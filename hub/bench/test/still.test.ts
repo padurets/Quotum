@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {FADE_FOR, PULSE_FOR} from '../../ui/lib/quota.js';
 import {hourShift} from '../../server/forecasts.js';
 import type {Snapshot} from '../../server/projection.js';
-import {DOT_STILL_AFTER, foreseenAt, MARGIN_MS, overviewCards, SETTLE_MS, stillProblems, warmUntil} from '../still.js';
+import {DOT_STILL_AFTER, foreseenAt, MARGIN_MS, overviewCards, quietAfter, SETTLE_MS, stillProblems, warmUntil} from '../still.js';
 import {scriptPerSecond, tally} from '../report.js';
 
 const MIN = 60_000;
@@ -74,6 +74,20 @@ test("a card's forecasts worked out again by themselves are told, as the overvie
   assert.deepEqual(stillProblems([late], lateAt - 3 * MIN, lateAt - MARGIN_MS / 2), told);
   assert.deepEqual(stillProblems([late], lateAt + MARGIN_MS + 1, lateAt + 3 * MIN), []);
   assert.deepEqual(stillProblems([late], lateAt - 3 * MIN, lateAt - MARGIN_MS - 1), []);
+});
+
+test('credit setup waits beyond forecast grace and resets before qualifying its unchanged quota baseline',()=>{
+  const card={id:'codex:late',successAt:10*HOUR+MIN,staleAfterMs:3*HOUR,windows:[] as {resetAt:number|null}[],forecast:{weekly:{asOf:10*HOUR}}};
+  const deadline=11*HOUR+hourShift(card.id),from=deadline-1000,to=deadline+8000;
+  assert.deepEqual(stillProblems([card],from,to,card.id),[`${card.id} has its forecasts worked out again`]);
+  const quiet=quietAfter([card],from,to)!;
+  assert.deepEqual(quiet,{resets:[],forecasts:[deadline],until:deadline+MARGIN_MS+1});
+  assert.deepEqual(stillProblems([card],quiet.until,quiet.until+to-from,card.id),[]);
+  assert.equal(quietAfter([card],quiet.until,quiet.until+to-from),null);
+  assert.deepEqual(quietAfter([card],deadline+MARGIN_MS/2,deadline+8000)?.forecasts,[deadline],'a recently fired timer remains inside the same scheduler grace');
+  const reset={...card,forecast:undefined,windows:[{resetAt:deadline+2000}]};
+  assert.deepEqual(quietAfter([card,reset],from,to),{resets:[deadline+2000],forecasts:[deadline],until:deadline+2000+MARGIN_MS+1});
+  assert.equal(quietAfter([{...card,forecast:undefined}],from,to),null);
 });
 
 test('the report adds up work outside what shows time by region, and the busiest label', () => {

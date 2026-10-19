@@ -54,6 +54,13 @@ export function foreseenAt(card: StillCard): number | null {
   return behind.length ? Math.floor(Math.min(...behind) / HOUR) * HOUR + HOUR + hourShift(card.id) : null;
 }
 
+/** Qualify the interval before measurement, including the forecast timer's grace. */
+export function quietAfter(cards:StillCard[],from:number,to:number) {
+  const resets=cards.flatMap(card=>card.windows.map(window=>window.resetAt)).filter((at):at is number=>at!==null&&at>=from&&at<=to);
+  const forecasts=cards.map(foreseenAt).filter((at):at is number=>at!==null&&at>=from-MARGIN_MS&&at<=to+MARGIN_MS);
+  return resets.length||forecasts.length?{resets,forecasts,until:Math.max(...resets,...forecasts)+MARGIN_MS+1}:null;
+}
+
 /**
  * What would change on the board by itself during `[from, to]`, when it should change
  * only with the clock: a card going stale, a dot still fading, a limit resetting, its
