@@ -11,10 +11,10 @@ const history = {range: '24h', live: true, since: 0, to: 0, cellMs: 60_000, hist
 const weekly: Win = {id: 'weekly', kind: 'weekly', label: null, used: 40, remaining: 60, resetAt: null, minutes: 10080};
 const sources = [{id: 'codex:1', provider: 'codex', windows: [weekly]}];
 
-test('the chart and the table show only what the cards show', () => {
+test('layout visibility keeps authorized chart and table series', () => {
   assert.deepEqual(linesOf(history, sources, view, 'weekly').map(l => [l.windowId, l.current]), [['weekly', 60]], 'a window no longer reported is left out');
   assert.deepEqual(linesOf(history, sources, {...view, windows: ['codex:1/weekly']}, 'weekly'), [], 'nor one hidden on the board');
-  assert.deepEqual(linesOf(history, sources, {...view, hidden: ['source:codex:1']}, 'weekly'), [], 'nor any of a hidden card');
+  assert.equal(linesOf(history, sources, {...view, hidden: ['source:codex:1']}, 'weekly').length, 1, 'hiding a card does not filter its measurements');
   assert.deepEqual(linesOf(history, null, view, 'weekly'), [], 'nothing before the board is known');
 });
 

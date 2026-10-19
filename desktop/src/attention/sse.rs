@@ -7,7 +7,7 @@ pub struct Decoder {
     cr: bool,
     size: usize,
 }
-const LIMIT: usize = 256 * 1024;
+const LIMIT: usize = 320 * 1024;
 impl Decoder {
     pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<(String, String)>, &'static str> {
         let mut frames = Vec::new();

@@ -37,7 +37,7 @@ test('retained unlimited credits and confirmed zero are measurements in the card
     const value=read();assert.equal(value.creditBalance?.status,'unlimited');assert.deepEqual(value.windows,[]);assert.deepEqual(value.meters,[]);
     const reading={value,basis:{range:{from:now-3_600_000,to:edge}},loading:false,error:null};
     const source={...value,budget:{enabled:true}};
-    const context={exports:{} as Record<string,(props:unknown)=>Node>,components:{} as Record<string,(props:unknown)=>Node>,require:()=>runtime,...money,t,observationDeadline,
+    const context={usePref:()=>({unit:'USD'}),matchesSelection:()=>true,fundsRule:()=>({mode:'exclude',values:[]}),matchesWallet:()=>true,walletRule:()=>({mode:'auto',include:[],exclude:[]}),useDataFilters:()=>({current:null}),exports:{} as Record<string,(props:unknown)=>Node>,components:{} as Record<string,(props:unknown)=>Node>,require:()=>runtime,...money,t,observationDeadline,
       useMeasurementClock:()=>edge,stamp:String,day:String,rateText:String,StatusMark:'status',Popover:'popover',MoneyCard:'money-card',ErrorLine:'error',BudgetKeyMetrics:'keys',
       usePeriodValues:()=>reading,useTimeRange:()=>reading.basis.range,useCurrencyContext:()=>defaultCurrencyContext,quotaPeriods,hasSubscriptionCaps,providerOf,
       isWindowHidden:()=>false,planOf:()=>null,keyShown:()=>true,MeasurementClock:{Provider:'clock'},PeriodStatus:'period-status',QuotaCard:'quota',Limit:'limit',AllHidden:'hidden',

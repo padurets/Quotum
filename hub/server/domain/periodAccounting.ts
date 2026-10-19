@@ -11,7 +11,7 @@ import type {PeriodRange} from './period.js';
 import type {WorkTrace} from './periodWork.js';
 import {union} from './work.js';
 import {spanBefore,spanDeadline,valuationAt} from './periodMoney.js';
-import {PeriodCurves,type WorkTimeline} from './periodCurves.js';
+import {PeriodCurves,type WorkTimeline,type SourceWorkCurves} from './periodCurves.js';
 
 const lower=lowerNumber;
 // Conservative JS storage reserves; typed numeric buffers use their byteLength.
@@ -42,7 +42,7 @@ class Intervals {
   cumulative(at:number){const i=lower(this.to,at);return this.sums[i]+(i<this.from.length?Math.max(0,at-this.from[i]):0);}
   in(range:PeriodRange){return this.cumulative(range.to)-this.cumulative(range.from);}
 }
-type QuotaSummary=Pick<HistorySeries,'consumed'|'coveredMs'|'remainingAtStart'|'remainingAtEnd'|'work'>;
+type QuotaSummary=Pick<HistorySeries,'consumed'|'coveredMs'|'remainingAtStart'|'remainingAtEnd'|'work'|'selectedWork'>;
 class QuotaIndex {
   readonly times:Numbers;
   private deadlines:Numbers=new Float64Array(0);
@@ -326,22 +326,25 @@ function* sortedNumbers(input:Float64Array):Preparation<Float64Array> {
 /** Prepared prefixes keep clock arithmetic independent of the number of retained samples. */
 export class PeriodAccounting {
   financialAuthority:object={};
+  private selectedCurves?:PeriodCurves;
+  private selectedKnown=Infinity;
   private readonly moneyWork=new Map<string,MoneyWorkIndex>();
   private readonly quota=new Map<string,QuotaIndex>();
   private readonly money=new Map<string,MoneyIndex>();
   private readonly sampleTimes=new Map<string,Numbers>();
   constructor(readonly tape:PeriodTape,work:WorkTrace|null,curves?:PeriodCurves,deferred=false) {if(!deferred)drain(this.build(work,curves));}
-  static *prepare(tape:PeriodTape,work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void):Preparation<PeriodAccounting>{const value=new PeriodAccounting(tape,work,curves,true);yield*value.build(work,curves,prior,changedWork,progress);return value;}
-  private *build(work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void):Preparation<void>{
+  static *prepare(tape:PeriodTape,work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void,sourceWide?:SourceWorkCurves):Preparation<PeriodAccounting>{const value=new PeriodAccounting(tape,work,curves,true);yield*value.build(work,curves,prior,changedWork,progress,sourceWide);return value;}
+  private *build(work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void,sourceWide?:SourceWorkCurves):Preparation<void>{
     const tape=this.tape;
     if(tape.fixed){if(prior?.tape.fixed&&JSON.stringify(prior.tape.fixed.money)===JSON.stringify(tape.fixed.money)&&JSON.stringify(prior.tape.fixed.range)===JSON.stringify(tape.fixed.range))this.financialAuthority=prior.financialAuthority;return;}
-    const workCurves=curves??(work?yield*PeriodCurves.prepare(work):undefined);
+    this.selectedCurves=curves??(work?yield*PeriodCurves.prepare(work):undefined);this.selectedKnown=work?.available===false?Infinity:work?.knownFrom??Infinity;
+    const workCurves=sourceWide??this.selectedCurves,known=sourceWide?(sourceWide.available===false?Infinity:sourceWide.knownFrom):this.selectedKnown;
     let preparedBytes=0;
     for(const series of tape.quota) {
       const activity=workCurves?.groups.source.get(series.source);
       const key=series.source+'\n'+series.window,old=prior?.quota.get(key),reuse=old?.series===series&&!changedWork.has(series.source);
       if(!reuse)progress?.(preparedBytes+sampleCount(series.samples)*88+1024);
-      const index=reuse?old!:yield*QuotaIndex.prepare(series,activity,series.workFrom===null||work?.available===false?Infinity:Math.max(work?.knownFrom??Infinity,series.workFrom??0));
+      const index=reuse?old!:yield*QuotaIndex.prepare(series,activity,series.workFrom===null?Infinity:Math.max(known,series.workFrom??0));
       if(!reuse){preparedBytes+=index.bytes;progress?.(preparedBytes);}
       this.quota.set(key,index);this.sampleTimes.set(key,index.times);
     }
@@ -363,15 +366,24 @@ export class PeriodAccounting {
   }
   get quotaBytes(){let bytes=0;for(const index of this.quota.values())bytes+=index.bytes;return bytes;}
   get bytes(){let bytes=this.quotaBytes;for(const index of this.money.values())bytes+=index.bytes;for(const index of this.moneyWork.values())bytes+=index.bytes;return bytes;}
-  quotaSummary(source:string,window:string,range:PeriodRange){return this.quota.get(source+'\n'+window)?.at(range);}
-  quotaWorkSlope(source:string,window:string,now:number,period:number,active:boolean){return this.quota.get(source+'\n'+window)?.workSlope(now,period,active);}
+  private directWork(source:string,range:PeriodRange,cutoff:number) {
+    const from=Math.max(range.from,this.selectedKnown,cutoff),curve=this.selectedCurves?.groups.source.get(source);
+    return {from:Number.isFinite(from)?from:range.to,ms:Number.isFinite(from)?range.to>from?curve?.read({from,to:range.to},true)??0:0:null,agentMs:Number.isFinite(from)&&range.to>from?curve?.read({from,to:range.to})??0:0};
+  }
+  quotaSummary(source:string,window:string,range:PeriodRange){const index=this.quota.get(source+'\n'+window);return index?{...index.at(range),selectedWork:this.directWork(source,range,index.series.workFrom===null?Infinity:index.series.workFrom??0)}:undefined;}
+  quotaWorkSlope(source:string,window:string,now:number,period:number,active:boolean){
+    const index=this.quota.get(source+'\n'+window);if(!index)return;
+    const curve=this.selectedCurves?.groups.source.get(source),known=Math.max(this.selectedKnown,index.series.workFrom===null?Infinity:index.series.workFrom??0);
+    const left=Math.max(now-period,known),slope=(at:number)=>active?Number(curve?.working(at)??false):curve?.slope(at)??0;
+    return {slope:slope(now)-(left===now-period?slope(left):0),next:Math.min(index.changesAt(now,period),curve?.next(now)??Infinity,left===now-period?(curve?.next(left)??Infinity)+period:known+period)};
+  }
   moneySummary(source:string,meter:string,unit:string,range:PeriodRange){return this.money.get(source+'\n'+meter+'\n'+unit)?.at(range);}
-  moneyWorkSummary(source:string,range:PeriodRange){return this.tape.fixed?.moneyWork?.find(row=>row.source===source)??this.moneyWork.get(source)?.at(range);}
+  moneyWorkSummary(source:string,range:PeriodRange){const fixed=this.tape.fixed?.moneyWork?.find(row=>row.source===source);if(fixed)return fixed;const index=this.moneyWork.get(source);if(!index)return;const selected=this.directWork(source,range,index.counter.workFrom??Infinity);return {...index.at(range),selectedWork:{from:selected.from,activeMs:selected.ms,agentMs:selected.agentMs}};}
   fixed(range:PeriodRange,cell:number):NonNullable<PeriodTape['fixed']> {
     const blank:History={range:'',live:false,since:range.from,to:range.to,cellMs:cell,historyStart:0,series:[],events:[],activity:{since:range.from,known:null,barMs:cell,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
     const quota=this.project(blank,range,undefined,true).series;
     const money=[...this.money.values()].flatMap(index=>{const group=index.group,last=group.readings.filter(row=>row.at<range.to).at(-1);return last?[{sourceId:group.source,meterId:group.meter,kind:group.paired?'balance' as const:last.kind,unit:group.displayUnit??last.unit,accounting:group.accounting,role:group.role,pointMode:last.kind==='cap'?'cell' as const:'observation' as const,...index.at(range),points:index.plot(range,cell,[])}]:[];});
-    return {range,cell,quota,money,...(this.moneyWork.size?{moneyWork:[...this.moneyWork.values()].map(index=>index.at(range))}:{})};
+    return {range,cell,quota,money,...(this.moneyWork.size?{moneyWork:[...this.moneyWork.keys()].map(source=>this.moneyWorkSummary(source,range)!)}:{})};
   }
   project(history:History,range:PeriodRange,values?:ReadonlyMap<string,PeriodValues>,boundaryOnly=false):History {
     if(range.from<this.tape.from)return history;
@@ -394,10 +406,10 @@ export class PeriodAccounting {
       const windowValue=membership?.windows.find(w=>w.id===row.window)??descriptor?.value;
       if(!history.live&&(membership?!membership.windows.some(w=>w.id===row.window):row.descriptors?numberAt(times,lower(times,range.to)-1)!==batches.get(row.source):row.member===false))continue;
       const old=previous.get(key);if(!old&&history.live)continue;
-      const summary=index.at(range),points=!history.live?index.plot(range,history.cellMs,old?.points??[],boundaryOnly):old!.points;
+      const summary=this.quotaSummary(row.source,row.window,range)!,points=!history.live?index.plot(range,history.cellMs,old?.points??[],boundaryOnly):old!.points;
       series.push({...old,sourceId:row.source,windowId:row.window,staleAfterMs:sampleAt(row.samples,sampleCount(row.samples)-1)?.staleAfterMs??0,...summary,points,...(!history.live?{pointMode:'observation' as const,windowValue:windowValue??row.windowValue}:{})});
     }
-    return {...history,exact:true,since:range.from,to:range.to,series,...(this.moneyWork.size?{moneyWork:[...this.moneyWork.values()].map(index=>index.at(range))}:{}),meterSeries:history.meterSeries?.map(series=>{const index=this.money.get(series.sourceId+'\n'+series.meterId+'\n'+series.unit);return index?{...series,...index.at(range),...(!history.live?{points:index.plot(range,history.cellMs,series.points,{from:history.since,to:history.to}),...(series.kind!=='cap'?{pointMode:'observation' as const}:{})}:{})}:series;})};
+    return {...history,exact:true,since:range.from,to:range.to,series,...(this.moneyWork.size?{moneyWork:[...this.moneyWork.keys()].map(source=>this.moneyWorkSummary(source,range)!)}:{}),meterSeries:history.meterSeries?.map(series=>{const index=this.money.get(series.sourceId+'\n'+series.meterId+'\n'+series.unit);return index?{...series,...index.at(range),...(!history.live?{points:index.plot(range,history.cellMs,series.points,{from:history.since,to:history.to}),...(series.kind!=='cap'?{pointMode:'observation' as const}:{})}:{})}:series;})};
   }
   changesAt(now:number,period:number,source?:string):number|null {
     if(this.tape.fixed)return null;

@@ -1,3 +1,6 @@
+import {effectiveFilters,filtersReady,onDataFilters} from './filterSelection';
+import {matchesSource,workFilter,jsonBytes} from '../../server/domain/dataFilters';
+import {mergeSourceWorkTape,sourceWorkCurves,type SourceWorkTape,type SourceWorkCurves} from '../../server/domain/periodCurves';
 import {moneyReadSelection} from './moneySelection';
 import {subscriptionSelection} from './subscription';
 import {cellOf} from '../../server/domain/history';
@@ -59,6 +62,20 @@ class BoardPeriod {
   private identity='';
   private selection:PeriodSelection={mode:'live',periodMs:86_400_000};
   private sourceIds:string[]=[];
+  private filterKey='';
+  private resourceIdentity='';
+  private resourceGeneration=0;
+  private workLimit=false;
+  private sourceTape:SourceWorkTape|null=null;
+  private sourceCurves:SourceWorkCurves|undefined;
+  private sourceCursor:string|undefined;
+  private facetsNeeded=false;
+  private facetsDemand=0;
+  private facetState:{value:{projects:(string|null)[];devices:{id:string;name:string}[];clients:(string|null)[]};loading:boolean;error:string|null}|{value:null;loading:boolean;error:string|null}={value:null,loading:false,error:null};
+  private readonly facetListeners=new Set<()=>void>();
+  getFacets=()=>this.facetState;
+  subscribeFacets=(listener:()=>void)=>{this.facetListeners.add(listener);return()=>{this.facetListeners.delete(listener);};};
+  demandFacets=()=>{this.facetsDemand++;if(!this.facetState.value){this.facetsNeeded=true;this.facetState={...this.facetState,loading:true};this.revision++;this.transport.change();}return()=>{this.facetsDemand--;};};
   private wantsWork=false;
   private workNeeded=false;
   private liveEvidence=false;
@@ -149,10 +166,12 @@ class BoardPeriod {
     let result=history;
     if(tape?.rangeKey===history.range){const range=this.tapeRange(tape,now),values=new Map<string,PeriodValues>();if(tape.selection.mode==='range')for(const [id,reading] of this.values)if(reading.value&&reading.basis?.range.to===range.to)values.set(id,reading.value);result=tape.accounting.project(history,range,values);}
     if(scope==='quota'&&this.activity&&this.workRangeKey===history.range&&this.work.basis){const range=this.workRange(now)!;result={...result,since:range.from,to:range.to,activity:this.activity.project(history.activity,range)};}
+    if(scope==='quota'&&this.selectedPending())result={...result,series:result.series.map(series=>({...series,selectedWork:{from:result.to,ms:null,agentMs:0}})),activity:{...result.activity,known:null,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
     return result;
   }
+  private selectedPending(){return !!effectiveFilters()&&(this.workLimit||this.work.loading||!!this.work.error||!this.work.value);}
   activityAt(history:History,by:import('./types').ActivityDimension,now:number,bar?:number,key?:string) {
-    let fallback=history.activity;
+    let fallback=effectiveFilters()&&(this.workLimit||this.work.loading||this.work.error||!this.work.value)?{...history.activity,known:null,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}:history.activity;
     if(bar!==undefined){const cell=fallback.cells.find(([at])=>at===bar);fallback={...fallback,activeMs:cell?.[1]??0,agentMs:cell?.[2]??0,agents:cell?.[3]??0,by:{...fallback.by,[by]:fallback.by[by].map(group=>({...group,agentMs:group.cells.find(([at])=>at===bar)?.[1]??0}))}};}
     if(!this.activity||this.workRangeKey!==history.range||!this.work.basis||this.workSelection.mode==='range')return fallback;
     const range=this.workRange(now)!;
@@ -184,7 +203,7 @@ class BoardPeriod {
   quotaAt(line:Line,now:number,rangeKey?:string):Line {
     const tape=this.tapes.get('quota');if(!tape||tape.selection.mode!=='live'||rangeKey!==undefined&&tape.rangeKey!==rangeKey)return line;
     const summary=tape.accounting.quotaSummary(line.sourceId,line.windowId,this.tapeRange(tape,now));
-    return summary?{...line,...summary}:line;
+    return summary?{...line,...summary,...(this.selectedPending()?{selectedWork:{from:now,ms:null,agentMs:0}}:{})}:line;
   }
   quotaOrderAt(line:Line,now:number,rangeKey:string,active:boolean){
     const tape=this.tapes.get('quota');
@@ -197,7 +216,10 @@ class BoardPeriod {
     const summary=tape.accounting.moneySummary(series.sourceId,series.meterId,series.unit,this.tapeRange(tape,now));
     return summary?{...series,...summary}:series;
   }
-  moneyWorkAt(source:string,now:number,rangeKey?:string){const tape=this.tapes.get('budget');return this.work.value&&tape&&this.workRangeKey===tape.rangeKey&&(rangeKey===undefined||rangeKey===tape.rangeKey)?tape.accounting.moneyWorkSummary(source,this.tapeRange(tape,now)):undefined;}
+  moneyWorkAt(source:string,now:number,rangeKey?:string){
+    const tape=this.tapes.get('budget'),value=tape&&this.workRangeKey===tape.rangeKey&&(!!this.work.value||!!this.sourceCurves)&&(rangeKey===undefined||rangeKey===tape.rangeKey)?tape.accounting.moneyWorkSummary(source,this.tapeRange(tape,now)):undefined;
+    return value&&this.selectedPending()?{...value,selectedWork:{from:now,activeMs:null,agentMs:0}}:value;
+  }
   rangeAt(scope:PeriodScope,now:number,rangeKey?:string){const tape=this.tapes.get(scope);return tape&&(rangeKey===undefined||tape.rangeKey===rangeKey)?this.tapeRange(tape,now):null;}
   moneyOrderAt(now:number,rangeKey:string,readOrder?:(at:number)=>string) {
     const tape=this.tapes.get('budget');
@@ -232,7 +254,7 @@ class BoardPeriod {
   refreshWorkClock=()=>{if(this.evaluatedAt!==hubNow())this.tick();else{this.retireExpired(hubNow());this.scheduleClock();}};
   subscribeSource=(id:string,listener:()=>void)=>{let set=this.sourceListeners.get(id);if(!set)this.sourceListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   subscribeValue=(id:string,listener:()=>void)=>{let set=this.valueListeners.get(id);if(!set)this.valueListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
-  private queryKey(query:HistoryQuery,scope?:PeriodScope){const board=page.get().board;return JSON.stringify([query.meters,query.unit,query.currency,query.work,scope==='quota'?board?.lineup.filter(id=>!board.view.hidden.includes('source:'+id)):scope&&board?.lineup.map(id=>[id,board.cards[id]?.budget])]);}
+  private queryKey(query:HistoryQuery,scope?:PeriodScope){const board=page.get().board;return JSON.stringify([query.meters,query.unit,query.currency,query.work,scope==='quota'?query.sources??board?.lineup:scope&&board?.lineup.map(id=>[id,board.cards[id]?.budget])]);}
   private tapeCovers(entry:{tape:PeriodTape;selection:PeriodSelection},range:{from:number;to:number}) {
     const {tape,selection}=entry;
     // A complete fixed summary covers its requested endpoints, even when minute
@@ -248,20 +270,28 @@ class BoardPeriod {
     for(const scope of PERIOD_SCOPES) {
       const visible=(scope==='quota'?[ACTIVITY,...QUOTA_WIDGETS]:scope==='funds'?[SUBSCRIPTION_FUNDS]:BUDGET_WIDGETS).some(id=>widgetVisible(board.view,id,board.lineup.length));if(!visible)continue;
       const meters=scope==='quota'?subscriptionSelection(cards,board.view):moneyReadSelection(cards,board.view,scope==='funds'?prefs().funds:prefs().money,board.currencies,scope==='funds'?'funds':'budget');
-      const query:HistoryQuery={cell:String(cell),from:String(Math.floor(range.from/cell)*cell),to:String(Math.ceil(range.to/cell)*cell),cells:'skip',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})};
+      const query:HistoryQuery={cell:String(cell),from:String(Math.floor(range.from/cell)*cell),to:String(Math.ceil(range.to/cell)*cell),cells:'skip',...(meters?{...(meters.sources?{sources:JSON.stringify(meters.sources)}:{}),unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})};
       queries[scope]=query;
     }
     return queries;
   }
   private intent():PeriodIntent|null {
-    const board=page.get().board;if(!board||!this.active)return null;
+    const board=page.get().board;if(!board||!this.active||!filtersReady())return null;
     const pending=!pan.get(),range=evaluatedRange(this.selection,hubNow()),queries=pending?this.queries(board,range):{};
     for(const scope of PERIOD_SCOPES)if(queries[scope]&&(this.projectionErrors[scope]&&!this.dirtyScopes.has(scope)||!this.needsTape(scope,this.queryKey(queries[scope]!,scope),range)))delete queries[scope];
-    return {board:board.id,generation:this.generation,revision:this.revision,proofEpoch:this.proofEpoch,request:{version:1,selection:this.selection,evaluatedAt:hubNow(),...queries,...(pending&&this.valuesNeeded&&this.selection.mode==='range'&&this.sourceIds.length?{values:this.sourceIds}:{}),...(pending&&this.wantsWork&&this.workNeeded?{sessions:{...(this.cursor?{cursor:this.cursor}:{})}}:{})}};
+    const filters=effectiveFilters();
+    const request={version:1 as const,selection:this.selection,evaluatedAt:hubNow(),...queries,...(filters?{workFilter:workFilter(filters)}:{}),
+      ...(pending&&this.valuesNeeded&&this.selection.mode==='range'&&this.sourceIds.length?{values:this.sourceIds}:{}),
+      ...(pending&&this.wantsWork&&this.workNeeded?{sessions:{...(this.cursor?{cursor:this.cursor}:{})}}:{}),
+      ...(pending&&this.facetsDemand>0&&this.facetsNeeded?{facets:true as const}:{}),
+      ...(filters&&this.selection.mode==='live'&&(queries.quota||queries.budget?.work==='1')?{sourceWork:{...(this.sourceCursor?{cursor:this.sourceCursor}:{})}}:{})};
+    if(this.workLimit||jsonBytes(request)>76*1024){delete request.sessions;delete request.facets;delete request.workFilter;}
+    return {board:board.id,generation:this.generation,resourceGeneration:this.resourceGeneration,revision:this.revision,proofEpoch:this.proofEpoch,request};
   }
   private setValue(id:string,value:Reading<PeriodValues>){this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
-  private publishWork() {this.workState={...this.work,rows:this.workRows,evidence:this.workEvidence};for(const listener of this.listeners)listener();}
+  private publishWork() {this.workState={...this.work,rows:this.workRows,evidence:this.workEvidence,...(this.workLimit?{loading:false,error:'filters_limit'}:{})};for(const listener of this.listeners)listener();}
   private retireWork() {
+    this.sourceTape=null;this.sourceCurves=undefined;this.sourceCursor=undefined;
     this.retained.clear();preparations()?.cancel(this.preparationOwner);
     // Work evidence belongs to its captured attribution. Native financial values
     // retain their independent authority across the replacement.
@@ -275,6 +305,7 @@ class BoardPeriod {
     this.measureBytes();clock.due(this.watch,null,hubNow());
   }
   private clear() {
+    this.sourceTape=null;this.sourceCurves=undefined;this.sourceCursor=undefined;this.facetState={value:null,loading:false,error:null};this.facetsNeeded=this.facetsDemand>0;
     this.workEvidence++;this.retirementAt=Infinity;
     this.proofEpoch++;this.workProofEpoch=-1;this.valuesProofEpoch=-1;this.dirtyScopes.clear();
     this.retained.clear();this.cacheKey='';
@@ -292,19 +323,32 @@ class BoardPeriod {
     const changedWork=this.workAuthority!==undefined&&board.workAuthority!==this.workAuthority;
     if(snapshot||!this.identity||event?.type==='hub'&&event.event.type==='history'&&event.event.data.workAuthority)this.workAuthority=board.workAuthority;
     const selected=timeRange(),selection:PeriodSelection=selected?{mode:'range',...selected}:{mode:'live',periodMs:periodOf(prefs().range).ms};
-    const sources=board.lineup.filter(id=>!board.view.hidden.includes('source:'+id));
-    const wantsWork=sources.length>0||[AGENTS,ACTIVITY].some(id=>widgetVisible(board.view,id,board.lineup.length));
+    const filters=effectiveFilters(),nextFilter=filters?JSON.stringify(workFilter(filters)):'';
+    const selectedChanged=nextFilter!==this.filterKey;this.filterKey=nextFilter;
+    const sources=board.lineup.filter(id=>!filters||matchesSource(filters,id));
+    this.workLimit=!!filters&&jsonBytes({version:1,selection,evaluatedAt:hubNow(),sessions:{cursor:'x'.repeat(2048)},workFilter:workFilter(filters)})>76*1024;
+    const wantsWork=!this.workLimit&&(sources.length>0||[AGENTS,ACTIVITY].some(id=>widgetVisible(board.view,id,board.lineup.length)));
     const scopeKeys=Object.fromEntries(Object.entries(this.queries(board,evaluatedRange(selection,hubNow()))).map(([scope,query])=>[scope,this.queryKey(query,scope as PeriodScope)]));
     const changedScopes=PERIOD_SCOPES.filter(scope=>scopeKeys[scope]!==this.scopeKeys[scope]);
+    const resourceIdentity=JSON.stringify([board.id,periodKey(selection),scopeKeys,board.workAuthority]);
+    if(resourceIdentity!==this.resourceIdentity){this.resourceIdentity=resourceIdentity;this.resourceGeneration++;}
     const identity=JSON.stringify([board.id,periodKey(selection),wantsWork]);
     const authority=JSON.stringify([board.id]);
     if(authority!==this.authority){this.clear();this.authority=authority;}
     if(event?.type==='hub'&&['history','hello','snapshot','mine','lineup'].includes(event.event.type))this.retained.clear();
-    const cacheKey=JSON.stringify([identity,scopeKeys]);
+    const cacheKey=JSON.stringify([identity,scopeKeys,nextFilter]);
     if(cacheKey!==this.cacheKey){this.retainCurrent();this.cacheKey=cacheKey;}
     this.selection=selection;this.sourceIds=sources;this.wantsWork=wantsWork;this.scopeKeys=scopeKeys;
     if(changedWork)this.retireWork();
+    if(selectedChanged){
+      this.generation++;this.revision++;preparations()?.cancel(this.preparationOwner);this.cursor=undefined;this.index=null;this.activity=null;this.activityRetained=null;
+      this.workEvidence++;this.work={...empty(),loading:wantsWork};this.workRows=[];const oldSources=[...this.rowsBySource.keys()];this.rowsBySource.clear();for(const id of oldSources)for(const listener of this.sourceListeners.get(id)??[])listener();this.workNeeded=wantsWork;this.publishWork();
+      if(selection.mode==='range')for(const scope of PERIOD_SCOPES)if(scopeKeys[scope])this.dirtyScopes.add(scope);
+      this.transport.change();
+      this.publishProjection(['quota','budget']);
+    }
     if(identity!==this.identity) {
+      this.facetState={value:null,loading:this.facetsDemand>0,error:null};this.facetsNeeded=this.facetsDemand>0;
       const oldBoard=this.identity?JSON.parse(this.identity)[0]:null;
       this.identity=identity;this.generation++;this.revision++;
       this.workEvidence++;this.retirementAt=Infinity;
@@ -330,7 +374,7 @@ class BoardPeriod {
         preparations()?.cancel(this.preparationOwner);this.tapes.clear();this.cursor=undefined;this.index=null;this.activity=null;this.work={...this.work,value:null};this.liveEvidence=false;this.transport.forgetEvidence();
         clock.due(this.watch,null,hubNow());
       }
-      this.bytes=JSON.stringify([...this.values.values()]).length*3+JSON.stringify(this.workRows).length*3+(this.activityRetained?JSON.stringify(this.activityRetained).length*3:0);
+      this.bytes=(this.sourceTape?JSON.stringify(this.sourceTape).length*3+this.sourceTape.patterns.reduce((sum,p)=>sum+p.length*64,0)+this.sourceTape.sources.reduce((sum,s)=>sum+s.blocks.length*64,0):0)+JSON.stringify([...this.values.values()]).length*3+JSON.stringify(this.workRows).length*3+(this.activityRetained?JSON.stringify(this.activityRetained).length*3:0);
       historyPool.release(valueStaging);
       this.workNeeded=wantsWork&&(!this.work.value||range.from<this.work.value.anchor||range.to>(this.work.value.cut??0)&&!this.liveEvidence);
       const saved=this.retained.has(cacheKey)?[cacheKey,this.retained.get(cacheKey)!] as const:[...this.retained].find(([,entry])=>entry.fits(selection));
@@ -359,11 +403,13 @@ class BoardPeriod {
     if(event?.type==='hub') {
       const hub=event.event;
       if(hub.type==='hello'||hub.type==='snapshot'||hub.type==='mine'||hub.type==='lineup') {
+        this.resourceGeneration++;
         this.generation++;this.revision++;if(hub.type==='hello'||changedWork||!this.index){this.cursor=undefined;this.workNeeded=wantsWork;}this.valuesNeeded=selection.mode==='range';
 
         if(hub.type==='snapshot'||hub.type==='hello')this.tick();
         this.transport.change();
       }else if(hub.type==='sessions'||hub.type==='unattributedSessions') {
+        if(this.facetsDemand>0){this.facetsNeeded=true;this.revision++;this.transport.change();}
         this.tick();
       }else if(hub.type==='history') {
         const included=hub.data.sources.some(id=>sources.includes(id));
@@ -371,6 +417,8 @@ class BoardPeriod {
         const own=hub.data.workSince!==undefined&&(selection.mode==='live'||hub.data.workSince<selection.to);
         const relevant=included&&(selection.mode==='live'||hub.data.since<selection.to)||own;
         if(relevant){
+          this.resourceGeneration++;
+          if(own&&this.facetsDemand>0)this.facetsNeeded=true;
           const retired=own&&hub.data.workSince===0||included&&(hub.data.changes?hub.data.changes.some(c=>sources.includes(c.source)&&c.scope==='quota'&&(c.since===0||c.workSince===0)):hub.data.since===0);
           if(retired)this.retireWork();
           if(included&&selection.mode==='range')this.valuesNeeded=true;
@@ -395,7 +443,7 @@ class BoardPeriod {
   private async applyReply(reply:PeriodReply,intent:PeriodIntent,transferred?:(bytes:number)=>boolean) {
     if(intent.generation!==this.generation||intent.revision!==this.revision)return;
     const proofEpoch=intent.proofEpoch??this.proofEpoch;
-    if(!reply.values&&!reply.sessions&&!PERIOD_SCOPES.some(scope=>reply[scope]?.state==='complete'?reply[scope].value.tape:reply[scope]?.state==='error'&&intent.request[scope]?.evidence!=='skip'))return;
+    if(!reply.values&&!reply.sessions&&!reply.facets&&!reply.sourceWork&&!PERIOD_SCOPES.some(scope=>reply[scope]?.state==='complete'?reply[scope].value.tape:reply[scope]?.state==='error'&&intent.request[scope]?.evidence!=='skip'))return;
     const changed=new Set<PeriodScope>();
     const staging={role:'visible' as const};
     // Decoding has released its byte buffers. Reuse its reservation for the
@@ -415,9 +463,22 @@ class BoardPeriod {
     // Card states are adopted unchanged; only their reading wrappers are new.
     if(reply.values?.state==='complete')try{charge('values',JSON.stringify(reply.values.value).length*3+reply.values.value.length*768);}catch(error){if(error!==limited)throw error;reply.values={state:'error',error:'history_limit'};}
     const priorWork=this.work.value,priorIndex=this.index,priorTapes=new Map(this.tapes);
+    let nextSourceTape=this.sourceTape,nextSourceCurves=this.sourceCurves,nextSourceCursor=this.sourceCursor;
+    const filtered=!!effectiveFilters();
     const retainedFrom=intent.request.selection.mode==='live'?evaluatedRange(intent.request.selection,hubNow()).from:null;
     const queryKeyFor=(scope:PeriodScope)=>this.queryKey(intent.request[scope]!,scope);
     function* build():Preparation<{work:WorkTrace|null;index:PeriodIndex|null;activity:PeriodActivity|null;tapes:typeof priorTapes;edge:number}> {
+      const sourcePart=reply.sourceWork;
+      if(sourcePart){
+        if(sourcePart.state==='error')nextSourceCurves={groups:{source:new Map()},knownFrom:Infinity,available:false};
+        else try{
+          let sourceBytes=JSON.stringify(sourcePart.value).length*3;
+          charge('sourceWork',sourceBytes);
+          const reserve=(bytes:number)=>{sourceBytes+=bytes;charge('sourceWork',sourceBytes);};
+          nextSourceTape=sourcePart.state==='delta'&&nextSourceTape?mergeSourceWorkTape(nextSourceTape,sourcePart.value,reserve):sourcePart.value;
+          nextSourceCurves=sourceWorkCurves(nextSourceTape,reserve);nextSourceCursor=sourcePart.value.cursor;
+        }catch(error){if(error!==limited)throw error;nextSourceCurves={groups:{source:new Map()},knownFrom:Infinity,available:false};reply.sourceWork={state:'error',error:'history_limit'};discard('sourceWork');}
+      }
       const incomingTapes=new Map<PeriodScope,PeriodTape>();
       // Compact each decoded column before allocating work or accounting indexes.
       // Progress replaces reservations as scratch buffers become unreachable.
@@ -459,14 +520,15 @@ class BoardPeriod {
       try{if(workPart?.state==='complete'&&!priorWork)for(const group of priorTapes.get('budget')?.tape.money??[])if(group.workCounter&&!changedWork.has(group.source)){changedBytes+=64+group.source.length*2;charge('changedWork',changedBytes);changedWork.add(group.source);yield;}
       if(workPart&&workPart.state!=='error')for(const refs of [workPart.value.refs,...(workPart.state==='complete'||retired?[priorWork?.refs??[]]:[])])for(const ref of refs){if(ref.source&&!changedWork.has(ref.source)){changedBytes+=64+ref.source.length*2;charge('changedWork',changedBytes);changedWork.add(ref.source);}yield;}}
       catch(error){if(error!==limited)throw error;reply.sessions={state:'error',error:'history_limit'};work=priorWork;index=null;activity=null;changedWork.clear();discard('changedWork');discard('work');}
+      if(reply.sourceWork)for(const source of nextSourceCurves?.groups.source.keys()??[])changedWork.add(source);
       const tapes=new Map(priorTapes);
       for(const scope of PERIOD_SCOPES){
         const old=tapes.get(scope),incoming=incomingTapes.get(scope);
-        if(!incoming&&!((scope==='quota'||old?.tape.money.some(g=>g.workCounter&&changedWork.has(g.source)))&&old&&index))continue;
+        if(!incoming&&!((scope==='quota'||old?.tape.money.some(g=>g.workCounter&&changedWork.has(g.source)))&&old&&(index||reply.sourceWork)))continue;
         const queryKey=incoming?queryKeyFor(scope):old!.queryKey,tape=incoming??old!.tape;
         const base=staged.get(scope)??0;
         try{
-          const accounting=yield*PeriodAccounting.prepare(tape,work,index?.curves??priorIndex?.curves,old?.accounting,changedWork,bytes=>charge(scope,base+bytes));
+          const accounting=yield*PeriodAccounting.prepare(tape,work,index?.curves??priorIndex?.curves,old?.accounting,changedWork,bytes=>charge(scope,base+bytes),filtered?nextSourceCurves??{groups:{source:new Map()},knownFrom:Infinity,available:false}:undefined);
           if(incoming){changed.add(scope);tapes.set(scope,{tape,accounting,generation:intent.generation,proofEpoch,selection:intent.request.selection,rangeKey:intent.request.selection.mode==='range'?periodKey(intent.request.selection):prefs().range,queryKey,basisRange:reply[scope]?.state==='complete'?reply[scope]!.basis.range:reply.basis.range});}
           else {tapes.set(scope,{...old!,accounting});changed.add(scope);}
         }catch(error){if(error!==limited)throw error;incomingTapes.delete(scope);failScope(scope);}
@@ -478,8 +540,10 @@ class BoardPeriod {
     const prepared=await prepareAsync(this.preparationOwner,build(),valid).catch(error=>{release();throw error;});
     if(!prepared||!valid()){release();return;}
     for(const scope of PERIOD_SCOPES){const part=reply[scope];if(part){if(part.state==='error'){this.projectionErrors[scope]=part.error==='history_limit'?'history_limit':'history_failed';this.dirtyScopes.delete(scope);}else delete this.projectionErrors[scope];changed.add(scope);}}
+    this.sourceTape=nextSourceTape;this.sourceCurves=nextSourceCurves;this.sourceCursor=nextSourceCursor;
     this.evaluatedAt=hubNow();this.tapes.clear();for(const [scope,tape] of prepared.tapes)this.tapes.set(scope,tape);
     for(const scope of PERIOD_SCOPES){const section=reply[scope];if(section?.state==='complete'&&section.value.tape)this.dirtyScopes.delete(scope);}
+    if(reply.facets){const part=reply.facets;this.facetsNeeded=false;this.facetState=part.state==='complete'?{value:part.value,loading:false,error:null}:{value:null,loading:false,error:part.error};for(const listener of this.facetListeners)listener();}
     if(reply.values) {
       if(reply.values.state==='complete'){
         changed.add('quota');this.valuesNeeded=false;this.valuesProofEpoch=proofEpoch;for(const value of reply.values.value)this.setValue(value.id,{value,basis:reply.values.basis,loading:false,error:null});
@@ -518,6 +582,7 @@ class BoardPeriod {
     const valid=()=>this.active&&generation===this.generation&&revision===this.revision&&!pan.get();
     const run=async()=>{
       if(!valid())return;
+      const sourceCurves=this.sourceCurves;
       const previousWork=this.work.value,previousIndex=this.index,previousTapes=new Map(this.tapes),staging={role:'visible' as const};
       const limited=new Error('history_limit'),sizes=new Map<string,number>();
       const charge=(key:string,bytes:number)=>{sizes.set(key,bytes);if(!historyPool.reserve(staging,[...sizes.values()].reduce((a,b)=>a+b,0)))throw limited;};
@@ -539,7 +604,7 @@ class BoardPeriod {
           let scratch=0;const tape=yield*retention.retainTape(entry.tape,from,bytes=>{scratch+=bytes;charge(scope,scratch);});
           if(tape!==entry.tape||(scope==='quota'||entry.tape.money.some(g=>g.workCounter))&&work!==previousWork){
             const owned={...tape,quota:tape.quota.filter(row=>!entry.tape.quota.includes(row)),money:tape.money.filter(row=>!entry.tape.money.includes(row))},base=tapeBytes(owned);
-            charge(scope,base);const accounting=yield*PeriodAccounting.prepare(tape,work,index?.curves,entry.accounting,changedWork,bytes=>charge(scope,base+bytes));tapes.set(scope,{...entry,tape,accounting});
+            charge(scope,base);const accounting=yield*PeriodAccounting.prepare(tape,work,index?.curves,entry.accounting,changedWork,bytes=>charge(scope,base+bytes),sourceCurves);tapes.set(scope,{...entry,tape,accounting});
           }else sizes.delete(scope);
           yield;
         }
@@ -560,7 +625,7 @@ class BoardPeriod {
     const next=this.receiving.then(run).finally(()=>{this.retiring=false;this.scheduleClock();});this.receiving=next.catch(()=>{});
   }
   private measureBytes(){
-    this.bytes=JSON.stringify([...this.values.values()]).length*3+workBytes(this.work.value,this.index?.curves.bytes)+(this.work.value?0:JSON.stringify(this.workRows).length*3)+(this.activityRetained?JSON.stringify(this.activityRetained).length*3:0)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape)+t.accounting.bytes,0);
+    this.bytes=(this.sourceTape?JSON.stringify(this.sourceTape).length*3+this.sourceTape.patterns.reduce((sum,p)=>sum+p.length*64,0)+this.sourceTape.sources.reduce((sum,s)=>sum+s.blocks.length*64,0):0)+JSON.stringify([...this.values.values()]).length*3+workBytes(this.work.value,this.index?.curves.bytes)+(this.work.value?0:JSON.stringify(this.workRows).length*3)+(this.activityRetained?JSON.stringify(this.activityRetained).length*3:0)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape)+t.accounting.bytes,0);
   }
   /** The current stream is authoritative even while an older analytical reply is being prepared. */
   private present(rows:WorkedSession[]) {
@@ -648,7 +713,7 @@ const nativeBytes=(part:Pick<PeriodTape['money'][number],'readings'|'spans'>,sha
 const tapeBytes=(tape:PeriodTape,wire=false)=>JSON.stringify({...tape,quota:tape.quota.map(s=>({...s,samples:[]})),money:tape.money.map(s=>({...s,readings:[],spans:[],...(s.paired?{paired:{readings:[],spans:[]}}:{}),...(s.workCounter?{workCounter:{...s.workCounter,readings:[],spans:[]}}:{})}))}).length*2+tape.quota.reduce((n,s)=>n+(wire&&!('columns' in s.samples)?s.samples.length*8:sampleBytes(s.samples,s.samplesEncoding==='delta')),0)+tape.money.reduce((n,s)=>n+nativeBytes(s)+(s.paired?nativeBytes(s.paired):0)+(s.workCounter?nativeBytes(s.workCounter,s.readings):0),0);
 
 export const boardPeriod=new BoardPeriod();
-export function followPeriod(){const stop=page.listen((event,state)=>boardPeriod.changed(event,state));const choose=()=>boardPeriod.changed();const stops=[stop,onPrefs(choose),onTimeRange(choose),pan.onPhase(()=>boardPeriod.refreshWorkClock())];choose();return()=>stops.forEach(stop=>stop());}
+export function followPeriod(){const stop=page.listen((event,state)=>boardPeriod.changed(event,state));const choose=()=>boardPeriod.changed();const stops=[stop,onDataFilters(choose),onPrefs(choose),onTimeRange(choose),pan.onPhase(()=>boardPeriod.refreshWorkClock())];choose();return()=>stops.forEach(stop=>stop());}
 export function usePeriodValues(id:string){return useSyncExternalStore(listener=>boardPeriod.subscribeValue(id,listener),()=>boardPeriod.getValue(id));}
 const roster=(rows:readonly WorkedSession[])=>rows.map(({workedMs:_,...row})=>row);
 const panelRoster=roster;

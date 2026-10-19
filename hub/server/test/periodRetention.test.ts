@@ -1,3 +1,4 @@
+import {encodeFixedView} from '../domain/view.js';
 import {test,type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync,rmSync} from 'node:fs';
@@ -48,7 +49,7 @@ async function fixture(t:TestContext){
   };
   return {get store(){return store;},get directory(){return directory;},user,board,read,history,
     source(provider:Parameters<Store['source']>[0]='deepseek'){const id=store.source(provider,(++sequence).toString().padStart(24,'a'),cutoff-86_400_000);store.hold(id,user.id,cutoff-86_400_000);return id;},
-    async reopen(legacy=false){await app.close();if(legacy){store.db.exec("DROP TRIGGER activity_device_removed; DROP TABLE device_activity_witnesses; DROP TABLE device_activity; DELETE FROM meta WHERE key='activityHubId';");store.db.exec('ALTER TABLE meter_spans DROP COLUMN observed_from; ALTER TABLE meter_contexts DROP COLUMN observed_from; DROP TABLE board_device_sessions; DROP TRIGGER meter_pairs_source_removed; DROP TRIGGER quota_anchors_source_deleted; DROP TRIGGER coverage_device_added; DROP TRIGGER coverage_device_removed; DROP TRIGGER coverage_device_status; DROP TRIGGER coverage_holding_added; DROP TRIGGER coverage_holding_removed; DROP TRIGGER coverage_holding_changed; DROP TRIGGER coverage_device_deleted; DROP TABLE client_links; DROP TABLE link_versions; DROP TABLE link_mutations; DROP TABLE device_tracking_policy; DROP INDEX devices_by_owner; DROP INDEX readings_sparse; ALTER TABLE readings DROP COLUMN pair_anchor; DROP TABLE meter_pair_starts; DROP TABLE quota_anchors; DROP TABLE work_coverage; DROP TABLE device_tracking; DROP TABLE owner_coverage_versions; DROP TABLE device_measurement_policies; DROP TABLE source_measurement_preferences; DROP TABLE device_measurement_control; DROP TABLE measurement_mutations; DROP TABLE resource_origins; ALTER TABLE device_clients DROP COLUMN observed_at; PRAGMA user_version=23;');}store.close();store=new Store(file,now);directory=new Directory(store.db);app=await build();},
+    async reopen(legacy=false){await app.close();if(legacy){for(const row of store.db.prepare('SELECT board_id FROM views').all())store.db.prepare('UPDATE views SET payload=? WHERE board_id=?').run(JSON.stringify(encodeFixedView({...directory.view(String(row.board_id)),version:4})),row.board_id);store.db.exec("DROP TRIGGER filters_board_removed; DROP TABLE board_filters; DROP TRIGGER activity_device_removed; DROP TABLE device_activity_witnesses; DROP TABLE device_activity; DELETE FROM meta WHERE key='activityHubId';");store.db.exec('ALTER TABLE meter_spans DROP COLUMN observed_from; ALTER TABLE meter_contexts DROP COLUMN observed_from; DROP TABLE board_device_sessions; DROP TRIGGER meter_pairs_source_removed; DROP TRIGGER quota_anchors_source_deleted; DROP TRIGGER coverage_device_added; DROP TRIGGER coverage_device_removed; DROP TRIGGER coverage_device_status; DROP TRIGGER coverage_holding_added; DROP TRIGGER coverage_holding_removed; DROP TRIGGER coverage_holding_changed; DROP TRIGGER coverage_device_deleted; DROP TABLE client_links; DROP TABLE link_versions; DROP TABLE link_mutations; DROP TABLE device_tracking_policy; DROP INDEX devices_by_owner; DROP INDEX readings_sparse; ALTER TABLE readings DROP COLUMN pair_anchor; DROP TABLE meter_pair_starts; DROP TABLE quota_anchors; DROP TABLE work_coverage; DROP TABLE device_tracking; DROP TABLE owner_coverage_versions; DROP TABLE device_measurement_policies; DROP TABLE source_measurement_preferences; DROP TABLE device_measurement_control; DROP TABLE measurement_mutations; DROP TABLE resource_origins; ALTER TABLE device_clients DROP COLUMN observed_at; PRAGMA user_version=23;');}store.close();store=new Store(file,now);directory=new Directory(store.db);app=await build();},
   };
 }
 
@@ -78,7 +79,7 @@ for(const provider of ['deepseek','openrouter'] as const)test(`${provider} reten
   assert.equal(actual.from,cutoff+2*M);assert.equal(actual.observedFrom,head);
   assert.equal(h.store.db.prepare('SELECT count(*) n FROM currency_bindings WHERE source_id=? AND observation_at=?').get(id,head)?.n,1);
   const nativeResult=await h.read(id,from,to,meter);assert.equal(nativeResult.summary.end,'100000000');
-  const tape=periodTape(h.store,h.board,h.store.shown(h.board,[]),h.user.id,'budget',{unit:'USD',currency:target.id,meters:JSON.stringify([[id,meter]])},{from,to},'test',from,()=>{});
+  const tape=periodTape(h.store,h.board,h.store.authorizedSources(h.board),h.user.id,'budget',{unit:'USD',currency:target.id,meters:JSON.stringify([[id,meter]])},{from,to},'test',from,()=>{});
   const wire=JSON.parse(JSON.stringify(tape));assert.equal(wire.money[0].spans.at(-1).observedFrom,head);
   assert.equal(new PeriodAccounting(wire,null).moneySummary(id,meter,target.id,{from,to})!.end,'200000000');
 });
@@ -140,7 +141,7 @@ test('shared financial projections keep admission evidence while stripping heads
   const card=result.value.meters.find(m=>m.id==='balance:credits')!;
   assert.equal(card.at,admission);assert.equal(card.amount,'2500000000001');assert.equal(card.scale,12);
   assert.equal(result.value.creditBalance!.at,admission);assert.equal(result.summary.semantics!.conversion!.original.at,admission);
-  const tape=periodTape(h.store,board.id,h.store.shown(board.id,[]),h.user.id,'budget',{unit:'USD',currency:'USD',meters:JSON.stringify([[id,'balance:credits']])},{from,to},'test',from,()=>{});
+  const tape=periodTape(h.store,board.id,h.store.authorizedSources(board.id),h.user.id,'budget',{unit:'USD',currency:'USD',meters:JSON.stringify([[id,'balance:credits']])},{from,to},'test',from,()=>{});
   assert.ok(tape.money[0].spans.every(span=>span.observedFrom===undefined||span.observedFrom>=admission));
   assert.ok(tape.money[0].readings.every(row=>row.at>=admission));
   assert.equal(new PeriodAccounting(JSON.parse(JSON.stringify(tape)),null).moneySummary(id,'balance:credits','USD',{from,to})!.end,result.summary.end);

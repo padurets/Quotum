@@ -5,7 +5,9 @@ import type {PastResets} from './resets';
 import {windowKey} from './types';
 import {seriesName} from './quota';
 import {DASHES} from './providers';
-import {cardId, colorOf} from './view';
+import {colorOf} from './view';
+import {effectiveFilters} from './filterSelection';
+import {matchesSelection,matchesSource} from '../../server/domain/dataFilters';
 import {covered, type Coverage} from './historyPlot';
 
 /** A series of the history as the chart and the table show it: named, coloured, with its value now. */
@@ -48,7 +50,7 @@ export function preciseReadout(line: Pick<PlotSeries,'pointMode'|'capCells'|'poi
 export function* linesPrepared<T extends PlotSeries>(history: {series: readonly T[];live?:boolean} | null, sources: {id: string; provider: string; title?: string; windows: Win[]}[] | null, view: View, kind: Kind): Preparation<(T & LineName)[]> {
   if (!history || !sources) return [];
   const perSource: Record<string, number> = {};
-  const hidden = new Set([...view.windows, ...view.hidden]);
+  const hidden = new Set(view.windows),filters=effectiveFilters();
   const rank = (entry: PlotSeries) => {
     const source = sources.findIndex(s => s.id === entry.sourceId);
     return source * 100 + (sources[source]?.windows.findIndex(w => w.id === entry.windowId) ?? 99);
@@ -56,10 +58,10 @@ export function* linesPrepared<T extends PlotSeries>(history: {series: readonly 
   const result: (T & LineName)[] = [];
   for (const entry of yield* ordered(history.series, (a, b) => rank(a) - rank(b))) {
     yield;
-    const source = hidden.has(cardId(entry.sourceId)) ? undefined : sources.find(s => s.id === entry.sourceId);
+    const source = filters&&!matchesSource(filters,entry.sourceId) ? undefined : sources.find(s => s.id === entry.sourceId);
     const retained=history.live===false&&'windowValue' in entry?entry.windowValue as Pick<Win,'id'|'kind'|'label'|'minutes'>|undefined:undefined;
     const live = retained??source?.windows.find(w => w.id === entry.windowId);
-    if (!source || !live || live.kind !== kind || !entry.points.length || hidden.has(windowKey(entry.sourceId, entry.windowId))) continue;
+    if (!source || !live || live.kind !== kind || !entry.points.length || (filters?!matchesSelection(filters.windows,[entry.sourceId,entry.windowId]):hidden.has(windowKey(entry.sourceId, entry.windowId)))) continue;
     const index = (perSource[entry.sourceId] = (perSource[entry.sourceId] ?? -1) + 1);
     result.push(
       {

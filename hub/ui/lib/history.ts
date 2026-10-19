@@ -1,3 +1,4 @@
+import {onDataFilters,filtersReady} from './filterSelection';
 import {HistoryPool,historyPool} from './historyPool';
 import {boardPeriod,followPeriod} from './period';
 import type {HistoryScope} from '../../server/domain/history';
@@ -934,7 +935,7 @@ export {historyPool} from './historyPool';
 function reader(scope: HistoryScope, family: MoneyFamily = 'budget') {
   const value=new HistoryStore({
     workInPresentation:scope!=='budget',
-    read: (_board, cell, from, to, signal, meters, meta) => boardPeriod.transport.read(family==='funds'?'funds':scope,{cell:String(cell),from:String(from),to:String(to),...(pan.get()?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})},signal).then(reply=>expandHistory(reply,meta)),
+    read: (_board, cell, from, to, signal, meters, meta) => boardPeriod.transport.read(family==='funds'?'funds':scope,{cell:String(cell),from:String(from),to:String(to),...(pan.get()?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{...(meters.sources?{sources:JSON.stringify(meters.sources)}:{}),unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})},signal).then(reply=>expandHistory(reply,meta)),
     now: hubNow,
     setTimeout: (run, ms) => setTimeout(run, ms),
     clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
@@ -954,9 +955,9 @@ const selectedMeters = (state: PageState, scope: HistoryScope, family: MoneyFami
 };
 function activeReaders(state=page.get()) {
   const board=state.board;
-  quotaHistory.setActive(shellActive&&!!board&&[ACTIVITY,...QUOTA_WIDGETS].some(id=>widgetVisible(board.view,id,board.lineup.length)));
-  fundsHistory.setActive(shellActive&&!!board&&widgetVisible(board.view,SUBSCRIPTION_FUNDS,board.lineup.length));
-  budgetHistory.setActive(shellActive&&!!board&&BUDGET_WIDGETS.some(id=>widgetVisible(board.view,id,board.lineup.length)));
+  quotaHistory.setActive(shellActive&&filtersReady()&&!!board&&[ACTIVITY,...QUOTA_WIDGETS].some(id=>widgetVisible(board.view,id,board.lineup.length)));
+  fundsHistory.setActive(shellActive&&filtersReady()&&!!board&&widgetVisible(board.view,SUBSCRIPTION_FUNDS,board.lineup.length));
+  budgetHistory.setActive(shellActive&&filtersReady()&&!!board&&BUDGET_WIDGETS.some(id=>widgetVisible(board.view,id,board.lineup.length)));
 }
 export const historyReaders = {setActive(active: boolean) {shellActive=active;boardPeriod.activate(active);activeReaders();}};
 
@@ -991,6 +992,7 @@ const windowsOf = (state: PageState) => Object.values(state.board?.cards ?? {}).
 if(typeof window!=='undefined')followPeriod();
 follow(quotaHistory,page);follow(budgetHistory,page);follow(fundsHistory,page,'funds');
 page.listen((_event,state)=>activeReaders(state));
+onDataFilters(()=>{for(const [reader,scope,family] of [[quotaHistory,'quota','budget'],[budgetHistory,'budget','budget'],[fundsHistory,'budget','funds']] as const)reader.setMeters(selectedMeters(page.get(),scope,family));activeReaders();});
 
 /** The plot follows the gesture; only its completion chooses exact quantities. */
 export function followPan(loader: HistoryStore, gesture: Pick<Pan, 'get' | 'subscribe'>, selectedRange: () => TimeRange | null) {

@@ -1571,16 +1571,37 @@ Its translucent surface remains distinct from the page background. On wide scree
 the backing shares the content's 1240 px maximum width and 28 px inner side spacing,
 with rounded lower corners. Hiding filters reduces that same surface to the header.
 Narrow screens keep edge-to-edge bars.
+The row also owns data selection for Resources, Projects, Devices and Clients.
+Provided-data authority, these predicates and layout visibility are independent.
+The v1 defaults live in `board_filters`, with their own revision and an opaque
+projection-authority precondition. Owner Save compares both atomically, merges
+authorized changes while retaining dormant raw rules, and explicitly adopts the
+initial revision zero. Readers keep current filters and dirty drafts per user,
+board and tab; foreign saves only update Restore. Compact and native attention
+consume saved defaults. Only native attention also retains its existing
+hidden-card admission, including a final check before notification delivery.
+Separate stream configuration frames carry the authorized filter projection;
+snapshots carry only matching revision/authority references.
+The period coordinator applies work predicates to authorized intervals before
+building session, activity or direct-hour indexes. Facets come from the unfiltered
+period and current roster. One raw read also supplies independent source-wide
+curves for supplier rates and forecasts, transported as a source-only live sweep
+or compact fixed summary. Work-filter changes retire selected indexes and details,
+while source evidence retains its own cursor, cache identity and generation.
+Canonical defaults fit 256 KiB, their merge/projection envelopes 272 KiB, period
+requests 76 KiB and details 80 KiB. An inherited oversized predicate remains
+recoverable in the common controls without an oversized work request.
 The filter button forms its own group after the board controls. A small dot marks a
-selected historical range, including when the row is hidden; returning to live removes it.
+non-default data selection or historical range, including while the row is hidden.
 The row starts closed and remembers its visibility in the reader's browser.
 Hiding it preserves the selected period and shared chart horizon; while open,
 it keeps them available during scrolling. Board navigation and widget management
 stay in the header. Five-hour limits, weekly limits and wallet balance
-each have independent chart/table pairs. Both wallet widgets share
-an accounts-and-keys picker in their settings. Each chart's legend controls
-only its own visibility. Subscription funds use their own family and expose data
-selection only for a bounded cohort or a retained explicit selection. Table columns
+each have independent chart/table pairs. The common Resources control selects logical windows, wallet balances and key caps
+for cards, charts and tables together. Each chart's legend controls
+only its own visibility. Subscription funds use their own filter family. Projects, devices and clients
+intersect the session cohort before aggregation; source-wide quota and financial
+estimates retain a separate source-only work sweep from the same authorized read. Table columns
 remain owner settings, while shared data controls are available to every reader. Each
 analytics panel uses the same heading and reader-error component. The selected
 period and its back/forward buttons appear together at the right end of the shared
@@ -1679,7 +1700,7 @@ reading order, with the heights chosen where the least their content can show fi
 arranging is available only on the wide grid.
 The hub migrates pre-grid views and legacy analytics anchors atomically, retaining
 hidden intent, heights, unrelated geometry and each table's columns. A board view and
-revision are read as one reconciled pair. Saves use the compact version 4 codec and its writer header;
+revision are read as one reconciled pair. Saves use the compact version 5 codec and its writer header;
 a stale runtime cannot save a version it merely echoed from a snapshot. The ordinary
 body limit is 80 KiB UTF-8 of the encoded request; decoded drafts fit 132 KiB.
 Storage and POST use the same tuple codec; readers receive a semantic View object.

@@ -9,6 +9,14 @@ import {packWorkPrepared,type WorkTrace} from './domain/periodWork.js';
 import {drain,type Preparation} from './domain/prepare.js';
 import type {Sessions} from './sessions.js';
 import {workKnownFrom} from './domain/history.js';
+import {matchesWork,type WorkFilter} from './domain/dataFilters.js';
+
+/** Both scopes borrow the same bounded raw ledger and immutable access snapshot. */
+export function selectedWork(sourceWide:WorkRead,filter:WorkFilter):WorkRead {
+  const read:WorkRead=(from,to)=>sourceWide(from,to).filter(row=>matchesWork(filter,{...row,clientId:row.rawContext?.client??null}));
+  read.access=sourceWide.access;read.authority=sourceWide.authority;read.ensureAccess=sourceWide.ensureAccess;read.reserve=sourceWide.reserve;read.release=sourceWide.release;
+  read.filterKey=JSON.stringify(filter);return read;
+}
 
 /** A composite read extracts work once for charts and the temporal index. */
 export function sharedWork(hub:Pick<Hub,'store'>,_shown:Shown,range:PeriodRange|null|(()=>PeriodRange|null),reserve:(bytes:number)=>void,release:(bytes:number)=>void,_owner:string|null=null,now=Date.now(),board:string):WorkRead {

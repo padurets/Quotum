@@ -184,8 +184,10 @@ notifications also stay live, independently of the board's historical range.
   sessions by project, machine or resource, with work within the selected period,
   the date and time of their last recorded work in it and current working counts when
   known. Individual agents with their machines and subscriptions are a click away.
-  The header's filter button reveals the common period, quota window and forecast
-  horizon; hiding the controls keeps those choices. A dot marks a historical range.
+  The header's filter button reveals the common period, forecast horizon and filters
+  for resources, projects, devices and clients. Readers explore their own selection;
+  the owner can explicitly save the board's opening defaults. Hiding the controls
+  keeps those choices. A dot marks a historical range.
   The owner places them on a six-column grid by dragging their heads, and resizes them
   to a third, a half, two thirds or the whole width. Each fills only the rows its content
   needs, so cards stack beside a tall list, unless the owner drags its bottom edge (or

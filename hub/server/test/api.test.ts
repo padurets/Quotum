@@ -711,8 +711,8 @@ test('history metadata reuse is opt-in and cannot bypass board access or a chang
   assert.ok(other.body.known); assert.notEqual(other.body.meta, first.body.meta);
   await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {...EMPTY, hidden: [`source:${source}`]}});
   const hidden = await read(suffix);
-  assert.equal(hidden.status, 200); assert.notEqual(hidden.body.meta, first.body.meta);
-  assert.equal(hidden.body.known.sources[source], undefined);
+  assert.equal(hidden.status, 200); assert.equal(hidden.body.meta, first.body.meta);
+  assert.equal(hidden.body.known, undefined);
   assert.equal((await read('&meta=invalid')).status, 400);
   assert.ok((await read('&meta=' + 'x'.repeat(43))).body.known, 'an unknown valid token returns complete metadata');
 });
@@ -1081,7 +1081,7 @@ test('view writes require an independent current writer header even when an old 
     assert.equal(reply.status,428);assert.equal(reply.body.error,'view_reload_required');
     assert.deepEqual(store.db.prepare('SELECT * FROM views WHERE board_id=?').get(board),before);
   }
-  assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:{...current,version:5}})).status,400);
+  assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:{...current,version:4}})).status,400);
   assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:{...current,version:1}})).status,400);
   assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:current,headers:{'If-Match':'"0"'}})).status,409);
 });

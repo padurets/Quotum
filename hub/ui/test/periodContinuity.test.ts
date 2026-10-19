@@ -10,7 +10,7 @@ for(const failure of [false,true])test(`a reconnect retires revoked work through
     const c=consumer({...h,...d}),before=c.settle(),presentation=d.loader.get().presentation;
     assert.ok(before.paths.length);assert.deepEqual(before.names,['Work project']);assert.equal(quotaCells(h,d).work.content,'1m');
     h.disconnect();h.remove();const gate=h.hold();h.reconnect();await flush();
-    assert.deepEqual(h.frames.map(f=>f.type),['hello','snapshot'],'a new stream does not replay the missing cutoff');
+    assert.deepEqual(h.frames.map(f=>f.type),['hello','snapshot','filters'],'a new stream does not replay the missing cutoff');
     if(failure){gate.reject(new Error('unavailable'));await flush();}
     const fresh=h.fresh();assert.equal(workedSessions((fresh.sessions as any).value,fresh.basis.range,NOW).length,0);
     assert.equal(h.period.get().rows.length,0);assert.ok(d.loader.get().presentation>presentation);
@@ -51,7 +51,7 @@ test('an unknown legacy snapshot cannot prove continuity, and a late old reply c
 test('overview, stream, new and lost leases and financial replacement snapshots share the existing opaque work identity',async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=await fixture();
   try {
-    const expected=()=>h.store.workKey(h.board,h.store.shown(h.board,h.directory.view(h.board).hidden));
+    const expected=()=>h.store.workKey(h.board,h.store.authorizedSources(h.board));
     assert.equal(new Projection(h.hub).snapshot(h.alice.id,h.board,NOW)!.workAuthority,expected());
     assert.equal(h.page.get().board!.workAuthority,expected());
     const reader={user:h.alice.id,secret:'fixture-session',board:h.board};

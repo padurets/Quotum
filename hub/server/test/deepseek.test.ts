@@ -233,7 +233,7 @@ test('a warm exact tile predecessor expires at the fixed edge when the selected 
     h.store.record(source,deepSeekMeasurement(payload(),H-60_000));
     const tiles=new HistoryTiles(h.store),nothing=()=>{};
     h.store.setObserver({touchSources:nothing,touchBoards:nothing,touchUser:nothing,touchHub:nothing,history:(id,since)=>tiles.touch(id,since),dropSessions:nothing,dropMember:nothing,dropBoard:nothing});
-    const selection={unit:'CNY',ids:[[source,'balance:CNY']] as [string,string][]},read=(cache=tiles)=>cache.read(board,M,0,2*H,3*H,h.store.shown(board,[]),selection).map(json=>JSON.parse(json));
+    const selection={unit:'CNY',ids:[[source,'balance:CNY']] as [string,string][]},read=(cache=tiles)=>cache.read(board,M,0,2*H,3*H,h.store.authorizedSources(board),selection).map(json=>JSON.parse(json));
     const before=read();h.store.record(source,deepSeekMeasurement(payload([]),H));
     const warm=read(),cold=read(new HistoryTiles(h.store));assert.deepEqual(warm,cold);
     const previous=composeMeters(before,M,0,H)[0];assert.ok(previous.points.every(p=>p.validUntil!<=H));

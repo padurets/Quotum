@@ -201,6 +201,24 @@ The first explicit save adopts revision 0 as revision 1 even if semantically equ
 later equal saves do not increment the revision or publish a change. Saving layout
 does not save filters; restoring filters makes no server mutation.
 
+The common filter row exposes Resources, Projects, Devices and Clients to every
+reader. Current selection and dirty drafts belong to one user, board and browser
+tab. Foreign saves update the Restore baseline without replacing that active view.
+An owner saves opening defaults explicitly with the 26 px Save icon; Restore uses
+the latest acknowledged defaults. Edits made while Save is in flight stay dirty.
+Family All/Automatic and Clear affect only that family's data selection.
+
+Snapshots and board frames carry only `filtersRevision` and `filtersAuthority`.
+A separate `filters` frame carries the projected envelope, after its snapshot or
+board frame and before dependent notification admission. A replacement snapshot
+requires its matching configuration. Same-revision authority changes reproject
+dormant rules. Configuration frames are bounded by 272 KiB; the native SSE decoder
+allows 320 KiB, and incremental stream/poll backlog allows 640 KiB including framing.
+Native pending notification admission retains its separate 256 KiB bound. Existing
+large initial browser snapshots have no new per-frame or aggregate bootstrap cap.
+Compact uses saved defaults. Native attention also uses the saved source/window
+mask and its existing hidden-card admission, rechecked at the final delivery sink.
+
 Canonical filters have a 256 KiB UTF-8 ceiling. The merge request and projected
 envelope have a 272 KiB ceiling. A new saved work predicate must also fit the existing
 76 KiB period request and 80 KiB filtered detail envelope, including reserved cursor
@@ -282,8 +300,8 @@ is `409 view_conflict` with the authorized current `{view, revision}`.
 Success returns `{view, revision}`. Semantic changes increment revision; no-op saves
 do not. Snapshots and view events carry that revision.
 
-Storage and POST use `[4, places, mask, ...fields]`; events, snapshots and conflict
-responses use the semantic object with `version: 4`. Each place is `[id, geometry]`
+Storage and POST use `[5, places, mask, ...fields]`; events, snapshots and conflict
+responses use the semantic object with `version: 5`. Each place is `[id, geometry]`
 or `[id, geometry, h]`, in reading order. Integer ids 0 through 6 stand for `agents`,
 `activity`, `quota-history`, `budget-history`, `quota-table`, `budget-table`, `subscription-funds`; aliases 7 through 10 are `quota-session-history`,
 `quota-session-table`, `budget-spending-history`, `budget-spending-table`; the last two are retired preview slots, never reused or offered by the widget catalogue. Other ids
@@ -428,7 +446,7 @@ or the table, a chart as tall as it draws by itself, the first agent of the list
 many more), so `h` is what the owner asked for, not what shows, and the hub does not check
 it against the content. A place has exactly `x`, `y`, `w` and, optionally, `h`; anything
 else is refused. The hub migrates stored pre-grid views and split analytics IDs before
-serving the view with its revision. Saves require the compact version 4 codec and
+serving the view with its revision. Saves require the compact version 5 codec and
 its writer header, with an 80 KiB UTF-8 body limit. The page uses keepalive only within its
 aggregate 64 KiB budget; larger drafts use immediate serialized ordinary saves.
 There is no separate count limit on places; each place is validated.
@@ -566,7 +584,7 @@ reset leaving the history) goes out when it does.
 | `unauthorized` | The session ended: signed out, a new password, expired. | Signs in again. |
 | `gone` | The board was deleted, or the reader is no longer on it. | Opens another board. |
 | `restart` | The hub stops, or could not work out the board. | Connects again in a few seconds. |
-| `limit` | A newer reader took its place, or it fell 256 KiB behind. | Connects again, not sooner than in 30 seconds. |
+| `limit` | A newer reader took its place, or it fell 640 KiB behind. | Connects again, not sooner than in 30 seconds. |
 
 ## Reading the board period
 
@@ -833,12 +851,39 @@ does not change capture or authority cutoffs. A cursor only proves its retained 
 widening into a discarded prefix requires a complete bounded baseline.
 
 `POST /api/boards/:board/period/sessions` reads details for at most 100 opaque refs.
-Its body is `{version:1, selection, evaluatedAt, cursor, refs}`, at most 8 KiB. The cursor
+Its body is `{version:1, selection, evaluatedAt, cursor, refs, workFilter?}`, at most 80 KiB. The cursor
 must still name the current authorized evidence and cover the requested interval;
 otherwise the response is `400 history_range_invalid`. It returns a complete sessions
 section containing the requested clipped rows, or a section error. Dashboard session
 disclosures use 50 rows from the complete index, so a clock-driven membership change
 requires no detail request. Detail reads use the same accounting transport and memory limits.
+
+The composite period request also accepts `workFilter`, `facets:true`, and
+`sourceWork:{cursor?}`. The work filter contains only sources, projects, devices
+and clients, using the data-filter selection codecs. It is applied after admission,
+funding redaction and corrected names, before interval aggregation or fixed
+compaction. Session and detail cursor identity includes the canonical predicate;
+a mismatched detail predicate returns `400 history_range_invalid`.
+`facets` returns bounded projects (including null), public devices with their names,
+and clients from the unfiltered authorized period plus current roster. The selected
+cohort does not shrink these choices.
+
+One authorized raw work read supplies the selected trace and independent
+source-wide curves. Live requests for quota work or budget `work:'1'` may request
+`sourceWork`: a separate complete/delta section with `version:1,from,cut,patterns,
+sources,replaceFrom?,replaceTo?,cursor`. Each source has `id,knownFrom,blocks`;
+blocks are flattened hour/pattern-index pairs. Patterns are flattened
+within-hour millisecond/count-delta pairs, with nonnegative counts returning to zero.
+A delta replaces its exact interval, including empty tails and partial hours.
+This cursor is independent of project/device/client predicates. Fixed reads send
+compact summaries instead. Quota summaries add `selectedWork:{from,ms,agentMs}`;
+money-work summaries add `selectedWork:{from,activeMs,agentMs}`. Direct hours use
+the selected cohort; spending rates, spending-during-work shares and forecasts use
+the full source cohort. Unknown work remains distinct from known empty work.
+Changing a work predicate reuses independent supplier evidence while retiring its
+selected rows, details and prepared indexes. Late replies cannot restore an older
+cohort or revoked access. A cold predicate that cannot fit the period/detail body
+budgets enters `filters_limit` recovery without issuing an oversized work request.
 
 The `history` event's optional `changes` entries are
 `{source, scope:'quota'|'budget', since, workSince?}`. `workSince` identifies actual
@@ -911,7 +956,7 @@ an absent entry is unavailable. These two fields appear in quota and legacy comb
 history. Budget-only history omits them and does not read device session access.
 The browser accepts legacy metadata but new replies do not send a private-work alias.
 `known.sources` gives when each shown
-subscription came to the board; hidden cards are absent. The chunks cover the cut
+subscription came to the board; layout-hidden cards remain authorized. The chunks cover the cut
 `[from, to)` whole, including empty cells, in time order, cut at tile edges. A whole tile
 ending no later than now is closed. Closed tiles are cached under their board, grid and
 tile, with the board's work selection and names; measurements and credited work
@@ -1180,7 +1225,7 @@ at once:
 
 A poll with its `lease` is answered with the events since the last answer as soon as
 there are any, else after 25 seconds with none. A lease counts as a reader while it lives
-and keeps its events, up to 256 KiB; it is forgotten 60 seconds after its last answer,
+and keeps its events, up to 640 KiB; it is forgotten 60 seconds after its last answer,
 when it falls further behind, or when the hub restarts, and a poll with it then starts a
 new lease with a snapshot. A lease is the session's and the board's it was made for. A
 lease let go for a newer reader answers `bye` with `limit` once: at once to a poll
@@ -1195,13 +1240,13 @@ its person; over the hub's, of its person if they have one, else it is refused w
 
 ## Exact meters and hub connections
 
-Card key scales use the existing view's `windows` visibility list with
-`<source id>/key:<opaque key id>` entries. The default preview stays visible unless
-hidden; `shown` holds explicitly enabled scales beyond it, using the same entry format.
-An explicit enabled choice survives changes in preview ordering. The card's switches
-also apply to compact. Card settings page through key-scale switches; there is no
-key-table dialog. Wallet widgets share an Accounts and keys data picker in their settings,
-independently of card scales. Chart legends control each chart's visibility separately.
+Cards, compact rows and wallet analytics share logical balance and key-cap
+selection in the common Resources filter. Automatic mode selects account balances
+and the capped keys in the five-key preview; explicit pins can retain keys outside
+that preview and exclusions take precedence. The same control pages through the
+authorized inventory and retained selected keys. Subscription funds are a separate
+family. Chart legends control each chart's paint independently. Layout hiding does
+not change history access, forecast authority or key inventory.
 Both resource types use the same segmented meter; balances have no percentage meter.
 
 A hub-measured card may also carry `meters`, `keys` (a preview of at most five),
@@ -1272,7 +1317,7 @@ windows, resets, work and selected catalogue-defined subscription cap meters. Bu
 reads contain only selected financial meters and never execute native-window or agent
 work reads; the native/activity wire fields are empty. Budget scope requires a valid
 `unit`/`meters` pair, including an explicit empty list. Resource-family mismatches return
-`400 invalid_request`; hidden or unauthorized selected sources remain `404 not_found`.
+`400 invalid_request`; unauthorized selected sources return `404 not_found`.
 Quota reads cannot request private monetary conversion. Validated ranges outside readable
 bounds return `400 history_range_invalid` for scoped readers, independently of malformed
 selection errors. Existing cell, tile, meter, response and retention limits remain.

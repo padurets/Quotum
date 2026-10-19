@@ -106,7 +106,7 @@ test('a financial grant revoked between sections discards the captured preparati
   assert.equal(attempts,2);h.released();
 });
 
-for(const change of ['relevant','unrelated','after-cut','other-scope','currency','authority','churn','floor','cancel'] as const)test(`cooperative period preparation handles ${change} between slices`,async t=>{
+for(const change of ['relevant','unrelated','after-cut','other-scope','currency','layout','churn','floor','cancel'] as const)test(`cooperative period preparation handles ${change} between slices`,async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=fixture();t.after(h.close);
   let attempts=0;const abort=new AbortController(),original=PeriodAccounting.prepare;
   t.mock.method(PeriodAccounting,'prepare',function*(...args:Parameters<typeof original>){
@@ -117,7 +117,7 @@ for(const change of ['relevant','unrelated','after-cut','other-scope','currency'
       if(change==='after-cut'){h.record(40,NOW-M);h.reader.touch(h.source,NOW-M,['quota']);}
       if(change==='other-scope')h.reader.touch(h.source,NOW-90*M,['budget']);
       if(change==='currency')h.store.currencies.select(h.user.id,'EUR');
-      if(change==='authority'){const view=h.directory.view(h.board);h.directory.saveView(h.board,{...view,hidden:['source:'+h.source]},h.user.id,NOW);}
+      if(change==='layout'){const view=h.directory.view(h.board);h.directory.saveView(h.board,{...view,hidden:['source:'+h.source]},h.user.id,NOW);}
       if(change==='churn')h.reader.touch(h.source,NOW-90*M,['quota']);
       if(change==='floor')for(let i=0;i<2049;i++)h.reader.touch('other-source',0,['quota']);
       if(change==='cancel')abort.abort();
@@ -131,11 +131,10 @@ for(const change of ['relevant','unrelated','after-cut','other-scope','currency'
   else{
     const reply=JSON.parse(await h.read()) as PeriodReply,part=reply.quota;
     assert.equal(part?.state,'complete');if(part?.state!=='complete')throw new Error('quota');
-    if(change==='authority')assert.deepEqual(part.value.tape!.fixed!.quota,[]);
-    else assert.equal(part.value.tape!.fixed!.quota[0].remainingAtEnd,change==='relevant'?60:90);
+    assert.equal(part.value.tape!.fixed!.quota[0].remainingAtEnd,change==='relevant'?60:90);
     assert.equal(reply.basis.revision,change==='relevant'?'1':change==='floor'?'2049':'0','a snapshot never acknowledges later irrelevant facts');
   }
-  assert.equal(attempts,['relevant','currency','authority','churn','floor'].includes(change)?2:1);
+  assert.equal(attempts,['relevant','currency','churn','floor'].includes(change)?2:1);
   h.released();
   if(change==='cancel')assert.equal(getEventListeners(abort.signal,'abort').length,0);
 });

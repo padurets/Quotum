@@ -1,3 +1,4 @@
+import type {FilterEnvelope} from '../../server/domain/dataFilters';
 import {budgetVisible} from './money';
 import {defaultCurrencyContext,DEFAULT_CURRENCY,type CurrencyContext} from '../../server/domain/currency';
 import {useMemo} from 'react';
@@ -33,6 +34,7 @@ export type Snapshot = {
   board: BoardMeta;
   view: View;
   viewRevision?: number;
+  filtersRevision?:number;filtersAuthority?:string;filters?:FilterEnvelope;
   connectionsRevision?: number;
   historyStart: number;
   workAuthority?: string;
@@ -54,6 +56,7 @@ export type HubEvent =
   | {type: 'hello'; data: {epoch: string}}
   | {type: 'snapshot'; data: Snapshot}
   | {type: 'board'; data: {board: BoardMeta}}
+  | {type:'filters';data:FilterEnvelope}
   | {type: 'view'; data: {view: View; revision?: number}}
   | {type: 'connections'; data: {revision: number}}
   | {type: 'lineup'; data: {sources: string[]}}
@@ -81,6 +84,7 @@ export type BoardState = {
   meta: BoardMeta;
   view: View;
   viewRevision?: number;
+  filtersRevision?:number;filtersAuthority?:string;filters?:FilterEnvelope;
   connectionsRevision?: number;
   historyStart: number;
   workAuthority?: string;
@@ -177,6 +181,7 @@ function snapshot(state: PageState, data: Snapshot): PageState {
     viewRevision: Math.max(old?.viewRevision ?? 0, data.viewRevision ?? 0),
     connectionsRevision: Math.max(old?.connectionsRevision ?? 0, data.connectionsRevision ?? 0),
     historyStart: data.historyStart,
+    filtersRevision:data.filtersRevision,filtersAuthority:data.filtersAuthority,filters:old?.filters&&old.filters.revision===data.filtersRevision&&old.filters.authority===data.filtersAuthority?old.filters:undefined,
     workAuthority: typeof data.workAuthority === 'string' && data.workAuthority ? data.workAuthority : undefined,
     lineup: keep(
       old?.lineup,
@@ -267,6 +272,8 @@ function hub(state: PageState, event: HubEvent): PageState {
       return patch(state, board => set(board, 'cadence', event.data.id, event.data.cadence));
     case 'refresh':
       return patch(state, board => set(board, 'refresh', event.data.id, event.data.refresh));
+    case 'filters':
+      return patch(state,board=>{if(board.filters&&board.filters.revision>event.data.revision)return board;return {...board,filters:keep(board.filters,event.data),filtersRevision:event.data.revision,filtersAuthority:event.data.authority};});
     case 'forecast':
       return patch(state, board => set(board, 'forecast', event.data.id, event.data.forecast));
     case 'mine':

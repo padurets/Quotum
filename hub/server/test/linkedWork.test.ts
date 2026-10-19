@@ -75,7 +75,7 @@ test('temporal fragments preserve one agent within the same cell and live counte
   const f = setup(); try {
     f.store.creditWork(f.device, now, now + 2 * minute, [f.key()]);
     f.link({to: now + minute}); f.link({sourceId: f.second, from: now + minute});
-    const tiles = new HistoryTiles(f.store), shown = f.store.shown(f.board, []);
+    const tiles = new HistoryTiles(f.store), shown = f.store.authorizedSources(f.board);
     const chunks = tiles.read(f.board, 5 * minute, now, now + 5 * minute, now + 5 * minute, shown).map(json => JSON.parse(json) as Chunk);
     const result = compose(chunks, {now: now + 5 * minute, historyStart: now, known: f.store.historyKnown(shown, f.owner.id)}, targetOf(5 * minute, now + 5 * minute, 'test', {from: now, to: now + 5 * minute}), new Set());
     assert.equal(result.activity.agentMs, 2 * minute); assert.equal(result.activity.activeMs, 2 * minute); assert.equal(result.activity.agents, 1);
@@ -140,7 +140,7 @@ test('closed tiles without a reader follow corrections and effective device/proj
   const f = setup(); try {
     f.store.creditWork(f.device, now, now + minute, [f.key()]);
     const tiles = new HistoryTiles(f.store);
-    const read = () => tiles.read(f.board, minute, now, now + 60 * minute, now + 3 * 60 * minute, f.store.shown(f.board, []));
+    const read = () => tiles.read(f.board, minute, now, now + 60 * minute, now + 3 * 60 * minute, f.store.authorizedSources(f.board));
     assert.equal(JSON.parse(read()[0]).activity.sessions[0][1], null);
     const link = f.link();
     assert.equal(JSON.parse(read()[0]).activity.sessions[0][1], f.wallet);
@@ -179,7 +179,7 @@ for (const flush of [false, true]) for (const change of ['holding', 'rule', 'bou
     if (change === 'boundary') time = now + minute;
     if (flush) events.flush();
     const answer = await events.poll(reading, opened.lease); assert.ok(answer && answer !== 'limit');
-    assert.equal(answer.frames.length, 1); assert.equal(answer.frames[0].type, 'snapshot');
+    assert.equal(answer.frames.length, 2); assert.equal(answer.frames[0].type, 'snapshot');
     const encoded = polled(answer.frames);
     for (const value of ['private-canary.example', 'custom-gateway-canary', link.id, f.owner.id, 'a'.repeat(32)]) assert.ok(!encoded.includes(value), value);
     const snapshot=JSON.parse(answer.frames[0].data);

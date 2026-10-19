@@ -1,9 +1,11 @@
+import {useDataFilters,dataFilters} from '../lib/dataFilters';
+import {walletRule,matchesWallet,type MoneyRef} from '../../server/domain/dataFilters';
 import {useEffect,useState} from 'react';
 import {DEFAULT_CURRENCY,conversionOrigin} from '../../server/domain/currency';
 import {useBoardId,useCurrencyContext,type Named} from '../lib/board';
 import {ApiError,call} from '../lib/http';
-import {archivedKeyGroups,keyMeter,moneySelection,moneyChoices,toggleMoneyChoice} from '../lib/moneySelection';
-import {usePref,setPrefs} from '../lib/prefs';
+import {archivedKeyGroups,keyMeter} from '../lib/moneySelection';
+import {usePref} from '../lib/prefs';
 import {referenceBalance,budgetVisible,keyName} from '../lib/money';
 import {balanceDescriptor,type MoneyFamily} from '../../server/domain/providers';
 import type {MeterHistory} from '../lib/moneyView';
@@ -16,16 +18,19 @@ import {KEYS_PER_PAGE,KeyPages,KeyPageContent} from './KeyPages';
 import type {KeyPage} from '../lib/moneyKeys';
 
 /** The chart and table edit the same reader selection beside their own measurements. */
-export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named[];hidden:readonly string[];series:readonly MeterHistory[]}) {
+export function KeyMoneySettings({sources,hidden:_hidden,series}:{sources:readonly Named[];hidden:readonly string[];series:readonly MeterHistory[]}) {
   const context=useCurrencyContext(),board=useBoardId(),moneyPrefs=usePref('money'),unit=moneyPrefs.unit??DEFAULT_CURRENCY;
-  const prefs={money:moneyPrefs};
-  const accounts=sources.filter(s=>budgetVisible(s)&&!hidden.includes('source:'+s.id)&&(unit===DEFAULT_CURRENCY?!!referenceBalance(s,context.target.id!==DEFAULT_CURRENCY||s.provider==='codex'):s.meters?.some(m=>m.kind==='balance'&&m.unit===unit)));
+  const filters=useDataFilters().current;
+  const accounts=sources.filter(s=>budgetVisible(s)&&(unit===DEFAULT_CURRENCY?!!referenceBalance(s,context.target.id!==DEFAULT_CURRENCY||s.provider==='codex'):s.meters?.some(m=>m.kind==='balance'&&m.unit===unit)));
   const [sourceId,setSource]=useState<string|null>(null);
   const [loaded,setPage]=useState<KeyPage|null>(null),[after,setAfter]=useState<string|undefined>(),[back,setBack]=useState<(string|undefined)[]>([]),[error,setError]=useState<unknown>(null),[changed,setChanged]=useState(false);
   const [loading,setLoading]=useState(true);
   const [archivePage,setArchivePage]=useState(0);
   const [membership,setMembership]=useState<{context:string;keys:string[]}|null>(null);
-  const selected=moneyChoices(sources,prefs.money.selected[unit]??moneySelection(sources,hidden,prefs.money,context).selection?.ids??[],unit);
+  const rule=filters&&walletRule(filters,unit);
+  const preview:MoneyRef[]=accounts.flatMap(source=>[{source:source.id,kind:'balance' as const},...(source.keys??[]).slice(0,5).filter(key=>source.meters?.some(m=>m.id===`key:${key.id}:cap`)).map(key=>({source:source.id,kind:'keyCap' as const,key:key.id}))]);
+  const logical=rule?(rule.mode==='only'?rule.values:[...rule.include,...preview]).filter(ref=>matchesWallet(rule,ref,preview.some(other=>JSON.stringify(other)===JSON.stringify(ref)))):[];
+  const selected:[string,string][]=logical.map(ref=>[ref.source,ref.kind==='balance'?'balance':`key:${ref.key}:cap`]);
   const source=accounts.find(s=>s.id===sourceId);
   const inCard=source?.keysCount===source?.keys?.length&&!!source?.keys;
   const page:KeyPage|null=inCard?{keys:source!.keys!,meters:source!.meters??[],total:source!.keysCount!,inventory:source!.inventory,next:null}:loaded;
@@ -52,10 +57,10 @@ export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named
     return()=>{live=false;};
   },[board,sourceId,after,inCard,source?.successAt]);
   const choose=(id:string)=>{setSource(id);setPage(null);setLoading(true);setAfter(undefined);setBack([]);setArchivePage(0);setError(null);setChanged(false);};
-  const has=(id:string,meter:string)=>selected.some(([s,m])=>s===id&&(conversionOrigin(m)?.meter??m)===(conversionOrigin(meter)?.meter??meter));
+  const has=(id:string,meter:string)=>selected.some(([s,m])=>s===id&&(!keyMeter(meter)&&!keyMeter(m)||(conversionOrigin(m)?.meter??m)===(conversionOrigin(meter)?.meter??meter)));
   const toggle=(id:string,meters:string[],on:boolean)=>{
-    const ids=toggleMoneyChoice(selected,id,meters,on);
-    setPrefs({money:{...prefs.money,removed:0,selected:{...prefs.money.selected,[unit]:ids}}});
+    for(const meter of meters){const key=keyMeter(meter),ref:MoneyRef=key?{source:id,kind:'keyCap',key:key[1]}:{source:id,kind:'balance'};
+      dataFilters.toggle('wallet',ref,on,unit,preview.some(other=>JSON.stringify(other)===JSON.stringify(ref)));}
   };
   const row=(id:string,meters:string[],label:string,unavailable=false,value?:string,slot=false,key=meters.join(':'))=>{
     const on=meters.some(meter=>has(id,meter)),extra=meters.filter(meter=>!has(id,meter)).length;
@@ -100,42 +105,14 @@ export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named
         {!s.keysCount&&selected.some(([id,m])=>id===s.id&&keyMeter(m))&&<button className="popover-row" onClick={()=>choose(s.id)}><span>{t('money.selectedDetails')}</span><b>›</b></button>}
       </div>)}</div>
     </>}
-    <div className="popover-section"><button className="popover-row" onClick={()=>{const next={...prefs.money.selected};delete next[unit];setPrefs({money:{...prefs.money,selected:next}});}}>{t('money.resetSelection')}</button></div>
+    <div className="popover-section"><button className="popover-row" onClick={()=>dataFilters.reset('wallet','all')}>{t('money.resetSelection')}</button></div>
   </>;
 }
 
-export function MoneySettings(props:{sources:readonly Named[];hidden:readonly string[];series:readonly MeterHistory[]}) {
-  return <div className="popover-section"><div className="popover-title">{t('money.data')}</div><KeyMoneySettings {...props}/></div>;
-}
-
-/** Additional subscription funds have their own balance-only series selection. */
-export function FundsSettings({sources,hidden}:{sources:readonly Named[];hidden:readonly string[]}) {
-  const context=useCurrencyContext(),settings=usePref('funds'),unit=settings.unit??DEFAULT_CURRENCY;
-  const selected=settings.selected[unit]??moneySelection(sources,hidden,settings,context,'funds').selection?.ids??[];
-  const available=sources.flatMap(source=>moneySelection([source],hidden,{...settings,selected:{}},context,'funds').selection?.ids??[]);
-  const toggle=(source:string,meter:string,on:boolean)=>{
-    const ids=on?[...selected,[source,meter] as [string,string]]:selected.filter(([s,m])=>s!==source||m!==meter);
-    if(ids.length<=MAX_METERS)setPrefs({funds:{...settings,selected:{...settings.selected,[unit]:ids}}});
-  };
-  return <>
-    <p className="popover-note">{selected.length} / {MAX_METERS}</p>
-    {available.map(([source,meter])=>{
-      const on=selected.some(([s,m])=>s===source&&m===meter);
-      return <SwitchRow key={source+':'+meter} on={on} disabled={!on&&selected.length>=MAX_METERS} onChange={next=>toggle(source,meter,next)}>{sources.find(s=>s.id===source)?.title??source}</SwitchRow>;
-    })}
-    <div className="popover-section"><button className="popover-row" onClick={()=>{const next={...settings.selected};delete next[unit];setPrefs({funds:{...settings,selected:next}});}}>{t('funds.allSubscriptions')}</button></div>
-  </>;
-}
-
-/** Reader selection shares the settings surface; ordinary funds visibility lives in the legend. */
-export function MoneyChartSettings({arrange,widget,sources,series,family='budget'}:{arrange:Arrange;widget:string;sources:readonly Named[];series:readonly MeterHistory[];family?:MoneyFamily}) {
-  const hidden=arrange.view.hidden;
-  const context=useCurrencyContext(),settings=usePref(family==='funds'?'funds':'money'),unit=settings.unit??DEFAULT_CURRENCY;
-  const available=sources.flatMap(source=>moneySelection([source],hidden,{...settings,selected:{}},context,family).selection?.ids??[]);
-  const data=family==='budget'||available.length>MAX_METERS||Object.hasOwn(settings.selected,unit);
-  if(!arrange.owner&&!data)return null;
+/** Chart settings retain presentation and placement only. */
+export function MoneyChartSettings({arrange,widget}:{arrange:Arrange;widget:string;sources:readonly Named[];series:readonly MeterHistory[];family?:MoneyFamily}) {
+  if(!arrange.owner)return null;
   return <Popover label={t('history.settings')} icon={<SlidersIcon/>}>
-    {data&&(family==='funds'?<div className="popover-section"><div className="popover-title">{t('funds.data')}</div><FundsSettings sources={sources} hidden={hidden}/></div>:<MoneySettings sources={sources} hidden={hidden} series={series}/>)}
-    {arrange.owner&&<HideRow onHide={()=>arrange.update(view=>withHidden(view,widget,true))}>{t('widget.hide')}</HideRow>}
+    <HideRow onHide={()=>arrange.update(view=>withHidden(view,widget,true))}>{t('widget.hide')}</HideRow>
   </Popover>;
 }

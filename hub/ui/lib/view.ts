@@ -8,8 +8,13 @@ import {FALLBACK_COLOR, PROVIDERS} from './providers';
 import {EMPTY_VIEW as EMPTY, VIEW_VERSION_HEADER, VIEW_KEEPALIVE_LIMIT, VIEW_VERSION, encodeView, sameView, viewBytes} from '../../server/domain/view';
 import {widgetHidden, splitWidget, ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, QUOTA_SESSION_HISTORY, QUOTA_SESSION_TABLE, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE} from '../../server/domain/widgets';
 export {ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, QUOTA_SESSION_HISTORY, QUOTA_SESSION_TABLE, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE};
-import {cardId, windowKey} from '../../server/domain/presentation';
-export {cardId, isWindowHidden, keyShown} from '../../server/domain/presentation';
+import {cardId} from '../../server/domain/presentation';
+export {cardId} from '../../server/domain/presentation';
+import {isWindowHidden as legacyWindowHidden,keyShown as legacyKeyShown} from '../../server/domain/presentation';
+import {effectiveFilters,filterWalletUnit} from './filterSelection';
+import {matchesSelection,matchesWallet,walletRule} from '../../server/domain/dataFilters';
+export const isWindowHidden=(view:View,source:string,id:string)=>{const filters=effectiveFilters();return filters?!matchesSelection(filters.windows,[source,id]):legacyWindowHidden(view,source,id);};
+export const keyShown=(view:View,source:string,key:string,preview:readonly {id:string}[])=>{const filters=effectiveFilters();return filters?matchesWallet(walletRule(filters,filterWalletUnit()),{source,kind:'keyCap',key},preview.some(part=>part.id===key)):legacyKeyShown(view,source,key,preview);};
 export const isOffByDefault = (id: string) => id === AGENTS || splitWidget(id);
 
 /** A card's own name; empty gives it back the automatic one. */
@@ -66,17 +71,6 @@ export function boardState(sources: {id: string}[], view: View): 'onboarding' | 
   const widgets = [...sources.map(source => cardId(source.id)), AGENTS, ...ANALYTICS];
   return widgets.every(id => isHidden(view, id)) ? 'allHidden' : 'widgets';
 }
-
-export const withWindowHidden = (view: View, key: string, hidden: boolean): View => ({
-  ...view,
-  windows: hidden ? [...new Set([...view.windows, key])] : view.windows.filter(other => other !== key),
-});
-
-/** Explicit key choices survive changes in the source's bounded default preview. */
-export const withKeyShown = (view:View,source:string,id:string,on:boolean):View => {
-  const key=windowKey(source,`key:${id}`);
-  return {...withWindowHidden(view,key,!on),shown:on?[...new Set([...view.shown,key])]:view.shown.filter(other=>other!==key)};
-};
 
 /** The weekly plan set for one source: the board's if valid, otherwise the default. */
 export const weeklyPlanOf = (view: View, sourceId: string): WeeklyPlan => {

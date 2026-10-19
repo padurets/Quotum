@@ -1,5 +1,7 @@
+import {matchesSource,matchesSelection} from './domain/dataFilters.js';
+import {filterContext,filterEnvelope} from './dataFilters.js';
 import {level, sameWindow, type AttentionState, type Candidate} from './domain/attention.js';
-import {sourceHidden, isWindowHidden, titled} from './domain/presentation.js';
+import {sourceHidden, titled} from './domain/presentation.js';
 import {balanceDescriptor, catalogue, monetaryOf, providerOf} from './domain/providers.js';
 import {DEFAULT_CURRENCY,type CurrencyContext} from './domain/currency.js';
 import {utcPeriods,type CalendarSpend} from './domain/meters.js';
@@ -42,7 +44,7 @@ export type Card = SourceState & {usageWork?:UsageWork[];budget?:BudgetAccess;ow
 /** When a source is measured next and why, while its holder follows the hub's pace. */
 export type Cadence = {by?:'hub';next: number; why: Why} | null;
 
-export type BoardPart = {board: {id: string; name: string; personal: boolean}; view: View; viewRevision: number; lineup: string[]};
+export type BoardPart = {board: {id: string; name: string; personal: boolean}; view: View; viewRevision: number;filtersRevision?:number;filtersAuthority?:string; lineup: string[]};
 export type SourcePart = {card: Card; sessions: BoardSession[]; cadence: Cadence; refresh: Refresh};
 /** Where the recent pace of a source's weekly windows leads, by window id (server/forecasts.ts). */
 export type ForecastPart = Record<string, WindowForecast>;
@@ -88,12 +90,15 @@ export class Projection {
   }
 
   /** The board: its name, how it is arranged, which sources it shows in which order; null once it is gone. */
-  boardPart(board: string, lineup = this.lineup(board)): BoardPart | null {
+  boardPart(board: string, lineup = this.lineup(board),roster?:ReturnType<Projection['roster']>): BoardPart | null {
     const found = this.hub.directory.board(board);
     if (!found) return null;
     const {view, revision} = this.hub.directory.viewState(board);
-    return {board: found, view, viewRevision: revision, lineup: lineup.map(s => s.id)};
+    const filters=this.filtersPart(board,roster);
+    return {board: found, view, viewRevision: revision,filtersRevision:filters.revision,filtersAuthority:filters.authority, lineup: lineup.map(s => s.id)};
   }
+
+  filtersPart(board:string,roster?:ReturnType<Projection['roster']>){return filterEnvelope(this.hub.directory,this.hub.store,board,filterContext(this.hub.store,board,this.hub.ingest,roster?.access,roster));}
 
   /**
    * Whose agents' work the board's history shows, from when and under which names
@@ -143,7 +148,7 @@ export class Projection {
    * from `sourcePart`: what reads a card for every frame does not work out forecasts.
    */
   forecastPart(board:string,source: string, now: number): Timed<ForecastPart> {
-    const rights=this.hub.store.shown(board,this.hub.directory.view(board).hidden).get(source);
+    const rights=this.hub.store.authorizedSources(board).get(source);
     if(!rights)return {value:{},changesAt:null};
     const global=this.hub.ingest.forecasts.of(source,now),retention=config.retention.sampleDays*DAY,cutoff=Math.max(rights.since,now-retention);
     let next=global.changesAt??Infinity;
@@ -157,13 +162,13 @@ export class Projection {
 
   /** The same visible figures as the cards, with data quality independent of their level. */
   attention(board: string, now: number): AttentionState {
-    const view = this.hub.directory.view(board);
-    const cards = this.attentionCards(board, now).filter(c => !sourceHidden(view, c.id));
+    const view = this.hub.directory.view(board),filters=this.filtersPart(board).filters;
+    const cards = this.attentionCards(board, now).filter(c => !sourceHidden(view, c.id)&&matchesSource(filters,c.id));
     let minimum: AttentionState['minimum'] = null;
     let partial = false;
     for (const card of cards) {
       if (!providerOf(card.provider)?.meterKinds.some(kind => kind === 'window')) continue;
-      const windows = card.windows.filter(w => !isWindowHidden(view, card.id, w.id));
+      const windows = card.windows.filter(w => matchesSelection(filters.windows,[card.id,w.id]));
       // A waiting source has no windows yet; it still makes a known minimum partial.
       if (!card.windows.length || windows.length) partial ||= card.stale || !!card.error || card.successAt === null;
       for (const w of windows) {
@@ -182,12 +187,12 @@ export class Projection {
 
   /** Visibility and names are resolved again at delivery, after any intervening edit. */
   visibleCandidates(board: string, candidates: Candidate[], now: number): Candidate[] {
-    const view = this.hub.directory.view(board);
-    const cards = titled(this.attentionCards(board, now), view.names).filter(c => !sourceHidden(view, c.id));
+    const view = this.hub.directory.view(board),filters=this.filtersPart(board).filters;
+    const cards = titled(this.attentionCards(board, now), view.names).filter(c => !sourceHidden(view, c.id)&&matchesSource(filters,c.id));
     return candidates.flatMap((c): Candidate[] => {
-      if (c.kind === 'announcement') return cards.some(s => s.provider === c.provider && s.windows.some(w => !isWindowHidden(view, s.id, w.id))) ? [c] : [];
+      if (c.kind === 'announcement') return cards.some(s => s.provider === c.provider && s.windows.some(w => matchesSelection(filters.windows,[s.id,w.id]))) ? [c] : [];
       const source = cards.find(s => s.id === c.sourceId);
-      const window = source?.windows.find(w => w.id === c.windowId && !isWindowHidden(view, source.id, w.id));
+      const window = source?.windows.find(w => w.id === c.windowId && matchesSelection(filters.windows,[source.id,w.id]));
       if (!source || !window || !sameWindow(c.window, window)) return [];
       // Coalescing may hide an intermediate identity change from the card delta.
       // The ledger also rejects a candidate when an old label comes back later.
@@ -234,10 +239,10 @@ export class Projection {
   /** The board as the reader sees it now; null once it is gone. */
   snapshot(user: string, board: string, now: number): Snapshot | null {
     const lineup = this.lineup(board);
-    const part = this.boardPart(board, lineup);
+    const roster=this.roster(board,now);
+    const part = this.boardPart(board, lineup,roster);
     if (!part) return null;
     const members = this.members(board);
-    const roster=this.roster(board,now);
     const sources = lineup.map(source => this.sourcePart(source, members, now,roster).value);
     return {
       providers: catalogue,
@@ -246,6 +251,7 @@ export class Projection {
       board: part.board,
       view: part.view,
       viewRevision: part.viewRevision,
+      filtersRevision:part.filtersRevision,filtersAuthority:part.filtersAuthority,
       historyStart: this.hub.store.historyStart(now),
       workAuthority: this.workKey(board,roster.access),
       sources: sources.map(s => s.card),

@@ -31,7 +31,7 @@ test('three production readers retain the dense 30d credit pan and cached return
         windows:[{id:'weekly',kind:'weekly',used:20+i,remaining:80-i,minutes:10080,resetAt:now+7*day,label:null}]});
     }
     store.db.exec('COMMIT');
-    const sources=store.sources(owner.personalBoard),known=store.historyKnown(store.shown(owner.personalBoard,[]));
+    const sources=store.sources(owner.personalBoard),known=store.historyKnown(store.authorizedSources(owner.personalBoard));
     const wallet:MeterSelection={unit:'USD',ids:sources.filter(s=>s.provider==='openrouter').map(s=>[s.id,'balance'])};
     const funds:MeterSelection={unit:'USD',displayCurrency:'USD',ids:sources.filter(s=>s.provider==='codex').map(s=>[s.id,'balance:credits'])};
     const observations=new Map(funds.ids.map(([id,meter])=>[id,store.meters.readings(id,meter,now-75*day,now+1).map(row=>row.at)]));

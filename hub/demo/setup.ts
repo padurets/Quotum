@@ -1,4 +1,5 @@
 import {migrateUnified} from '../server/domain/unifiedView.js';
+import {defaultFilters} from '../server/domain/dataFilters.js';
 import {migrateFixed} from '../server/domain/fixedView.js';
 import type {View} from '../server/domain/view.js';
 import {COLUMNS, defaultWidth, starts, type Layout} from '../ui/lib/grid.js';
@@ -139,7 +140,11 @@ export async function setUp(base: string, set: DemoSet, start: number, setupCode
       await stand.people.get(sharer)!.share(stand.boards.get(board)!, stand.sources.get(card.id)!);
     }
   }
-  for (const [key, board] of stand.boards) await ownerOf(stand, key).saveView(board, viewOf(stand, key));
+  for (const [key, board] of stand.boards) {
+    const owner=ownerOf(stand,key),filters=defaultFilters();
+    filters.windows.values=cards(set).flatMap(card=>(card.on?.[key]?.windows??[]).map(window=>[stand.sources.get(card.id)!,window] as [string,string]));
+    await owner.saveView(board,viewOf(stand,key));await owner.saveFilters(board,filters);
+  }
   return stand;
 }
 
@@ -233,7 +238,6 @@ export function viewOf(stand: Stand, key: string) {
     if (looks.name) view.names[source] = looks.name;
     if (looks.color) view.colors[source] = looks.color;
     if (looks.hidden) view.hidden.push(`source:${source}`);
-    for (const window of looks.windows ?? []) view.windows.push(`${source}/${window}`);
     if (looks.plan === 'off') view.unplanned.push(source);
     else if (looks.plan) view.plans[source] = looks.plan;
   }

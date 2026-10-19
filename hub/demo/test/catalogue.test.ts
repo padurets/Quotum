@@ -1,3 +1,4 @@
+import {matchesSelection,type FilterEnvelope} from '../../server/domain/dataFilters.js';
 import {currentCohort,capturedCohort} from './sessionOracle.js';
 import {seedSessionClients} from '../sessionClients.js';
 import type {PeriodReply} from '../../server/domain/periodRead.js';
@@ -35,7 +36,7 @@ import {cadenceOf, dotOf, level, resetLine, titled, windowName} from '../../ui/l
 import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.js';
 import {ANALYTICS_KINDS, type History, type LiveSession, type Pace, type SourceForecast, type View} from '../../ui/lib/types.js';
 import type {Snapshot} from '../../ui/lib/board.js';
-import {ACTIVITY, AGENTS, boardState, cardId, columnShown, QUOTA_TABLE, QUOTA_HISTORY, isHidden, isWindowHidden, planOf} from '../../ui/lib/view.js';
+import {ACTIVITY, AGENTS, boardState, cardId, columnShown, QUOTA_TABLE, QUOTA_HISTORY, isHidden, planOf} from '../../ui/lib/view.js';
 import {SCENES, SETS,PERIOD_SCENES,SESSION_ACTIVITY_SCENES} from '../catalogue.js';
 import {
   awake,
@@ -116,6 +117,8 @@ const within = (entry: Entry, check: Span, t: number) => {
 
 /** A board as the page puts it together from its snapshot: each card named from the whole board, with its agents and its pace. */
 type Overview = {unattributedSessions?:LiveSession[];view: View; historyStart: number; sources: (Snapshot['sources'][number] & {title: string; sessions: LiveSession[]; cadence: Pace; refresh: Snapshot['refresh'][string]; forecast: SourceForecast})[]};
+// A scene's saved opening filters do not change as its measurement clock advances.
+const configurations=new WeakMap<Stand,Map<string,Promise<FilterEnvelope>>>();
 
 /** What the hub shows at one moment, read once per board as the page would. */
 class Reading {
@@ -133,6 +136,12 @@ class Reading {
   private reader(board: string) {
     const entry = this.stand.set.entries.find(e => e.kind === 'board' && e.id === board);
     return this.stand.people.get(entry?.kind === 'board' ? entry.owner : board)!;
+  }
+
+  filters(board:string) {
+    let saved=configurations.get(this.stand);if(!saved)configurations.set(this.stand,saved=new Map());
+    if(!saved.has(board))saved.set(board,this.reader(board).get<FilterEnvelope>('/api/boards/'+encodeURIComponent(this.stand.boards.get(board)!)+'/filters'));
+    return saved.get(board)!;
   }
 
   overview(board: string): Promise<Overview> {
@@ -250,7 +259,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       const history = await reading.history(entry.id, range);
       const {activity} = history;
       if ('activityEmpty' in check) {
-        const shown = overview.sources.filter(source => !isHidden(overview.view, cardId(source.id))).length;
+        const shown = overview.sources.length;
         return {activityEmpty: activityEmpty(history, shown)?.key ?? null, range};
       }
       const tenth = (ms: number) => Math.round(ms / 360_000) / 10;
@@ -322,7 +331,8 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
   const weekly = planOf(overview.view, source.id);
   if ('window' in card && live) {
     const note = planNote(live, source.successAt, now, weekly);
-    const hidden = isWindowHidden(overview.view, source.id, live.id);
+    const filters=await reading.filters(board);
+    const hidden = !matchesSelection(filters.filters.windows,[source.id,live.id]);
     // A hidden window keeps its name (the card's settings list it) and draws nothing else.
     const onCard = (value: unknown) => (hidden ? 'not drawn: the window is hidden' : value);
     Object.assign(values, {

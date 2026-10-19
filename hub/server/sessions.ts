@@ -209,6 +209,17 @@ export class Sessions {
     return found.sort((a, b) => a.device.name.localeCompare(b.device.name) || a.device.id.localeCompare(b.device.id) || a.startedAt - b.startedAt);
   }
 
+  /** Project choices need no interval read or funding resolution. */
+  projects(access:WorkAccess,now:number) {
+    const projects=new Set<string|null>();
+    for(const [id,machine] of this.machines){
+      if(!admitted(access,id,machine.user)||now-machine.at>KEEP_MS)continue;
+      const names=this.store.projectNames(machine.user);
+      for(const session of machine.sessions)projects.add(session.project===null?null:names.get(session.project)??session.project);
+    }
+    return projects;
+  }
+
   /** One admitted collection is split once into disjoint subscription and fallback slices. */
   board(access:WorkAccess,now:number) {
     const sessions=new Map<string,BoardSession[]>(),unattributedSessions:BoardSession[]=[],ends:number[]=[];

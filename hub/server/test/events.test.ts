@@ -27,7 +27,8 @@ const ACCOUNT = 'a1b2c3d4e5f6a1b2c3d4e5f6';
 /** The page asks for events with this header (spec: `GET /api/events`). */
 const STREAM = {'quotum-stream': '1'};
 /** Device controls have a separate private-event suite; these assertions track board data. */
-const boardTypes=(frames:Frame[])=>frames.filter(frame=>frame.type!=='deviceContacts').map(frame=>frame.type);
+// Configuration ordering and contents have their own data-filter stream tests.
+const boardTypes=(frames:Frame[])=>frames.filter(frame=>frame.type!=='deviceContacts'&&frame.type!=='filters').map(frame=>frame.type);
 
 test('every subscription of one reader receives the same currency change',t=>{
   const at=Date.now(),store=new Store(':memory:',at),directory=new Directory(store.db);
@@ -121,12 +122,12 @@ async function open(base: string, cookie: string | undefined, board?: string, he
   streams.add(() => void reader.cancel().catch(() => undefined));
   let read = 0;
   /** The next event but pings, within `ms`. */
-  const next = async (ms = 2000): Promise<Event> => {
+  const next = async (ms = 2000,configuration=false): Promise<Event> => {
     const until = Date.now() + ms;
     for (;;) {
       while (read < events.length) {
         const event = events[read++];
-        if (event.type !== 'ping') return event;
+        if (event.type !== 'ping'&&(configuration||event.type!=='filters')) return event;
       }
       if (ended) throw new Error('the stream ended');
       const left = until - Date.now();
@@ -242,7 +243,10 @@ async function reading(h: Awaited<ReturnType<typeof hub>>, as: string, board?: s
   assert.equal(s.status, 200, JSON.stringify(s.body));
   const hello = await s.next();
   const snapshot = await s.next();
-  assert.deepEqual([hello.type, snapshot.type], ['hello', 'snapshot']);
+  const filters=await s.next(2000,true);
+  assert.deepEqual([hello.type, snapshot.type,filters.type], ['hello', 'snapshot','filters']);
+  assert.equal(filters.data.revision,snapshot.data.filtersRevision);
+  assert.equal(filters.data.authority,snapshot.data.filtersAuthority);
   return Object.assign(s, {hello: hello.data, snapshot: snapshot.data});
 }
 
@@ -952,7 +956,7 @@ test('a reader too far behind is let go', () => {
     board,
     kind: 'stream',
     send: frames => got.push(...frames.map((f: Frame) => f.type)),
-    backlog: () => 300 * 1024,
+    backlog: () => 700 * 1024,
     end: reason => got.push(`bye ${reason}`),
   };
   assert.notEqual(events.open(reader), 'limit');
@@ -972,7 +976,7 @@ test('long polls carry the same events: a lease starts with hello and snapshot, 
   const first = await poll();
   assert.deepEqual(
     first.events.map((e: Event) => e.type),
-    ['hello', 'snapshot'],
+    ['hello', 'snapshot','filters'],
   );
   const started = Date.now();
   const empty = await poll(first.lease);
@@ -993,7 +997,7 @@ test('long polls carry the same events: a lease starts with hello and snapshot, 
   assert.notEqual(expired.lease, first.lease, 'forgotten a while after its last answer');
   assert.deepEqual(
     expired.events.map((e: Event) => e.type),
-    ['hello', 'snapshot'],
+    ['hello', 'snapshot','filters'],
   );
   await h.call('POST', '/api/auth/login', {as: 'alice2', body: {email: 'alice@example.com', password: 'correct horse'}});
   assert.notEqual((await poll(expired.lease, 'alice2')).lease, expired.lease, "another session's lease is not this one's");
@@ -1018,7 +1022,7 @@ test('a lease is of its board, and holds no more than a reader may fall behind: 
   assert.notEqual(behind.lease, other.lease);
   assert.deepEqual(
     behind.events.map((e: Event) => e.type),
-    ['hello', 'snapshot'],
+    ['hello', 'snapshot','filters'],
   );
   assert.equal(behind.events[1].data.board.name, 'Gang');
 });
@@ -1041,7 +1045,7 @@ test('a lease let go for a newer reader says so once, then is forgotten', async 
   assert.deepEqual((await poll(idle.lease)).events, [{type: 'bye', data: {reason: 'limit'}}], 'a lease asked on later hears it once');
   assert.deepEqual(
     (await poll(idle.lease)).events.map((e: Event) => e.type),
-    ['hello', 'snapshot'],
+    ['hello', 'snapshot','filters'],
   );
 });
 

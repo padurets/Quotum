@@ -49,7 +49,7 @@ export type ExtendHub = (app: FastifyInstance, hub: Hub, guards: Guards) => void
 
 /** Errors of the framework itself (malformed JSON, a body too large…) in the hub's `{error}` shape. */
 function errorCode(status: number, path: string): string {
-  if (status === 413) return /\/filters(?:\?|$)/.test(path) ? 'filters_limit' : 'too_large';
+  if (status === 413) return /\/filters(?:\?|$)/.test(path) ? 'filters_limit' : /\/period\/sessions(?:\?|$)/.test(path) ? 'history_limit' : 'too_large';
   if (status >= 500) return 'internal_error';
   return path.startsWith('/v1/ingest') ? 'invalid_batch' : path.startsWith('/v1/activity') ? 'invalid_activity' : 'invalid_request';
 }

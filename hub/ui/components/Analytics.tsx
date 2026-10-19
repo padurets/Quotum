@@ -9,6 +9,7 @@ import {t, useLocale} from '../i18n';
 import {pan} from '../lib/pan';
 import {Popover} from './Popover';
 import {Segmented} from './Kit';
+import {DataFilterControls} from './DataFilters';
 
 const Arrow = ({back}: {back: boolean}) => (
   <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -148,6 +149,7 @@ function ViewingControls({widgets}: {widgets: string[]}) {
   const horizonName = (value: typeof horizon) => value === 'auto' ? t('history.horizonAuto') : t('history.daysShort', {count: parseInt(value)});
   return (
     <div className="analytics-head-inner">
+      <DataFilterControls/>
       <div className="controls">
         {charts && <Popover label={t('history.horizon')} trigger={<span className="period-name">{t('history.horizon')}: {horizonName(horizon)}<ChevronIcon /></span>}>
           <div className="popover-section">

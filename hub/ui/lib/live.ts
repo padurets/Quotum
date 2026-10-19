@@ -74,6 +74,7 @@ export function sseParser(onEvent: (type: string, data: string) => void) {
   let skipLF = false;
   const line = (text: string) => {
     if (!text) {
+      if(type==='filters'&&new TextEncoder().encode(data.join('\n')).byteLength>272*1024)throw new Error('filters_frame_limit');
       if (data.length) onEvent(type || 'message', data.join('\n'));
       type = '';
       data = [];
@@ -84,7 +85,7 @@ export function sseParser(onEvent: (type: string, data: string) => void) {
     const field = colon < 0 ? text : text.slice(0, colon);
     const value = colon < 0 ? '' : text.slice(colon + (text[colon + 1] === ' ' ? 2 : 1));
     if (field === 'event') type = value;
-    else if (field === 'data') data.push(value);
+    else if (field === 'data') {if(type==='filters'&&new TextEncoder().encode([...data,value].join('\n')).byteLength>272*1024)throw new Error('filters_frame_limit');data.push(value);}
   };
   return (chunk: string) => {
     // A CR that ended the last chunk and an LF that starts this one are one end of line.
@@ -102,6 +103,7 @@ export function sseParser(onEvent: (type: string, data: string) => void) {
       start = i + 1;
     }
     buffer = buffer.slice(start);
+    if(type==='filters'&&new TextEncoder().encode(buffer).byteLength>272*1024+128)throw new Error('filters_frame_limit');
   };
 }
 
@@ -509,6 +511,7 @@ export class Live {
       answer = await response.json();
       if (!current()) return;
       if (typeof answer?.lease !== 'string' || !Array.isArray(answer.events)) throw new Error('format');
+      if(answer.events.some(({type,data}:{type:string;data:unknown})=>type==='filters'&&new TextEncoder().encode(JSON.stringify(data)).byteLength>272*1024))throw new Error('filters_frame_limit');
     } catch {
       if (current()) this.retry();
       return;

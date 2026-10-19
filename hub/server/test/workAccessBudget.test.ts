@@ -47,7 +47,7 @@ test('the default history ceiling admits context rows before materializing a den
    return statement;
   });
   const board=directory.boards(owner.id).find(board=>board.personal)!.id;
-  assert.throws(()=>tiles.read(board,2*H,start,start+40080*M,Date.now(),store.shown(board,[]),undefined,'quota'),HistoryLimit);
+  assert.throws(()=>tiles.read(board,2*H,start,start+40080*M,Date.now(),store.authorizedSources(board),undefined,'quota'),HistoryLimit);
   assert.ok(materialized<count,'over-budget contexts are refused before full native materialization');
   assert.ok(unadmitted<=4096,'a native context batch cannot allocate ahead of its reservation');assert.equal(reserved,0);
  }finally{store.close();}
@@ -66,10 +66,10 @@ for(const links of [64,128])test(`the default history ceiling bounds ${links} te
   store.db.exec('COMMIT');
   const tiles=new HistoryTiles(store),reservation=tiles.reservation.bind(tiles);let reserved=0;
   t.mock.method(tiles,'reservation',()=>{const value=reservation();let own=0;return {add:(bytes:number)=>{value.add(bytes);reserved+=bytes;own+=bytes;},remove:(bytes:number)=>{value.remove(bytes);reserved-=bytes;own-=bytes;},close:()=>{value.close();reserved-=own;own=0;}};});
-  assert.throws(()=>tiles.read(board,12*H,start,end,Date.now(),store.shown(board,[]),undefined,'quota'),HistoryLimit,'small raw input must not admit an unbounded temporal projection');
+  assert.throws(()=>tiles.read(board,12*H,start,end,Date.now(),store.authorizedSources(board),undefined,'quota'),HistoryLimit,'small raw input must not admit an unbounded temporal projection');
   assert.equal(reserved,0,'a refused projection releases all request reservations');
   store.db.prepare('DELETE FROM client_links WHERE id NOT IN (?,?)').run('link-0','link-1');
-  assert.equal(tiles.read(board,12*H,start,end,Date.now(),store.shown(board,[]),undefined,'quota').length,2,'a smaller projection still succeeds on the same tiles');
+  assert.equal(tiles.read(board,12*H,start,end,Date.now(),store.authorizedSources(board),undefined,'quota').length,2,'a smaller projection still succeeds on the same tiles');
   assert.equal(reserved,0);
  }finally{store.close();}
 });
@@ -127,7 +127,7 @@ test('a failed work capture errors every dependent section without fallback allo
  for(const scope of ['sessions','quota'])assert.deepEqual(reply[scope],{state:'error',error:'history_limit'},scope);
  assert.equal(reply.budget.state,'complete');assert.equal(JSON.parse(h.period.read(h.board,h.owner.id,{...h.body,sessions:undefined,quota:undefined,budget})).budget.state,'complete','all failed reservations release on exit');
  h.calls.length=0;assert.throws(()=>readHistory(h.hub,h.tiles,h.events,h.board,h.owner.id,h.quota),(e:unknown)=>e instanceof ReadError&&e.statusCode===413&&e.code==='history_limit');assert.deepEqual(h.calls,[true]);
- h.calls.length=0;assert.throws(()=>h.tiles.read(h.board,M,at,at+H,at+2*H,h.store.shown(h.board,[])),HistoryLimit);assert.deepEqual(h.calls,[true],'direct closed-tile reads also honor the request ceiling');
+ h.calls.length=0;assert.throws(()=>h.tiles.read(h.board,M,at,at+H,at+2*H,h.store.authorizedSources(h.board)),HistoryLimit);assert.deepEqual(h.calls,[true],'direct closed-tile reads also honor the request ceiling');
  const reservation=h.tiles.reservation();try{reservation.add(5000);}finally{reservation.close();}
 });
 

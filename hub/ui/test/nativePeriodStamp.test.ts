@@ -40,7 +40,7 @@ test('native historical values disclose their actual sample time while live valu
     let selected:{from:number;to:number}|null={from:at-60_000,to:at+180_000};
     const reading={value:read(selected.to),basis:{range:selected},loading:false,error:null};
     assert.equal(reading.value.windows[0].observedAt,at);assert.equal(reading.value.windows[0].stale,false);
-    const context={exports:{} as Record<string,(props:unknown)=>Node>,draw:undefined as unknown as (props:unknown)=>Node,require:()=>runtime,
+    const context={useDataFilters:()=>({current:null}),exports:{} as Record<string,(props:unknown)=>Node>,draw:undefined as unknown as (props:unknown)=>Node,require:()=>runtime,
       t,stamp,num,level,windowName,providerOf,quotaPeriods,hasSubscriptionCaps,budgetVisible,
       usePeriodValues:()=>reading,useTimeRange:()=>selected,useCurrencyContext:()=>defaultCurrencyContext,
       isWindowHidden:()=>false,planOf:()=>null,MeasurementClock:{Provider:'clock'},PercentLimit:undefined as unknown,

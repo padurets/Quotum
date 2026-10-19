@@ -1,3 +1,5 @@
+import {useDataFilters} from '../lib/dataFilters';
+import {openDataFilters} from './DataFilters';
 import {openClientLinks} from './ClientLinks';
 import {MeasurementClock,useMeasurementClock,useMeasurementTime} from '../lib/measurementClock';
 import {usePeriodValues,useSourcePeriodSessions} from '../lib/period';
@@ -9,16 +11,15 @@ import {keyShown} from '../lib/view';
 import {budgetVisible, subscriptionFundsVisible} from '../lib/money';
 import {memo, useEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import type {Card, Win} from '../lib/types';
-import {MEASURE_INTERVAL, windowKey, type MeasureIntervalMs} from '../lib/types';
+import {MEASURE_INTERVAL, type MeasureIntervalMs} from '../lib/types';
 import {countdown, countdownChangesAt, earliest, num, stamp} from '../lib/format';
 import {cadenceChangesAt, cadenceOf, dotChangesAt, dotOf, errorText, problemOf, resetLineChangesAt, windowName} from '../lib/quota';
 import {t, useLocale} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, planMark, planMarkChangesAt, planNote, planNoteChangesAt, planTotal, type WeeklyPlan} from '../lib/plan';
 import {logoOf} from './logos';
 import {MeterBar,PercentLimit,ResetText} from './Meter';
-import {KeyScaleSettings} from './KeyScaleSettings';
 import {MoneyCard,QuotaCard,QuotaMark,AccessMark,BalanceMark} from './MoneyCard';
-import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
+import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS,hasSubscriptionCaps} from '../lib/providers';
 import {call} from '../lib/http';
 import {useCadence, useCard, useConnection, useMine, useRefresh, useResetsFor, useSourceAccess, useTitle} from '../lib/board';
@@ -31,7 +32,7 @@ import {RefreshAction} from './RefreshAction';
 import {refreshChangesAt, refreshPending, refreshText} from '../lib/refresh';
 import {ErrorLine, Segmented} from './Kit';
 import {useBubble} from './Tooltip';
-import {quotaPeriods,quotaRemaining} from '../lib/subscription';
+import {quotaPeriods} from '../lib/subscription';
 import {navigate, measurementDevicesHref} from '../lib/router';
 import {app, inApp} from '../lib/app';
 
@@ -285,12 +286,9 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
   const mine = useMine(source.id);
   const [error, setError] = useState<unknown>(null);
   const [open, setOpen] = useState(false);
-  const hidden = new Set(arrange.view.windows);
   const hasWeekly = source.windows.some(w => w.kind === 'weekly');
   const planned = planOf(arrange.view, source.id) !== null;
   const owner = arrange.owner;
-  const periods=quotaPeriods(source);
-
   const unshare = async () => {
     setError(null);
     try {
@@ -308,21 +306,6 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
           <CardName source={source} arrange={arrange} />
         </>
       )}
-      {owner && periods.length > 1 && (
-        <>
-          <div className="popover-title popover-section">{t('source.show')}</div>
-          {periods.map(w => {
-            const key = windowKey(source.id, w.id);
-            const remaining=quotaRemaining(source,w.id);
-            return (
-              <SwitchRow key={w.id} on={!hidden.has(key)} onChange={on => arrange.update(view => withWindowHidden(view, key, !on))} value={remaining===null?'—':`${num(remaining)}%`}>
-                {windowName(w)}
-              </SwitchRow>
-            );
-          })}
-        </>
-      )}
-      {owner && !!source.keysCount && open && <KeyScaleSettings source={source} board={boardId} arrange={arrange}/>}
       {owner && (
         <>
           <div className="popover-title popover-section">{t('source.color')}</div>
@@ -368,16 +351,15 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
  * A card whose every limit its board hides: it says so where the limits would be, that
  * the measurements go on, and lets the board's owner bring them back in one go.
  */
-function AllHidden({source, arrange}: {source: Card; arrange: Arrange}) {
-  const showAll = () => arrange.update(view => quotaPeriods(source).reduce((next, w) => withWindowHidden(next, windowKey(source.id, w.id), false), view));
+function AllHidden() {
+  const showAll = () => openDataFilters();
   return (
     <div className="card-empty">
       <EyeOffIcon />
       <b>{t('card.allHidden')}</b>
-      <span>{t(arrange.owner ? 'card.allHiddenNote' : 'card.allHiddenByOwner')}</span>
-      {arrange.owner && (
-        <button type="button" className="text-button card-empty-action" onClick={showAll}>
-          {t('card.showAll')}
+      <span>{t('filters.emptyMetrics')}</span>
+      {(<button type="button" className="text-button card-empty-action" onClick={showAll}>
+          {t('header.filters')}
         </button>
       )}
     </div>
@@ -517,6 +499,7 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
 
 /** The two inputs are explicit: live operations never masquerade as historical measurements. */
 function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;boardId:string}) {
+  useDataFilters();
   const reading=usePeriodValues(source.id),selected=useTimeRange(),context=useCurrencyContext(source.id);
   const historical=!!selected,value=historical?reading.value:null;
   const historicalContext=value?{...context,sources:{...context.sources,[source.id]:value.meters.flatMap(m=>m.conversion?[{from:m.conversion.original.unit,at:m.conversion.original.at,anchor:null,steps:m.conversion.steps??[m.conversion.rate]}]:[])}}:context;
@@ -533,7 +516,7 @@ function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;
       {visible.map(w=><Limit key={w.id} w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={weekly}/>)}
       {noEvidence&&<div className="card-empty">{t('period.noEvidence')}</div>}
       {!historical&&!caps&&!source.windows.length&&!budgetVisible(source)&&!source.meters&&<div className="card-empty">{errorText(source.error??'waiting')}</div>}
-      {!!periods.length&&!shownPeriods.length&&<AllHidden source={source} arrange={arrange}/>}
+      {!!periods.length&&!shownPeriods.length&&<AllHidden/>}
       {historical&&<PeriodStatus {...reading}/>}
     </div>
   </MeasurementClock.Provider>;
@@ -541,6 +524,7 @@ function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;
 
 /** Historical funds share the value basis; the tray's actions and reset news stay live. */
 function CardFooter({source,arrange,boardId}:{source:Card;arrange:Arrange;boardId:string}) {
+  useDataFilters();
   const reading=usePeriodValues(source.id),selected=useTimeRange(),context=useCurrencyContext(source.id);
   if(!selected)return <CardTray source={source} funds={subscriptionFundsVisible(source)?<MoneyCard source={source} board={boardId} view={arrange.view} tray/>:null}/>;
   const value=reading.value;

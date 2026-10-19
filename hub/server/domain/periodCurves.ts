@@ -46,6 +46,14 @@ export class WorkTimeline {
   next(at:number){const i=upper(this.hours,at)-1;return Math.min(i<0?Infinity:this.hours[i]+this.curves[i].next(at-this.hours[i]),this.hours[i+1]===undefined?Infinity:this.hours[i+1]+this.curves[i+1].times[0]);}
   last(at:number){let i=upper(this.hours,at)-1;if(i<0)return 0;let value=this.curves[i].last(Math.min(WORK_BLOCK_MS,at-this.hours[i]));if(value===null&&i>0){i--;value=this.curves[i].last(WORK_BLOCK_MS);}return value===null?0:this.hours[i]+value;}
   get bytes(){return this.hours.length*32+16;}
+  /** Export the same exact sweep used by the integrals, without contextual refs. */
+  *sourceBlocks(pattern:(values:number[])=>number):Generator<[number,number]> {
+    for(let i=0;i<this.hours.length;i++){
+      const curve=this.curves[i],values:number[]=[];let count=0;
+      for(const at of curve.times){const next=curve.slope(at);if(next!==count)values.push(at,next-count);count=next;}
+      yield [this.hours[i]/WORK_BLOCK_MS,pattern(values)];
+    }
+  }
   /** Whole expired hours leave owned buffers; surviving hour patterns stay shared. */
   retain(from:number,reserve:(bytes:number)=>void) {
     let start=Math.max(0,upper(this.hours,from)-1);
@@ -59,6 +67,66 @@ export class WorkTimeline {
     for(const curve of this.curves){if(!curves.has(curve)){reserve(64);curves.add(curve);bytes+=curve.bytes;}yield;}
     return bytes;
   }
+}
+
+export type SourceWorkTape={version:1;from:number;cut:number;patterns:number[][];sources:{id:string;knownFrom:number|null;blocks:number[]}[];replaceFrom?:number;replaceTo?:number};
+export type SourceWorkCurves={groups:{source:ReadonlyMap<string,WorkTimeline>};knownFrom:number;available?:boolean};
+export function sourceWorkTape(curves:{groups:{source:ReadonlyMap<string,WorkTimeline>}},from:number,cut:number,sources:ReadonlyMap<string,number|null>,reserve:(bytes:number)=>void):SourceWorkTape {
+  const patterns:number[][]=[],ids=new Map<string,number>();
+  const pattern=(values:number[])=>{const key=values.join(',');let id=ids.get(key);if(id===undefined){reserve(160+values.length*32);id=patterns.length;ids.set(key,id);patterns.push(values);}return id;};
+  const rows:SourceWorkTape['sources']=[];
+  for(const [id,knownFrom] of sources){reserve(256+id.length*2);const blocks:number[]=[];for(const [hour,p] of curves.groups.source.get(id)?.sourceBlocks(pattern)??[]){reserve(32);blocks.push(hour,p);}rows.push({id,knownFrom,blocks});}
+  return {version:1,from,cut,patterns,sources:rows};
+}
+
+/** Strict source-only decoding shares Curve and WorkTimeline's millisecond arithmetic. */
+export function sourceWorkCurves(tape:SourceWorkTape,reserve:(bytes:number)=>void=()=>{}):SourceWorkCurves {
+  if(tape.version!==1||!Number.isSafeInteger(tape.from)||!Number.isSafeInteger(tape.cut)||tape.cut<tape.from||!Array.isArray(tape.patterns)||!Array.isArray(tape.sources))throw new Error('invalid_source_work');
+  const patterns=tape.patterns.map(pattern=>{
+    if(!Array.isArray(pattern)||pattern.length%2)throw new Error('invalid_source_work');
+    const changes:[number,number][]=[];let count=0,previous=-1;
+    for(let i=0;i<pattern.length;i+=2){const at=pattern[i],delta=pattern[i+1];count+=delta;
+      if(!Number.isSafeInteger(at)||at<0||at>WORK_BLOCK_MS||at<=previous||!Number.isSafeInteger(delta)||!Number.isSafeInteger(count)||count<0)throw new Error('invalid_source_work');
+      changes.push([at,delta]);previous=at;
+    }
+    if(count!==0)throw new Error('invalid_source_work');reserve(160+changes.length*64);return new Curve(changes);
+  });
+  const source=new Map<string,WorkTimeline>();let knownFrom=Infinity;
+  for(const row of tape.sources){
+    if(typeof row.id!=='string'||!row.id||source.has(row.id)||row.knownFrom!==null&&!Number.isSafeInteger(row.knownFrom)||!Array.isArray(row.blocks)||row.blocks.length%2)throw new Error('invalid_source_work');
+    const blocks:[number,Curve][]=[];let previous=-Infinity;
+    for(let i=0;i<row.blocks.length;i+=2){const hour=row.blocks[i],index=row.blocks[i+1];if(!Number.isSafeInteger(hour)||hour<=previous||!Number.isSafeInteger(index)||!patterns[index])throw new Error('invalid_source_work');blocks.push([hour,patterns[index]]);previous=hour;}
+    reserve(256+blocks.length*64);source.set(row.id,new WorkTimeline(blocks));if(row.knownFrom!==null)knownFrom=Math.min(knownFrom,row.knownFrom);
+  }
+  return {groups:{source},knownFrom,available:Number.isFinite(knownFrom)};
+}
+
+/** Replace the exact interval, including an empty tail and cuts inside an hour. */
+export function mergeSourceWorkTape(before:SourceWorkTape,patch:SourceWorkTape,reserve:(bytes:number)=>void=()=>{}):SourceWorkTape {
+  sourceWorkCurves(patch,reserve);
+  const from=patch.from,cut=patch.cut,replaceFrom=patch.replaceFrom??from,replaceTo=patch.replaceTo??cut;
+  const patterns:number[][]=[],dictionary=new Map<string,number>(),sources:SourceWorkTape['sources']=[];
+  for(const row of patch.sources){
+    const hours=new Map<number,Map<number,number>>();
+    const add=(tape:SourceWorkTape,source:SourceWorkTape['sources'][number],ranges:readonly [number,number][])=>{
+      for(let i=0;i<source.blocks.length;i+=2){const hour=source.blocks[i],pattern=tape.patterns[source.blocks[i+1]],base=hour*WORK_BLOCK_MS;let count=0;
+        for(let j=0;j<pattern.length;j+=2){count+=pattern[j+1];if(!count)continue;const end=pattern[j+2]??WORK_BLOCK_MS;
+          for(const [lo,hi] of ranges){const a=Math.max(pattern[j],from-base,lo-base),b=Math.min(end,cut-base,hi-base);if(a>=b)continue;
+            let changes=hours.get(hour);if(!changes){reserve(128);hours.set(hour,changes=new Map());}reserve(64);changes.set(a,(changes.get(a)??0)+count);changes.set(b,(changes.get(b)??0)-count);
+          }
+        }
+      }
+    };
+    const prior=before.sources.find(source=>source.id===row.id);
+    if(prior)add(before,prior,[[from,replaceFrom],[replaceTo,cut]]);add(patch,row,[[replaceFrom,replaceTo]]);
+    const blocks:number[]=[];
+    for(const [hour,changes] of [...hours].sort(([a],[b])=>a-b)){
+      const values=[...changes].filter(([,delta])=>delta!==0).sort(([a],[b])=>a-b).flat();if(!values.length)continue;
+      const key=values.join(',');let id=dictionary.get(key);if(id===undefined){reserve(160+values.length*32);id=patterns.length;dictionary.set(key,id);patterns.push(values);}reserve(32);blocks.push(hour,id);
+    }
+    reserve(256+row.id.length*2);sources.push({id:row.id,knownFrom:row.knownFrom,blocks});
+  }
+  return {version:1,from,cut,patterns,sources};
 }
 
 export class PeriodCurves {

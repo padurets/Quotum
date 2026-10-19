@@ -40,7 +40,7 @@ function fixture(file:string,times:number[]) {
   store.links.mutate(owner.id,'create',null,{clientId:'opencode',deviceId:device,route:null,sourceId:source,from:start,to:null,expectedRevision:'0',requestId:randomUUID()},start);
   store.close();store=new Store(file,start+61*minute);
   const read=(from=start+10*minute,to=start+61*minute,cell=minute):MoneyWork=>{
-    const chunks=new HistoryTiles(store).read(board,cell,from,to,to,store.shown(board,[]),{ids:[[source,'balance']],unit:'USD'},'budget',undefined,true).map(json=>JSON.parse(json));
+    const chunks=new HistoryTiles(store).read(board,cell,from,to,to,store.authorizedSources(board),{ids:[[source,'balance']],unit:'USD'},'budget',undefined,true).map(json=>JSON.parse(json));
     return drain(composeMoneyWorkPrepared(chunks,cell,from,to))[0];
   };
   return {store,source,board,owner:owner.id,device,read};
@@ -48,7 +48,7 @@ function fixture(file:string,times:number[]) {
 
 test('dense native pair reads share the request ceiling even when their financial JSON is sparse',()=>{
   const root=mkdtempSync(path.join(tmpdir(),'quotum-pair-budget-')),h=fixture(path.join(root,'db.sqlite'),Array.from({length:3000},(_,i)=>i/60));
-  const tiles=new HistoryTiles(h.store,128*1024),from=start,to=start+50*minute,shown=h.store.shown(h.board,[]),selection={ids:[[h.source,'balance']] as [string,string][],unit:'USD'};
+  const tiles=new HistoryTiles(h.store,128*1024),from=start,to=start+50*minute,shown=h.store.authorizedSources(h.board),selection={ids:[[h.source,'balance']] as [string,string][],unit:'USD'};
   try{
     assert.ok(tiles.read(h.board,minute,from,to,to,shown,selection,'budget').length);
     assert.throws(()=>tiles.read(h.board,minute,from,to,to,shown,selection,'budget',undefined,true),HistoryLimit);
@@ -118,7 +118,7 @@ test('closed work tiles reattribute on correction while pure financial tiles and
   const root=mkdtempSync(path.join(tmpdir(),'quotum-work-cache-')),f=fixture(path.join(root,'fixture.sqlite'),[0,20,40,60]);
   try {
     const second=f.store.source('openrouter','second',start);f.store.hold(second,f.owner,start);
-    const history=new HistoryTiles(f.store),selection={ids:[[f.source,'balance']] as [string,string][],unit:'USD' as const},shown=f.store.shown(f.board,[]),end=start+120*minute;
+    const history=new HistoryTiles(f.store),selection={ids:[[f.source,'balance']] as [string,string][],unit:'USD' as const},shown=f.store.authorizedSources(f.board),end=start+120*minute;
     const read=(work:boolean)=>history.read(f.board,minute,start,end,end,shown,selection,'budget',undefined,work);
     const financial=read(false),old=read(true),ledger=f.store.db.prepare('SELECT * FROM agent_work').all();assert.deepEqual(read(true),old);
     const rule=f.store.links.list(f.owner)[0];f.store.links.mutate(f.owner,'correct',rule.id,{...rule,sourceId:second,expectedRevision:'1',requestId:randomUUID()},end);

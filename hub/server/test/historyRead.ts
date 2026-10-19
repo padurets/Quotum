@@ -7,7 +7,7 @@ export function readHistory(store: Store, board: string, from: number, cell: num
   const to = Math.ceil((options.to ?? Math.max(from + cell, last + 1)) / cell) * cell;
   const start = Math.floor(from / cell) * cell;
   const now = options.now ?? to;
-  const shown = options.shown ?? store.shown(board, []);
+  const shown = options.shown ?? store.authorizedSources(board);
   const chunks: Chunk[] = store.cells(board, cell, start, to, {now, shown}).map(chunk => ({...chunk, activity: {...chunk.activity, sessions: chunk.activity.sessions.map(([id,source,project,device,sourceStatus])=>[JSON.stringify([id,source,sourceStatus]),source,project,device,sourceStatus,String(id)])}}));
   const windows = new Set(store.states(board).flatMap(s => s.windows.map(w => `${s.id} ${w.id}`)));
   return compose(chunks, {now, historyStart: store.historyStart(now), known: store.historyKnown(shown,store.privateOwner(board),store.workAccess(board,now))}, {cell, k0: start / cell, k1: to / cell - 1, length: to - start, live: options.to === undefined, key: '', now}, windows);

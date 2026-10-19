@@ -150,7 +150,7 @@ export const config = {
     smoothMs: 100,
     pollMs: 25_000,
     leaseMs: 60_000,
-    bufferBytes: 256 * 1024,
+    bufferBytes: 640 * 1024,
     perSession: 8,
     perUser: 16,
     maxStreams: 2000,

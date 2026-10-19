@@ -214,8 +214,11 @@ and platform smoke checks still apply.
   spending, forecasts or agent-work attribution.
 - Devices and provider accounts connect through My connections. Account settings hold
   profile and app settings. A widget's display switches live in its own settings;
-  table column switches do not change chart selections. Shared quota and budget filters
-  remain accessible from either member of their chart/table pair.
+  table column switches do not change chart selections. Resource, project, device and client data filters live in the shared header row.
+  Layout visibility, data selection and provided-data authority remain independent.
+  Current filters are tab-local; only an explicit owner Save changes opening defaults.
+  Work subsets apply before interval aggregation, while supplier estimates retain
+  independent source-wide work curves.
 - **Budget widgets share one semantic presentation.** Dashboard and compact use the
   same budget view and renderer: one Available balance, supported scoped allowances
   separately, and balance composition in the existing disclosure. Accounting totals

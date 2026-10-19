@@ -22,8 +22,46 @@ import {expandPeriod,type PeriodWireReply} from '../domain/periodWire.js';
 import {HISTORY_BYTES_PER_MEASUREMENT} from '../../bench/budget.js';
 import {PeriodAccounting} from '../domain/periodAccounting.js';
 import {transaction} from '../touches.js';
+import {defaultFilters,workFilter} from '../domain/dataFilters.js';
+import {PeriodCurves,sourceWorkCurves} from '../domain/periodCurves.js';
 
 const M=60_000,H=60*M,now=1_800_000_000_000;
+
+test('project selection precedes live and fixed union, facets and cursor-bound details',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const start=now-2*H;
+  for(const [project,from,to] of [['A',0,60],['B',30,90],['C',75,120]] as const)h.store.creditWork(h.device,start+from*M,start+to*M,[{source:h.source,client:'opencode',origin:'terminal',startedAt:start,project,folder:'',identity:{kind:'stable',sessionId:project}}]);
+  const filters=defaultFilters();filters.projects={mode:'include',values:['A','B']};
+  const predicate=workFilter(filters),selection={mode:'live' as const,periodMs:2*H};
+  const quota={cell:String(M),from:String(start),to:String(now),cells:'skip'};
+  let reads=0;const original=h.store.agentWork.bind(h.store);t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{reads++;return original(...args);});
+  const result=await h.read({version:1,selection,evaluatedAt:now,sessions:{},workFilter:predicate,facets:true,quota,sourceWork:{}});
+  assert.equal(result.statusCode,200,result.body);const live=result.json<PeriodReply>();
+  if(live.sessions?.state!=='complete'||live.facets?.state!=='complete'||live.sourceWork?.state!=='complete')throw new Error('incomplete selected period');
+  assert.equal(reads,1,'selected work, source estimates and facets share one raw extraction');
+  const rows=workedSessions(live.sessions.value,live.basis.range,now);assert.deepEqual(rows.map(row=>row.project),['A','B']);
+  assert.equal(rows.reduce((sum,row)=>sum+row.workedMs,0),120*M);
+  assert.equal(new PeriodCurves(live.sessions.value).all.read(live.basis.range,true),90*M);
+  assert.deepEqual(live.facets.value.projects,['A','B','C'],'facets do not consume the selected cohort');
+  const source=sourceWorkCurves(live.sourceWork.value).groups.source.get(h.source)!;
+  assert.equal(source.read(live.basis.range,true),120*M);assert.equal(source.read(live.basis.range),165*M);
+  assert.equal(JSON.stringify(live.sourceWork.value).includes('"project"'),false);
+  const fixed=(await h.read({version:1,selection:{mode:'range',from:start,to:now},evaluatedAt:now,sessions:{},workFilter:predicate})).json<PeriodReply>();
+  if(fixed.sessions?.state!=='complete')throw new Error('incomplete fixed period');
+  assert.equal(fixed.sessions.value.spans.length,0);assert.equal(fixed.sessions.value.packed,undefined);
+  assert.equal(fixed.sessions.value.fixed?.activity.activeMs,90*M);assert.equal(fixed.sessions.value.fixed?.activity.agentMs,120*M);
+  const detail={version:1,selection,evaluatedAt:now,cursor:live.sessions.value.cursor,refs:rows.map(row=>row.ref),workFilter:predicate};
+  const matching=await h.details(detail);assert.equal(matching.statusCode,200,matching.body);assert.equal(matching.json().sessions.value.length,2);
+  filters.projects={mode:'include',values:['C']};
+  assert.equal((await h.details({...detail,workFilter:workFilter(filters)})).statusCode,400);
+  const other=(await h.read({version:1,selection,evaluatedAt:now,sessions:{cursor:live.sessions.value.cursor},workFilter:workFilter(filters)})).json<PeriodReply>();
+  assert.equal(other.sessions?.state,'complete','a changed predicate never produces a delta for an old cohort');
+  filters.projects={mode:'include',values:[]};
+  const empty=(await h.read({version:1,selection,evaluatedAt:now,sessions:{},workFilter:workFilter(filters),quota,sourceWork:{}})).json<PeriodReply>();
+  if(empty.sessions?.state!=='complete'||empty.sourceWork?.state!=='complete')throw new Error('incomplete empty period');
+  assert.equal(empty.sessions.value.refs.length,0);assert.notEqual(empty.sessions.value.available,false);
+  assert.equal(sourceWorkCurves(empty.sourceWork.value).groups.source.get(h.source)!.read(empty.basis.range,true),120*M);
+});
 async function fixture() {
   const store=new Store(':memory:',now-3*H),directory=new Directory(store.db);
   const user=directory.createUser('a@example.com','A','unused',now-3*H),board=directory.boards(user.id)[0].id;
@@ -230,7 +268,7 @@ test('a chart-only past tile reads only its work, and extraction replacement rel
   let used=0,peak=0,accessBytes=0;
   const capture=h.store.workAccess.bind(h.store);
   t.mock.method(h.store,'workAccess',(...args:Parameters<Store['workAccess']>)=>capture(args[0],args[1],bytes=>{accessBytes+=bytes;args[2]?.(bytes);}));
-  const read=sharedWork(h.hub,h.store.shown(h.board,[]),null,bytes=>{used+=bytes;peak=Math.max(peak,used);},bytes=>{used-=bytes;assert.ok(used>=0);},null,now,h.board);
+  const read=sharedWork(h.hub,h.store.authorizedSources(h.board),null,bytes=>{used+=bytes;peak=Math.max(peak,used);},bytes=>{used-=bytes;assert.ok(used>=0);},null,now,h.board);
   const metadata=used;assert.ok(metadata>0,'the common captured access is charged before extraction');
   assert.equal(metadata,accessBytes,'only the captured access remains charged after authority hashing');
   assert.ok(peak>metadata,'temporary authority hashing is released before extraction starts');peak=used;

@@ -131,3 +131,10 @@ export function parseFilterUpdate(value:unknown):FilterUpdate|null {
   if(value.materialize!==undefined){if(!object(value.materialize)||!keys(value.materialize,['wallet','funds'])||Object.entries(value.materialize).some(([family,unit])=>!replace.includes(family)||!isUnit(unit)))return null;result.materialize=value.materialize;}
   return jsonBytes(result)<=FILTER_BODY_LIMIT?result:null;
 }
+
+/** Reserve the released cursor and detail envelope before accepting an opening default. */
+export function executableWorkFilters(filters:DataFilters) {
+  const predicate=workFilter(filters);
+  return jsonBytes({version:1,selection:{mode:'live',periodMs:86_400_000},evaluatedAt:Number.MAX_SAFE_INTEGER,sessions:{cursor:'x'.repeat(2048)},workFilter:predicate})<=76*1024&&
+    jsonBytes({version:1,selection:{mode:'live',periodMs:86_400_000},evaluatedAt:Number.MAX_SAFE_INTEGER,cursor:'x'.repeat(2048),refs:Array.from({length:100},()=> '01234567'),workFilter:predicate})<=80*1024;
+}

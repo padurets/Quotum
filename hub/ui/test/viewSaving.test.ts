@@ -1,3 +1,5 @@
+import * as filterRuntimeBindings from '../lib/filterSelection';
+import * as filterModelBindings from '../../server/domain/dataFilters';
 import * as viewContract from '../../server/domain/view';
 import * as widgets from '../../server/domain/widgets';
 import {test} from 'node:test';
@@ -19,7 +21,7 @@ function fixture(platform?: 'electron'|'tauri') {
   const appContext={exports:{} as {inApp:()=>boolean},...(platform==='electron'?{__QUOTUM__:{invoke:()=>{}}}:platform==='tauri'?{__TAURI__:{core:{invoke:()=>{}}}}:{}),require:()=>({})};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../lib/app.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,appContext);
   const keepalives:{body:string;headers:Record<string,string>}[]=[];
-  const context={TextEncoder,AbortController,exports:{} as {useView:(id:string,view:View,owner:boolean,revision:number)=>Arrange;flushView:(id:string)=>Promise<void>;flushLargeViews:()=>Promise<void>},setTimeout:()=>0,clearTimeout:()=>{},window:{addEventListener:(name:string,fn:()=>void)=>events.set(name,fn),removeEventListener:(name:string)=>events.delete(name)},fetch:(_url:string,options:{body:string;headers:Record<string,string>})=>{keepalives.push(options);return Promise.resolve({});},require:(name:string)=>{
+  const context={TextEncoder,AbortController,exports:{} as {useView:(id:string,view:View,owner:boolean,revision:number)=>Arrange;flushView:(id:string)=>Promise<void>;flushLargeViews:()=>Promise<void>},setTimeout:()=>0,clearTimeout:()=>{},window:{addEventListener:(name:string,fn:()=>void)=>events.set(name,fn),removeEventListener:(name:string)=>events.delete(name)},fetch:(_url:string,options:{body:string;headers:Record<string,string>})=>{keepalives.push(options);return Promise.resolve({});},require:(name:string)=>{if(name==='./filterSelection')return filterRuntimeBindings;if(name==='../../server/domain/dataFilters')return filterModelBindings;
     if(name==='./app')return appContext.exports;
     if(name.endsWith('/domain/view'))return viewContract;
     if(name.endsWith('/domain/widgets'))return widgets;

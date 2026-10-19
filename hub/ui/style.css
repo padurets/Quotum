@@ -1238,3 +1238,11 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .text-button.measurement-mark-button { display: flex; padding: 0; border: 0; }
 .multiline { white-space: pre-line; }
 .period-status { display: flex; flex-wrap: wrap; gap: .4rem .8rem; color: var(--muted); font-size: .8rem; }
+
+.data-filter-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.filter-save-actions { display: inline-flex; align-items: center; gap: 4px; }
+.filter-save-actions .icon-button { width: 26px; height: 26px; padding: 5px; flex: 0 0 26px; }
+.filter-save-actions .icon-button svg { width: 16px; height: 16px; }
+.filter-family-actions { display: flex; gap: 4px; }
+.filter-family-actions .popover-row { flex: 1; }
+.filter-options { min-width: 0; }

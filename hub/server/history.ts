@@ -89,7 +89,7 @@ export class HistoryTiles {
   }
 
   /** JSON is stored as sent, so hits do not allocate or serialize all the cells again. */
-  read(board: string, cell: number, from: number, to: number, now: number, shown: Shown, meters?: MeterSelection, scope?: HistoryScope, work?: WorkRead, sourceWork=false): string[] {
+  read(board: string, cell: number, from: number, to: number, now: number, shown: Shown, meters?: MeterSelection, scope?: HistoryScope, work?: WorkRead, sourceWork=false,selectedWork?:WorkRead): string[] {
     const reservation=!work&&(scope!=='budget'||sourceWork)?this.reservation():null;
     try{
     if(reservation)work=sharedWork({store:this.store},shown,{from,to},reservation.add,reservation.remove,null,now,board);
@@ -108,7 +108,7 @@ export class HistoryTiles {
     for (let at = from; at < to;) {
       const tile = tileOf(at, cell);
       const end = Math.min(to, tileEnd(tile, cell));
-      parts.push({from: at, to: end, tile, key: `${board} ${scope ?? 'legacy'} ${cell} ${tile}${sourceWork ? ' work' : ''}${meters ? ' '+JSON.stringify(meters) : ''}`, eligible: at === tileStart(tile, cell) && end === tileEnd(tile, cell) && end <= now && at >= oldest});
+      parts.push({from: at, to: end, tile, key: `${board} ${scope ?? 'legacy'} ${cell} ${tile}${sourceWork ? ' work' : ''}${selectedWork?.filterKey ? ' filter:'+selectedWork.filterKey : ''}${meters ? ' '+JSON.stringify(meters) : ''}`, eligible: at === tileStart(tile, cell) && end === tileEnd(tile, cell) && end <= now && at >= oldest});
       at = end;
     }
     const workKey = ((scope !== 'budget'||sourceWork) && parts.some(p => p.eligible) ? (work!.authority??this.store.workKey(board, shown,access!,work!.reserve,work!.release))+JSON.stringify([...shown]) : '') + (meters ? this.store.financialKey(board) : '');
@@ -125,7 +125,7 @@ export class HistoryTiles {
       while (i < parts.length && parts[i].json === undefined) i++;
       const reservation=this.reservation();
       let chunks:Chunk<number>[];
-      try{chunks=this.store.cells(board,cell,parts[start].from,parts[i-1].to,{now,shown,meters,scope,work,sourceWork,reserve:reservation.add});}finally{reservation.close();}
+      try{chunks=this.store.cells(board,cell,parts[start].from,parts[i-1].to,{now,shown,meters,scope,work,selectedWork,sourceWork,reserve:reservation.add});}finally{reservation.close();}
       chunks.forEach((raw, offset) => {
         const part = parts[start + offset];
         const chunk: Chunk = {...raw, activity: {...raw.activity, sessions: raw.activity.sessions.map(([id,source,project,device,sourceStatus])=>[this.fragmentRef(board,id,source,sourceStatus),source,project,device,sourceStatus,this.ref(board,id)])}};

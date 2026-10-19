@@ -1,4 +1,4 @@
-import {canonicalRefs,defaultFilters,filterRefKey,FILTER_FAMILIES,parseDataFilters,walletRule,fundsRule,
+import {canonicalRefs,defaultFilters,filterRefKey,FILTER_FAMILIES,FILTER_BYTES,jsonBytes,parseDataFilters,walletRule,fundsRule,
   type DataFilters,type FilterAuthority,type FilterFamily,type FamilyRef,type FilterUpdate,type Selection,type Wallet,type MoneyRef,type OnlyWallet} from './dataFilters.js';
 
 /** A projected document is safe to disclose; dormant intent stays in raw storage. */
@@ -96,6 +96,7 @@ export function mergeFilters(raw:DataFilters,update:FilterUpdate,allowed:FilterA
     if(decision.family==='wallet')result.wallet=setWallet(result.wallet,decision.ref,decision.included,automatic(decision.ref));
     else result[decision.family]=setSelection(result[decision.family] as Selection<FamilyRef>,decision.ref,decision.included) as never;
   }
+  if(jsonBytes(result)>FILTER_BYTES)throw Object.assign(new Error('filters_limit'),{statusCode:413});
   return parseDataFilters(result);
 }
 
@@ -107,4 +108,22 @@ export function filtersFromView(view:{windows:readonly string[];shown:readonly s
     else {const at=value.indexOf('/');if(at>0)filters.windows.values.push([value.slice(0,at),value.slice(at+1)]);}}
   for(const value of view.shown){const match=key(value);if(match&&filters.wallet.mode==='auto')filters.wallet.include.push({source:match[1],kind:'keyCap',key:match[2]});}
   const parsed=parseDataFilters(filters);if(!parsed)throw new Error('Invalid migrated board filters');return parsed;
+}
+
+/** A regrant exposes raw decisions, while a foreign save leaves an open view alone. */
+export function rebaseFilterProjection(current:DataFilters,before:DataFilters,after:DataFilters,intents:Pick<FilterUpdate,'resets'|'decisions'>):DataFilters {
+  const result=structuredClone(current);
+  for(const family of FILTER_FAMILIES){
+    if(intents.resets?.[family])continue;
+    const touched=new Set(intents.decisions?.filter(d=>d.family===family).map(d=>filterRefKey(d.ref)));
+    if(family==='wallet'){
+      const explicit=(rule:Wallet)=>rule.mode==='only'?rule.values.map(ref=>({ref,included:true})):[...rule.include.map(ref=>({ref,included:true})),...rule.exclude.map(ref=>({ref,included:false}))];
+      const prior=new Set(explicit(before.wallet).map(d=>filterRefKey(d.ref)));
+      for(const {ref,included} of explicit(after.wallet))if(!prior.has(filterRefKey(ref))&&!touched.has(filterRefKey(ref)))result.wallet=setWallet(result.wallet,ref,included);
+    }else {
+      const prior=new Set(before[family].values.map(filterRefKey));
+      for(const ref of after[family].values)if(!prior.has(filterRefKey(ref))&&!touched.has(filterRefKey(ref)))result[family]=setSelection(result[family] as Selection<FamilyRef>,ref,after[family].mode==='include') as never;
+    }
+  }
+  return result;
 }

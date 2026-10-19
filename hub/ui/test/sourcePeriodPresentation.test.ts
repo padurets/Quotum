@@ -22,7 +22,7 @@ function component(file:string,name:string,start:string,end?:string,bindings:Rec
   const source=code(file),at=source.indexOf(start);
   assert.ok(at>=0);
   const body=source.slice(at,end?source.indexOf(end,at):undefined);
-  const context={exports:{},draw:null as unknown as (props:Record<string,unknown>)=>Node|null,
+  const context={useDataFilters:()=>({current:null}),exports:{},draw:null as unknown as (props:Record<string,unknown>)=>Node|null,
     require:()=>runtime,t,...bindings};
   runInNewContext(ts.transpileModule(body+`\nglobalThis.draw=${name};`,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   return context.draw;
@@ -42,7 +42,7 @@ function sourceHook(board:ReturnType<typeof workStore>,id:string) {
   const source=code('../lib/period.ts'),body=source.slice(source.indexOf('const roster='));
   let cursor=0,changes=0;
   const slots:unknown[]=[],subscriptions:{read:()=>unknown;value:unknown;stop:()=>void}[]=[];
-  const context={exports:{} as {useTimeRange:()=>null,useSourcePeriodSessions:(id:string)=>SessionPeriod&{rows:WorkedSession[]}},boardPeriod:board,selector,sameJson,
+  const context={useDataFilters:()=>({current:null}),exports:{} as {useTimeRange:()=>null,useSourcePeriodSessions:(id:string)=>SessionPeriod&{rows:WorkedSession[]}},boardPeriod:board,selector,sameJson,
     useRef:(value:unknown)=>{const index=cursor++;return slots[index]??(slots[index]={current:value});},
     useState:(initial:()=>unknown)=>{const index=cursor++;return [slots[index]??(slots[index]=initial())];},
     useSyncExternalStore:(subscribe:(listener:()=>void)=>()=>void,read:()=>unknown)=>{

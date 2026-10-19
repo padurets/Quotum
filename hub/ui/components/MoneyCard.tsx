@@ -36,6 +36,10 @@ import {MeterBar, PercentLimit, ResetText} from './Meter';
 import {level, resetLineChangesAt} from '../lib/quota';
 import {useShownKeys} from '../lib/moneyKeys';
 import {rateText} from '../lib/currencySettings';
+import {useDataFilters} from '../lib/dataFilters';
+import {usePref} from '../lib/prefs';
+import {fundsRule,matchesSelection,matchesWallet,walletRule} from '../../server/domain/dataFilters';
+import {openDataFilters} from './DataFilters';
 
 function KeyStatus({part, cap}: {part: BudgetLimit['part']; cap: Meter}) {
   const now = useMeasurementClock((now) =>
@@ -337,6 +341,8 @@ export function MoneyCard({
 
 type MoneySource=Pick<Card,'id'|'provider'|'meters'|'currencyUnavailable'|'creditBalance'>;
 export function MoneyValues({source,keys,meters,error=null,compact=false,tray=false,context}:{source:MoneySource;keys:KeyPart[];meters:Meter[];error?:unknown;compact?:boolean;tray?:boolean;context:CurrencyContext}) {
+  const filters=useDataFilters().current,moneyPrefs=usePref('money'),fundsPrefs=usePref('funds');
+  const showBalance=!filters||matchesWallet(walletRule(filters,moneyPrefs.unit??undefined),{source:source.id,kind:'balance'},true);
   const {remaining, limits} = budgetView(source, keys, meters, context),
     groups = remaining.values;
   const credit=source.provider==='codex';
@@ -412,10 +418,10 @@ export function MoneyValues({source,keys,meters,error=null,compact=false,tray=fa
       ))}
     </div>
   );
-  if(tray)return <FundsMark source={source} groups={groups} context={context} native={native} rateSources={rateSources} quoteDate={quoteDate} displayUnavailable={!!displayUnavailable}/>;
+  if(tray)return filters&&!matchesSelection(fundsRule(filters,fundsPrefs.unit??undefined),source.id)?null:<FundsMark source={source} groups={groups} context={context} native={native} rateSources={rateSources} quoteDate={quoteDate} displayUnavailable={!!displayUnavailable}/>;
   return (
     <div className="money-body">
-      <div className="money-balance">
+      {showBalance&&<div className="money-balance">
         <span>{t(credit?'money.additionalFunds':'money.accountBalance')}</span>
         <div className="money-balance-values">
           <CreditBalanceValue source={source} breakdown={breakdown}>
@@ -471,7 +477,8 @@ export function MoneyValues({source,keys,meters,error=null,compact=false,tray=fa
           )}
           </CreditBalanceValue>
         </div>
-      </div>
+      </div>}
+      {!showBalance&&!limits.length&&<div className="card-empty"><span>{t('filters.emptyMetrics')}</span><button type="button" className="text-button" onClick={openDataFilters}>{t('header.filters')}</button></div>}
       <div className="limits money-limits">
         {limits.map((limit) => (
           <BudgetKeyMetrics key={limit.scope.id} limit={limit} context={context} compact={compact} />

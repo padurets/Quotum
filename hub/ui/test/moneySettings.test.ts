@@ -1,3 +1,7 @@
+import {DataFilterState} from '../lib/filterState';
+import {defaultFilters,type FilterEnvelope} from '../../server/domain/dataFilters';
+import * as filterModel from '../../server/domain/dataFilters';
+import {publishDataFilters} from '../lib/filterSelection';
 import * as currency from '../../server/domain/currency';
 import {defaultCurrencyContext,type CurrencyContext} from '../../server/domain/currency';
 import {test} from 'node:test';
@@ -15,8 +19,6 @@ import {referenceBalance,budgetVisible,balanceGroups,balanceRoleLabel,keyName} f
 import type {Named} from '../lib/board';
 import type {KeyPage} from '../lib/moneyKeys';
 import type {Meter} from '../../server/domain/meters';
-import {EMPTY_VIEW} from '../../server/domain/view';
-import type {Arrange} from '../lib/view';
 
 type Node={type:unknown;props:Record<string,unknown>;key?:string};
 const component=(name:string)=>({name});
@@ -27,6 +29,10 @@ const meter=(id:string,amount='1'):Meter=>({id,amount,kind:id.endsWith(':cap')?'
 
 function fixture(selected:[string,string][]=[],budget?:{source:Named;context:CurrencyContext;others?:Named[]}) {
   const hooks=preparationFixture();
+  const state=new DataFilterState({save:async()=>{throw new Error('explicit save only');}});
+  state.open('u','b');const filters=defaultFilters();filters.wallet={mode:'only',values:[{source:budget?.source.id??'s',kind:'balance'},...selected.filter(([,id])=>id.endsWith(':cap')).map(([source,id])=>({source,kind:'keyCap' as const,key:id.slice(4,-4)}))]};
+  state.accept({filters,revision:1,authority:'a',unavailable:{}} as FilterEnvelope);
+  state.subscribe(()=>publishDataFilters(state.get().current));publishDataFilters(state.get().current);
   let revision=1,prefs={money:readMoney(budget?{unit:'USD',...(selected.length?{selected:{USD:selected}}:{})}:{unit:'USD',selected:{USD:[['s','balance'],...selected]}})};
   let source:Named={id:'s',title:'Account',provider:'openrouter',plan:'',successAt:revision,error:null,stale:false,windows:[],resets:null,owners:[],staleAfterMs:1000,measureIntervalMs:null,meters:[meter('balance')],keys:[],keysCount:20};
   if(budget)source=budget.source;
@@ -38,6 +44,8 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
     return {keys,meters:keys.flatMap(k=>[meter(`key:${k.id}:usage`),...(revision===1?[meter(`key:${k.id}:cap`)]:[])]),total:20,inventory:null,next:ids||from===10?null:'10'};
   };
   const context={exports:{} as {KeyMoneySettings:(props:{sources:Named[];hidden:string[];series:[]})=>Node},require:(name:string)=>{
+    if(name==='../../server/domain/dataFilters')return filterModel;
+    if(name.endsWith('/dataFilters'))return {useDataFilters:state.get,dataFilters:state};
     if(name==='react')return {useState:hooks.useState,useEffect:hooks.useLayoutEffect};
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),jsxs:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),Fragment:'fragment'};
     if(name.endsWith('/board'))return {useBoardId:()=> 'b',useCurrencyContext:()=>budget?.context??defaultCurrencyContext};
@@ -116,57 +124,17 @@ test('an open settings page reloads its names and caps on a successful source up
   assert.ok(!f.selection()!.ids.some(([,meter])=>meter==='key:10:usage'));
 });
 
-test('shared settings expose reader data selection while keeping board actions owner-only',()=>{
+test('chart settings contain only owner presentation controls',()=>{
   const popover=component('popover'),hide=component('hide');
-  let available=1,settings=readMoney({unit:'USD'});
   const modules:Record<string,unknown>={
-    'react/jsx-runtime':{jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props}),Fragment:'fragment'},
-    '../lib/board':{useCurrencyContext:()=>defaultCurrencyContext},
-    '../lib/prefs':{usePref:()=>settings},
-    '../lib/moneySelection':{moneySelection:()=>({selection:{ids:Array.from({length:available},(_,i)=>['s',String(i)])}})},
-    '../../server/domain/currency':currency,'../../server/domain/meterHistory':{MAX_METERS:32},
-    '../i18n':{t:(key:string)=>key},'./Popover':{Popover:popover,HideRow:hide,SwitchRow:switchRow},
+    'react/jsx-runtime':{jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props})},
+    '../i18n':{t:(key:string)=>key},'./Popover':{Popover:popover,HideRow:hide},
   };
-  const load=(file:string)=>{
-    const context={exports:{} as Record<string,(props:Record<string,unknown>)=>Node|null>,require:(name:string)=>modules[name]??{}};
-    runInNewContext(ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
-    return context.exports;
-  };
-  const money=load('../components/MoneySettings.tsx'),table=load('../components/AnalyticsTable.tsx');
-  for(const owner of [false,true]) {
-    const arrange:Arrange={view:EMPTY_VIEW,owner,update:()=>{throw new Error('opening reader settings must not write the board');}};
-    const props={arrange,widget:'budget-history',sources:[{id:'s'}],series:[]};
-    const chart=money.MoneyChartSettings(props)!;
-    assert.equal(chart.type,popover);assert.equal(chart.props.label,'history.settings');
+  const context={exports:{} as {MoneyChartSettings:(props:unknown)=>Node|null},require:(name:string)=>modules[name]??{}};
+  runInNewContext(ts.transpileModule(readFileSync(new URL('../components/MoneySettings.tsx',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
+  for(const owner of [false,true]){
+    const chart=context.exports.MoneyChartSettings({arrange:{owner},widget:'budget-history'});
+    assert.equal(chart===null,!owner);
     assert.equal(nodes(chart).filter(node=>node.type===hide).length,Number(owner));
-    const picker=nodes(chart).find(node=>node.type===money.MoneySettings)!;
-    assert.ok(picker);assert.equal(nodes(money.MoneySettings(picker.props)).filter(node=>node.type===money.KeyMoneySettings).length,1);
-    const grid=table.TableSettings({...props,columns:[{id:'value',title:'Balance'}],visible:['value'],children:picker})!;
-    assert.equal(grid.type,popover);assert.ok(nodes(grid).includes(picker));
-    assert.equal(nodes(grid).filter(node=>node.type===switchRow).length,Number(owner),'column controls stay owner-only');
-    assert.equal(nodes(grid).filter(node=>node.type===hide).length,Number(owner));
-    const funds={...props,family:'funds'};
-    const ordinary=money.MoneyChartSettings(funds);
-    assert.equal(ordinary===null,!owner);
-    assert.equal(nodes(ordinary).some(node=>node.type===money.FundsSettings),false,'ordinary funds have no duplicate visibility list');
-    available=33;
-    assert.equal(nodes(money.MoneyChartSettings(funds)).filter(node=>node.type===money.FundsSettings).length,1);
-    available=1;settings=readMoney({unit:'USD',selected:{USD:[]}});
-    assert.equal(nodes(money.MoneyChartSettings(funds)).filter(node=>node.type===money.FundsSettings).length,1,'explicit empty data selection remains recoverable');
-    settings=readMoney({unit:'USD'});
-  }
-  modules.react={memo:(component:unknown)=>component,useMemo:(read:()=>unknown)=>read(),useRef:(current:unknown)=>({current})};
-  modules['../lib/board']={useCurrencyContext:()=>defaultCurrencyContext,useNamed:()=>[]};
-  modules['../lib/history']={useBudgetHistory:()=>({history:null}),budgetHistory:{retry:()=>{}}};
-  modules['../lib/view']={columnShown:()=>true,BUDGET_TABLE:'budget-table'};
-  modules['../i18n']={t:(key:string)=>key,useLocale:()=> 'en'};
-  modules['./AnalyticsTable']=table;modules['./MoneySettings']=money;
-  const analytics=load('../components/MoneyAnalytics.tsx');
-  for(const owner of [false,true]) {
-    const panel=analytics.MoneyTable({arrange:{owner,view:EMPTY_VIEW}})!;
-    assert.equal(panel.props.controls,undefined);
-    const settings=panel.props.settings as Node;
-    assert.equal(settings.type,table.TableSettings);
-    assert.equal((settings.props.children as Node).type,money.MoneySettings,'the table uses the same reader selection inside its existing settings');
   }
 });

@@ -17,7 +17,7 @@ export function workFrom(groups: CellSamples[], from: number): number {
 }
 
 /** One pass through samples and stretches; chunks stop at tile edges, never sample edges. */
-export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Record<string, string>, cell: number, from: number, to: number, known:HistoryMeta['known'],reserve?:(bytes:number)=>void):Chunk<number>[] {
+export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Record<string, string>, cell: number, from: number, to: number, known:HistoryMeta['known'],reserve?:(bytes:number)=>void,selected:Stretch[]=stretches):Chunk<number>[] {
   const chunks: Chunk<number>[] = [];
   for (let at = from; at < to;) {
     const end = Math.min(to, tileEnd(tileOf(at, cell), cell));
@@ -76,7 +76,7 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
   // Work is already selected and cut to the board's known thresholds. Its part before
   // `from` proves incoming steps but does not belong to activity in these chunks.
   const activity = new Map<number, Stretch[]>();
-  for (const s of stretches) for (let at = cellStart(Math.max(s.from, from), cell); at < Math.min(s.to, to); at += cell) {
+  for (const s of selected) for (let at = cellStart(Math.max(s.from, from), cell); at < Math.min(s.to, to); at += cell) {
     const start=Math.max(s.from,at,from),end=Math.min(s.to,at+cell,to);
     if (end <= start) continue;
     const part=start===s.from&&end===s.to?s:{...s,from:start,to:end};
@@ -130,7 +130,7 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
         if (ms !== defaultMs) row[3].push([dim, key, ms]);
       }
     }
-    for(const [source] of bySource)if(source!==null){
+    for(const source of new Set(spans.map(s=>s.source)))if(source!==null){
       const full=spans.filter(s=>s.source===source);if(!full.length)continue;
       const clipped=full.flatMap(s=>{const from=Math.max(s.from,s.quotaFrom??known.sourceWork?.[source]??known.work);return s.to>from?[{...s,from}]:[];});
       const agent=(rows:Stretch[])=>rows.reduce((n,s)=>n+s.to-s.from,0),activeMs=workTime(clipped),agentMs=agent(clipped);
