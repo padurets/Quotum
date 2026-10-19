@@ -1246,7 +1246,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .filter-control.is-changed > .picker > .text-button { padding-right: 4px; }
 .filter-count { padding: 1px 5px; border-radius: 5px; background: var(--hair-2); font-size: 10px; line-height: 16px; font-variant-numeric: tabular-nums; }
 .filter-changed { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); }
-.filter-control .filter-reset { width: 22px; height: 26px; padding: 4px; color: var(--text-3); }
+.filter-control .filter-reset { padding: 4px; color: var(--text-3); }
 .filter-viewing { display: flex; flex: 1 1 320px; align-items: flex-start; gap: 12px; min-width: 0; max-width: 100%; }
 .filter-save-actions { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; padding-top: 1px; }
 .filter-save-actions .icon-button { width: 26px; height: 26px; padding: 5px; flex: 0 0 26px; }
