@@ -37,6 +37,12 @@ on:
         type: boolean
         default: false
 
+      native_calibration:
+        description: Calibrate native CPU function mapping without running the dashboard
+        required: false
+        type: boolean
+        default: false
+
 permissions:
   contents: read
 
@@ -156,8 +162,565 @@ jobs:
           path: ${{ runner.temp }}/quotum-bench-dashboard
           if-no-files-found: warn
 
+  native-cpu-calibration:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native_calibration }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.diagnostic_ref }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - name: Verify the exact calibration source and exclusive mode
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import {execFileSync} from 'node:child_process';
+          const expected=process.env.CALIBRATION_SHA,actual=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
+          assert(/^[a-f0-9]{40}$/.test(expected??'')&&expected===actual&&actual===process.env.GITHUB_SHA);
+          assert(process.env.OTHER_MODES==='false false false false');
+          JS
+        env:
+          CALIBRATION_SHA: ${{ inputs.diagnostic_ref }}
+          OTHER_MODES: ${{ inputs.trace_only }} ${{ inputs.original_timing }} ${{ inputs.retirement }} ${{ inputs.grid }}
+      - run: npm ci
+      - name: Prepare the bounded method calibration
+        run: |
+          set -eu
+          calibration_dir="$RUNNER_TEMP/quotum-native-calibration"
+          [ ! -e "$calibration_dir" ]
+          [ "$(df -B1 --output=avail "$RUNNER_TEMP" | tail -n 1)" -gt 8589934592 ]
+          mkdir -m 700 "$calibration_dir"
+          cat > "$calibration_dir/perf-sample.c" <<'CALIBRATION_C'
+          #define _GNU_SOURCE
+          #include <errno.h>
+          #include <fcntl.h>
+          #include <grp.h>
+          #include <inttypes.h>
+          #include <limits.h>
+          #include <linux/capability.h>
+          #include <linux/perf_event.h>
+          #include <poll.h>
+          #include <signal.h>
+          #include <stdarg.h>
+          #include <stdint.h>
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <sys/ioctl.h>
+          #include <sys/mman.h>
+          #include <sys/prctl.h>
+          #include <sys/syscall.h>
+          #include <sys/types.h>
+          #include <time.h>
+          #include <unistd.h>
+
+          enum { RING_BYTES = 65536, MAP_BYTES = 17 * 4096, SAMPLE_LIMIT = 8192 };
+          struct Sample { uint64_t ip; uint32_t pid, tid; uint64_t time, period; };
+          _Static_assert(sizeof(struct Sample) == 32, "perf sample layout");
+          static struct Sample samples[SAMPLE_LIMIT];
+          static struct perf_event_mmap_page *meta;
+          static unsigned char *ring;
+          static int event_fd = -1, enabled, complete;
+          static unsigned used, phase_begin;
+          static uint64_t tail, last_time, deadline, baseline[4];
+          static pid_t target, owner_group, parent;
+          static uid_t owner_uid;
+          static gid_t owner_gid;
+          static uint64_t birth;
+          static volatile sig_atomic_t interrupted;
+          static const char *failure;
+          static int failure_errno;
+
+          static int fail(const char *stage, int error) {
+              if (!failure) { failure = stage; failure_errno = error ? error : EIO; }
+              return -1;
+          }
+          static void on_signal(int number) { (void)number; interrupted = 1; }
+          static uint64_t now_ns(void) {
+              struct timespec t;
+              if (clock_gettime(CLOCK_MONOTONIC, &t)) { fail("clock", errno); return 0; }
+              return (uint64_t)t.tv_sec * UINT64_C(1000000000) + (uint64_t)t.tv_nsec;
+          }
+          static int live(void) {
+              if (interrupted) return fail("signal", EINTR);
+              if (now_ns() >= deadline) return fail("deadline", ETIMEDOUT);
+              return failure ? -1 : 0;
+          }
+          /* A stopped-phase dump must not block forever on the controller's pipe. */
+          static int emit(const char *format, ...) {
+              char line[2048]; va_list args;
+              va_start(args, format); int n = vsnprintf(line, sizeof(line), format, args); va_end(args);
+              if (n < 0 || (size_t)n >= sizeof(line)) return fail("output_format", EOVERFLOW);
+              for (size_t at = 0; at < (size_t)n;) {
+                  if (live()) return -1;
+                  ssize_t wrote = write(STDOUT_FILENO, line + at, (size_t)n - at);
+                  if (wrote > 0) { at += (size_t)wrote; continue; }
+                  if (wrote < 0 && errno == EINTR) continue;
+                  if (wrote < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                      struct pollfd p = { .fd = STDOUT_FILENO, .events = POLLOUT };
+                      if (poll(&p, 1, 5) >= 0 || errno == EINTR) continue;
+                  }
+                  return fail("output", errno);
+              }
+              return 0;
+          }
+          static int digits(const char *text, uint64_t maximum, uint64_t *out) {
+              if (!*text) return -1;
+              uint64_t value = 0;
+              for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
+                  if (*p < '0' || *p > '9' || value > (maximum - (*p - '0')) / 10) return -1;
+                  value = value * 10 + (*p - '0');
+              }
+              *out = value; return 0;
+          }
+          static int proc_text(const char *leaf, char *buffer, size_t capacity) {
+              char path[80]; snprintf(path, sizeof(path), "/proc/%ld/%s", (long)target, leaf);
+              int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+              if (fd < 0) return fail("identity_open", errno);
+              size_t at = 0; int error = 0;
+              while (at < capacity - 1) {
+                  ssize_t n = read(fd, buffer + at, capacity - 1 - at);
+                  if (n > 0) { at += (size_t)n; continue; }
+                  if (!n) break;
+                  if (errno != EINTR) { error = errno; break; }
+                  if (interrupted) { error = EINTR; break; }
+              }
+              if (at == capacity - 1) error = EOVERFLOW;
+              if (close(fd) && !error) error = errno;
+              buffer[at] = 0;
+              return error ? fail("identity_read", error) : 0;
+          }
+          static int identity(void) {
+              char buffer[16384]; uint64_t actual = 0; int have_uid = 0, have_tgid = 0;
+              if (proc_text("stat", buffer, sizeof(buffer))) return -1;
+              char *p = strrchr(buffer, ')');
+              if (!p || p[1] != ' ') return fail("identity_stat", EPROTO);
+              p += 2;
+              for (int field = 3; field <= 22; field++) {
+                  char *end = strchr(p, ' ');
+                  if (!end) return fail("identity_stat", EPROTO);
+                  if (field == 22) { *end = 0; if (digits(p, UINT64_MAX, &actual)) return fail("identity_stat", EPROTO); }
+                  p = end + 1;
+              }
+              if (actual != birth) return fail("identity_birth", ESRCH);
+              if (getpgid(target) != owner_group || getsid(target) != owner_group) return fail("identity_group", ESRCH);
+              if (proc_text("status", buffer, sizeof(buffer))) return -1;
+              for (char *line = buffer; line && *line;) {
+                  char *next = strchr(line, '\n'); if (next) *next++ = 0;
+                  unsigned long long a, b, c, d; char extra;
+                  if (!strncmp(line, "Tgid:", 5)) {
+                      if (have_tgid++ || sscanf(line + 5, "%llu %c", &a, &extra) != 1 || a != (unsigned long long)target) return fail("identity_tgid", EPROTO);
+                  } else if (!strncmp(line, "Uid:", 4)) {
+                      if (have_uid++ || sscanf(line + 4, "%llu %llu %llu %llu %c", &a, &b, &c, &d, &extra) != 4 || a != owner_uid || b != owner_uid || c != owner_uid || d != owner_uid) return fail("identity_uid", EPERM);
+                  }
+                  line = next;
+              }
+              return have_uid == 1 && have_tgid == 1 ? 0 : fail("identity_status", EPROTO);
+          }
+          static int arm_parent(void) {
+              if (prctl(PR_SET_PDEATHSIG, SIGTERM) || getppid() != parent) return fail("parent", ESRCH);
+              return 0;
+          }
+          static int drop_privileges(void) {
+              if (setgroups(0, NULL)) return fail("drop_groups", errno);
+              if (setresgid(owner_gid, owner_gid, owner_gid)) return fail("drop_gid", errno);
+              if (setresuid(owner_uid, owner_uid, owner_uid)) return fail("drop_uid", errno);
+              uid_t a, b, c; gid_t x, y, z;
+              if (getresuid(&a, &b, &c) || getresgid(&x, &y, &z) || getgroups(0, NULL) != 0 || a != owner_uid || b != owner_uid || c != owner_uid || x != owner_gid || y != owner_gid || z != owner_gid) return fail("drop_verify", EPERM);
+              struct __user_cap_header_struct header = { .version = _LINUX_CAPABILITY_VERSION_3, .pid = 0 };
+              struct __user_cap_data_struct capabilities[2];
+              if (syscall(__NR_capget, &header, capabilities)) return fail("drop_capget", errno);
+              for (unsigned i = 0; i < 2; i++) if (capabilities[i].effective || capabilities[i].permitted || capabilities[i].inheritable) return fail("drop_caps", EPERM);
+              return arm_parent(); /* Credential changes clear PDEATHSIG. */
+          }
+          static void ring_copy(void *out, uint64_t position, size_t size) {
+              size_t offset = (size_t)(position & (RING_BYTES - 1));
+              size_t first = size < RING_BYTES - offset ? size : RING_BYTES - offset;
+              memcpy(out, ring + offset, first); memcpy((unsigned char *)out + first, ring, size - first);
+          }
+          static int drain_ring(void) {
+              uint64_t head = __atomic_load_n(&meta->data_head, __ATOMIC_ACQUIRE);
+              if (head < tail || head - tail > RING_BYTES) return fail("ring_overflow", EOVERFLOW);
+              while (tail < head) {
+                  struct perf_event_header h;
+                  if (head - tail < sizeof(h)) return fail("ring_truncated", EPROTO);
+                  ring_copy(&h, tail, sizeof(h));
+                  if (h.size < sizeof(h) || h.size > head - tail) return fail("ring_truncated", EPROTO);
+                  if (h.type == PERF_RECORD_LOST || h.type == PERF_RECORD_LOST_SAMPLES) return fail("ring_lost", ENOBUFS);
+                  if (h.type == PERF_RECORD_THROTTLE || h.type == PERF_RECORD_UNTHROTTLE) return fail("ring_throttled", ENOBUFS);
+                  if (h.type != PERF_RECORD_SAMPLE || h.size != sizeof(h) + sizeof(struct Sample)) return fail("ring_record", EPROTO);
+                  if ((h.misc & PERF_RECORD_MISC_CPUMODE_MASK) != PERF_RECORD_MISC_USER) return fail("ring_mode", EPROTO);
+                  struct Sample s; ring_copy(&s, tail + sizeof(h), sizeof(s));
+                  if (!s.ip || s.pid != (uint32_t)target || s.tid != (uint32_t)target || !s.time || !s.period || s.time < last_time) return fail("ring_sample", EPROTO);
+                  if (used == SAMPLE_LIMIT) return fail("sample_cap", EOVERFLOW);
+                  samples[used++] = s; last_time = s.time; tail += h.size;
+                  __atomic_store_n(&meta->data_tail, tail, __ATOMIC_RELEASE);
+              }
+              return 0;
+          }
+          static int counters(uint64_t out[4]) {
+              ssize_t n = read(event_fd, out, sizeof(uint64_t) * 4);
+              return n == (ssize_t)(sizeof(uint64_t) * 4) ? 0 : fail("counter_read", n < 0 ? errno : EPROTO);
+          }
+          static int stop_event(void) {
+              if (ioctl(event_fd, PERF_EVENT_IOC_DISABLE, 0)) return fail("disable", errno);
+              enabled = 0;
+              if (drain_ring()) return -1;
+              if (__atomic_load_n(&meta->data_head, __ATOMIC_ACQUIRE) != tail) return fail("ring_late", EPROTO);
+              return 0;
+          }
+          static int command(unsigned state) {
+              char phase = state < 2 ? 'A' : 'B';
+              if (state == 0 || state == 2) {
+                  if (identity() || __atomic_load_n(&meta->data_head, __ATOMIC_ACQUIRE) != tail) return fail("start_state", EPROTO);
+                  if (counters(baseline)) return -1;
+                  if (baseline[3]) return fail("counter_lost", ENOBUFS);
+                  phase_begin = used;
+                  if (ioctl(event_fd, PERF_EVENT_IOC_ENABLE, 0)) return fail("enable", errno);
+                  enabled = 1;
+                  return emit("{\"kind\":\"started\",\"phase\":\"%c\"}\n", phase);
+              }
+              uint64_t end[4];
+              if (stop_event() || counters(end) || identity()) return -1;
+              for (unsigned i = 0; i < 4; i++) { if (end[i] < baseline[i]) return fail("counter_order", EPROTO); end[i] -= baseline[i]; }
+              if (end[3]) return fail("counter_lost", ENOBUFS);
+              if (end[2] > end[1]) return fail("counter_order", EPROTO);
+              for (unsigned i = phase_begin; i < used; i++) {
+                  struct Sample *s = &samples[i];
+                  if (emit("{\"kind\":\"sample\",\"phase\":\"%c\",\"ip\":\"%" PRIx64 "\",\"pid\":%u,\"tid\":%u,\"time\":\"%" PRIu64 "\",\"period\":\"%" PRIu64 "\"}\n", phase, s->ip, s->pid, s->tid, s->time, s->period)) return -1;
+              }
+              return emit("{\"kind\":\"stopped\",\"phase\":\"%c\",\"value\":\"%" PRIu64 "\",\"enabled\":\"%" PRIu64 "\",\"running\":\"%" PRIu64 "\",\"samples\":%u,\"lost\":0,\"throttled\":0,\"overflow\":0}\n", phase, end[0], end[1], end[2], used - phase_begin);
+          }
+          static void cleanup(void) {
+              if (event_fd >= 0) {
+                  if (ioctl(event_fd, PERF_EVENT_IOC_DISABLE, 0)) fail("cleanup_disable", errno);
+                  enabled = 0;
+              }
+              if (meta) {
+                  unsigned before = used;
+                  drain_ring();
+                  if (!failure && used != before) fail("late_record", EPROTO);
+                  uint64_t final[4];
+                  if (counters(final) == 0 && final[3]) fail("counter_lost", ENOBUFS);
+                  if (munmap(meta, MAP_BYTES)) fail("cleanup_unmap", errno);
+                  meta = NULL;
+              }
+              if (event_fd >= 0 && close(event_fd)) fail("cleanup_close", errno);
+              event_fd = -1;
+          }
+          int main(int argc, char **argv) {
+              struct sigaction action = { .sa_handler = on_signal };
+              sigemptyset(&action.sa_mask);
+              if (sigaction(SIGTERM, &action, NULL) || sigaction(SIGINT, &action, NULL) || signal(SIGPIPE, SIG_IGN) == SIG_ERR) return 1;
+              deadline = now_ns() + UINT64_C(10000000000);
+              int in_flags = fcntl(STDIN_FILENO, F_GETFL), out_flags = fcntl(STDOUT_FILENO, F_GETFL);
+              if (in_flags < 0 || out_flags < 0 || fcntl(STDIN_FILENO, F_SETFL, in_flags | O_NONBLOCK) || fcntl(STDOUT_FILENO, F_SETFL, out_flags | O_NONBLOCK)) return 1;
+              if (emit("{\"kind\":\"boot\",\"pid\":%ld}\n", (long)getpid())) goto done;
+              uint64_t args[5];
+              if (argc != 6) { fail("arguments", EINVAL); goto done; }
+              for (unsigned i = 0; i < 5; i++) if (digits(argv[i + 1], i == 4 ? UINT64_MAX : i == 0 || i == 3 ? INT_MAX : UINT_MAX, &args[i])) { fail("arguments", EINVAL); goto done; }
+              target = (pid_t)args[0]; owner_uid = (uid_t)args[1]; owner_gid = (gid_t)args[2]; owner_group = (pid_t)args[3]; birth = args[4];
+              if (geteuid() != 0 || target <= 1 || target == getpid() || !owner_uid || owner_group <= 1 || !birth) { fail("arguments", EPERM); goto done; }
+              parent = getppid();
+              if (parent <= 1) { fail("parent", ESRCH); goto done; }
+              if (arm_parent() || identity() || live()) goto done;
+              struct perf_event_attr attr;
+              memset(&attr, 0, sizeof(attr));
+              attr.type = PERF_TYPE_SOFTWARE; attr.size = sizeof(attr); attr.config = PERF_COUNT_SW_TASK_CLOCK;
+              attr.disabled = 1; attr.exclude_kernel = 1; attr.exclude_hv = 1; attr.inherit = 0;
+              attr.sample_period = 250000; attr.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_PERIOD;
+              attr.read_format = PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_TOTAL_TIME_RUNNING | PERF_FORMAT_LOST;
+              attr.use_clockid = 1; attr.clockid = CLOCK_MONOTONIC; attr.wakeup_events = 1;
+              event_fd = (int)syscall(__NR_perf_event_open, &attr, target, -1, -1, PERF_FLAG_FD_CLOEXEC);
+              if (event_fd < 0) { fail("perf_open", errno); goto done; }
+              if (drop_privileges() || identity() || live()) goto done;
+              if (sysconf(_SC_PAGESIZE) != 4096) { fail("page_size", EINVAL); goto done; }
+              void *mapping = mmap(NULL, MAP_BYTES, PROT_READ | PROT_WRITE, MAP_SHARED, event_fd, 0);
+              if (mapping == MAP_FAILED) { fail("mmap", errno); goto done; }
+              meta = mapping; ring = (unsigned char *)mapping + 4096;
+              if (meta->data_offset != 4096 || meta->data_size != RING_BYTES || meta->data_head || meta->data_tail) { fail("ring_initial", EPROTO); goto done; }
+              char hex[sizeof(attr) * 2 + 1];
+              for (size_t i = 0; i < sizeof(attr); i++) snprintf(hex + i * 2, 3, "%02x", ((unsigned char *)&attr)[i]);
+              if (emit("{\"kind\":\"ready\",\"pid\":%ld,\"target\":%ld,\"uid\":%lu,\"attrHex\":\"%s\"}\n", (long)getpid(), (long)target, (unsigned long)owner_uid, hex)) goto done;
+              const char *expected[] = { "startA", "stopA", "startB", "stopB", "end" };
+              unsigned state = 0; size_t length = 0; char line[16];
+              while (!failure && state < 5) {
+                  if (live()) break;
+                  if (enabled && drain_ring()) break;
+                  struct pollfd p[2] = {{ .fd = STDIN_FILENO, .events = POLLIN }, { .fd = event_fd, .events = enabled ? POLLIN : 0 }};
+                  if (poll(p, 2, 5) < 0) { if (errno == EINTR) continue; fail("poll", errno); break; }
+                  if (p[1].revents & (POLLERR | POLLHUP | POLLNVAL)) { fail("target_event", ESRCH); break; }
+                  if (p[0].revents & (POLLERR | POLLNVAL)) { fail("ipc", EIO); break; }
+                  if (!(p[0].revents & (POLLIN | POLLHUP))) continue;
+                  for (;;) {
+                      char byte; ssize_t n = read(STDIN_FILENO, &byte, 1);
+                      if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+                      if (n < 0 && errno == EINTR) { if (live()) break; continue; }
+                      if (n <= 0) { fail("ipc_eof", n < 0 ? errno : EPIPE); break; }
+                      if (byte == '\n') {
+                          line[length] = 0;
+                          if (strcmp(line, expected[state])) { fail("ipc_order", EPROTO); break; }
+                          if (state < 4 && command(state)) break;
+                          state++; length = 0; if (state == 5) break;
+                      } else if (!byte || length == sizeof(line) - 1) { fail("ipc_line", EPROTO); break; }
+                      else line[length++] = byte;
+                      if (live()) break;
+                  }
+              }
+              complete = state == 5;
+          done:
+              cleanup();
+              if (!failure && complete && live() == 0 && emit("{\"kind\":\"end\",\"samples\":%u,\"lost\":0,\"throttled\":0,\"overflow\":0}\n", used) == 0) return 0;
+              if (!failure) fail("incomplete", EPROTO);
+              char error[160]; int n = snprintf(error, sizeof(error), "{\"kind\":\"error\",\"stage\":\"%s\",\"errno\":%d}\n", failure, failure_errno);
+              if (n > 0 && (size_t)n < sizeof(error)) {
+                  ssize_t wrote = write(STDOUT_FILENO, error, (size_t)n);
+                  (void)wrote;
+              }
+              return 1;
+          }
+          CALIBRATION_C
+          cat > "$calibration_dir/control.mjs" <<'CALIBRATION_JS'
+          import assert from 'node:assert/strict';
+          import {createHash} from 'node:crypto';
+          import {spawn} from 'node:child_process';
+          import {readFile, writeFile, mkdir, readdir, readlink, open, stat} from 'node:fs/promises';
+          import {constants} from 'node:fs';
+          import path from 'node:path';
+          import {pathToFileURL} from 'node:url';
+          import {setTimeout as wait} from 'node:timers/promises';
+
+          // This is a method calibration, never a dashboard acceptance run.
+          const root=process.env.GITHUB_WORKSPACE, out=process.env.QUOTUM_CALIBRATION_DIR;
+          assert(root&&out&&process.env.CI==='true'&&process.platform==='linux'&&process.arch==='x64');
+          const hash=b=>createHash('sha256').update(b).digest('hex');
+          const save=async(name,value)=>{const b=Buffer.from(JSON.stringify(value,null,2)+'\n');assert(b.length<=8*1024*1024);await writeFile(path.join(out,name+'.json'),b,{flag:'wx'});};
+          await mkdir(out,{recursive:true});
+          const [{launchChrome},{RunOwner},{openTab,findChrome},{processIdentity}]=await Promise.all(
+            ['chrome','runOwner','cdp','browserProcess'].map(name=>import(pathToFileURL(path.join(root,'hub/bench',name+'.ts')))));
+          const owner=new RunOwner(), results={mode:'method-calibration',status:'insufficient-evidence',limits:[
+            'No dashboard performance or historical cause proof',
+            'Function-code container only, not inlining leaf or exclusive function CPU',
+            'Logging disables code compaction; observer effects remain unknown',
+            'Map has no independent completeness footer; no claim of a complete native ledger']};
+          let browser,cdp,helper,helperExit,helperPid,helperEnded=false,invalidated=false;
+          const rows=[],waiters=[],helperRaw=[],helperErr=[];let bytes=0,partial='',helperFailure;
+          let cancelled=false;
+          const cancel=()=>{
+            cancelled=true;invalidated=true;helper?.stdin.destroy();
+            for(const item of waiters.splice(0)){clearTimeout(item.timer);item.reject(Error('control-cancelled'));}
+            void owner.close().catch(()=>{});
+          };
+          process.on('SIGTERM',cancel);process.on('SIGINT',cancel);
+          const outerDeadline=setTimeout(cancel,90000);
+          const event=(name,timeout=2000)=>new Promise((resolve,reject)=>{
+            const ready=rows.find(row=>!row.used&&row.kind===name);
+            if(ready){ready.used=true;resolve(ready);return;}
+            const item={name,resolve,reject,timer:setTimeout(()=>{waiters.splice(waiters.indexOf(item),1);reject(Error('helper-'+name+'-deadline'));},timeout)};
+            waiters.push(item);
+          });
+          const receive=row=>{
+            if(row.kind==='boot'){assert(Number.isInteger(row.pid)&&row.pid>1);helperPid=row.pid;}
+            if(row.kind==='error'){helperFailure=row;for(const item of waiters.splice(0)){clearTimeout(item.timer);item.reject(Error('helper-'+row.stage));}}
+            const item=waiters.find(item=>item.name===row.kind);
+            if(item){clearTimeout(item.timer);waiters.splice(waiters.indexOf(item),1);item.resolve(row);}
+            else rows.push(row);
+          };
+          const source=`window.__nativeCalibration = (()=>{
+            function calibrationA(ms) {
+              const until=performance.now()+ms; let x=173,s=0;
+              do { for(let i=0;i<8192;i++){x=(Math.imul(x^i,1664525)+1013904223)|0;s=(s+x)|0;} } while(performance.now()<until);
+              window.__nativeSink=s; return {value:s,done:true};
+            }
+            function calibrationB(ms) {
+              const until=performance.now()+ms; let x=281,s=0;
+              do { for(let i=0;i<8192;i++){x=(Math.imul(x+i,1103515245)^12345)|0;s=(s^x)|0;} } while(performance.now()<until);
+              window.__nativeSink=s; return {value:s,done:true};
+            }
+            return {A:calibrationA,B:calibrationB};
+          })();
+          //# sourceURL=quotum-native-calibration.js`;
+          const contexts=new Map(),invalidations=[];
+          const invalidate=kind=>{invalidated=true;invalidations.push(kind);};
+          const readIdentity=async pid=>{
+            const value=processIdentity(pid,await readFile(`/proc/${pid}/stat`,'utf8'));assert(value);return value;
+          };
+          async function identity(pid,group){
+            const before=await readIdentity(pid), status=await readFile(`/proc/${pid}/status`,'utf8');
+            assert(before.group===group&&before.session===group&&before.state!=='Z');
+            const uid=status.match(/^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)$/m);assert(uid&&uid.slice(1).every(x=>Number(x)===process.getuid()));
+            assert(Number(status.match(/^Tgid:\s+(\d+)$/m)?.[1])===pid);
+            assert((await readlink(`/proc/${pid}/ns/pid`))===await readlink('/proc/self/ns/pid'));
+            const tids=await readdir(`/proc/${pid}/task`);assert(tids.length<100);
+            const mains=[];for(const tid of tids)if((await readFile(`/proc/${pid}/task/${tid}/comm`,'utf8')).trim()==='CrRendererMain')mains.push(Number(tid));
+            assert.deepEqual(mains,[pid]);
+            const after=await readIdentity(pid);assert.equal(after.birth,before.birth);
+            return {pid,group,session:before.session,birth:before.birth,mainTid:pid,uid:process.getuid(),namespaceEqual:true};
+          }
+          async function trace(stage){
+            const events=[];let size=0,complete;
+            const done=new Promise(resolve=>{complete=resolve;});
+            const collected=payload=>{for(const value of payload.value??[]){size+=Buffer.byteLength(JSON.stringify(value));if(size<=4*1024*1024&&events.length<20000)events.push(value);else invalidate('trace-cap');}};
+            cdp.on('Tracing.dataCollected',collected);cdp.on('Tracing.tracingComplete',complete);
+            try{
+              await cdp.send('Tracing.start',{categories:'-*,disabled-by-default-devtools.timeline',transferMode:'ReportEvents'},owner.signal);
+              await wait(100,undefined,{signal:owner.signal});await cdp.send('Tracing.end',{},owner.signal);
+              await Promise.race([done,wait(2000).then(()=>{throw Error('trace-drain-deadline');})]);
+            }finally{cdp.off('Tracing.dataCollected',collected);cdp.off('Tracing.tracingComplete',complete);}
+            await save('trace-'+stage,events);
+            const tree=await cdp.send('Page.getFrameTree',{},owner.signal), frame=tree.frameTree?.frame;assert(frame?.id&&frame.url==='about:blank');
+            const frames=events.filter(e=>e.name==='TracingStartedInBrowser').flatMap(e=>e.args?.data?.frames??[])
+              .filter(f=>f.frame===frame.id&&f.isOutermostMainFrame===true&&f.isInPrimaryMainFrame===true);
+            assert.equal(frames.length,1);assert(Number.isSafeInteger(frames[0].processId)&&frames[0].processId>1);
+            return {frame:frame.id,loader:frame.loaderId??null,pid:frames[0].processId};
+          }
+          async function mapRead(pid,stage){
+            const file=await open(path.join(out,'maps',`perf-${pid}.map`),constants.O_RDONLY|constants.O_NOFOLLOW);
+            try{
+              const a=await file.stat();assert(a.isFile()&&a.uid===process.getuid()&&a.size>0&&a.size<=2*1024*1024);
+              const b=await file.readFile();const z=await file.stat();assert.equal(b.length,a.size);assert.equal(z.size,a.size);assert.equal(z.ino,a.ino);
+              assert(b.at(-1)===10);await writeFile(path.join(out,'map-'+stage+'.txt'),b,{flag:'wx'});
+              return {bytes:b,dev:a.dev,ino:a.ino,sha256:hash(b)};
+            }finally{await file.close();}
+          }
+          try{
+            const maps=path.join(out,'maps');await mkdir(maps,{recursive:false});
+            const chrome=findChrome(process.env);assert(chrome&&path.isAbsolute(chrome));
+            const quote=s=>"'"+s.replaceAll("'","'\\''")+"'";
+            const wrapper=path.join(out,'chrome-wrapper.sh');
+            await writeFile(wrapper,'#!/bin/sh\nexec '+quote(chrome)+' '+quote('--js-flags=--perf-basic-prof,--perf-basic-prof-path='+maps)+' "$@"\n',{flag:'wx',mode:0o700});
+            browser=await owner.start(signal=>launchChrome(wrapper,false,signal));
+            const launched=browser.launchReport();assert(launched.ownedGroup&&launched.pid>1);
+            ({cdp}=await openTab(browser));
+            const runtime=await cdp.send('Browser.getVersion',{},owner.signal);
+            assert(runtime.product==='Chrome/155.0.8059.39'&&runtime.jsVersion==='15.5.35.20'&&runtime.revision.replace(/^@/,'')==='3ff7ac5a9224be9156d7f8703a06e22890aafd34');
+            cdp.on('Runtime.executionContextCreated',e=>{if(contexts.size>=16)invalidate('context-cap');else contexts.set(e.context.id,e.context);});
+            cdp.on('Runtime.executionContextDestroyed',()=>invalidate('context-destroyed'));
+            cdp.on('Runtime.executionContextsCleared',()=>invalidate('contexts-cleared'));
+            for(const name of ['Page.frameNavigated','Page.frameDetached','Inspector.detached','Inspector.targetCrashed'])cdp.on(name,()=>invalidate(name));
+            await cdp.send('Page.enable',{},owner.signal);await cdp.send('Runtime.enable',{},owner.signal);
+            await cdp.evaluate(source,owner.signal);
+            // Warm both functions equally outside either sampling window.
+            await cdp.evaluate('window.__nativeCalibration.A(100);window.__nativeCalibration.B(100);true',owner.signal);
+            const first=await trace('before'), expected=await identity(first.pid,launched.pid);
+            const own=await browser.observeProcesses(owner.signal);assert(own.some(p=>p.pid===first.pid&&p.birth===expected.birth));
+            const mapBefore=await mapRead(first.pid,'before');
+            owner.signal.throwIfAborted();assert(!cancelled&&!invalidated);
+            helper=spawn('sudo',['-n','--',path.join(out,'perf-sample'),String(first.pid),String(process.getuid()),String(process.getgid()),String(launched.pid),expected.birth],{stdio:['pipe','pipe','pipe']});
+            helper.stdin.on('error',()=>{
+              helperFailure={kind:'error',stage:'stdin'};
+              for(const item of waiters.splice(0)){clearTimeout(item.timer);item.reject(Error('helper-stdin'));}
+            });
+            helperExit=new Promise(resolve=>{helper.once('exit',(code,signal)=>resolve({code,signal}));helper.once('error',()=>resolve({code:null,signal:'spawn-error'}));});
+            helper.stdout.on('data',chunk=>{
+              try{bytes+=chunk.length;assert(bytes<=2*1024*1024);helperRaw.push(chunk);partial+=chunk.toString('utf8');
+                let end;while((end=partial.indexOf('\n'))>=0){const line=partial.slice(0,end);partial=partial.slice(end+1);if(line)receive(JSON.parse(line));}
+              }catch{helperFailure={kind:'error',stage:'reader'};helper.stdin.destroy();}
+            });
+            let stderrBytes=0;helper.stderr.on('data',chunk=>{stderrBytes+=chunk.length;if(stderrBytes<=8192)helperErr.push(chunk);else helper.stdin.destroy();});
+            const boot=await event('boot'),ready=await event('ready');assert.equal(boot.pid,ready.pid);assert.equal(ready.target,first.pid);assert.equal(ready.uid,process.getuid());
+            assert(/^[0-9a-f]+$/.test(ready.attrHex)&&ready.attrHex.length%2===0);
+            const attr=Buffer.from(ready.attrHex,'hex');assert(attr.length>=96&&attr.length<=256&&attr.readUInt32LE(4)===attr.length);
+            assert.equal(attr.readUInt32LE(0),1);assert.equal(attr.readBigUInt64LE(8),1n);
+            assert.equal(attr.readBigUInt64LE(16),250000n);assert.equal(attr.readBigUInt64LE(24),263n);
+            assert.equal(attr.readBigUInt64LE(32),19n);assert.equal(attr.readBigUInt64LE(40),0x2000061n);
+            assert.equal(attr.readUInt32LE(48),1);assert.equal(attr.readInt32LE(92),1);
+            assert(attr.subarray(52,92).every(x=>x===0)&&attr.subarray(96).every(x=>x===0));
+            results.helper={boot,ready};results.phases=[];
+            for(const phase of ['A','B']){
+              assert(!invalidated&&!helperFailure);helper.stdin.write('start'+phase+'\n');const started=await event('started');assert.equal(started.phase,phase);
+              const value=await cdp.evaluate('window.__nativeCalibration.'+phase+'(400)',owner.signal);assert(value.done&&Number.isInteger(value.value));
+              helper.stdin.write('stop'+phase+'\n');const stopped=await event('stopped');assert.equal(stopped.phase,phase);
+              results.phases.push({phase,value,started,stopped});
+            }
+            helper.stdin.end('end\n');const ended=await event('end');const exit=await helperExit;helperEnded=true;assert.deepEqual(exit,{code:0,signal:null});assert(!helperFailure&&!partial);assert.equal(stderrBytes,0);
+            assert.equal(ended.lost,0);assert.equal(ended.throttled,0);assert.equal(ended.overflow,0);results.helper.end=ended;
+            const mapAfter=await mapRead(first.pid,'after');assert.equal(mapAfter.dev,mapBefore.dev);assert.equal(mapAfter.ino,mapBefore.ino);assert(mapAfter.bytes.subarray(0,mapBefore.bytes.length).equals(mapBefore.bytes));
+            const last=await trace('after');assert.deepEqual(last,first);assert.deepEqual(await identity(first.pid,launched.pid),expected);assert(!invalidated);
+            const parsed=[];cdp.on('Debugger.scriptParsed',e=>{if(e.url==='quotum-native-calibration.js')parsed.push(e);});
+            await cdp.send('Debugger.enable',{},owner.signal);assert.equal(parsed.length,1);assert.equal(parsed[0].hash.toLowerCase(),hash(source));
+            const mainContext=contexts.get(parsed[0].executionContextId);assert(mainContext?.auxData?.isDefault===true&&mainContext.auxData.frameId===first.frame);
+            const received=await cdp.send('Debugger.getScriptSource',{scriptId:parsed[0].scriptId},owner.signal);assert.equal(received.scriptSource,source);
+            const locations={};
+            for(const phase of ['A','B']){
+              const fn=await cdp.send('Runtime.evaluate',{expression:'window.__nativeCalibration.'+phase,objectGroup:'native-calibration-location'},owner.signal);
+              assert(fn.result?.objectId);
+              const properties=await cdp.send('Runtime.getProperties',{objectId:fn.result.objectId,ownProperties:true},owner.signal);
+              const location=properties.internalProperties?.find(p=>p.name==='[[FunctionLocation]]')?.value?.value;
+              assert(location?.scriptId===parsed[0].scriptId&&Number.isInteger(location.lineNumber)&&Number.isInteger(location.columnNumber));
+              locations[phase]={line:location.lineNumber+1,column:location.columnNumber+1};
+            }
+            await cdp.send('Runtime.releaseObjectGroup',{objectGroup:'native-calibration-location'},owner.signal);
+            await cdp.send('Debugger.disable',{},owner.signal);
+            results.binding={runtime,frame:first,process:expected,source:{bytes:Buffer.byteLength(source),sha256:hash(source),parsed,locations},mapBefore:{bytes:mapBefore.bytes.length,sha256:mapBefore.sha256},mapAfter:{bytes:mapAfter.bytes.length,sha256:mapAfter.sha256}};
+            const parseMap=bytes=>bytes.toString('utf8').trimEnd().split('\n').map(line=>{
+              assert(Buffer.byteLength(line)<4096);const m=/^([a-f0-9]+) ([a-f0-9]+) (.+)$/i.exec(line);assert(m);return {start:BigInt('0x'+m[1]),end:BigInt('0x'+m[1])+BigInt('0x'+m[2]),label:m[3]};
+            });
+            const ranges=parseMap(mapAfter.bytes),existing=new Set(mapBefore.bytes.toString('utf8').trimEnd().split('\n'));
+            const samples=rows.filter(r=>r.kind==='sample');assert(samples.length<=8192);assert.equal(samples.length,ended.samples);await save('samples',samples);
+            const names={A:'calibrationA',B:'calibrationB'}, classified=[];
+            for(const sample of samples){
+              assert(['A','B'].includes(sample.phase)&&/^\d+$/.test(sample.time)&&/^\d+$/.test(sample.period));
+              assert(sample.pid===first.pid&&sample.tid===first.pid&&/^[a-f0-9]+$/i.test(sample.ip));
+              assert(BigInt(sample.period)===250000n);const ip=BigInt('0x'+sample.ip),owners=ranges.filter(r=>r.start<=ip&&ip<r.end);
+              // All duplicates/reused addresses remain unknown, even when labels agree.
+              // A later code creation cannot retroactively name an earlier instruction.
+              const prior=owners.length===1&&existing.has(owners[0].start.toString(16)+' '+(owners[0].end-owners[0].start).toString(16)+' '+owners[0].label);
+              const label=prior?owners[0].label:null;
+              const m=label&&/^(?:LazyCompile|Function):[^ ]*(calibration[AB]) quotum-native-calibration\.js:(\d+):(\d+)$/.exec(label);
+              let name=m?.[1]??null;
+              if(m){const phase=m[1]==='calibrationA'?'A':'B';if(Number(m[2])!==locations[phase].line||Number(m[3])!==locations[phase].column)name=null;}
+              classified.push({phase:sample.phase,ip:sample.ip,owners:owners.length,name,label});
+            }
+            await save('classified',classified);
+            for(const phase of ['A','B']){
+              const bucket=classified.filter(r=>r.phase===phase),correct=bucket.filter(r=>r.name===names[phase]),wrong=bucket.filter(r=>r.name&&r.name!==names[phase]);
+              const p=results.phases.find(r=>r.phase===phase),counter=p.stopped;
+              assert(bucket.length===counter.samples&&correct.length>=20&&wrong.length===0);
+              assert.equal(counter.lost,0);assert.equal(counter.throttled,0);assert.equal(counter.overflow,0);
+              assert(BigInt(counter.enabled)>0n&&BigInt(counter.running)*1000n>=BigInt(counter.enabled)*999n);
+              p.mapping={total:bucket.length,known:correct.length,wrong:wrong.length,unknown:bucket.length-correct.length};
+            }
+            results.status='qualified-function-container-calibration';
+          }catch(error){results.failure={message:typeof error?.message==='string'?error.message.slice(0,200):'unknown',helper:helperFailure??null};}
+          finally{
+            if(helper&&!helperEnded){helper.stdin.destroy();const exit=await Promise.race([helperExit,wait(11000).then(()=>null)]);results.helperCleanup={exit,pid:helperPid??null};if(!exit)results.status='cleanup-unconfirmed';}
+            for(const item of waiters.splice(0)){clearTimeout(item.timer);item.reject(Error('control-cleanup'));}
+            try{await owner.close();results.browserCleanup=browser?.launchReport();}catch{results.status='cleanup-unconfirmed';results.browserCleanup={failures:owner.failures};}
+            clearTimeout(outerDeadline);process.off('SIGTERM',cancel);process.off('SIGINT',cancel);
+            if(helper){await writeFile(path.join(out,'helper-raw.log'),Buffer.concat(helperRaw),{flag:'wx'});await writeFile(path.join(out,'helper-stderr.log'),Buffer.concat(helperErr),{flag:'wx'});}
+            if(cancelled)results.status='cancelled';
+            results.invalidations=invalidations;results.helperRows=rows.filter(r=>r.kind!=='sample');
+            await save('result',results);
+          }
+          console.log(JSON.stringify({status:results.status,failure:results.failure??null}));
+          process.exitCode=results.status==='qualified-function-container-calibration'?0:1;
+          CALIBRATION_JS
+          cc -std=c11 -O2 -Wall -Wextra -Werror "$calibration_dir/perf-sample.c" -o "$calibration_dir/perf-sample"
+          node --check "$calibration_dir/control.mjs"
+          sha256sum "$calibration_dir/perf-sample.c" "$calibration_dir/perf-sample" "$calibration_dir/control.mjs"
+      - name: Run one synthetic function-mapping calibration
+        run: node --import tsx "$QUOTUM_CALIBRATION_DIR/control.mjs"
+        env:
+          QUOTUM_CALIBRATION_DIR: ${{ runner.temp }}/quotum-native-calibration
+      - name: Calibration evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-cpu-calibration-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quotum-native-calibration
+          if-no-files-found: error
+
   idle-cpu-control:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_calibration }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
