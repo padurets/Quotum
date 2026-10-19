@@ -1,4 +1,5 @@
-import {matchesSelection,type FilterEnvelope} from '../../server/domain/dataFilters.js';
+import {matchesSelection,workFilter,type FilterEnvelope} from '../../server/domain/dataFilters.js';
+import {sourceWorkCurves} from '../../server/domain/periodCurves.js';
 import {currentCohort,capturedCohort} from './sessionOracle.js';
 import {seedSessionClients} from '../sessionClients.js';
 import type {PeriodReply} from '../../server/domain/periodRead.js';
@@ -37,7 +38,7 @@ import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.j
 import {ANALYTICS_KINDS, type History, type LiveSession, type Pace, type SourceForecast, type View} from '../../ui/lib/types.js';
 import type {Snapshot} from '../../ui/lib/board.js';
 import {ACTIVITY, AGENTS, boardState, cardId, columnShown, QUOTA_TABLE, QUOTA_HISTORY, isHidden, planOf} from '../../ui/lib/view.js';
-import {SCENES, SETS,PERIOD_SCENES,SESSION_ACTIVITY_SCENES} from '../catalogue.js';
+import {SCENES, SETS,PERIOD_SCENES,SESSION_ACTIVITY_SCENES,FILTER_SCENES} from '../catalogue.js';
 import {
   awake,
   cards,
@@ -891,6 +892,24 @@ test('seed and live credit share producer IDs and expose known positive, zero, l
   assert.ok(byName('ios-app').rows.some(row => row.session.workedMs !== null), 'a mixed group contains known credit too');
 });
 
+
+test('data filter catalogue keeps empty work recoverable beside supplier measurements',async t=>{
+  const set=setOf('filters'),start=Math.floor(Date.now()/MIN)*MIN,{stand}=await bringUp(t,set,start);
+  const owner=stand.people.get('ana')!,member=stand.people.get('ben')!,board=stand.boards.get('compact')!;
+  const filters=await owner.get<FilterEnvelope>('/api/boards/'+board+'/filters');
+  assert.deepEqual(filters.filters.projects,{mode:'include',values:[]});
+  const overview=await owner.get<Snapshot>('/api/overview?board='+board);assert.ok(overview.sources.some(source=>source.windows.length));
+  const response=expandPeriod(await owner.post<PeriodWireReply>('/api/boards/'+board+'/period',{version:1,selection:{mode:'live',periodMs:HOUR},evaluatedAt:start-MIN,sessions:{},facets:true,workFilter:workFilter(filters.filters),quota:{cell:String(MIN),from:String(start-HOUR),to:String(start-MIN),cells:'skip'},sourceWork:{}}));
+  assert.equal(response.sessions?.state,'complete');assert.equal(response.facets?.state,'complete');assert.equal(response.sourceWork?.state,'complete');
+  if(response.sessions?.state!=='complete'||response.facets?.state!=='complete'||response.sourceWork?.state!=='complete')throw new Error('incomplete filters scene');
+  assert.equal(response.sessions.value.refs.length,0);assert.ok(response.facets.value.projects.includes('recent-1'));
+  assert.ok([...sourceWorkCurves(response.sourceWork.value).groups.source.values()].some(curve=>curve.read(response.basis.range,true)>0));
+  assert.deepEqual((await member.get<FilterEnvelope>('/api/boards/'+board+'/filters')).filters,filters.filters);
+  await assert.rejects(member.saveFilters(board,filters.filters),(error:unknown)=>(error as {status:number}).status===403);
+  const all=structuredClone(filters.filters);all.projects={mode:'exclude',values:[]};await owner.saveFilters(board,all);
+  assert.deepEqual((await owner.get<FilterEnvelope>('/api/boards/'+board+'/filters')).filters.projects,all.projects);
+  assert.deepEqual(FILTER_SCENES,['selected-empty','unfiltered-facets','resources-continue','member-current','save-restore']);
+});
 
 test('session comparison catalogue exposes grouped session columns and retained work with a whole union total',async t=>{
   const set=setOf('all'),start=Math.floor(Date.now()/MIN)*MIN;

@@ -142,6 +142,8 @@ export async function setUp(base: string, set: DemoSet, start: number, setupCode
   }
   for (const [key, board] of stand.boards) {
     const owner=ownerOf(stand,key),filters=defaultFilters();
+    const entry=boards(set).find(board=>board.id===key);
+    if(entry?.filterProjects)filters.projects=entry.filterProjects;
     filters.windows.values=cards(set).flatMap(card=>(card.on?.[key]?.windows??[]).map(window=>[stand.sources.get(card.id)!,window] as [string,string]));
     await owner.saveView(board,viewOf(stand,key));await owner.saveFilters(board,filters);
   }

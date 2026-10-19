@@ -1668,6 +1668,14 @@ const activity: DemoSet = {
 };
 
 const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter and DeepSeek wallets, partial readings and private access failures'};
+export const FILTER_SCENES=['selected-empty','unfiltered-facets','resources-continue','member-current','save-restore'] as const;
+const dataFilters:DemoSet={...activity,id:'filters',about:'Saved empty project selection with retained resource measurements and reader recovery',entries:[
+  ...activity.entries.map(entry=>entry.kind==='board'?{...entry,name:'Filtered agents',members:['ben'],filterProjects:{mode:'include' as const,values:[]},expect:[{state:'widgets' as const}],look:[
+    'The saved Projects selection is empty. Agent sessions and activity are empty; subscription measurements and estimates remain available.',
+    'At 320/390/1440 px in EN/RU, open Projects, search and choose All; Restore returns to the empty defaults. Save and Restore use 26 px icon buttons. Ben can explore the same filters and cannot save opening defaults.',
+  ]}:entry),
+  {kind:'person',id:'ben',name:'Ben',expect:[{state:'onboarding'}]},
+]};
 const analytics:DemoSet={...all,id:'analytics',about:'Quota and wallet analytics with a separate subscription-funds chart, native quotas, z.ai, OpenRouter and DeepSeek'};
 const quotas:DemoSet={...all,id:'quotas',about:'Personal z.ai subscription quotas in credits, unknown resets and partial readings'};
 export const CLIENT_SCENES = [
@@ -1695,4 +1703,4 @@ const measurementDevices:DemoSet={id:'devices',about:'Measurement participation,
   {kind:'machine',id:'local-only',expect:[{name:'local-only'}]},
   {kind:'card',id:'codex-managed',provider:'codex',plan:'Plus',machines:['laptop','desktop','backup'],history:6*HOUR,windows:[weekly({since:-DAY,use:steady(0,5)})],on:{ana:{name:'Measurement selection'}},expect:[{title:'Measurement selection'}],look:['The existing status and settings open My connections without changing card height']},
 ]};
-export const SETS: DemoSet[] = [all, showcase, activity,SESSION_ANALYTICS,money,quotas,analytics, machineClients,linkedClients,measurementDevices, ONBOARDING];
+export const SETS: DemoSet[] = [all, showcase, activity,dataFilters,SESSION_ANALYTICS,money,quotas,analytics, machineClients,linkedClients,measurementDevices, ONBOARDING];
