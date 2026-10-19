@@ -44,6 +44,32 @@ test('sparse source deltas retain known empty sources and compare curves indepen
   assert.equal(sameSourceWork(before,unchanged,'s'),true);
 });
 
+test('a month of unchanged source hours shares its patterns through a clipped empty tail',()=>{
+  const values=[0,1,H,-1],before={version:1 as const,from:0,cut:720*H,patterns:[values],sources:[{id:'s',knownFrom:0,blocks:Array.from({length:720},(_,hour)=>[hour,0]).flat()}]};
+  const patch={version:1 as const,from:1,cut:720*H+1,replaceFrom:720*H,replaceTo:720*H+1,patterns:[],sources:[]};
+  const original=JSON.stringify(before);let reserved=0;
+  const merged=mergeSourceWorkTape(before,patch,bytes=>{reserved+=bytes;assert.ok(reserved<32*1024,'an empty tail must not allocate a sweep for every retained hour');});
+  assert.equal(JSON.stringify(before),original);assert.ok(merged.patterns.includes(values),'whole hours retain the original immutable pattern');
+  const curve=sourceWorkCurves(merged).groups.source.get('s')!;
+  assert.equal(curve.read({from:0,to:720*H+1}),720*H-1);
+  assert.equal(curve.read({from:0,to:1}),0);assert.equal(curve.read({from:720*H,to:720*H+1}),0);
+  assert.throws(()=>mergeSourceWorkTape(before,patch,()=>{throw Error('capacity');}),/capacity/);
+  assert.equal(JSON.stringify(before),original,'a refused merge leaves the retained tape intact');
+});
+
+test('shared source patterns preserve exact replacement integrals across whole and partial hours',()=>{
+  const tape=(spans:WorkTrace['spans'])=>sourceWorkTape(new PeriodCurves({...trace(spans),cut:4*H}),0,4*H,new Map([['s',0]]),()=>{});
+  const before=tape([[0,0,3*H],[1,H/2,2*H+H/2],[2,3*H,4*H]]),patch=tape([[0,H,4*H],[1,0,H/2]]);
+  const old=sourceWorkCurves(before).groups.source.get('s')!,next=sourceWorkCurves(patch).groups.source.get('s')!;
+  for(const from of [0,1,H/2,H])for(const cut of [3*H,4*H])for(const lo of [from,H,3*H])for(const hi of [lo,lo+1,cut].filter(at=>at>=lo&&at<=cut)){
+    const merged=sourceWorkCurves(mergeSourceWorkTape(before,{...patch,from,cut,replaceFrom:lo,replaceTo:hi})).groups.source.get('s')!;
+    for(const active of [false,true])for(const start of [0,H/2,H,2*H,3*H])for(const end of [start,3*H,4*H].filter(at=>at>=start)){
+      const read=(curve:typeof old,a:number,b:number)=>curve.read({from:Math.max(start,from,a),to:Math.min(end,cut,b)},active);
+      assert.equal(merged.read({from:start,to:end},active),read(old,from,lo)+read(next,lo,hi)+read(old,hi,cut));
+    }
+  }
+});
+
 test('half an hour selected never halves the full-hour supplier rate or remaining-work estimate',()=>{
   const full=trace([[0,0,H]]),selected=trace([[0,0,H/2]]),range={from:0,to:H+1};
   const source=sourceWorkCurves(sourceWorkTape(new PeriodCurves(full),0,H,new Map([['s',0]]),()=>{}));

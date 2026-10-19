@@ -106,24 +106,41 @@ export function mergeSourceWorkTape(before:SourceWorkTape,patch:SourceWorkTape,r
   sourceWorkCurves(patch,reserve);
   const from=patch.from,cut=patch.cut,replaceFrom=patch.replaceFrom??from,replaceTo=patch.replaceTo??cut;
   const patterns:number[][]=[],dictionary=new Map<string,number>(),sources:SourceWorkTape['sources']=[];
+  const references=new Map<readonly number[],number>();
+  const pattern=(values:number[])=>{
+    let id=references.get(values);if(id!==undefined)return id;
+    const key=values.join(',');id=dictionary.get(key);
+    if(id===undefined){reserve(160+values.length*32);id=patterns.length;dictionary.set(key,id);patterns.push(values);}
+    reserve(64);references.set(values,id);return id;
+  };
   const incoming=new Map(patch.sources.map(row=>[row.id,row]));
   for(const row of [...patch.sources,...before.sources.filter(row=>!incoming.has(row.id)).map(row=>({...row,blocks:[]}))]){
-    const hours=new Map<number,Map<number,number>>();
-    const add=(tape:SourceWorkTape,source:SourceWorkTape['sources'][number],ranges:readonly [number,number][])=>{
-      for(let i=0;i<source.blocks.length;i+=2){const hour=source.blocks[i],pattern=tape.patterns[source.blocks[i+1]],base=hour*WORK_BLOCK_MS;let count=0;
-        for(let j=0;j<pattern.length;j+=2){count+=pattern[j+1];if(!count)continue;const end=pattern[j+2]??WORK_BLOCK_MS;
-          for(const [lo,hi] of ranges){const a=Math.max(pattern[j],from-base,lo-base),b=Math.min(end,cut-base,hi-base);if(a>=b)continue;
-            let changes=hours.get(hour);if(!changes){reserve(128);hours.set(hour,changes=new Map());}reserve(64);changes.set(a,(changes.get(a)??0)+count);changes.set(b,(changes.get(b)??0)-count);
-          }
-        }
-      }
-    };
     const prior=before.sources.find(source=>source.id===row.id);
-    if(prior)add(before,prior,[[from,replaceFrom],[replaceTo,cut]]);add(patch,row,[[replaceFrom,replaceTo]]);
-    const blocks:number[]=[];
-    for(const [hour,changes] of [...hours].sort(([a],[b])=>a-b)){
-      const values=[...changes].filter(([,delta])=>delta!==0).sort(([a],[b])=>a-b).flat();if(!values.length)continue;
-      const key=values.join(',');let id=dictionary.get(key);if(id===undefined){reserve(160+values.length*32);id=patterns.length;dictionary.set(key,id);patterns.push(values);}reserve(32);blocks.push(hour,id);
+    const old=prior?.blocks??[],blocks:number[]=[];let i=0,j=0;
+    // Whole hours already have an immutable, exact pattern. Only cuts through an
+    // hour need a new sweep; a short tail must not expand a month's shared hours.
+    while(i<old.length||j<row.blocks.length){
+      const hour=Math.min(old[i]??Infinity,row.blocks[j]??Infinity),base=hour*WORK_BLOCK_MS,end=base+WORK_BLOCK_MS;
+      const a=old[i]===hour?before.patterns[old[i+1]]:undefined,b=row.blocks[j]===hour?patch.patterns[row.blocks[j+1]]:undefined;
+      if(old[i]===hour)i+=2;if(row.blocks[j]===hour)j+=2;
+      if(end<=from||base>=cut)continue;
+      let values:number[]|undefined;
+      if(base>=from&&end<=cut&&(end<=replaceFrom||base>=replaceTo))values=a;
+      else if(base>=from&&end<=cut&&base>=replaceFrom&&end<=replaceTo)values=b;
+      else {
+        reserve(128);const changes=new Map<number,number>();
+        const add=(values:number[]|undefined,ranges:readonly [number,number][])=>{
+          let count=0;
+          for(let k=0;k<(values?.length??0);k+=2){count+=values![k+1];if(!count)continue;const end=values![k+2]??WORK_BLOCK_MS;
+            for(const [lo,hi] of ranges){const a=Math.max(values![k],from-base,lo-base),b=Math.min(end,cut-base,hi-base);if(a>=b)continue;
+              reserve(64);changes.set(a,(changes.get(a)??0)+count);changes.set(b,(changes.get(b)??0)-count);
+            }
+          }
+        };
+        add(a,[[from,replaceFrom],[replaceTo,cut]]);add(b,[[replaceFrom,replaceTo]]);
+        values=[...changes].filter(([,delta])=>delta!==0).sort(([a],[b])=>a-b).flat();
+      }
+      if(values?.length){const id=pattern(values);reserve(32);blocks.push(hour,id);}
     }
     reserve(256+row.id.length*2);sources.push({id:row.id,knownFrom:row.knownFrom,blocks});
   }
