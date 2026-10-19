@@ -51,7 +51,7 @@ export const NOW=1_800_000_000_000,H=3_600_000,M=60_000;
 export const flush=async()=>{for(let i=0;i<300;i++)await Promise.resolve();};
 
 /** Actual producer, wire JSON boundary, page reducer, transport and bounded server reader. */
-export async function fixture({personal=false,ownerDevice=false,transportLive=false,privateWork=false,unknown=false,current=false,stable=true,fixed=false,tableOnly=false,periodName="1h",creditFrom=NOW-3*M,creditTo=NOW-2*M,clocked=false,sessionMs=24*H}={}) {
+export async function fixture({personal=false,ownerDevice=false,transportLive=false,privateWork=false,unknown=false,current=false,stable=true,fixed=false,tableOnly=false,periodName="1h",creditFrom=NOW-3*M,creditTo=NOW-2*M,clocked=false,sessionMs=24*H,initialFilters=null as filterModelBindings.DataFilters|null}={}) {
   let selectedRange=fixed?{from:NOW-H,to:NOW}:null;
   const start=NOW-Math.max(3*H,periodOf(periodName).ms+H);
   const store=new Store(':memory:',start),directory=new Directory(store.db);
@@ -99,8 +99,10 @@ export async function fixture({personal=false,ownerDevice=false,transportLive=fa
     packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,
     timeRange:()=>selectedRange,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
   runInNewContext(ts.transpileModule(code.slice(code.indexOf('class BoardPeriod'),code.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  if(initialFilters)filterRuntimeBindings.publishDataFilters(initialFilters);
   const period=new context.exports.BoardPeriod();pan.onPhase(()=>period.refreshWorkClock());page.listen((event,state)=>period.changed(event,state));period.activate(true);await flush();
-  assert.equal(period.get().error,null);assert.equal(period.get().rows.length,1);const initialRequests=requests.slice();requests.length=0;frames.length=0;
+  const limited=!!initialFilters&&!filterModelBindings.executableWorkFilters(initialFilters);
+  assert.equal(period.get().error,limited?'filters_limit':null);assert.equal(period.get().rows.length,limited?0:1);const initialRequests=requests.slice();requests.length=0;frames.length=0;
   const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=next[1].at;timers.delete(next[0]);next[1].run();events.flush();}now=at;if(!clocked)period.tick();};
   const jump=(at:number)=>{now=at;for(const [token,timer] of [...timers])if(timer.at<=at){timers.delete(token);timer.run();}events.flush();if(clocked)pageClock.wakeDue();else period.tick();};
   return {hub,device,owner,advance,jump,pan,selectedRange:()=>selectedRange,selectRange:(range:typeof selectedRange)=>{selectedRange=range;period.changed();},clock:pageClock,initialRequests,prepareWith:(value:Preparations|null)=>{preparer=value;},settings,pool,reader,store,directory,board,alice,bob,source,credit,events,period,page,frames,requests,
@@ -163,21 +165,24 @@ export function consumer(h: any) {
 import {HistoryStore,follow} from '../lib/history';
 import {expandHistory} from '../../server/domain/history';
 
-export async function drawings(h:any,activity=true){
+export async function drawings(h:any,activity=true,scope:'quota'|'budget'='quota'){
  const source=readFileSync(new URL('../lib/history.ts',import.meta.url),'utf8');
- const retry=source.split('\n').find(line=>line.trimStart().startsWith('retry:'));assert.ok(retry);
- const retryContext={retry:null as any,boardPeriod:h.period,scope:'quota',family:'budget'};
- runInNewContext(ts.transpileModule('globalThis.retry=({'+retry+'}).retry;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,retryContext);
- const loader=new HistoryStore({now:()=>NOW,preparations:null,read:(_board,cell,from,to,signal,_meters,meta,activityOnly)=>h.period.transport.read('quota',{cell:String(cell),from:String(from),to:String(to),meta:meta?.meta??''},signal,activityOnly).then((reply:import('../../server/domain/history').HistoryReply)=>expandHistory(reply,meta)),retry:retryContext.retry,setTimeout:()=>({}),clearTimeout:()=>{},dropTimeRange:()=>{}},undefined,'quota',h.pool);
+ const read=source.split('\n').find(line=>line.trimStart().startsWith('read:')),retry=source.split('\n').find(line=>line.trimStart().startsWith('retry:'));assert.ok(read);assert.ok(retry);
+ const adapter=source.slice(source.indexOf('const selectedMeters ='),source.indexOf('function activeReaders('));
+ const readerContext={read:null as any,retry:null as any,selected:null as any,boardPeriod:h.period,scope,family:'budget',pan:h.pan,expandHistory,prefs:()=>h.settings,subscriptionSelection,moneyReadSelection};
+ runInNewContext(ts.transpileModule(adapter+'\nglobalThis.read=({'+read+'}).read;globalThis.retry=({'+retry+'}).retry;globalThis.selected=selectedMeters;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,readerContext);
+ const loader=new HistoryStore({workInPresentation:scope!=='budget',now:()=>NOW,preparations:null,read:readerContext.read,retry:readerContext.retry,setTimeout:()=>({}),clearTimeout:()=>{},dropTimeRange:()=>{}},undefined,scope,h.pool);
  const stop=follow(loader,h.page);loader.setActivityActive(activity);loader.choose(h.settings.range,h.selectedRange());loader.open(h.board);loader.setWorkFilter(JSON.stringify(filterRuntimeBindings.effectiveFilters()?filterModelBindings.workFilter(filterRuntimeBindings.effectiveFilters()!):null),filterRuntimeBindings.effectiveFilters()??undefined);loader.hello(h.events.epoch);
+ loader.setMeters(readerContext.selected(h.page.get(),scope));
  const board=h.page.get().board;loader.snapshot(board.lineup,Object.values(board.cards).flatMap((c:any)=>c.windows.map((w:any)=>`${c.id} ${w.id}`)),board.historyStart,board.workAuthority);await flush();
- const slots:any[]=[];let cursor=0;
+ const selectedSlots:any[]=[],financialSlots:any[]=[];let slots=selectedSlots,cursor=0;
  const useRef=(current:any)=>slots[cursor++]??(slots[cursor-1]={current});
  const useMemo=(read:any,deps:any[])=>{const box=useRef(null);if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;};
  const context={useRef,useMemo,useSyncExternalStore:(_s:any,read:any)=>read(),pan:{active:()=>null,onPhase:()=>()=>{}},hubNow:()=>NOW,planEventsAt,planEventsDeadline,shallowEqual,useClock:()=>NOW,fundsHistory:{},page:h.page,timeRange:h.selectedRange,timeRangeKey,prefs:()=>h.settings,boardPeriod:h.period,read:null as any};
  runInNewContext(ts.transpileModule(source.slice(source.indexOf('function usePeriodHistory('),source.indexOf('export function useHistory('))+'\nglobalThis.read=usePeriodHistory;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
- const render=()=>{cursor=0;return context.read(loader,true);};
- return {loader,render,close:()=>{stop();loader.close();}};
+ const render=()=>{slots=selectedSlots;cursor=0;return context.read(loader,true);};
+ const renderFinancial=()=>{slots=financialSlots;cursor=0;return context.read(loader,false,true);};
+ return {loader,render,renderFinancial,close:()=>{stop();loader.close();}};
 }
 import {subscriptionLinesOf} from '../lib/subscription';
 import {lineWork,workText} from '../lib/work';

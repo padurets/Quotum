@@ -226,7 +226,7 @@ class BoardPeriod {
     return summary?{...series,...summary}:series;
   }
   moneyWorkAt(source:string,now:number,rangeKey?:string){
-    const tape=this.tapes.get('budget'),value=tape&&(tape.sourceEpoch??0)===this.sourceEpoch&&(tape.tape.fixed||this.workRangeKey===tape.rangeKey&&(!!this.work.value||!!this.sourceCurves))&&(rangeKey===undefined||rangeKey===tape.rangeKey)?tape.accounting.moneyWorkSummary(source,this.tapeRange(tape,now)):undefined;
+    const tape=this.tapes.get('budget'),value=tape&&(tape.sourceEpoch??0)===this.sourceEpoch&&(tape.tape.fixed||!!this.sourceCurves||this.workRangeKey===tape.rangeKey&&!!this.work.value)&&(rangeKey===undefined||rangeKey===tape.rangeKey)?tape.accounting.moneyWorkSummary(source,this.tapeRange(tape,now)):undefined;
     return value&&this.selectedPending()?{...value,selectedWork:{from:now,activeMs:null,agentMs:0}}:value;
   }
   rangeAt(scope:PeriodScope,now:number,rangeKey?:string){const tape=this.tapes.get(scope);return tape&&(rangeKey===undefined||tape.rangeKey===rangeKey)?this.tapeRange(tape,now):null;}
@@ -287,7 +287,7 @@ class BoardPeriod {
   private intent():PeriodIntent|null {
     const board=page.get().board;if(!board||!this.active||!filtersReady())return null;
     const pending=!pan.get(),range=evaluatedRange(this.selection,hubNow()),queries=pending?this.queries(board,range):{},filters=effectiveFilters();
-    if(this.workLimit){delete queries.quota;if(queries.budget)queries.budget={...queries.budget,work:undefined};}
+    // Native evidence and supplier work keep their queries when selected work cannot execute.
     const sourceNeeded=!!filters&&this.selection.mode==='live'&&!this.sourceTape;
     for(const scope of PERIOD_SCOPES)if(queries[scope]&&(this.projectionErrors[scope]&&!this.dirtyScopes.has(scope)||!this.needsTape(scope,this.queryKey(queries[scope]!,scope),range)&&!(sourceNeeded&&(scope==='quota'||queries[scope]?.work==='1'))))delete queries[scope];
     const request={version:1 as const,selection:this.selection,evaluatedAt:hubNow(),...queries,...(filters&&!this.workLimit?{workFilter:workFilter(filters)}:{}),

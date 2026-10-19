@@ -23,11 +23,11 @@ assert.ok(listener);assert.ok(selectedKey);
 /** Execute the production filter subscription against the real reader and coordinator. */
 function wire(h:Awaited<ReturnType<typeof fixture>>,d:Awaited<ReturnType<typeof drawings>>) {
   const stopPeriod=onDataFilters(()=>h.period.changed());let stopReader=()=>{};
-  const unused={setMeters(){},setActive(){}};
+  const unused={setMeters(){},setActive(){},setActivityActive(){},setWorkFilter(){return false;}};
   runInNewContext(ts.transpileModule(adapter+'\n'+selectedKey+'\n'+listener,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,{
     ...widgets,subscriptionSelection,moneyReadSelection,filtersReady,effectiveFilters,workFilter,
     page:h.page,prefs:()=>h.settings,shellActive:true,pan:h.pan,
-    quotaHistory:d.loader,budgetHistory:unused,fundsHistory:unused,
+    quotaHistory:d.loader.scope==='quota'?d.loader:unused,budgetHistory:d.loader.scope==='budget'?d.loader:unused,fundsHistory:unused,
     onDataFilters:(fn:()=>void)=>(stopReader=onDataFilters(fn)),
   });
   return ()=>{stopPeriod();stopReader();};
@@ -159,5 +159,34 @@ for(const cold of [false,true])test(`an oversized selected predicate cannot beco
     d.loader.endPan(false);const range={from:NOW-H-M,to:NOW-M};h.selectRange(range);d.loader.choose('1h',range);await flush();assert.equal(d.loader.get().error,'filters_limit');assert.equal(d.loader.getActivityPlot(),null);
     publishDataFilters(defaultFilters());await flush();assert.equal(d.loader.get().error,undefined);assert.equal(h.period.get().error,null);
     move(d.loader,3);await flush();assert.ok(names(d.loader).includes('B'),'a smaller executable predicate restores the selected drawing');
+  }finally{await flush();stop();d?.close();await h.close();publishDataFilters(null,false);Date.now=originalNow;}
+});
+
+for(const scope of ['quota','budget'] as const)for(const cold of [false,true])for(const fixed of [false,true])test(`the actual ${scope} financial hook completes with oversized work in a ${cold?'cold':'warm'} ${fixed?'fixed':'live'} coordinator`,async()=>{
+  const originalNow=Date.now;Date.now=()=>NOW;publishDataFilters(defaultFilters());
+  const large=defaultFilters();large.projects={mode:'include',values:Array.from({length:1600},(_,i)=>String(i).padStart(4,'0')+'x'.repeat(60))};
+  const h=await fixture({personal:true,fixed,initialFilters:cold?large:null});let d:Awaited<ReturnType<typeof drawings>>|undefined,stop=()=>{};
+  try{
+    const wallet=h.store.source('openrouter','native-limit-wallet',NOW-3*H);h.store.hold(wallet,h.alice.id,NOW-3*H);
+    const record=(at:number,usage:string)=>h.store.record(wallet,{type:'meters',observedAt:at,staleAfterMs:H,meters:[{id:'usage',kind:'counter',unit:'USD',amount:usage,at,stale:false,staleAfterMs:H,limit:null,resetAt:null,minutes:null,scope:null,label:null},{id:'credits',kind:'counter',unit:'USD',amount:'15000000',at,stale:false,staleAfterMs:H,limit:null,resetAt:null,minutes:null,scope:null,label:null}],keys:[],inventoryComplete:true,inventoryError:null});
+    record(NOW-H,'0');record(NOW-M,'1000000');
+    h.store.creditWork(h.device,NOW-20*M,NOW-10*M,[{source:wallet,client:'codex',origin:'terminal',project:'Wallet project',folder:'',startedAt:NOW-3*H,identity:{kind:'stable',sessionId:'native-limit-wallet-work'}}]);
+    const view=h.page.get().board!.view,visible:string[]=[widgets.BUDGET_HISTORY,widgets.BUDGET_TABLE,...(scope==='quota'?[widgets.ACTIVITY]:[])],hidden=scope==='budget'?[widgets.ACTIVITY,...widgets.QUOTA_WIDGETS]:[];
+    h.directory.saveView(h.board,{...view,hidden:[...new Set([...view.hidden.filter(id=>!visible.includes(id)),...hidden])],shown:[...new Set([...view.shown.filter(id=>!hidden.includes(id)),...visible])]},h.alice.id,NOW);h.events.flush();await flush();
+    if(!cold){d=await drawings(h,scope==='quota',scope);stop=wire(h,d);assert.ok(d.renderFinancial().history);}
+    if(!cold){h.requests.length=0;publishDataFilters(large);await flush();}
+    else{d=await drawings(h,scope==='quota',scope);stop=wire(h,d);}
+    assert.equal(h.period.get().error,'filters_limit');
+    const check=()=>{
+      const frame=d!.renderFinancial();assert.equal(frame.loading,false);assert.equal(frame.error,undefined);assert.ok(frame.history,'the actual native hook must pass its accounting readiness gate');assert.equal(h.period.projectionState(frame.history,scope).ready,true);return frame.history;
+    };
+    let native=check();assert.ok(scope==='quota'?native.series.length:native.meterSeries.length);
+    if(!fixed){assert.equal(h.period.sourceCurves?.available,true);assert.ok(h.period.sourceCurves.groups.source.has(h.source),'supplier work keeps its independent authorized cohort');}
+    const supplier=h.period.moneyWorkAt(wallet,NOW,fixed?`${NOW-H}-${NOW}`:'1h');assert.ok(supplier?.activeMs>0,'supplier estimates do not depend on a completed selected-work period');assert.equal(supplier.selectedWork.activeMs,null);
+    assert.ok(h.requests.some(body=>body[scope]&&body[scope]!.evidence!=='skip'),'native evidence is independent of the blocked selected predicate');
+    assert.ok(h.requests.every(body=>!body.workFilter&&!body.sessions));
+    h.store.record(h.source,{observedAt:NOW-M/2,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:28,remaining:72,resetAt:NOW+H}]});record(NOW-M/2,'2000000');h.events.flush();await flush();
+    native=check();assert.equal(scope==='quota'?native.series[0].points.at(-1)![1]:native.meterSeries.find((row:any)=>row.sourceId===wallet&&row.meterId==='balance').end,scope==='quota'?72:'13000000');
+    publishDataFilters(defaultFilters());await flush();assert.equal(h.period.get().error,null);check();
   }finally{await flush();stop();d?.close();await h.close();publishDataFilters(null,false);Date.now=originalNow;}
 });

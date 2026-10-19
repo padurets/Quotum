@@ -309,10 +309,10 @@ with 32-KiB bodies and ten key-verification attempts per minute per user and add
 Status and reservation have a separate bounded request limit. Credentials cannot be
 submitted in a query. Closed panels do not poll or read catalogue/history data.
 
-`POST /api/boards/:board/view` is owner-only and accepts the compact v4 view described
+`POST /api/boards/:board/view` is owner-only and accepts the compact v5 view described
 below, up to 80 KiB (81,920 UTF-8 bytes including JSON syntax). The independent
-writer header `X-Quotum-View-Version: 4` is required, even when a previous page echoes
-a received v4 view. Missing or incompatible writer headers return
+writer header `X-Quotum-View-Version: 5` is required, even when a previous page echoes
+a received v5 view. Missing or incompatible writer headers return
 `428 view_reload_required` without mutation; malformed or unsupported body
 versions return `400 invalid_request`. `If-Match: "<revision>"` remains required:
 missing is `428 view_reload_required`, malformed is `400 invalid_request`, and stale
