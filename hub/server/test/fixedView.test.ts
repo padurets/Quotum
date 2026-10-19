@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {mkdtempSync,rmSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {EMPTY_VIEW, decodeView, decodeUnifiedView, encodeView, encodeUnifiedView, VIEW_BODY_LIMIT, VIEW_DECODED_LIMIT, type UnifiedView} from '../domain/view.js';
+import {EMPTY_VIEW, decodeFixedView, encodeFixedView, decodeView, decodeUnifiedView, encodeView, encodeUnifiedView, VIEW_BODY_LIMIT, VIEW_DECODED_LIMIT, type UnifiedView} from '../domain/view.js';
 import {migrateFixed, fixedWidgetTargets} from '../domain/fixedView.js';
 import {reconcileAnalytics} from '../domain/analyticsView.js';
 import {WIDGETS, widgetVisible} from '../domain/widgets.js';
@@ -25,7 +25,7 @@ test('fixed siblings preserve geometry, reading order, hidden intent and every o
   const view = {...old(),names:{q:'Team'},colors:{q:'#123456'},windows:['q/weekly'],plans:{q:[100,0,0,0,0,0,0]},unplanned:['b'],
     hidden:['quota-table','source:b'],shown:parents,columns:{'quota-table':['spent'],'budget-table':['topup']},shownColumns:{'quota-table':['during']},
     layout:{columns:6,places:{'quota-history':{x:0,w:3,y:2,h:17},'source:q':{x:3,w:3,y:5},'quota-table':{x:0,w:6,y:6,h:10},'budget-history':{x:0,w:6,y:8},'budget-table':{x:0,w:6,y:9,h:5}}}};
-  const next = migrateFixed(view,resources),roundtrip = decodeView(encodeView(next));
+  const next = migrateFixed(view,resources),roundtrip = decodeFixedView(encodeFixedView(next));
   assert.deepEqual({...roundtrip,shown:next.shown},next);
   assert.deepEqual(Object.keys(next.layout.places),['quota-history','quota-session-history','source:q','quota-table','quota-session-table','budget-history','budget-table']);
   for (const id of Object.keys(view.layout.places)) {
@@ -74,12 +74,12 @@ test('fresh fixed defaults follow catalogue capabilities, grants and sticky owne
   assert.deepEqual(fixedWidgetTargets(['quota-history','quota-history','budget-table']),['quota-history','quota-session-history','budget-table']);
 });
 
-test('the released v3 aliases remain frozen and only v4 is accepted by the active writer', () => {
+test('the released v3 aliases remain frozen and v4 remains readable only by migration', () => {
   const ids=['agents','activity','quota-history','budget-history','quota-table','budget-table','subscription-funds'];
   for(const [alias,id] of ids.entries()) {
     const v3=[3,[[alias,3]],4,[1<<alias]];
     assert.ok(decodeUnifiedView(v3)?.shown.includes(id));assert.equal(decodeView(v3),null);
-    assert.ok(decodeView([4,[[alias,3]],4,[1<<alias]])?.shown.includes(id));
+    assert.ok(decodeFixedView([4,[[alias,3]],4,[1<<alias]])?.shown.includes(id));
   }
   assert.equal(decodeUnifiedView([3,[[7,3]],0]),null);
   assert.equal(decodeView([4,[[11,3]],0]),null);
@@ -118,9 +118,9 @@ test('combined legacy encoded, decoded and collection maxima migrate, reload and
   for(const input of [decoded,encoded]) {
     assert.ok(decodeUnifiedView(encodeUnifiedView(input)));
     const next=migrateFixed(input,resources);
-    assert.ok(bytes(encodeView(next))<=VIEW_BODY_LIMIT);assert.ok(bytes(next)<=VIEW_DECODED_LIMIT);
+    assert.ok(bytes(encodeFixedView(next))<=VIEW_BODY_LIMIT);assert.ok(bytes(next)<=VIEW_DECODED_LIMIT);
     assert.ok(next.hidden.length<=211&&next.shown.length<=215&&Object.keys(next.columns).length<=211);
-    assert.deepEqual({...decodeView(encodeView(next)),shown:next.shown},next);
+    assert.deepEqual({...decodeFixedView(encodeFixedView(next)),shown:next.shown},next);
     for(const key of ['names','windows','plans','colors','unplanned'] as const)assert.deepEqual(next[key],input[key]);
     for(const field of ['columns','shownColumns'] as const) {
       for(const [id,columns] of Object.entries(input[field]))assert.deepEqual(next[field][id],columns);
@@ -135,7 +135,7 @@ test('combined legacy encoded, decoded and collection maxima migrate, reload and
       migrate(db,10);
       const saved=db.prepare('SELECT payload,revision FROM views WHERE board_id=?').get('b') as {payload:string;revision:number};
       assert.equal(saved.revision,8);
-      assert.deepEqual({...decodeView(JSON.parse(saved.payload)),shown:next.shown},next);
+      assert.deepEqual({...decodeView(JSON.parse(saved.payload)),shown:next.shown},{...next,version:5,windows:[]});
       migrate(db,11);
       assert.deepEqual(db.prepare('SELECT payload,revision FROM views WHERE board_id=?').get('b'),saved);
     } finally {db.close();}
@@ -153,7 +153,7 @@ for(const version of [19,22,25])test(`layout ${version} upgrades atomically with
     db.prepare('INSERT INTO views VALUES(?,?,?,?,?)').run('b',JSON.stringify(payload),'u',0,7);
     migrate(db,10);
     const directory=new Directory(db),state=directory.viewState('b');
-    assert.equal(state.revision,8);assert.equal(state.view.version,4);
+    assert.equal(state.revision,8);assert.equal(state.view.version,5);
     assert.ok(widgetVisible(state.view,'quota-session-history',1));assert.ok(widgetVisible(state.view,'quota-session-table',1));
     assert.equal(directory.saveView('b',state.view,'u',11),8);
     const saved=db.prepare('SELECT payload,revision FROM views WHERE board_id=?').get('b');
@@ -206,7 +206,7 @@ test('retired preview spending aliases read losslessly but are never active or a
   const wire=encodeView(view),decoded=decodeView(wire)!;
   assert.deepEqual(wire[1].map(place=>place[0]),[9,10]);
   assert.deepEqual(decoded,view);
-  assert.equal(migrateFixed(decoded,resources),decoded,'unrelated preview layout fields are not reset');
+  assert.deepEqual(decoded.layout,view.layout,'unrelated preview layout fields are not reset');
   assert.equal(widgetVisible(decoded,'source:wallet',10),true,'retiring a builtin never hides implicit source cards');
   assert.equal(widgetVisible({...decoded,hidden:['source:wallet']},'source:wallet',10),false,'source visibility still respects the saved hide');
   for(const id of retired){assert.ok(!WIDGETS.includes(id as typeof WIDGETS[number]));assert.equal(widgetVisible(decoded,id,10),false);}

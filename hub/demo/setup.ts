@@ -206,7 +206,7 @@ export function viewOf(stand: Stand, key: string) {
   const shown = cards(set).filter(card => (personal ? holdersOf(set, card).includes(key) : !!card.on?.[key]));
   const board = boards(set).find(b => b.id === key) ?? people(set).find(p => p.id === key);
   const view: View = {
-    version: 4 as const,
+    version: 5 as const,
     layout: {columns: COLUMNS, places: {}} as Layout,
     names: {} as Record<string, string>,
     hidden: [] as string[],
@@ -244,7 +244,7 @@ export function viewOf(stand: Stand, key: string) {
     view.layout.places[id] = board?.places?.[id] ?? auto;
   }
   const resources=shown.map(card=>({id:stand.sources.get(card.id)!,provider:card.provider}));
-  return migrateFixed(migrateUnified({...view,version:2},resources),resources);
+  return {...migrateFixed(migrateUnified({...view,version:2},resources),resources),version:5 as const,windows:[]};
 }
 
 /**

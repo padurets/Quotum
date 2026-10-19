@@ -145,6 +145,69 @@ requests retain their target/deadline. Stable Auto fallback remains refreshable.
 
 ## Adding widgets and saving views
 
+Board data filters are stored independently of layout. The active view codec is v5,
+with the v4 geometry and builtin aliases. Its reserved `windows` array must be empty;
+`shown` contains widget placements, without key-scale entries. View writers send
+`X-Quotum-View-Version: 5` and their layout `If-Match` revision. Older writers receive
+`428 view_reload_required`. The atomic upgrade moves v4 window exclusions and explicit
+key choices into data filters and preserves hidden cards and their geometry. A chain
+of legacy layout upgrades increments the original view revision once.
+
+`GET /api/boards/:board/filters` requires membership and returns
+`{filters, revision, authority, unavailable}` with `Cache-Control: no-store`. Its
+`filters` is an authorized projection of the saved intent, never dormant private
+references. `unavailable` contains only counts per family. `authority` is an opaque
+precondition for this projection's access context.
+
+`filters` has `version: 1` and seven families:
+
+- `sources`: a selection of `{source: publicSourceId}` or the board-safe
+  `{status: 'unknown' | 'notProvided'}` funding states.
+- `windows`: a selection of `[sourceId, windowId]` logical quota windows.
+- `wallet`: `{mode:'auto', include:MoneyRef[], exclude:MoneyRef[]}` or
+  `{mode:'only', values:MoneyRef[]}`. A `MoneyRef` is `{source,kind:'balance'}` or
+  `{source,kind:'keyCap',key}`; display currency is not part of its identity.
+- `funds`: a selection of subscription source IDs, separate from wallets.
+- `projects`: a selection of corrected project names or `null` for no project.
+- `devices`: a selection of public device IDs.
+- `clients`: a selection of coding-client IDs or `null` for an unknown legacy client.
+
+A selection is `{mode:'include'|'exclude', values:[]}`. Empty include explicitly
+selects nothing; empty exclude selects the authorized universe. Dimensions intersect.
+Values are deduplicated and canonically ordered. Ordinary defaults use empty exclude;
+wallet automatic defaults include account balances and the bounded capped-key preview,
+with explicit includes outside that preview and exclusions taking precedence.
+Optional migration-only `legacy` holds `walletByUnit`, `fundsByUnit` and
+`fundsPreferredByUnit` maps using the existing monetary-unit codec. It preserves old
+per-unit selections until that family is explicitly materialized or reset.
+
+Owner-only `PUT /api/boards/:board/filters` takes a quoted integer `If-Match` and
+`{filters, authority, replace, resets?, decisions?, materialize?}`. `replace` names
+changed families. `resets` maps replaced families to `all` or `none`, explicitly
+clearing their dormant and legacy decisions. `decisions` lists final
+`{family,ref,included}` checkbox decisions, including a reference revoked after the
+edit. `materialize` names the existing wallet/funds unit whose legacy rule was edited.
+An untouched seed without that marker preserves all unit branches. Unknown fields,
+invalid references, duplicate families and invalid units are rejected.
+
+The transaction compares both revision and authority before merging. Untouched
+families remain exact. Changed families preserve dormant explicit membership;
+mode changes re-encode its boolean meaning. Explicit decisions apply last. Missing
+preconditions return `428 filters_reload_required`; malformed input returns
+`400 invalid_request`; stale revision returns `409 filters_conflict`; changed access
+returns `409 filters_context_changed`. Both conflicts include the current authorized
+envelope. Members receive `403 forbidden`. There is no automatic conflict retry.
+The first explicit save adopts revision 0 as revision 1 even if semantically equal;
+later equal saves do not increment the revision or publish a change. Saving layout
+does not save filters; restoring filters makes no server mutation.
+
+Canonical filters have a 256 KiB UTF-8 ceiling. The merge request and projected
+envelope have a 272 KiB ceiling. A new saved work predicate must also fit the existing
+76 KiB period request and 80 KiB filtered detail envelope, including reserved cursor
+space; otherwise Save returns `413 filters_limit` without adoption or mutation.
+References express selection intent, never authority: every read still checks
+membership, source grants, device admission and financial consent.
+
 `GET /api/boards/:board/catalogue` requires membership. It returns the board,
 `viewRevision`, `connectionsRevision`, registered connectors, and only sources and
 standard widgets this reader can add or show. Sources are the reader's holdings and

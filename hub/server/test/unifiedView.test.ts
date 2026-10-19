@@ -61,7 +61,7 @@ for(const version of [19,21])test(`the largest sparse accepted v2 retains its ow
     migrate(db,1);
     const directory=new Directory(db), state=directory.viewState('b');
     assert.equal(state.revision,8);
-    assert.deepEqual(state.view.names,input.names); assert.deepEqual(state.view.windows,input.windows);
+    assert.deepEqual(state.view.names,input.names); assert.deepEqual(state.view.windows,[]);
     assert.ok(bytes(encodeCurrent(state.view))<=VIEW_BODY_LIMIT);
     assert.equal(directory.saveView('b',state.view,'u',2),8);
     assert.deepEqual(directory.viewState('b'),state);

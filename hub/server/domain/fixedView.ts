@@ -1,4 +1,4 @@
-import {EMPTY_VIEW, type UnifiedView, type View, type Place} from './view.js';
+import {EMPTY_VIEW, type UnifiedView, type FixedView, type Place} from './view.js';
 import {reconcileAnalytics, type AnalyticsResources} from './analyticsView.js';
 import {QUOTA_HISTORY, QUOTA_TABLE, QUOTA_SESSION_HISTORY, QUOTA_SESSION_TABLE} from './widgets.js';
 
@@ -7,8 +7,8 @@ const siblings = new Map([
 ]);
 
 /** A reader's old modes never determine the owner's fixed widget layout. */
-export function migrateFixed(input: UnifiedView | View | undefined, resources: AnalyticsResources): View {
-  if (!input) return reconcileAnalytics({...EMPTY_VIEW, layout:{columns:6,places:{}}}, resources);
+export function migrateFixed(input: UnifiedView | FixedView | undefined, resources: AnalyticsResources): FixedView {
+  if (!input) return reconcileAnalytics({...EMPTY_VIEW, version:4, layout:{columns:6,places:{}}}, resources);
   if (input.version === 4) return input;
   const hidden = new Set(input.hidden), shown = new Set(input.shown);
   const entries: [string, Place][] = [];

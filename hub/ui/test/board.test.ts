@@ -19,7 +19,7 @@ const card = (id: string, used = 50, extra: Partial<Card> = {}): Card => ({
   ...extra,
 });
 
-const VIEW = {version:4 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
+const VIEW = {version:5 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 test('contact storage stays bounded across abandoned devices and reconnect replaces its baseline',()=>{
   const devices=Array.from({length:1100},(_,index)=>({deviceId:`device-${index}`,lastSeenAt:index+1}));
   const first=reduce(INITIAL,{type:'hub',event:{type:'deviceContacts',data:{devices}}});

@@ -5,6 +5,7 @@ import {newId, secretHash} from '../domain/auth.js';
 import {EMPTY_VIEW, encodeView, decodeView, sameView, viewBytes, VIEW_BODY_LIMIT, type View} from '../domain/view.js';
 import {tell, transaction, type Touches} from '../touches.js';
 import {workFundingKey} from '../domain/workAccess.js';
+import {defaultFilters,parseDataFilters,sameFilters,type DataFilters} from '../domain/dataFilters.js';
 
 export type User = {id: string; email: string; name: string; createdAt: number};
 export type Board = {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
@@ -168,6 +169,29 @@ export class Directory {
   }
 
   // ---------- views ----------
+
+  filtersState(board:string):{filters:DataFilters;revision:number} {
+    const row=this.db.prepare('SELECT payload,revision FROM board_filters WHERE board_id=?').get(board);
+    if(!row)return {filters:defaultFilters(),revision:0};
+    const filters=parseDataFilters(JSON.parse(String(row.payload)));
+    if(!filters)throw new Error('Invalid stored board filters');
+    return {filters,revision:Number(row.revision)};
+  }
+
+  /** The first explicit save adopts migrated defaults even when their values match. */
+  saveFilters(board:string,filters:DataFilters,by:string,now:number):number {
+    return this.transaction(()=>{
+      const current=this.filtersState(board),parsed=parseDataFilters(filters);
+      if(!parsed)throw Object.assign(new Error('filters_limit'),{statusCode:413});
+      if(current.revision>0&&sameFilters(current.filters,parsed))return current.revision;
+      const revision=current.revision+1;
+      if(!Number.isSafeInteger(revision))throw new Error('Filters revision exhausted');
+      this.db.prepare('INSERT INTO board_filters VALUES (?,?,?,?,?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision,updated_by=excluded.updated_by,updated_at=excluded.updated_at')
+        .run(board,JSON.stringify(parsed),revision,by,now);
+      tell(this.observer,o=>o.touchBoards([board]));
+      return revision;
+    });
+  }
 
   /** The view and revision are reconciled together, before any reader sees either. */
   viewState(boardId: string): {view: View; revision: number} {

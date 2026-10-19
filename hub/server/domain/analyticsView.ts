@@ -1,5 +1,5 @@
 import {legacyLayout, ordered} from './layout.js';
-import {EMPTY_VIEW, type View, type UnifiedView, type SplitView} from './view.js';
+import {EMPTY_VIEW, type View, type FixedView, type UnifiedView, type SplitView} from './view.js';
 import {providerOf, moneyFamily, supportsQuota} from './providers.js';
 import {ACTIVITY, SUBSCRIPTION_FUNDS, QUOTA_HISTORY, QUOTA_TABLE, BUDGET_HISTORY, BUDGET_TABLE, QUOTA_WIDGETS, LEGACY_QUOTA_WIDGETS, LEGACY_BUDGET_WIDGETS, BUDGET_WIDGETS, showWidgets} from './widgets.js';
 
@@ -9,10 +9,10 @@ const families = (resources: AnalyticsResources) => ({quota: resources.some(s =>
 const legacyIds = ['history', 'forecast'];
 
 /** The server applies defaults once; hidden and placed widgets never depend on a reader. */
-export function reconcileAnalytics<T extends View | UnifiedView | SplitView>(view: T, resources: AnalyticsResources): T {
+export function reconcileAnalytics<T extends View | FixedView | UnifiedView | SplitView>(view: T, resources: AnalyticsResources): T {
   const {quota, budget} = families(resources);
   const funds = resources.some(s => s.budget?.enabled!==false && moneyFamily(providerOf(s.provider))==='funds');
-  const modern = view.version === 4;
+  const modern = view.version >= 4;
   const quotaWidgets = modern ? QUOTA_WIDGETS : LEGACY_QUOTA_WIDGETS;
   const budgetWidgets = modern ? BUDGET_WIDGETS : LEGACY_BUDGET_WIDGETS;
   const add = [...(quota ? quotaWidgets : []), ...(funds ? [SUBSCRIPTION_FUNDS] : []), ...(budget ? budgetWidgets : [])].filter(id => !view.shown.includes(id) && !view.hidden.includes(id));
