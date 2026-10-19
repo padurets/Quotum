@@ -107,8 +107,7 @@ function Origin({origin}: {origin: LiveSession['origin']}) {
 }
 
 /**
- * The subscription's current sessions, or retained sessions when a past interval is
- * selected, in the card's tray. The marks
+ * The subscription's sessions in the viewing period, in the card's tray. The marks
  * tell at a glance how many still work and on which machine;
  * the panel it opens, upwards where there is room, names them. When the tray has no room
  * for the marks (`roomy` false), they all go and the count stays; they are still laid out,

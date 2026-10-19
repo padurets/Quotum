@@ -676,8 +676,8 @@ the machine last delivered for that client; only one its person holds; the agent
 out a session of a client signed in anew since it last measured, until it knows which
 account that is). This list supplies current presence by project (as that person named
 it) and folder, visible to members of boards admitting that saved device's sessions.
-Source disclosure follows the board's provided subscriptions separately. The compact panel and live subscription cards use current sessions.
-Dashboard analytics use retained work in the board's period, with this presence attached when known.
+Source disclosure follows the board's provided subscriptions separately. The compact panel uses current sessions; dashboard lists
+use retained work in the board's period, with this presence attached when known.
 Each list also counts until the next one, for at most 200 seconds: the hub
 keeps when each session worked, with its machine, subscription, where it runs, since
 when and its project and folder names as reported, as long as samples. A session is
@@ -706,7 +706,7 @@ before writes. On rollback this can conservatively undercount parallel work unti
 end. Shared session history and live counters are clipped to the device's current
 joining or re-enable cutoff. Source quota attribution is additionally clipped to its
 sharing cutoff; personal live counters retain their own captured credit. Dashboard session lists
-and the agents panel opened from a card's tray when a past interval is selected use authorized work intersecting the
+and the agents panel opened from a card's tray use authorized work intersecting the
 board's selected period, clipped to that period and those cutoffs. They include retained
 contexts absent from the current machine list. The tray panel shows that period's work
 in agent-hours, with project and folder, grouped by machine. Optional current presence

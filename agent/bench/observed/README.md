@@ -33,11 +33,16 @@ node --import tsx bench/observed-recovery.ts ../agent/target/release/examples/ob
 `resources.py` runs the real Runner, capture worker, journal and HubSink against a
 loopback protocol stand-in. `client.c` supplies native process names, controlled
 CPU and a version answer. It never calls a provider. Run in its own PID and network
-namespace, without real configuration or credentials mounted. Serialize measured
-runs with builds and other heavy checks. For example, from the repository root:
+namespace, without real configuration or credentials mounted, and under a different
+UID from any real collector on the host. A parent PID namespace can still see the
+container's synthetic `codex` processes; using the collector's UID lets them enter
+its real work history as projectless agents. Build as your normal user, then run
+the fixture under a separate UID (65534 below). The fixture and probe share that UID
+so process discovery inside the container still works. Serialize measured runs with
+builds and other heavy checks. For example, from the repository root:
 
 ```sh
-docker run --rm --network none --user "$(id -u):$(id -g)" \
+docker run --rm --network none --user 65534:65534 \
   -v "$PWD":/work -w /work quotum-rust python3 agent/bench/observed/resources.py \
   agent/target/release/examples/observed_probe --children 100
 ```

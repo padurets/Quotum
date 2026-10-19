@@ -110,7 +110,7 @@ test('the actual card tray keeps an accessible loading/error disclosure and retr
   });
   let reading:SessionPeriod&{rows:WorkedSession[]}={rows:[],basis:null,loading:true,error:null};
   const drawCard=component('../components/SourceCard.tsx','CardTray','function CardTray(','\n/**',{
-    useTimeRange:()=>basis.range,useSessions:()=>[],useSourcePeriodSessions:()=>reading,useResetsFor:()=>undefined,useSourceAccess:()=>null,providerOf,Tray:drawTray,
+    useTimeRange:()=>null,useSourcePeriodSessions:()=>reading,useResetsFor:()=>undefined,useSourceAccess:()=>null,providerOf,Tray:drawTray,
     AccessMark:'access',QuotaMark:'quota',BalanceMark:'balance',FreeResets:'free-resets',
   });
   const draw=()=>nodes(drawCard({source:{id:'s',provider:'claude'}}));

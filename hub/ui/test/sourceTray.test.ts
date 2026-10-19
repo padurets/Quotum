@@ -30,7 +30,7 @@ test('the actual card tray adds no news container for an ordinary client or comp
   }
 });
 
-test('live subscription cards show the current roster rather than hundreds of retained sessions',()=>{
+test('subscription cards retain all agents who worked in the viewing period after their processes end',()=>{
   const row=(id:number):LiveSession=>({ref:'past-'+id,device:{id:'machine',name:'Laptop'},origin:'terminal',project:'Project',folder:null,startedAt:0,lastWorkedAt:0,working:id<3,workedMs:60_000});
   const history={rows:Array.from({length:282},(_,id)=>row(id)),basis:null,loading:false,error:null};
   let current:LiveSession[]=Array.from({length:20},(_,id)=>{const {ref:_ref,...session}=row(id);return session;});
@@ -43,20 +43,20 @@ test('live subscription cards show the current roster rather than hundreds of re
     require:()=>({jsx:(type:unknown,props:unknown)=>({type,props}),jsxs:(type:unknown,props:unknown)=>({type,props}),Fragment:'fragment'})};
   runInNewContext(ts.transpileModule(source.slice(start,end)+'\nglobalThis.CardTray=CardTray;',{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   const draw=()=>context.CardTray({source:{id:'codex:fixture',provider:'codex',usageWork:[{quality:'partial'}]}}).props;
-  assert.equal(draw().sessions.length,20);
+  assert.equal(draw().sessions,history.rows,'the rolling viewing period includes completed agents');
   assert.equal(draw().sessions.filter(row=>row.working).length,3);
-  assert.equal(draw().sessionPeriod,undefined,'history failures do not label current presence');
+  assert.equal(draw().sessionPeriod,history,'the disclosure retains its period and evidence status');
   assert.equal(draw().news,null,'work diagnostics add no warning to an ordinary subscription');
   current=[];
-  assert.equal(draw().sessions.length,0,'ended processes do not return from retained history');
+  assert.equal(draw().sessions,history.rows,'an empty current roster does not erase period work');
   current=[row(300)];
-  assert.equal(draw().sessions.length,1,'a new current roster replaces the previous one');
+  assert.equal(draw().sessions,history.rows,'new current processes do not replace period membership');
   selected={from:0,to:120_000};
   assert.equal(draw().sessions,history.rows,'an explicit historical selection retains its complete work roster');
   assert.equal(draw().sessionPeriod,history);
-  assert.equal(history.rows.length,282,'no historical records are removed to correct the live count');
+  assert.equal(history.rows.length,282,'distinct processes that really worked remain in history');
   selected=null;
-  assert.equal(draw().sessions,current);
+  assert.equal(draw().sessions,history.rows);
 });
 
 test('subscription balances live only in the dashboard and compact footers, with financial sharing respected',()=>{

@@ -92,6 +92,10 @@ and platform smoke checks still apply.
 - **Tests never start a real client.** They use recorded answers and stand-in programs.
   Keep it that way: no test may depend on an account, the network or an installed
   Claude Code, Codex or Antigravity.
+- **Native client stand-ins stay out of real history.** On Linux, run process fixtures
+  under a different UID from any real host collector. A child PID namespace does not hide its
+  processes from a collector in a parent namespace. Build with the normal user; use a
+  separate runtime UID for the fixture and its observing probe.
 - **The agent never touches secrets.** It never reads provider tokens, cookies or
   credential files, never makes a model request and never calls provider APIs. A new
   provider is an adapter in `agent/crates/core/src/providers/` that asks the provider's
