@@ -163,7 +163,7 @@ export function findChrome(env: NodeJS.ProcessEnv): string | null {
 }
 
 /** A browser the benchmark drives: the DevTools endpoint (`http://host:port`) and how to let go of it. */
-export type Browser = {endpoint: string; owned?: boolean; blinkRuntimeStats?: boolean; owner?: RunOwner; launchReport?(): unknown; close(): Promise<void>; diagnostics?(pids:number[],candidate?:number,signal?:AbortSignal):Promise<unknown>};
+export type Browser = {endpoint: string; owned?: boolean; owner?: RunOwner; launchReport?(): unknown; close(): Promise<void>; diagnostics?(pids:number[],candidate?:number,signal?:AbortSignal):Promise<unknown>};
 
 /** Fixed categories survive evidence filtering without exposing kernel symbol text. */
 export function threadWait(value: string) {

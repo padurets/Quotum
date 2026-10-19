@@ -275,29 +275,6 @@ test('stream evidence omits secrets, private paths and arbitrary text while coun
   assert.doesNotMatch(JSON.stringify(result), /secret-canary|private|5000x/);
 });
 
-test('native runtime instrumentation is enabled only by an explicit owned launch', {skip: process.platform === 'win32'}, async t => {
-  const root=mkdtempSync(path.join(tmpdir(),'quotum-chrome-runtime-test-'));
-  const recordFile=path.join(root,'arguments.json'),executable=path.join(root,'chrome');
-  t.after(()=>rmSync(root,{recursive:true,force:true}));
-  writeFileSync(executable,'#!/usr/bin/env node\n'
-    + "const fs=require('node:fs'),http=require('node:http'),args=process.argv.slice(2);\n"
-    + "const profile=args.find(value=>value.startsWith('--user-data-dir=')).slice('--user-data-dir='.length);\n"
-    + `fs.writeFileSync(${JSON.stringify(recordFile)},JSON.stringify({args,profile}));\n`
-    + "const server=http.createServer((req,res)=>res.end(JSON.stringify({Browser:'Chrome/fixture',webSocketDebuggerUrl:'ws://127.0.0.1:'+server.address().port+'/devtools/browser/fixture'})));\n"
-    + "server.listen(0,'127.0.0.1',()=>fs.writeFileSync(profile+'/DevToolsActivePort',server.address().port+'\\n/devtools/browser/fixture\\n'));\n",{mode:0o755});
-  for(const enabled of [false,true]) {
-    const browser=await launchChrome(executable,true,undefined,undefined,enabled);
-    let record:{args:string[];profile:string}|undefined;
-    try {
-      record=JSON.parse(readFileSync(recordFile,'utf8')) as {args:string[];profile:string};
-      assert.equal(record.args.includes('--enable-blink-features=BlinkRuntimeCallStats'),enabled);
-      assert.equal(browser.blinkRuntimeStats,enabled?true:undefined);
-    }finally {await browser.close();}
-    assert.ok(record);
-    assert.equal(existsSync(record.profile),false);
-  }
-});
-
 test('interrupting the actual entry point during startup reaps its detached browser and removes its profile',
   {skip: process.platform === 'win32'}, async t => {
     const root = mkdtempSync(path.join(tmpdir(), 'quotum-test-bench-signal-'));

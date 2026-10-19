@@ -192,7 +192,7 @@ async function main() {
     const overview = () => overviewCards(path => ana.get<Snapshot>(path), board);
     heard = await hear(address.base, ana.cookie, board);
 
-    browser = await owner.start(signal => options.cdp ? Promise.resolve(attachedChrome(options.cdp)) : launchChrome(chrome!, !process.env.CI, signal, undefined, panDiagnostic === 'trace'));
+    browser = await owner.start(signal => options.cdp ? Promise.resolve(attachedChrome(options.cdp)) : launchChrome(chrome!, !process.env.CI, signal));
     evidence.save('browser', browser.launchReport?.() ?? {mode: 'attached'});
     if(process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE==='1'){
       say('diagnostic native replay only; this does not run the canonical benchmark');
