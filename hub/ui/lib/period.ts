@@ -69,6 +69,7 @@ class BoardPeriod {
   private sourceTape:SourceWorkTape|null=null;
   private sourceCurves:SourceWorkCurves|undefined;
   private sourceCursor:string|undefined;
+  private sourceEpoch=0;
   private facetsNeeded=false;
   private facetsDemand=0;
   private facetState:{value:{projects:(string|null)[];devices:{id:string;name:string}[];clients:(string|null)[]};loading:boolean;error:string|null}|{value:null;loading:boolean;error:string|null}={value:null,loading:false,error:null};
@@ -92,7 +93,7 @@ class BoardPeriod {
   private workRangeKey='24h';
   private activity:PeriodActivity|null=null;
   private activityRetained:History['activity']|null=null;
-  private readonly tapes=new Map<PeriodScope,{tape:PeriodTape;accounting:PeriodAccounting;generation:number;proofEpoch:number;selection:PeriodSelection;rangeKey:string;queryKey:string;basisRange?:PeriodBasis['range']}>();
+  private readonly tapes=new Map<PeriodScope,{tape:PeriodTape;accounting:PeriodAccounting;generation:number;proofEpoch:number;sourceEpoch?:number;selection:PeriodSelection;rangeKey:string;queryKey:string;basisRange?:PeriodBasis['range']}>();
   private readonly projectionRevision={quota:0,budget:0,funds:0};
   private readonly projectionErrors:Partial<Record<PeriodScope,'history_limit'|'history_failed'>>={};
   private readonly projectionListeners={quota:new Set<()=>void>(),budget:new Set<()=>void>(),funds:new Set<()=>void>()};
@@ -219,7 +220,7 @@ class BoardPeriod {
     return summary?{...series,...summary}:series;
   }
   moneyWorkAt(source:string,now:number,rangeKey?:string){
-    const tape=this.tapes.get('budget'),value=tape&&(tape.tape.fixed||this.workRangeKey===tape.rangeKey&&(!!this.work.value||!!this.sourceCurves))&&(rangeKey===undefined||rangeKey===tape.rangeKey)?tape.accounting.moneyWorkSummary(source,this.tapeRange(tape,now)):undefined;
+    const tape=this.tapes.get('budget'),value=tape&&(tape.sourceEpoch??0)===this.sourceEpoch&&(tape.tape.fixed||this.workRangeKey===tape.rangeKey&&(!!this.work.value||!!this.sourceCurves))&&(rangeKey===undefined||rangeKey===tape.rangeKey)?tape.accounting.moneyWorkSummary(source,this.tapeRange(tape,now)):undefined;
     return value&&this.selectedPending()?{...value,selectedWork:{from:now,activeMs:null,agentMs:0}}:value;
   }
   rangeAt(scope:PeriodScope,now:number,rangeKey?:string){const tape=this.tapes.get(scope);return tape&&(rangeKey===undefined||tape.rangeKey===rangeKey)?this.tapeRange(tape,now):null;}
@@ -293,6 +294,7 @@ class BoardPeriod {
   private setValue(id:string,value:Reading<PeriodValues>){this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
   private publishWork() {this.workState={...this.work,rows:this.workRows,evidence:this.workEvidence,...(this.workLimit?{loading:false,error:'filters_limit'}:{})};for(const listener of this.listeners)listener();}
   private retireWork() {
+    this.sourceEpoch++;
     this.sourceTape=null;this.sourceCurves=undefined;this.sourceCursor=undefined;
     this.retained.clear();preparations()?.cancel(this.preparationOwner);
     // Work evidence belongs to its captured attribution. Native financial values
@@ -469,7 +471,7 @@ class BoardPeriod {
     // Card states are adopted unchanged; only their reading wrappers are new.
     if(reply.values?.state==='complete')try{charge('values',JSON.stringify(reply.values.value).length*3+reply.values.value.length*768);}catch(error){if(error!==limited)throw error;reply.values={state:'error',error:'history_limit'};}
     const priorWork=this.work.value,priorIndex=this.index,priorTapes=new Map(this.tapes);
-    const previousSourceCurves=this.sourceCurves,previousSourceTape=this.sourceTape;
+    const previousSourceCurves=this.sourceCurves,previousSourceTape=this.sourceTape,sourceEpoch=this.sourceEpoch;
     let nextSourceTape=this.sourceTape,nextSourceCurves=previousSourceCurves,nextSourceCursor=this.sourceCursor;
     const filtered=!!effectiveFilters();
     const retainedFrom=intent.request.selection.mode==='live'?evaluatedRange(intent.request.selection,hubNow()).from:null;
@@ -536,7 +538,7 @@ class BoardPeriod {
         const base=staged.get(scope)??0;
         try{
           const accounting=yield*PeriodAccounting.prepare(tape,work,index?.curves??priorIndex?.curves,old?.accounting,changedWork,bytes=>charge(scope,base+bytes),filtered?nextSourceCurves??{groups:{source:new Map()},knownFrom:Infinity,available:false}:undefined);
-          if(incoming){changed.add(scope);tapes.set(scope,{tape,accounting,generation:intent.generation,proofEpoch,selection:intent.request.selection,rangeKey:intent.request.selection.mode==='range'?periodKey(intent.request.selection):prefs().range,queryKey,basisRange:reply[scope]?.state==='complete'?reply[scope]!.basis.range:reply.basis.range});}
+          if(incoming){changed.add(scope);tapes.set(scope,{tape,accounting,generation:intent.generation,proofEpoch,sourceEpoch,selection:intent.request.selection,rangeKey:intent.request.selection.mode==='range'?periodKey(intent.request.selection):prefs().range,queryKey,basisRange:reply[scope]?.state==='complete'?reply[scope]!.basis.range:reply.basis.range});}
           else {tapes.set(scope,{...old!,accounting});changed.add(scope);}
         }catch(error){if(error!==limited)throw error;incomingTapes.delete(scope);failScope(scope);}
       }

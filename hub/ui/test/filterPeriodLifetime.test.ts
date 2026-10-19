@@ -90,7 +90,7 @@ test('an unchanged source sweep never wakes the budget table projection',async t
   }finally{publishDataFilters(null,false);await h.close();}
 });
 
-test('fixed wallet estimates remain available while the selected session baseline is unavailable',async t=>{
+test('fixed wallet estimates survive a missing selected baseline and retire with supplier evidence',async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=await fixture({fixed:true});
   try{
     publishDataFilters(defaultFilters());h.period.changed();await flush();
@@ -100,5 +100,8 @@ test('fixed wallet estimates remain available while the selected session baselin
     h.period.work={value:null,basis:null,loading:false,error:'unavailable'};h.period.workRangeKey='unavailable';
     const value=h.period.moneyWorkAt(h.source,NOW,old.rangeKey);
     assert.equal(value.eligibleActiveMs,3_600_000);assert.equal(value.selectedWork.activeMs,null);
+    const financial=h.period.getFinancialProjectionRevision('budget');h.period.retireWork();
+    assert.equal(h.period.moneyWorkAt(h.source,NOW,old.rangeKey),undefined,'an evidence reset retires old estimates even when the access authority did not change');
+    assert.equal(h.period.getFinancialProjectionRevision('budget'),financial);
   }finally{publishDataFilters(null,false);await h.close();}
 });
