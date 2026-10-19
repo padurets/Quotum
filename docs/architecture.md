@@ -2125,6 +2125,8 @@ one does not count as open. The new window is created once it has gone, and the 
 `hub.log` tells each request, attempt and outcome.
 Panel presentations carry the controller's request revision. Retiring an old window
 cannot close or blur a newer request; each native window keeps its request for life.
+The Win32 loader rechecks its captured request between showing, bringing to the foreground
+and focusing, and stops the remaining calls when that request has been retired.
 A newer request retires that window before creating its own. Cancellation marks the
 presentation before queuing its close, and stale loader commands cannot cover a ready panel.
 The panel is hidden before its WebView2 controller is destroyed, so focus leaves while

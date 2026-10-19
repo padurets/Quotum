@@ -96,6 +96,26 @@ impl PanelToggle {
         self.wanted
     }
 }
+#[cfg(any(windows, test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoadingActivation {
+    Show,
+    Foreground,
+    Focus,
+}
+
+// Native show and focus calls can dispatch another window request before returning.
+#[cfg(any(windows, test))]
+pub fn activate_loading(mut current: impl FnMut() -> bool, mut action: impl FnMut(LoadingActivation)) -> bool {
+    for operation in [LoadingActivation::Show, LoadingActivation::Foreground, LoadingActivation::Focus] {
+        if !current() {
+            return false;
+        }
+        action(operation);
+    }
+    current()
+}
+
 #[cfg(not(target_os = "linux"))]
 pub fn panel_target(state: &HubState) -> Url {
     let mut url = target(state);
@@ -418,5 +438,84 @@ mod tests {
         assert!(!navigation.request(3, next.clone(), false), "focus does not reload");
         assert!(navigation.request(3, next, true), "explicit reentry does reload");
         assert!(navigation.request(4, first, false), "generation is independent of the URL");
+    }
+
+    #[test]
+    fn loading_activation_stops_when_native_calls_accept_a_new_intent() {
+        use std::cell::RefCell;
+        let steps = [LoadingActivation::Show, LoadingActivation::Foreground, LoadingActivation::Focus];
+        for next_compact in [false, true] {
+            for (stop, stop_operation) in steps.iter().enumerate() {
+                let toggle = RefCell::new(PanelToggle::default());
+                toggle.borrow_mut().show();
+                let request = toggle.borrow().revision();
+                let mut calls = Vec::new();
+                let completed = activate_loading(
+                    || toggle.borrow().requested(request),
+                    |operation| {
+                        calls.push(operation);
+                        if operation == *stop_operation {
+                            if next_compact {
+                                toggle.borrow_mut().show();
+                            } else {
+                                toggle.borrow_mut().close();
+                            }
+                        }
+                    },
+                );
+                assert!(!completed, "a native call accepted a newer request");
+                assert_eq!(calls, steps[..=stop], "already started native calls remain observable");
+                assert_ne!(toggle.borrow().revision(), request);
+            }
+        }
+    }
+
+    #[test]
+    fn a_reentrant_loader_keeps_the_new_revision_without_old_continuation() {
+        use std::cell::{Cell, RefCell};
+        let toggle = RefCell::new(PanelToggle::default());
+        toggle.borrow_mut().show();
+        let first = toggle.borrow().revision();
+        let shown = Cell::new(first);
+        let calls = RefCell::new(Vec::new());
+        let completed = activate_loading(
+            || shown.get() == first && toggle.borrow().requested(first),
+            |operation| {
+                calls.borrow_mut().push((first, operation));
+                if operation == LoadingActivation::Show {
+                    toggle.borrow_mut().show();
+                    let next = toggle.borrow().revision();
+                    shown.set(next);
+                    assert!(activate_loading(
+                        || shown.get() == next && toggle.borrow().requested(next),
+                        |operation| calls.borrow_mut().push((next, operation)),
+                    ));
+                }
+            },
+        );
+        let next = shown.get();
+        assert!(!completed);
+        assert_ne!(first, next);
+        assert_eq!(
+            *calls.borrow(),
+            [
+                (first, LoadingActivation::Show),
+                (next, LoadingActivation::Show),
+                (next, LoadingActivation::Foreground),
+                (next, LoadingActivation::Focus),
+            ]
+        );
+    }
+
+    #[test]
+    fn loading_activation_preserves_a_current_request_and_skips_a_closed_one() {
+        let mut toggle = PanelToggle::default();
+        toggle.show();
+        let request = toggle.revision();
+        let mut calls = Vec::new();
+        assert!(activate_loading(|| toggle.requested(request), |operation| calls.push(operation)));
+        assert_eq!(calls, [LoadingActivation::Show, LoadingActivation::Foreground, LoadingActivation::Focus]);
+        toggle.close();
+        assert!(!activate_loading(|| toggle.requested(request), |_| panic!("a closed loader cannot activate")));
     }
 }

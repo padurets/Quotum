@@ -83,11 +83,10 @@ impl Panel {
         if !toggle.wanted() {
             return;
         }
-        if self.probe {
-            self.request.set(toggle.revision());
-        }
+        let request = toggle.revision();
+        self.request.set(request);
         drop(toggle);
-        self.request_probe.mark(6, self.request.get(), 1, 0, 0, 0);
+        self.request_probe.mark(6, request, 1, 0, 0, 0);
         unsafe {
             let mut hwnd = self.hwnd.get();
             if hwnd.is_null() {
@@ -180,18 +179,35 @@ impl Panel {
             }
             *self.text.borrow_mut() = wide(native_text::text(shell.locale(), "desktop.loading"));
             self.started.set(Some(Instant::now()));
-            self.visible.set(true);
             self.observed(hwnd, 2, || SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE));
             self.observed(hwnd, 3, || round(hwnd));
-            self.request_probe.mark(6, self.request.get(), 2, hwnd as u64, 0, 0);
-            self.observed(hwnd, 4, || ShowWindow(hwnd, SW_SHOW));
-            self.request_probe.mark(6, self.request.get(), 3, hwnd as u64, 0, 0);
-            self.request_probe.mark(6, self.request.get(), 4, hwnd as u64, 0, 0);
-            self.observed(hwnd, 5, || SetForegroundWindow(hwnd));
-            self.request_probe.mark(6, self.request.get(), 5, hwnd as u64, 0, 0);
-            self.request_probe.mark(6, self.request.get(), 6, hwnd as u64, 0, 0);
-            self.observed(hwnd, 6, || SetFocus(hwnd));
-            self.request_probe.mark(6, self.request.get(), 7, hwnd as u64, 0, 0);
+            if !crate::window::activate_loading(
+                || {
+                    self.request.get() == request
+                        && !shell.exiting()
+                        && shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).requested(request)
+                },
+                |operation| match operation {
+                    crate::window::LoadingActivation::Show => {
+                        self.visible.set(true);
+                        self.request_probe.mark(6, request, 2, hwnd as u64, 0, 0);
+                        self.observed(hwnd, 4, || ShowWindow(hwnd, SW_SHOW));
+                        self.request_probe.mark(6, request, 3, hwnd as u64, 0, 0);
+                    }
+                    crate::window::LoadingActivation::Foreground => {
+                        self.request_probe.mark(6, request, 4, hwnd as u64, 0, 0);
+                        self.observed(hwnd, 5, || SetForegroundWindow(hwnd));
+                        self.request_probe.mark(6, request, 5, hwnd as u64, 0, 0);
+                    }
+                    crate::window::LoadingActivation::Focus => {
+                        self.request_probe.mark(6, request, 6, hwnd as u64, 0, 0);
+                        self.observed(hwnd, 6, || SetFocus(hwnd));
+                        self.request_probe.mark(6, request, 7, hwnd as u64, 0, 0);
+                    }
+                },
+            ) {
+                return;
+            }
             self.observed(hwnd, 7, || SetTimer(hwnd, 1, 80, None));
             self.observed(hwnd, 8, || UpdateWindow(hwnd));
         }
