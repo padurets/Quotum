@@ -129,11 +129,11 @@ export function Modal({
 }
 
 /** A labelled input; its hint is read out as its description, not as part of its name. */
-export function Field({label, hint, ...input}: {label: string; hint?: string} & InputHTMLAttributes<HTMLInputElement>) {
+export function Field({label, hint, compact, ...input}: {label: string; hint?: string; compact?: boolean} & InputHTMLAttributes<HTMLInputElement>) {
   const id = useId();
   return (
     <div className="field">
-      <label htmlFor={id}>{label}</label>
+      <label htmlFor={id} className={compact ? 'sr-only' : undefined}>{label}</label>
       <input id={id} aria-describedby={hint ? `${id}-hint` : undefined} {...input} />
       {hint && <small id={`${id}-hint`}>{hint}</small>}
     </div>

@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode} from 'react';
+import {useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode, type RefObject} from 'react';
 import {barsOf, coverOf, crampedOf, roomOf, shiftOf, sideOf} from '../lib/place';
 import {settler} from '../lib/settle';
 import {X} from 'lucide-react';
@@ -17,6 +17,7 @@ export function Popover({
   triggerClass,
   up = false,
   width,
+  horizontalAnchor,
 }: {
   label: string;
   icon?: ReactNode;
@@ -33,6 +34,8 @@ export function Popover({
   align?: 'left' | 'right';
   /** A content width, still capped to the viewport by the shared panel style. */
   width?: number;
+  /** Align horizontally with this part of the trigger, leaving its badges outside the anchor. */
+  horizontalAnchor?: RefObject<HTMLElement | null>;
 }) {
   const [own, setOwn] = useState(false);
   const open = controlled ?? own;
@@ -129,7 +132,9 @@ export function Popover({
       // or of its dialog, either without its own scrollbar.
       const placed = element.getBoundingClientRect();
       size = {width: placed.width, height: placed.height};
-      const shift = shiftOf(placed.left - room.left, placed.right - room.left, room.right - room.left);
+      const anchor = horizontalAnchor?.current?.getBoundingClientRect();
+      const offset = anchor ? align === 'left' ? anchor.left - at.left : anchor.right - at.right : 0;
+      const shift = offset + shiftOf(placed.left + offset - room.left, placed.right + offset - room.left, room.right - room.left);
       if (shift) element.style.translate = `${shift}px 0`;
       setSide(same => (same?.up === next && same.cap === cap && same.cramped === cramped ? same : {up: next, cap, cramped}));
     };
@@ -212,7 +217,7 @@ export function Popover({
     });
     const shifts = new MutationObserver(moved);
     const widgets = document.querySelectorAll('.widget');
-    for (const watched of [element, document.getElementById('root')!, ...widgets, trigger.closest('.dialog')]) {
+    for (const watched of [element, trigger, horizontalAnchor?.current, document.getElementById('root')!, ...widgets, trigger.closest('.dialog')]) {
       if (watched) observer.observe(watched);
     }
     for (const moving of [...widgets, trigger.closest('.widget-body')]) {

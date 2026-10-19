@@ -1596,9 +1596,13 @@ non-default data selection or historical range, including while the row is hidde
 The row starts closed and remembers its visibility in the reader's browser.
 Each data filter has on/off choices, a small minus-count tag for exclusions and an
 adjacent cross that shows all again. Shared filter rows keep every switch on the
-right, including group headings and unknown resources. Status and reset slots keep
-their width as choices change. Resource groups use provider logos and inline
+right, including group headings and unknown resources. Dropdowns align with the
+filter label independently of its exclusion badge; unchanged filters reserve no
+status space. Search uses a short placeholder and an accessible hidden label.
+Resource groups use provider logos and inline
 disclosures; disabling a parent hides its children without changing their choices.
+Expandable and plain resource rows align their names; child guides have inset ends
+and a gap before the row's hover surface.
 Wallet key batches append within that disclosure instead of replacing the menu
 with another screen. The horizon uses the same dropdown style without its selected
 value in the trigger. Restore precedes Save at the right end of the complete row;

@@ -5,7 +5,7 @@ export const ru = {
   "filters.resources": "Ресурсы",
   "filters.projects": "Проекты",
   "filters.devices": "Устройства",
-  "filters.search": "Поиск вариантов фильтра",
+  "filters.search": "Поиск",
   "filters.active": "Фильтры данных включены",
   "filters.clients": "Клиенты",
   "filters.save": "Сохранить фильтры на доске",

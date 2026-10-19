@@ -12,8 +12,8 @@ import {RESOURCE_FILTERS,excludedCount,excludedResources,resourcesRestricted,sel
 import {clientName} from '../../server/domain/clients';
 import {fundsRule,matchesSelection,matchesSource,type DataFilters,type FamilyRef,type Selection} from '../../server/domain/dataFilters';
 import {moneyFamily,providerOf} from '../../server/domain/providers';
-import {FilterGroup,FilterPopover,FilterRow} from './Filters';
-import {ErrorLine,Field} from './Kit';
+import {FilterGroup,FilterPopover,FilterRow,FilterSearch} from './Filters';
+import {ErrorLine} from './Kit';
 import {KeyMoneySettings} from './MoneySettings';
 import {logoOf} from './logos';
 
@@ -30,10 +30,10 @@ function Dimension({family,label}:{family:'projects'|'devices'|'clients';label:K
     family==='devices'?(facets.value?.devices??[]).map(device=>({ref:device.id,name:device.name})):
       (facets.value?.clients??[]).map(ref=>({ref,name:ref?clientName(ref):t('filters.unknownClient')}));
   const count=rule?excludedCount(rule as Selection<FamilyRef>,options.map(option=>option.ref)):0;
-  return <FilterPopover label={label} count={count} capacity={options.length} changed={!!rule&&selectionRestricted(rule)} onReset={()=>{dataFilters.reset(family,'all');setSearch('');}} open={open} onOpenChange={setOpen} width={288}>
+  return <FilterPopover label={label} count={count} changed={!!rule&&selectionRestricted(rule)} onReset={()=>{dataFilters.reset(family,'all');setSearch('');}} open={open} onOpenChange={setOpen} width={288}>
     {facets.loading&&<p className="popover-note">{t('desktop.loading')}</p>}
     {facets.error&&<p className="popover-note" role="status">{t('filters.unavailable')}</p>}
-    {(options.length>10||!!search)&&<div className="popover-body"><Field label={t('filters.search')} type="search" value={search} onChange={event=>setSearch(event.target.value)}/></div>}
+    {(options.length>10||!!search)&&<FilterSearch value={search} onChange={setSearch}/>}
     <div className="filter-options">{rule&&options.filter(option=>option.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())).map(option=><FilterRow key={JSON.stringify(option.ref)} on={matchesSelection(rule as Selection<FamilyRef>,option.ref)} onChange={on=>dataFilters.toggle(family,option.ref,on)}>{option.name}</FilterRow>)}</div>
     {!!state.saved?.unavailable[family]&&<p className="popover-note">{t('filters.unavailableCount',{count:state.saved.unavailable[family]})}</p>}
   </FilterPopover>;
@@ -60,10 +60,10 @@ function Resources(){
   useEffect(()=>{const show=()=>{requested=false;setOpen(true);};window.addEventListener('quotum:open-filters',show);return()=>window.removeEventListener('quotum:open-filters',show);},[]);
   const wallets=sources.filter(source=>moneyFamily(providerOf(source.provider))==='budget'&&source.budget?.enabled!==false&&source.meters?.some(meter=>meter.kind==='balance'||meter.kind==='cap'));
   const count=filters?excludedResources(filters,sources,facets.value,money.unit??undefined,funds.unit??undefined):0;
-  return <FilterPopover label="filters.resources" count={count} capacity={sources.reduce((sum,source)=>sum+1+source.windows.length+(source.meters?.length??0)+(source.keysCount??0),facets.value?.funding.length??0)} changed={!!filters&&resourcesRestricted(filters)} onReset={()=>{dataFilters.reset(RESOURCE_FILTERS,'all');setSearch('');}} open={open} onOpenChange={setOpen} width={320}>
-    {(sources.length>10||!!search)&&<div className="popover-body"><Field label={t('filters.search')} type="search" value={search} onChange={event=>setSearch(event.target.value)}/></div>}
+  return <FilterPopover label="filters.resources" count={count} changed={!!filters&&resourcesRestricted(filters)} onReset={()=>{dataFilters.reset(RESOURCE_FILTERS,'all');setSearch('');}} open={open} onOpenChange={setOpen} width={320}>
+    {(sources.length>10||!!search)&&<FilterSearch value={search} onChange={setSearch}/>}
     <div className="filter-options">{filters&&!!board&&sources.map(source=><Resource key={source.id} source={source} filters={filters} wallets={wallets} fundsUnit={funds.unit??undefined} visible={(source.title??source.id).toLocaleLowerCase().includes(search.toLocaleLowerCase())}/>)}
-      {filters&&facets.value?.funding.map(status=><FilterRow key={status} on={matchesSelection(filters.sources,{status})} onChange={on=>dataFilters.toggle('sources',{status},on)}>{t(status==='unknown'?'agents.unknownSource':'agents.notProvided')}</FilterRow>)}
+      {filters&&facets.value?.funding.map(status=><FilterGroup key={status} label={t(status==='unknown'?'agents.unknownSource':'agents.notProvided')} on={matchesSelection(filters.sources,{status})} onChange={on=>dataFilters.toggle('sources',{status},on)}/>)}
     </div>
     {facets.error&&<p className="popover-note" role="status">{t('filters.unavailable')}</p>}
     {!!state.conflicts&&<p className="popover-note">{t('filters.conflictCount',{count:state.conflicts})}</p>}

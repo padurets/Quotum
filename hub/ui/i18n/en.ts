@@ -10,7 +10,7 @@ export const en = {
   "filters.resources": "Resources",
   "filters.projects": "Projects",
   "filters.devices": "Devices",
-  "filters.search": "Search filter options",
+  "filters.search": "Search",
   "filters.active": "Data filters are active",
   "filters.clients": "Clients",
   "filters.save": "Save filters on board",
