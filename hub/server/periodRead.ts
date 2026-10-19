@@ -305,7 +305,7 @@ export class PeriodReader {
         const part=yield*section((function*(){
           const curves=yield*fullSourceCurves({from:patch.from,to:patch.to}),known=sourceWorkFrom(work.ensureAccess!());
           const value=sourceWorkTape(curves,patch.coveredFrom,patch.coveredTo,new Map([...sources].map(id=>[id,known[id]??null])),reserve);
-          return {...value,cursor,replaceFrom:patch.from,replaceTo:patch.to};
+          return {...value,...(delta?{sources:value.sources.filter(source=>source.blocks.length)}:{}),cursor,replaceFrom:patch.from,replaceTo:patch.to};
         })());
         response.sourceWork=delta&&part.state==='complete'?{state:'delta',basis,value:part.value}:part;
       }

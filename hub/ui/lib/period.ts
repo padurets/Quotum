@@ -1,6 +1,6 @@
 import {effectiveFilters,filtersReady,onDataFilters} from './filterSelection';
 import {matchesSource,workFilter,jsonBytes} from '../../server/domain/dataFilters';
-import {mergeSourceWorkTape,sourceWorkCurves,type SourceWorkTape,type SourceWorkCurves} from '../../server/domain/periodCurves';
+import {mergeSourceWorkTape,sameSourceWork,sourceWorkCurves,type SourceWorkTape,type SourceWorkCurves} from '../../server/domain/periodCurves';
 import {moneyReadSelection} from './moneySelection';
 import {subscriptionSelection} from './subscription';
 import {cellOf} from '../../server/domain/history';
@@ -464,7 +464,7 @@ class BoardPeriod {
     // Card states are adopted unchanged; only their reading wrappers are new.
     if(reply.values?.state==='complete')try{charge('values',JSON.stringify(reply.values.value).length*3+reply.values.value.length*768);}catch(error){if(error!==limited)throw error;reply.values={state:'error',error:'history_limit'};}
     const priorWork=this.work.value,priorIndex=this.index,priorTapes=new Map(this.tapes);
-    const previousSourceCurves=this.sourceCurves;
+    const previousSourceCurves=this.sourceCurves,previousSourceTape=this.sourceTape;
     let nextSourceTape=this.sourceTape,nextSourceCurves=previousSourceCurves,nextSourceCursor=this.sourceCursor;
     const filtered=!!effectiveFilters();
     const retainedFrom=intent.request.selection.mode==='live'?evaluatedRange(intent.request.selection,hubNow()).from:null;
@@ -522,7 +522,7 @@ class BoardPeriod {
       try{if(workPart?.state==='complete'&&!priorWork)for(const group of priorTapes.get('budget')?.tape.money??[])if(group.workCounter&&!changedWork.has(group.source)){changedBytes+=64+group.source.length*2;charge('changedWork',changedBytes);changedWork.add(group.source);yield;}
       if(workPart&&workPart.state!=='error')for(const refs of [workPart.value.refs,...(workPart.state==='complete'||retired?[priorWork?.refs??[]]:[])])for(const ref of refs){if(ref.source&&!changedWork.has(ref.source)){changedBytes+=64+ref.source.length*2;charge('changedWork',changedBytes);changedWork.add(ref.source);}yield;}}
       catch(error){if(error!==limited)throw error;reply.sessions={state:'error',error:'history_limit'};work=priorWork;index=null;activity=null;changedWork.clear();discard('changedWork');discard('work');}
-      if(reply.sourceWork)for(const curves of [previousSourceCurves,nextSourceCurves])for(const source of curves?.groups.source.keys()??[])changedWork.add(source);
+      if(reply.sourceWork)for(const curves of [previousSourceCurves,nextSourceCurves])for(const source of curves?.groups.source.keys()??[])if(reply.sourceWork.state==='error'||previousSourceCurves?.available!==nextSourceCurves?.available||previousSourceCurves?.knownFrom!==nextSourceCurves?.knownFrom||previousSourceCurves?.groups.source.has(source)!==nextSourceCurves?.groups.source.has(source)||!sameSourceWork(previousSourceTape,nextSourceTape,source))changedWork.add(source);
       const tapes=new Map(priorTapes);
       for(const scope of PERIOD_SCOPES){
         const old=tapes.get(scope),incoming=incomingTapes.get(scope);

@@ -512,10 +512,10 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
   })()`);
   const record=await owner.post<Credential>('/api/credentials',{provider:'openrouter',secret:MONEY_KEY(1),allowNoExpiry:true});
   const source=record.sourceId!;
+  // The dense panning wallets must not exclude this newly connected account.
+  await selectMoney(cdp, [[source, 'balance']]);
   const shownBy=Date.now()+SHOWN_WITHIN;
   while(!await cdp.evaluate<boolean>(`!!document.querySelector('[data-card="${source}"] [data-money]')`)){if(Date.now()>shownBy)throw new Stop('money card did not appear');await sleep(20);}
-  // The dense panning wallets must not change the single-account update baseline.
-  await selectMoney(cdp, [[source, 'balance']]);
   const readyBy=Date.now()+SHOWN_WITHIN;
   while(!await cdp.evaluate<boolean>(`!!document.querySelector('[data-series="${source} balance"]')`)){if(Date.now()>readyBy)throw new Stop('money chart did not appear');await sleep(20);}
   await cdp.evaluate(`(async () => {

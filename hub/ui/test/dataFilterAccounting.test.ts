@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {PeriodCurves,sourceWorkTape,sourceWorkCurves,mergeSourceWorkTape} from '../../server/domain/periodCurves';
+import {PeriodCurves,sourceWorkTape,sourceWorkCurves,mergeSourceWorkTape,sameSourceWork} from '../../server/domain/periodCurves';
 import {PeriodAccounting} from '../../server/domain/periodAccounting';
 import {packSamples} from '../../server/domain/periodTape';
 import {drain} from '../lib/prepare';
@@ -30,6 +30,18 @@ test('a source sweep delta replaces an empty interval inside an hour without los
   assert.equal(merged.read({from:0,to:2*H}),H);assert.equal(merged.read({from:30*M,to:90*M}),0);
   assert.equal(merged.read({from:0,to:30*M}),30*M);assert.equal(merged.read({from:90*M,to:2*H}),30*M);
   assert.throws(()=>sourceWorkCurves({...before,patterns:[[0,-1,H,1]]}),/invalid_source_work/);
+});
+
+test('sparse source deltas retain known empty sources and compare curves independently of dictionary indices',()=>{
+  const before=sourceWorkTape(new PeriodCurves(trace([[0,0,2*H]])),0,2*H,new Map([['s',0],['empty',null]]),()=>{});
+  const patch={version:1 as const,from:0,cut:2*H,patterns:[],sources:[],replaceFrom:30*M,replaceTo:90*M};
+  const merged=mergeSourceWorkTape(before,patch),curves=sourceWorkCurves(merged);
+  assert.equal(curves.groups.source.get('s')!.read({from:0,to:2*H}),H);
+  assert.equal(merged.sources.find(row=>row.id==='empty')?.knownFrom,null);
+  assert.equal(sameSourceWork(before,merged,'s'),false);
+  assert.equal(sameSourceWork(before,merged,'empty'),true);
+  const unchanged=mergeSourceWorkTape(before,{...patch,replaceFrom:2*H,replaceTo:2*H});
+  assert.equal(sameSourceWork(before,unchanged,'s'),true);
 });
 
 test('half an hour selected never halves the full-hour supplier rate or remaining-work estimate',()=>{

@@ -106,7 +106,8 @@ export function mergeSourceWorkTape(before:SourceWorkTape,patch:SourceWorkTape,r
   sourceWorkCurves(patch,reserve);
   const from=patch.from,cut=patch.cut,replaceFrom=patch.replaceFrom??from,replaceTo=patch.replaceTo??cut;
   const patterns:number[][]=[],dictionary=new Map<string,number>(),sources:SourceWorkTape['sources']=[];
-  for(const row of patch.sources){
+  const incoming=new Map(patch.sources.map(row=>[row.id,row]));
+  for(const row of [...patch.sources,...before.sources.filter(row=>!incoming.has(row.id)).map(row=>({...row,blocks:[]}))]){
     const hours=new Map<number,Map<number,number>>();
     const add=(tape:SourceWorkTape,source:SourceWorkTape['sources'][number],ranges:readonly [number,number][])=>{
       for(let i=0;i<source.blocks.length;i+=2){const hour=source.blocks[i],pattern=tape.patterns[source.blocks[i+1]],base=hour*WORK_BLOCK_MS;let count=0;
@@ -127,6 +128,19 @@ export function mergeSourceWorkTape(before:SourceWorkTape,patch:SourceWorkTape,r
     reserve(256+row.id.length*2);sources.push({id:row.id,knownFrom:row.knownFrom,blocks});
   }
   return {version:1,from,cut,patterns,sources};
+}
+
+/** Dictionary indices are local to each tape; compare the actual source curves. */
+export function sameSourceWork(before:SourceWorkTape|null,after:SourceWorkTape|null,source:string):boolean {
+  const a=before?.sources.find(row=>row.id===source),b=after?.sources.find(row=>row.id===source);
+  if(!a||!b)return a===b;
+  if(a.knownFrom!==b.knownFrom||a.blocks.length!==b.blocks.length)return false;
+  for(let i=0;i<a.blocks.length;i+=2){
+    if(a.blocks[i]!==b.blocks[i])return false;
+    const x=before!.patterns[a.blocks[i+1]],y=after!.patterns[b.blocks[i+1]];
+    if(x.length!==y.length||x.some((value,index)=>value!==y[index]))return false;
+  }
+  return true;
 }
 
 export class PeriodCurves {
