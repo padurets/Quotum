@@ -11,6 +11,23 @@ type Flight={role:'visible';intent:PeriodIntent;controller:AbortController;deman
 const aborted=()=>new DOMException('Aborted','AbortError');
 const cursorKey=(board:string,scope:PeriodScope,query:HistoryQuery)=>JSON.stringify([board,scope,query.meters,query.unit,query.currency,query.sources]);
 
+/** Only fixed summaries carry selected work; native evidence stays shared and immutable. */
+function withoutSelectedWork<T>(value:T,charge:(bytes:number)=>void):T{
+  if(!value||typeof value!=='object')return value;
+  const record=value as Record<string,unknown>;let copy:Record<string,unknown>|undefined;
+  for(const key in record){
+    if(!Object.hasOwn(record,key))continue;
+    const next=key==='selectedWork'?undefined:withoutSelectedWork(record[key],charge);
+    if(key!=='selectedWork'&&next===record[key])continue;
+    if(!copy){
+      let bytes=64;if(Array.isArray(value))bytes+=value.length*8;else for(const field in record)if(Object.hasOwn(record,field))bytes+=32+field.length*2;
+      charge(bytes);copy=(Array.isArray(value)?value.slice():{...record}) as Record<string,unknown>;
+    }
+    if(key==='selectedWork')delete copy[key];else copy[key]=next;
+  }
+  return (copy??value) as T;
+}
+
 /** One event-loop collection combines chart sections with the period's other visible consumers. */
 export class PeriodTransport implements HistoryMember {
   private queue:Demand[]=[];
@@ -49,9 +66,9 @@ export class PeriodTransport implements HistoryMember {
   private current(intent:PeriodIntent){const current=this.intent();return current?.board===intent.board&&this.key(current)===this.key(intent);}
   private resourcesCurrent(intent:PeriodIntent){const current=this.intent();return current?.board===intent.board&&(intent.resourceGeneration===undefined?this.current(intent):current.resourceGeneration===intent.resourceGeneration);}
   private retire(){for(const flight of this.flights)if(flight.extras&&!this.current(flight.intent)&&!this.resourcesCurrent(flight.intent))this.abort(flight);}
-  private async adopt(reply:PeriodReply,intent:PeriodIntent,flight:Flight){
+  private async adopt(reply:PeriodReply,intent:PeriodIntent,flight:Flight,heldBytes=0){
     flight.preparing=true;
-    await this.receive(reply,intent,bytes=>this.pool.reserve(flight,bytes));
+    await this.receive(reply,intent,bytes=>this.pool.reserve(flight,heldBytes+bytes));
     if(flight.controller.signal.aborted||!this.current(intent))return false;
     // Preparation can reject individual sections. Only adopted evidence can name a later delta.
     for(const scope of PERIOD_SCOPES){const part=reply[scope],query=intent.request[scope];if(query&&part?.state==='complete'){
@@ -103,7 +120,8 @@ export class PeriodTransport implements HistoryMember {
     const start=()=>{
       if(flight.controller.signal.aborted)return;
       if(extras&&!this.current(intent)&&!this.resourcesCurrent(intent)){this.abort(flight);this.schedule();return;}
-      const response=jsonBytes(body)>PERIOD_BODY_BYTES||body.workFilter&&(body.quota||body.sessions||body.facets||body.budget?.work==='1')&&!executableWorkFilters(body.workFilter)?Promise.reject(new ApiError(413,'history_limit')):this.send(intent.board,body,flight.controller.signal,bytes=>this.pool.reserve(flight,bytes));
+      let decodedBytes=0;
+      const response=jsonBytes(body)>PERIOD_BODY_BYTES||body.workFilter&&(body.quota||body.sessions||body.facets||body.budget?.work==='1')&&!executableWorkFilters(body.workFilter)?Promise.reject(new ApiError(413,'history_limit')):this.send(intent.board,body,flight.controller.signal,bytes=>{if(!this.pool.reserve(flight,bytes))return false;decodedBytes=bytes;return true;});
       response.then(async reply=>{
         if(flight.controller.signal.aborted)return;
         // A→B→A is three generations. Equal target text does not revive the first response.
@@ -118,11 +136,18 @@ export class PeriodTransport implements HistoryMember {
           const current=this.intent()!;
           // A work-filter edit does not revoke source-wide evidence already in flight.
           // Fixed summaries carry selected direct fields, which await their new cohort.
+          let copiedBytes=0;
+          const charge=(bytes:number)=>{copiedBytes+=bytes;if(!this.pool.reserve(flight,decodedBytes+copiedBytes))throw new ApiError(413,'history_limit');};
+          charge(512);
           const resources={...evidenceReply,sessions:undefined,facets:undefined};
           for(const scope of PERIOD_SCOPES){const part=resources[scope];if(part?.state==='complete'){
-            resources[scope]=JSON.parse(JSON.stringify({...part,value:{...part.value,chunks:[]}},(key,value)=>key==='selectedWork'?undefined:value));
+            charge(512);
+            const tape=part.value.tape,fixed=withoutSelectedWork(tape?.fixed,charge);
+            resources[scope]={...part,value:{...part.value,chunks:[],...(tape?{tape:{...tape,...(fixed?{fixed}:{})}}:{})}};
           }}
-          await this.adopt(resources,{...current,request:{...appliedIntent.request,sessions:undefined,facets:undefined}},flight);
+          // The captured chart still needs the original body until adoption finishes.
+          await this.adopt(resources,{...current,request:{...appliedIntent.request,sessions:undefined,facets:undefined}},flight,decodedBytes+copiedBytes);
+          if(flight.controller.signal.aborted)return;
         }
         for(const demand of demands) {
           const part=activityOnly&&demand.scope!=='quota'?evidenceReply[demand.scope]:reply[demand.scope];

@@ -1593,6 +1593,9 @@ period, adding the current roster only for a live period. One raw read also supp
 curves for supplier rates and forecasts, transported as a source-only live sweep
 or compact fixed summary. Work-filter changes retire selected indexes and details,
 while source evidence retains its own cursor, cache identity and generation.
+Late source-only adoption shares native arrays and copies only changed fixed
+summaries after reserving their metadata. The captured response remains charged
+beside recipient staging until adoption and its chart consumers finish.
 The private storage wrapper keeps boolean decisions that coincide with a changed
 rule's default; repeated include/exclude or wallet auto/only transitions cannot
 forget a dormant exclusion. Its filters and retained decisions together fit
