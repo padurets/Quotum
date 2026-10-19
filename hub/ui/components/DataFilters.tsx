@@ -26,14 +26,13 @@ function Dimension({family,label}:{family:'projects'|'devices'|'clients';label:K
   const [open,setOpen]=useState(false),state=useDataFilters(),facets=useSyncExternalStore(boardPeriod.subscribeFacets,boardPeriod.getFacets);
   const [search,setSearch]=useState('');
   const rule=state.current?.[family];
-  const countNeedsChoices=rule?.mode==='include'&&!facets.value&&!facets.error;
-  useEffect(()=>open||countNeedsChoices?boardPeriod.demandFacets():undefined,[open,countNeedsChoices]);
+  useEffect(()=>open?boardPeriod.demandFacets():undefined,[open]);
   const choices=(value:typeof facets.value):{ref:string|null;name:string}[]=>family==='projects'?(value?.projects??[]).map(ref=>({ref,name:ref??t('activity.noProject')})):
     family==='devices'?(value?.devices??[]).map(device=>({ref:device.id,name:device.name})):
       (value?.clients??[]).map(ref=>({ref,name:ref?clientName(ref):t('filters.unknownClient')}));
   const available=choices(facets.value),retained=choices(facets.value?.retained??null);
   const options=[...available,...retained.filter(option=>rule?.values.some(ref=>ref===option.ref)&&!available.some(present=>present.ref===option.ref))];
-  const count=rule?excludedCount(rule as Selection<FamilyRef>,available.map(option=>option.ref)):0;
+  const count=rule?(rule.mode==='include'&&!facets.value?undefined:excludedCount(rule as Selection<FamilyRef>,available.map(option=>option.ref))):0;
   return <FilterPopover label={label} count={count} changed={!!rule&&selectionRestricted(rule)} onReset={()=>{dataFilters.reset(family,'all');setSearch('');}} open={open} onOpenChange={setOpen} width={288}>
     {facets.loading&&<p className="popover-note">{t('desktop.loading')}</p>}
     {facets.error&&<p className="popover-note" role="status">{t('filters.unavailable')}</p>}
@@ -60,11 +59,10 @@ function Resources(){
   const [search,setSearch]=useState('');
   const history=useSyncExternalStore(budgetHistory.subscribe,budgetHistory.get);
   const facets=useSyncExternalStore(boardPeriod.subscribeFacets,boardPeriod.getFacets),filters=state.current;
-  const countNeedsChoices=filters?.sources.mode==='include'&&!facets.value&&!facets.error;
-  useEffect(()=>open||countNeedsChoices?boardPeriod.demandFacets():undefined,[open,countNeedsChoices]);
+  useEffect(()=>open?boardPeriod.demandFacets():undefined,[open]);
   useEffect(()=>{const show=()=>{requested=false;setOpen(true);};window.addEventListener('quotum:open-filters',show);return()=>window.removeEventListener('quotum:open-filters',show);},[]);
   const wallets=sources.filter(source=>moneyFamily(providerOf(source.provider))==='budget'&&source.budget?.enabled!==false&&source.meters?.some(meter=>meter.kind==='balance'||meter.kind==='cap'));
-  const count=filters?excludedResources(filters,sources,facets.value,money.unit??undefined,funds.unit??undefined):0;
+  const count=filters?(filters.sources.mode==='include'&&!facets.value?undefined:excludedResources(filters,sources,facets.value,money.unit??undefined,funds.unit??undefined)):0;
   return <FilterPopover label="filters.resources" count={count} changed={!!filters&&resourcesRestricted(filters)} onReset={()=>{dataFilters.reset(RESOURCE_FILTERS,'all');setSearch('');}} open={open} onOpenChange={setOpen} width={320}>
     {(sources.length>10||!!search)&&<FilterSearch value={search} onChange={setSearch}/>}
     <FilterOptions>{filters&&!!board&&sources.map(source=><Resource key={source.id} source={source} filters={filters} wallets={wallets} fundsUnit={funds.unit??undefined} series={history.history?.meterSeries??[]} visible={(source.title??source.id).toLocaleLowerCase().includes(search.toLocaleLowerCase())}/>)}

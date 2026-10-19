@@ -5,12 +5,43 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {DataFilterState} from '../lib/filterState';
 import {defaultFilters,matchesSelection,type FilterEnvelope,type FamilyRef} from '../../server/domain/dataFilters';
-import {excludedCount,selectionRestricted} from '../lib/filterSummary';
+import {excludedCount,excludedResources,selectionRestricted,resourcesRestricted,RESOURCE_FILTERS} from '../lib/filterSummary';
 import {clientName} from '../../server/domain/clients';
 import type {WorkFacets} from '../../server/domain/periodRead';
+import {fixture,flush,NOW} from './periodRuntimeFixture';
+import {publishDataFilters} from '../lib/filterSelection';
 
 type Node={type:string;props:any};
 const nodes=(value:any):Node[]=>Array.isArray(value)?value.flatMap(nodes):value&&typeof value==='object'&&'props' in value?[value,...nodes(value.props.children)]:[];
+
+test('mounted closed controls keep include counts lazy until the user opens their choices',async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const source=readFileSync(new URL('../components/DataFilters.tsx',import.meta.url),'utf8');
+  for(const family of ['projects','devices','clients','sources'] as const){
+    publishDataFilters(defaultFilters());const h=await fixture();let cleanups:(()=>void)[]=[];
+    try{
+      const filters=defaultFilters();filters[family]={mode:'include',values:[]};publishDataFilters(filters);h.period.changed();await flush();h.requests.length=0;
+      let open=false,demands=0,rawReads=0;const effects:(()=>void|(()=>void))[]=[],original=h.store.agentWork.bind(h.store);
+      h.store.agentWork=(...args:Parameters<typeof original>)=>{rawReads++;return original(...args);};
+      const period=new Proxy(h.period,{get(target,key){return key==='demandFacets'?()=>{demands++;return target.demandFacets();}:Reflect.get(target,key);}});
+      const jsx=(type:string,props:any)=>({type,props}),context={exports:{} as {Dimension:(props:unknown)=>Node;Resources:()=>Node},require:()=>({jsx,jsxs:jsx,Fragment:'fragment'}),
+        useState:(initial:unknown)=>typeof initial==='boolean'||typeof initial==='function'?[open,(value:boolean)=>{open=value;}]:[initial,()=>{}],useEffect:(run:()=>void|(()=>void))=>effects.push(run),useSyncExternalStore:(_s:unknown,get:()=>unknown)=>get(),
+        useDataFilters:()=>({current:filters,saved:null}),dataFilters:{reset(){},toggle(){}},boardPeriod:period,clientName,matchesSelection,excludedCount,excludedResources,selectionRestricted,resourcesRestricted,RESOURCE_FILTERS,t:(key:string)=>key,
+        useNamed:()=>[],useBoardId:()=>h.board,usePref:()=>({unit:'USD'}),budgetHistory:{subscribe:()=>()=>{},get:()=>({history:null})},window:{addEventListener(){},removeEventListener(){}},
+        FilterPopover:'popover',FilterOptions:'options',FilterRow:'row',FilterSearch:'search',FilterGroup:'group',Resource:'resource',Unlink:'unlink'};
+      const code=family==='sources'?'export '+source.slice(source.indexOf('function Resources('),source.indexOf('export function DataFilterControls')):'export '+source.slice(source.indexOf('function Dimension('),source.indexOf('function Resource('));
+      runInNewContext(ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
+      const render=()=>{effects.length=0;return family==='sources'?context.exports.Resources():context.exports.Dimension({family,label:'filters.'+family});};
+      const mount=()=>{for(const run of effects){const cleanup=run();if(cleanup)cleanups.push(cleanup);}};
+      let tree=render();assert.equal(tree.props.open,false);assert.equal(tree.props.count,undefined,'an unknown include universe has no invented exclusion count');mount();await flush();
+      assert.equal(demands,0,family+' remains closed');assert.equal(h.requests.length,0);assert.equal(rawReads,0);assert.equal(h.period.getFacets().value,null);
+      cleanups.forEach(cleanup=>cleanup());cleanups=[];tree.props.onOpenChange(true);tree=render();mount();await flush();
+      assert.equal(tree.props.open,true);assert.equal(demands,1);assert.equal(h.requests.filter(request=>request.facets).length,1);assert.equal(rawReads,1);
+      assert.ok(h.period.getFacets().value.projects.includes('Work project'),'opening reads the complete unfiltered authorized universe');
+      assert.equal(typeof render().props.count,'number','confirmed choices supply the actual count');
+    }finally{cleanups.forEach(cleanup=>cleanup());publishDataFilters(null,false);await h.close();}
+  }
+});
 
 test('actual dimension rows keep authorized absent choices independently removable and hide unconfirmed dormant references',()=>{
   const source=readFileSync(new URL('../components/DataFilters.tsx',import.meta.url),'utf8'),code='export '+source.slice(source.indexOf('function Dimension('),source.indexOf('function Resource('));
