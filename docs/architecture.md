@@ -1594,6 +1594,12 @@ recoverable in the common controls without an oversized work request.
 The filter button forms its own group after the board controls. A small dot marks a
 non-default data selection or historical range, including while the row is hidden.
 The row starts closed and remembers its visibility in the reader's browser.
+Each data filter has on/off choices, a small minus-count tag for exclusions and an
+adjacent cross that shows all again. Resource groups use provider logos and inline
+disclosures; disabling a parent hides its children without changing their choices.
+Wallet key batches append within that disclosure instead of replacing the menu
+with another screen. The horizon uses the same dropdown style without its selected
+value in the trigger. Save and Restore sit at the right end of the complete row.
 Hiding it preserves the selected period and shared chart horizon; while open,
 it keeps them available during scrolling. Board navigation and widget management
 stay in the header. Five-hour limits, weekly limits and wallet balance

@@ -45,6 +45,18 @@ test('automatic and clear reset only their family and the first equal Save adopt
   state.reset('wallet','all');assert.deepEqual(state.get().current?.wallet,{mode:'auto',include:[],exclude:[]});assert.deepEqual(state.get().current?.projects,{mode:'exclude',values:['P']});
 });
 
+test('the resource cross publishes one complete reset and leaves work dimensions unchanged',async()=>{
+  let write:FilterUpdate|undefined;
+  const state=new DataFilterState({save:async(_board,_revision,update)=>{write=update;return {...envelope(2),filters:update.filters};}}),saved=envelope(1);
+  saved.filters.legacy={walletByUnit:{USD:{mode:'only',values:[]}},fundsByUnit:{USD:{mode:'include',values:[]}}};
+  state.open('u','b');state.accept(saved);state.toggle('projects','P',false);state.toggle('sources',{source:'s'},false);state.toggle('windows',['s','weekly'],false);
+  let notifications=0;const unsubscribe=state.subscribe(()=>{notifications++;});
+  state.reset(['sources','windows','wallet','funds'],'all');unsubscribe();
+  assert.equal(notifications,1);assert.deepEqual(state.get().current,{...defaultFilters(),projects:{mode:'exclude',values:['P']}});
+  await state.save();assert.deepEqual(write?.resets,{sources:'all',windows:'all',wallet:'all',funds:'all'});
+  assert.ok(write?.decisions?.every(decision=>decision.family==='projects'));
+});
+
 test('compact consumes saved defaults without changing the dashboard draft',()=>{
   const state=new DataFilterState({save:async()=>envelope(1)}),saved=envelope(1);
   state.open('u','b');state.accept(saved);state.toggle('projects','P',false);

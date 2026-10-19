@@ -8,8 +8,7 @@ import {QUOTA_WIDGETS, BUDGET_WIDGETS, ACTIVITY, SUBSCRIPTION_FUNDS} from '../..
 import {t, useLocale} from '../i18n';
 import {pan} from '../lib/pan';
 import {Popover} from './Popover';
-import {Segmented} from './Kit';
-import {DataFilterControls} from './DataFilters';
+import {DataFilterControls,FilterPopover,FilterSaveActions} from './DataFilters';
 
 const Arrow = ({back}: {back: boolean}) => (
   <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -144,21 +143,18 @@ export function AnalyticsHead({widgets, visible}: {widgets: string[]; visible: b
 
 function ViewingControls({widgets}: {widgets: string[]}) {
   const horizon = usePref('horizon');
+  const [horizonOpen,setHorizonOpen]=useState(false);
   const historyStart = useHistoryBegins();
   const charts = [ACTIVITY,...QUOTA_WIDGETS.filter(id=>id.endsWith('history')),...BUDGET_WIDGETS.filter(id=>id.endsWith('history')),SUBSCRIPTION_FUNDS].some(id=>widgets.includes(id));
   const horizonName = (value: typeof horizon) => value === 'auto' ? t('history.horizonAuto') : t('history.daysShort', {count: parseInt(value)});
   return (
     <div className="analytics-head-inner">
       <DataFilterControls/>
-      <div className="controls">
-        {charts && <Popover label={t('history.horizon')} trigger={<span className="period-name">{t('history.horizon')}: {horizonName(horizon)}<ChevronIcon /></span>}>
-          <div className="popover-section">
-            <div className="popover-title">{t('history.horizon')}</div>
-            <div className="popover-pad"><Segmented value={horizon} onChange={horizon => setPrefs({horizon})} options={HORIZONS.map(h => [h, horizonName(h)])} label={t('history.horizon')} /></div>
-          </div>
-        </Popover>}
-      </div>
+      {charts && <FilterPopover label="history.horizon" changed={horizon!=='auto'} onReset={()=>setPrefs({horizon:'auto'})} open={horizonOpen} onOpenChange={setHorizonOpen}>
+        {HORIZONS.map(value=><button type="button" key={value} className="popover-row" aria-pressed={horizon===value} onClick={()=>{setPrefs({horizon:value});setHorizonOpen(false);}}><i className={`check ${horizon===value?'on':''}`}/><span>{horizonName(value)}</span></button>)}
+      </FilterPopover>}
       <PeriodSwitch historyStart={historyStart} />
+      <FilterSaveActions/>
     </div>
   );
 }

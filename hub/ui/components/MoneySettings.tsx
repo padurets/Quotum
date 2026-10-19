@@ -1,6 +1,6 @@
 import {useDataFilters,dataFilters} from '../lib/dataFilters';
-import {walletRule,matchesWallet,type MoneyRef} from '../../server/domain/dataFilters';
-import {useEffect,useState} from 'react';
+import {filterRefKey,walletRule,matchesWallet,matchesSource,type MoneyRef} from '../../server/domain/dataFilters';
+import {useEffect,useRef,useState} from 'react';
 import {DEFAULT_CURRENCY,conversionOrigin} from '../../server/domain/currency';
 import {useBoardId,useCurrencyContext,type Named} from '../lib/board';
 import {ApiError,call} from '../lib/http';
@@ -14,97 +14,84 @@ import {withHidden,type Arrange} from '../lib/view';
 import {t} from '../i18n';
 import {ErrorLine} from './Kit';
 import {Popover,SwitchRow,SlidersIcon,HideRow} from './Popover';
-import {KEYS_PER_PAGE,KeyPages,KeyPageContent} from './KeyPages';
+import {KEYS_PER_PAGE} from './KeyPages';
 import type {KeyPage} from '../lib/moneyKeys';
 
-/** The chart and table edit the same reader selection beside their own measurements. */
-export function KeyMoneySettings({sources,hidden:_hidden,series}:{sources:readonly Named[];hidden:readonly string[];series:readonly MeterHistory[]}) {
-  const context=useCurrencyContext(),board=useBoardId(),moneyPrefs=usePref('money'),unit=moneyPrefs.unit??DEFAULT_CURRENCY;
-  const filters=useDataFilters().current;
-  const accounts=sources.filter(s=>budgetVisible(s)&&(unit===DEFAULT_CURRENCY?!!referenceBalance(s,context.target.id!==DEFAULT_CURRENCY||s.provider==='codex'):s.meters?.some(m=>m.kind==='balance'&&m.unit===unit)));
-  const [sourceId,setSource]=useState<string|null>(null);
-  const [loaded,setPage]=useState<KeyPage|null>(null),[after,setAfter]=useState<string|undefined>(),[back,setBack]=useState<(string|undefined)[]>([]),[error,setError]=useState<unknown>(null),[changed,setChanged]=useState(false);
-  const [loading,setLoading]=useState(true);
-  const [archivePage,setArchivePage]=useState(0);
-  const [membership,setMembership]=useState<{context:string;keys:string[]}|null>(null);
+/** Keys expand in place; additional batches preserve the rows already on screen. */
+export function KeyMoneySettings({sources,source:focused,hidden:_hidden,series,active=true}:{sources:readonly Named[];source?:Named;hidden:readonly string[];series:readonly MeterHistory[];active?:boolean}) {
+  const context=useCurrencyContext(),board=useBoardId(),unit=usePref('money').unit??DEFAULT_CURRENCY,filters=useDataFilters().current;
+  const balance=(s:Named)=>unit===DEFAULT_CURRENCY?referenceBalance(s,context.target.id!==DEFAULT_CURRENCY||s.provider==='codex')?.total:s.meters?.find(m=>m.kind==='balance'&&m.unit===unit&&balanceDescriptor(s.provider,m.id)?.role==='total');
+  const accounts=sources.filter(s=>budgetVisible(s)&&!!balance(s));
   const rule=filters&&walletRule(filters,unit);
-  const preview:MoneyRef[]=accounts.flatMap(source=>[{source:source.id,kind:'balance' as const},...(source.keys??[]).slice(0,5).filter(key=>source.meters?.some(m=>m.id===`key:${key.id}:cap`)).map(key=>({source:source.id,kind:'keyCap' as const,key:key.id}))]);
-  const logical=rule?(rule.mode==='only'?rule.values:[...rule.include,...preview]).filter(ref=>matchesWallet(rule,ref,preview.some(other=>JSON.stringify(other)===JSON.stringify(ref)))):[];
+  const preview:MoneyRef[]=accounts.filter(source=>!filters||matchesSource(filters,source.id)).flatMap(source=>[{source:source.id,kind:'balance' as const},...(source.keys??[]).slice(0,5).filter(key=>source.meters?.some(m=>m.id===`key:${key.id}:cap`)).map(key=>({source:source.id,kind:'keyCap' as const,key:key.id}))]);
+  const logical=rule?[...new Map((rule.mode==='only'?rule.values:[...rule.include,...preview]).filter(ref=>(!filters||matchesSource(filters,ref.source))&&matchesWallet(rule,ref,preview.some(other=>filterRefKey(other)===filterRefKey(ref)))).map(ref=>[filterRefKey(ref),ref])).values()]:[];
   const selected:[string,string][]=logical.map(ref=>[ref.source,ref.kind==='balance'?'balance':`key:${ref.key}:cap`]);
-  const source=accounts.find(s=>s.id===sourceId);
+  const source=focused??accounts.find(source=>source.keysCount||selected.some(([id,meter])=>id===source.id&&keyMeter(meter))),sourceId=source?.id;
+  const [keysOpen,setKeysOpen]=useState(false),[batches,setBatches]=useState(1),[error,setError]=useState<unknown>(null),[changed,setChanged]=useState(false),[loading,setLoading]=useState(false);
+  const identity=JSON.stringify([board,sourceId,source?.successAt]);
+  const scope=JSON.stringify([board,sourceId]);
+  const cache=useRef<{identity:string;pages:KeyPage[]}>({identity:'',pages:[]});
+  const [loaded,setLoaded]=useState<{identity:string;scope:string;page:KeyPage}|null>(null);
   const inCard=source?.keysCount===source?.keys?.length&&!!source?.keys;
-  const page:KeyPage|null=inCard?{keys:source!.keys!,meters:source!.meters??[],total:source!.keysCount!,inventory:source!.inventory,next:null}:loaded;
-  const selectedKeys=JSON.stringify([...new Set(selected.filter(([id])=>id===sourceId).map(([,m])=>keyMeter(m)?.[1]).filter((id):id is string=>!!id))].sort());
-  const membershipContext=JSON.stringify([board,sourceId,source?.successAt,selectedKeys]);
+  const page:KeyPage|null=inCard?{keys:source!.keys!,meters:source!.meters??[],total:source!.keysCount!,inventory:source!.inventory,next:null}:loaded?.scope===scope?loaded.page:null;
+  const stale=!inCard&&!!page&&loaded?.identity!==identity;
+  const selectedKeys=JSON.stringify([...new Set(selected.filter(([id])=>id===sourceId).flatMap(([,meter])=>keyMeter(meter)?.[1]??[]))].sort());
+  const membershipContext=JSON.stringify([identity,selectedKeys]);
+  const [membership,setMembership]=useState<{context:string;keys:string[]}|null>(null);
   useEffect(()=>{
-    const ids:string[]=JSON.parse(selectedKeys);
-    if(!board||!sourceId||inCard||!ids.length)return;
+    if(!active||!keysOpen||!board||!sourceId||inCard||selectedKeys==='[]'||membership?.context===membershipContext)return;
     let live=true;
     call<KeyPage>('GET',`/api/boards/${encodeURIComponent(board)}/sources/${encodeURIComponent(sourceId)}/keys?ids=${encodeURIComponent(selectedKeys)}`)
-      .then(reply=>{if(live)setMembership({context:membershipContext,keys:reply.keys.map(k=>k.id)});},failure=>{if(live)setError(failure);});
+      .then(reply=>{if(live)setMembership({context:membershipContext,keys:reply.keys.map(key=>key.id)});},failure=>{if(live)setError(failure);});
     return()=>{live=false;};
-  },[board,sourceId,inCard,selectedKeys,membershipContext]);
+  },[active,keysOpen,board,sourceId,inCard,selectedKeys,membershipContext,membership?.context]);
   useEffect(()=>{
-    if(!sourceId||!board||inCard)return;
-    setLoading(true);
-    let live=true;
-    call<KeyPage>('GET',`/api/boards/${encodeURIComponent(board)}/sources/${encodeURIComponent(sourceId)}/keys?limit=${KEYS_PER_PAGE}${after?'&after='+encodeURIComponent(after):''}`)
-      .then(reply=>{if(live){setPage(reply);setError(null);setLoading(false);}},failure=>{
+    if(!active||!keysOpen||!sourceId||!board||inCard)return;
+    let live=true;setLoading(true);
+    const read=async(retry=false):Promise<void>=>{
+      const pages=cache.current.identity===identity?[...cache.current.pages]:[];
+      try{
+        for(let index=pages.length;index<batches&&(index===0||pages[index-1].next);index++){
+          const after=pages[index-1]?.next;
+          const reply=await call<KeyPage>('GET',`/api/boards/${encodeURIComponent(board)}/sources/${encodeURIComponent(sourceId)}/keys?limit=${KEYS_PER_PAGE}${after?'&after='+encodeURIComponent(after):''}`);
+          if(!live)return;pages.push(reply);
+        }
         if(!live)return;
-        setLoading(false);setPage(null);
-        if(failure instanceof ApiError&&failure.code==='keys_changed'){setChanged(true);setBack([]);setAfter(undefined);}else setError(failure);
-      });
-    return()=>{live=false;};
-  },[board,sourceId,after,inCard,source?.successAt]);
-  const choose=(id:string)=>{setSource(id);setPage(null);setLoading(true);setAfter(undefined);setBack([]);setArchivePage(0);setError(null);setChanged(false);};
+        cache.current={identity,pages};
+        const last=pages.at(-1)!;setLoaded({identity,scope,page:{...last,keys:pages.flatMap(page=>page.keys),meters:pages.flatMap(page=>page.meters)}});setError(null);setLoading(false);
+      }catch(failure){
+        if(!live)return;
+        if(!retry&&failure instanceof ApiError&&failure.code==='keys_changed'){cache.current={identity:'',pages:[]};setChanged(true);await read(true);}
+        else{setError(failure);setLoading(false);}
+      }
+    };
+    void read();return()=>{live=false;};
+  },[active,keysOpen,board,sourceId,inCard,identity,scope,batches]);
   const has=(id:string,meter:string)=>selected.some(([s,m])=>s===id&&(!keyMeter(meter)&&!keyMeter(m)||(conversionOrigin(m)?.meter??m)===(conversionOrigin(meter)?.meter??meter)));
   const toggle=(id:string,meters:string[],on:boolean)=>{
     for(const meter of meters){const key=keyMeter(meter),ref:MoneyRef=key?{source:id,kind:'keyCap',key:key[1]}:{source:id,kind:'balance'};
-      dataFilters.toggle('wallet',ref,on,unit,preview.some(other=>JSON.stringify(other)===JSON.stringify(ref)));}
+      dataFilters.toggle('wallet',ref,on,unit,preview.some(other=>filterRefKey(other)===filterRefKey(ref)));}
   };
-  const row=(id:string,meters:string[],label:string,unavailable=false,value?:string,slot=false,key=meters.join(':'))=>{
+  const row=(id:string,meters:string[],label:string,unavailable=false,value?:string,key=meters.join(':'),slot=false)=>{
     const on=meters.some(meter=>has(id,meter)),extra=meters.filter(meter=>!has(id,meter)).length;
-    return <SwitchRow key={key} className={slot?'key-slot':undefined} on={on} value={value} disabled={!on&&(unavailable||selected.length+extra>MAX_METERS)} onChange={next=>toggle(id,meters,next)}>{label}</SwitchRow>;
+    return <SwitchRow key={key} className={slot?'key-slot':undefined} on={on} value={value} disabled={loading||stale||!on&&(unavailable||selected.length+extra>MAX_METERS)} onChange={next=>toggle(id,meters,next)}>{label}</SwitchRow>;
   };
   const membershipReady=inCard||selectedKeys==='[]'||membership?.context===membershipContext;
-  const current=new Set(inCard?source?.keys?.map(k=>k.id):membership?.context===membershipContext?membership.keys:[]);
+  const current=new Set(inCard?source?.keys?.map(key=>key.id):membership?.context===membershipContext?membership.keys:[]);
   const archived=source&&membershipReady?archivedKeyGroups(source.id,selected,current,series):[];
-  const free=KEYS_PER_PAGE-(page?.keys.length??0),extraPages=Math.ceil(Math.max(0,archived.length-free)/KEYS_PER_PAGE);
-  const archivalIndex=Math.min(archivePage,extraPages);
-  const archivedStart=archivalIndex?free+(archivalIndex-1)*KEYS_PER_PAGE:0;
-  const archivedShown=page&&!page.next?archived.slice(archivedStart,archivedStart+(archivalIndex?KEYS_PER_PAGE:free)):[];
-  const total=(page?.total??source?.keysCount??0)+archived.length;
-  const busy=!inCard&&loading;
-  useEffect(()=>{if(archivePage>extraPages)setArchivePage(extraPages);},[archivePage,extraPages]);
-  const balance=(s:Named)=>unit===DEFAULT_CURRENCY?referenceBalance(s,context.target.id!==DEFAULT_CURRENCY||s.provider==='codex')?.total:s.meters?.find(m=>m.kind==='balance'&&m.unit===unit&&balanceDescriptor(s.provider,m.id)?.role==='total');
-  const keyRow=(id:string,label:string,meters:string[],archived=false)=>{
-    return row(source!.id,meters,label,archived||!meters.length,archived?t('money.archived'):!meters.length?t('money.noCap'):undefined,true,id);
-  };
+  const keyRow=(id:string,label:string,meters:string[],archived=false)=>row(source!.id,meters,label,archived||!meters.length,archived?t('money.archived'):!meters.length?t('money.noCap'):undefined,id,true);
   return <>
-    <p className="popover-note">{selected.length} / {MAX_METERS}</p>
-    {source?<>
-      <button className="popover-row" onClick={()=>setSource(null)}><span>← {t('money.accounts')}</span></button>
-      <div className="popover-title">{source.title}</div>
+    {(focused?[focused]:accounts).map(source=>balance(source)&&row(source.id,[balance(source)!.id],focused?t('money.balance'):source.title??source.id))}
+    {source&&(!!source.keysCount||selectedKeys!=='[]'||!!archived.length)&&<details className="filter-key-details" open={keysOpen} onToggle={event=>setKeysOpen(event.currentTarget.open)}>
+      <summary className="link-button">{t('money.keySeries',{count:source.keysCount??0})}</summary>
       <ErrorLine error={error}/>
       {changed&&<p className="popover-note">{t('money.changed')}</p>}
       {(page?.inventory??source.inventory)?.complete===false&&<p className="popover-note">{t('money.inventoryPartial')}</p>}
-      <KeyPageContent key={source.id} loading={busy} rows={Math.min(KEYS_PER_PAGE,total)}>
-        {page&&<>
-          {!archivalIndex&&page.keys.map(part=>keyRow(part.id,keyName(part),[`key:${part.id}:cap`].filter(id=>page.meters.some(m=>m.unit===unit&&m.id===id)||has(source.id,id))))}
-          {archivedShown.map(group=>keyRow(group.id,group.label,[group.cap],true))}
-        </>}
-      </KeyPageContent>
-      {(total>KEYS_PER_PAGE||!!page?.next||back.length>0||!!archivalIndex)&&<KeyPages page={back.length+archivalIndex+1} pages={Math.ceil(total/KEYS_PER_PAGE)} previous={!!back.length||!!archivalIndex} next={!!page?.next||archivalIndex<extraPages}
-        loading={busy}
-        onPrevious={()=>{if(archivalIndex){setArchivePage(archivalIndex-1);return;}setLoading(true);setAfter(back.at(-1));setBack(back.slice(0,-1));}}
-        onNext={()=>{if(page?.next){setLoading(true);setBack([...back,after]);setAfter(page.next);}else setArchivePage(archivalIndex+1);}}/>}
-    </>:<>
-      <div>{accounts.map(s=><div key={s.id} className="popover-section">
-        {balance(s)&&row(s.id,[balance(s)!.id],s.title??s.id)}
-        {!!s.keysCount&&<button className="popover-row" onClick={()=>choose(s.id)}><span>{t('money.keySeries',{count:s.keysCount})}</span><b>›</b></button>}
-        {!s.keysCount&&selected.some(([id,m])=>id===s.id&&keyMeter(m))&&<button className="popover-row" onClick={()=>choose(s.id)}><span>{t('money.selectedDetails')}</span><b>›</b></button>}
-      </div>)}</div>
-    </>}
+      {page?.keys.map(part=>keyRow(part.id,keyName(part),[`key:${part.id}:cap`].filter(id=>page.meters.some(meter=>meter.unit===unit&&meter.id===id)||has(source.id,id))))}
+      {archived.map(group=>keyRow(group.id,group.label,[group.cap],true))}
+      {loading&&!page&&<p className="popover-note">{t('desktop.loading')}</p>}
+      {page?.next&&<button type="button" className="popover-row filter-load-more" disabled={loading} aria-busy={loading} onClick={()=>setBatches(batches+1)}>{t('common.more')}</button>}
+    </details>}
   </>;
 }
 

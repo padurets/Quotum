@@ -73,17 +73,15 @@ export class DataFilterState {
     const decision={family,ref,included} as FilterDecision;e.decisions.set(family+':'+filterRefKey(ref),{value:decision,seq});
     if(!this.update(e,current)){e.resets=previous.resets;e.decisions=previous.decisions;e.materialize=previous.materialize;}
   }
-  reset(family:FilterFamily,mode:'all'|'none'){
+  reset(family:FilterFamily|readonly FilterFamily[],mode:'all'|'none'){
     const e=this.entry();if(!e?.current)return;
     const previous={resets:{...e.resets},decisions:new Map(e.decisions),materialize:{...e.materialize}};
-    e.resets[family]={value:mode,seq:++e.seq};delete e.materialize[family as 'wallet'|'funds'];for(const [key,intent] of e.decisions)if(intent.value.family===family)e.decisions.delete(key);
-    if(!this.update(e,resetFilter(e.current,family,mode))){e.resets=previous.resets;e.decisions=previous.decisions;e.materialize=previous.materialize;}
-  }
-  mode(family:'projects'|'devices'|'clients',mode:'include'|'exclude'){
-    const e=this.entry();if(!e?.current)return;
-    const current=structuredClone(e.current);current[family].mode=mode;
-    for(const [key,intent] of e.decisions)if(intent.value.family===family){const listed=current[family].values.some(ref=>filterRefKey(ref)===filterRefKey(intent.value.ref));e.decisions.set(key,{seq:++e.seq,value:{...intent.value,included:listed===(mode==='include')}});}
-    e.seq++;this.update(e,current);
+    let current=e.current;
+    for(const part of typeof family==='string'?[family]:family){
+      e.resets[part]={value:mode,seq:++e.seq};delete e.materialize[part as 'wallet'|'funds'];for(const [key,intent] of e.decisions)if(intent.value.family===part)e.decisions.delete(key);
+      current=resetFilter(current,part,mode);
+    }
+    if(!this.update(e,current)){e.resets=previous.resets;e.decisions=previous.decisions;e.materialize=previous.materialize;}
   }
   restore(){const e=this.entry();if(!e?.saved)return;e.conflicts=0;e.resets={};e.decisions.clear();e.materialize={};e.originRevision=e.saved.revision;this.update(e,e.saved.filters);}
   async save(){

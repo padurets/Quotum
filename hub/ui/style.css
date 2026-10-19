@@ -100,7 +100,7 @@ main { max-width: var(--page-width); margin: 0 auto; padding: 28px 28px 56px; di
 /* Shared viewing controls extend the header's glass below its navigation. */
 .analytics-head { position: sticky; top: 60px; z-index: 5; }
 .analytics-head::before { content: ''; position: absolute; top: 0; inset-inline: 28px; height: 1px; background: var(--hair-2); }
-.analytics-head-inner { max-width: var(--page-width); min-height: 56px; margin: 0 auto; padding: 10px 28px; display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
+.analytics-head-inner { max-width: var(--page-width); min-height: 56px; margin: 0 auto; padding: 10px 28px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 /* Once there is room beside the content, the glass shares its width and rounds only its lower edge. */
 @media (min-width: 1280px) {
   .board-bar { max-width: var(--page-width); margin-inline: auto; border-radius: 0 0 16px 16px; }
@@ -1239,9 +1239,27 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .multiline { white-space: pre-line; }
 .period-status { display: flex; flex-wrap: wrap; gap: .4rem .8rem; color: var(--muted); font-size: .8rem; }
 
-.data-filter-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.filter-save-actions { display: inline-flex; align-items: center; gap: 4px; }
+.data-filter-controls { display: contents; }
+.filter-control, .filter-trigger { display: inline-flex; align-items: center; gap: 6px; }
+.filter-control { flex: 0 0 auto; gap: 0; }
+.filter-count { padding: 1px 5px; border-radius: 5px; background: var(--hair-2); font-size: 10px; line-height: 16px; font-variant-numeric: tabular-nums; }
+.filter-changed { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); }
+.filter-control .filter-reset { width: 22px; height: 26px; padding: 4px; color: var(--text-3); }
+.filter-save-actions { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
 .filter-save-actions .icon-button { width: 26px; height: 26px; padding: 5px; flex: 0 0 26px; }
 .filter-save-actions .icon-button svg { width: 16px; height: 16px; }
-.filter-family-actions { display: flex; flex-direction: column; }
 .filter-options { min-width: 0; }
+.filter-resource { position: relative; }
+.filter-resource .filter-resource-toggle { position: absolute; top: 0; right: 27px; width: 34px; padding: 9px 4px; z-index: 1; }
+.filter-resource-toggle > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.filter-resource-heading { min-height: 34px; padding-right: 64px; gap: 8px; }
+summary.filter-resource-heading { cursor: pointer; list-style: none; }
+summary.filter-resource-heading::-webkit-details-marker { display: none; }
+.filter-resource-heading img { width: 16px; height: 16px; flex: 0 0 16px; object-fit: contain; }
+.filter-resource-heading > svg { position: absolute; right: 9px; top: 10px; color: var(--text-3); }
+.filter-resource details[open] > summary > svg { transform: rotate(180deg); }
+.filter-resource.is-off .filter-resource-heading { color: var(--text-4); cursor: default; }
+.filter-resource-items { margin-left: 20px; padding-bottom: 6px; border-left: 1px solid var(--hair); }
+.filter-key-details { padding: 6px 0 0 8px; }
+.filter-key-details > summary { font-size: 12px; color: var(--text-3); cursor: pointer; }
+.filter-key-details[open] > summary { margin-bottom: 6px; }

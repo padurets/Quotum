@@ -22,7 +22,7 @@ import type {Meter} from '../../server/domain/meters';
 
 type Node={type:unknown;props:Record<string,unknown>;key?:string};
 const component=(name:string)=>({name});
-const pages=component('pages'),content=component('content'),switchRow=component('switch');
+const switchRow=component('switch');
 const nodes=(value:unknown):Node[]=>Array.isArray(value)?value.flatMap(nodes):value&&typeof value==='object'&&'props' in value?[value as Node,...nodes((value as Node).props.children)]:[];
 const flush=async()=>{for(let i=0;i<10;i++)await Promise.resolve();};
 const meter=(id:string,amount='1'):Meter=>({id,amount,kind:id.endsWith(':cap')?'cap':'balance',unit:'USD',at:1,staleAfterMs:1000,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null});
@@ -46,7 +46,7 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
   const context={exports:{} as {KeyMoneySettings:(props:{sources:Named[];hidden:string[];series:[]})=>Node},require:(name:string)=>{
     if(name==='../../server/domain/dataFilters')return filterModel;
     if(name.endsWith('/dataFilters'))return {useDataFilters:state.get,dataFilters:state};
-    if(name==='react')return {useState:hooks.useState,useEffect:hooks.useLayoutEffect};
+    if(name==='react')return {useState:hooks.useState,useRef:hooks.useRef,useEffect:hooks.useLayoutEffect};
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),jsxs:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),Fragment:'fragment'};
     if(name.endsWith('/board'))return {useBoardId:()=> 'b',useCurrencyContext:()=>budget?.context??defaultCurrencyContext};
     if(name.endsWith('/http'))return {ApiError,call};
@@ -59,7 +59,7 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
     if(name.endsWith('/view'))return {};
     if(name.endsWith('/i18n'))return {t:(key:string)=>key};
     if(name==='./Popover')return {SwitchRow:switchRow};
-    if(name==='./KeyPages')return {KEYS_PER_PAGE:10,KeyPages:pages,KeyPageContent:content};
+    if(name==='./KeyPages')return {KEYS_PER_PAGE:10};
     if(name==='./Kit')return {ErrorLine:component('error')};
     throw new Error(name);
   }};
@@ -67,10 +67,12 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
   let tree:Node;
   const render=()=>{hooks.begin();tree=context.exports.KeyMoneySettings({sources:[source,...budget?.others??[]],hidden:[],series:[]});hooks.commit();return nodes(tree);};
   const settle=async()=>{render();await flush();return render();};
-  const pager=()=>nodes(tree).find(n=>n.type===pages)!.props as {page:number;pages:number;next:boolean;previous:boolean;loading:boolean;onNext:()=>void;onPrevious:()=>void};
+  const more=()=>nodes(tree).find(n=>n.type==='button'&&n.props.className==='popover-row filter-load-more');
   const slots=()=>nodes(tree).filter(n=>typeof n.props.className==='string'&&n.props.className.includes('key-slot'));
-  const openKeys=async()=>{const button=nodes(tree).find(n=>n.type==='button'&&nodes(n).some(child=>child.props.children==='money.keySeries'));assert.ok(button);(button.props.onClick as ()=>void)();await settle();};
-  return {settle,render,pager,slots,reads,openKeys,selection:()=>moneySelection([source],[],prefs.money,budget?.context).selection,switches:()=>nodes(tree).filter(n=>n.type===switchRow),refresh:()=>{revision++;source={...source,successAt:revision};}};
+  const keys=()=>nodes(tree).find(n=>n.type==='details'&&n.props.className==='filter-key-details');
+  const openKeys=async(open=true)=>{const details=keys();assert.ok(details);(details.props.onToggle as (event:unknown)=>void)({currentTarget:{open}});await settle();};
+  const loadMore=async()=>{const button=more();assert.ok(button);(button.props.onClick as ()=>void)();await settle();};
+  return {settle,render,more,keys,slots,reads,openKeys,loadMore,selection:()=>moneySelection([source],[],prefs.money,budget?.context).selection,switches:()=>nodes(tree).filter(n=>n.type===switchRow),refresh:()=>{revision++;source={...source,successAt:revision};}};
 }
 
 test('native and converted balance-only sources have balance switches without archived key controls',async t=>{
@@ -94,30 +96,30 @@ test('native and converted balance-only sources have balance switches without ar
   assert.equal(multiple.switches().length,2);assert.equal(multiple.render().some(n=>n.props.children==='money.selectedDetails'),false);
 });
 
-test('the real settings keep ten slots when a selected live key moves off page',async()=>{
+test('loading more keys appends rows without replacing a selected live key',async()=>{
   const f=fixture();await f.settle();await f.openKeys();
   const usage=f.switches().find(n=>n.key==='0')!;
   (usage.props.onChange as (on:boolean)=>void)(true);await f.settle();
   assert.ok(f.selection()!.ids.some(([,meter])=>meter==='key:0:cap'));
   assert.ok(!f.selection()!.ids.some(([,meter])=>meter==='key:0:usage'));
-  f.pager().onNext();await f.settle();
-  assert.equal(f.slots().length,10);assert.equal(f.pager().page,2);assert.equal(f.pager().pages,2);
-  assert.equal(f.switches().some(n=>n.key==='0'),false);
+  const before=f.reads.length;await f.loadMore();
+  assert.equal(f.slots().length,20);assert.equal(f.more(),undefined);
+  assert.equal(f.switches().some(n=>n.key==='0'),true);
+  assert.equal(f.reads.length,before+1,'only the new batch is read');
+  const loaded=f.reads.length;await f.openKeys(false);await f.openKeys();assert.equal(f.reads.length,loaded,'reopening the disclosure reuses its rows');
 });
 
-test('selected archived scales use the same pages and remain removable',async()=>{
+test('selected archived scales remain removable beside the live key list',async()=>{
   const f=fixture([['s','key:gone:usage'],['s','key:gone:cap']]);await f.settle();await f.openKeys();
-  assert.equal(f.pager().pages,3);f.pager().onNext();await f.settle();
-  assert.equal(f.slots().length,10);f.pager().onNext();await f.settle();
-  assert.equal(f.slots().length,1);assert.equal(f.pager().page,3);assert.equal(f.pager().loading,false);
+  assert.equal(f.slots().length,11);await f.loadMore();assert.equal(f.slots().length,21);
   const row=f.switches().find(n=>n.key==='gone')!;assert.equal(row.props.disabled,false);(row.props.onChange as (on:boolean)=>void)(false);await f.settle();assert.ok(!f.selection()!.ids.some(([,meter])=>meter.startsWith('key:gone:')));
-  assert.equal(f.pager().pages,2);assert.equal(f.slots().length,10);
+  assert.equal(f.slots().length,20);assert.equal(f.more(),undefined);
 });
 
-test('an open settings page reloads its names and caps on a successful source update',async()=>{
-  const f=fixture();await f.settle();await f.openKeys();f.pager().onNext();await f.settle();
+test('an expanded key list refreshes names and caps without losing the loaded range',async()=>{
+  const f=fixture();await f.settle();await f.openKeys();await f.loadMore();
   const before=f.reads.length;f.refresh();await f.settle();
-  assert.equal(f.reads.length,before+1);assert.equal(f.pager().page,2);
+  assert.equal(f.reads.length,before+2);assert.equal(f.slots().length,20);
   assert.ok(f.slots().every(n=>n.props.children===`Key ${Number(n.key)} revision 2`));
   const key=f.switches().find(n=>n.key==='10')!;assert.equal(key.props.disabled,true,'usage without a reported cap is not a balance choice');
   assert.equal(key.props.value,'money.noCap');

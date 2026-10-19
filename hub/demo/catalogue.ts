@@ -1675,10 +1675,12 @@ const dataFilters:DemoSet={...SESSION_ANALYTICS,id:'filters',about:'Populated mi
     on:{ana:entry.on!.ana,team:entry.on!.ana},
   }:entry),
   {kind:'board',id:'team',name:'Filter playground',owner:'ana',members:['boris','ben'],agents:true,agentsColumns:['client','subscription','active','concurrency'],agentsPlace:{x:0,y:0,w:6,h:12},
-    expect:[{state:'widgets'}],look:['Opens with all projects, devices and clients selected, four native subscriptions, wallets, key caps and subscription funds. Search among more than fifty projects; compare client, device and resource combinations across sessions and analytics.']},
+    expect:[{state:'widgets'}],look:['Opens with all projects, devices and clients selected, four native subscriptions, wallets, key caps and subscription funds. Search among more than fifty projects; compare client, device and resource combinations across sessions and analytics.',
+      'Each filter shows only its name, a minus-count tag for excluded values and a cross to show all again. There are no All/Clear actions or include/exclude mode fields. Save and Restore stay at the right end of the complete row, after the period controls; Horizon uses the same dropdown style.',
+      'Resources have small provider logos and inline disclosures. Turning a resource off hides its child choices and turning it back on preserves them. Wallet keys expand in place; Load more appends rows without a nested screen, Back action or page replacement. Test EN/RU at 320/390/1440 px.']},
   ...activity.entries.filter(entry=>entry.kind!=='person').map(entry=>entry.kind==='board'?{...entry,name:'Empty project selection',members:['ben'],filterProjects:{mode:'include' as const,values:[]},expect:[{state:'widgets' as const}],look:[
     'The saved Projects selection is empty. Agent sessions and activity are empty; subscription measurements and estimates remain available.',
-    'At 320/390/1440 px in EN/RU, open Projects, search and choose All; Restore returns to the empty defaults. Save and Restore use 26 px icon buttons. Ben can explore the same filters and cannot save opening defaults.',
+    'At 320/390/1440 px in EN/RU, use the Projects cross to show all; Restore returns to the empty defaults. Search narrows the available switches and the minus-count describes the exclusions. Save and Restore use 26 px icon buttons at the right end of the row. Ben can explore the same filters and cannot save opening defaults.',
   ]}:entry.kind==='card'?{...entry,on:{compact:entry.on!.compact}}:entry),
   {kind:'person',id:'ben',name:'Ben',expect:[{state:'onboarding'}]},
 ]};
