@@ -1990,7 +1990,9 @@ abort or reversal; entering them restores the allowance. A disjoint jump inside 
 held tile also reads the minimum unknown or stale bridge to its retained interval,
 without rereading its fresh component. Empty tiles have no head to fill. At most
 one foreground per resource family and one purely speculative flight overall share
-the two aggregate slots; foreground requests take priority; the final
+the two aggregate slots. A coalesced response retains its borrowed drawing slots until
+its HTTP read and recipient preparation settle, including after that drawing is cancelled.
+Foreground requests take priority; the final
 range uses the same batching without a buffer. Writes to the same tile are
 serialized, obsolete requests are aborted and speculative errors cannot drop the
 selection. The existing 15 MiB tile estimate protects the visible frame. On release,

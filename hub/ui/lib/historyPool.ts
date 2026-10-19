@@ -9,6 +9,7 @@ export class HistoryPool {
   private readonly active = new Map<Flight, Waiting>();
   private readonly waiting: Waiting[] = [];
   private readonly reservations = new Map<Flight, number>();
+  private readonly retained = new Map<Flight, {count:number;released:boolean}>();
   private scheduled = false;
 
   constructor(readonly budget = 15 * 1024 * 1024) {}
@@ -17,11 +18,27 @@ export class HistoryPool {
   get estimatedBytes() {return [...this.members].reduce((n, member) => n + member.estimatedBytes, 0) + [...this.reservations.values()].reduce((a,b) => a+b, 0);}
   isActive(flight: Flight) {return this.active.has(flight);}
 
+  /** A shared HTTP response can outlive the drawing that supplied its slot. */
+  retain(flight:Flight) {
+    if(!this.active.has(flight))return ()=>{};
+    const held=this.retained.get(flight)??{count:0,released:false};
+    this.retained.set(flight,held);held.count++;
+    let released=false;
+    return ()=>{
+      if(released)return;released=true;
+      if(--held.count)return;
+      this.retained.delete(flight);
+      if(held.released)this.release(flight);
+    };
+  }
+
   request(owner: HistoryMember, flight: Flight, start: () => void, cancel: () => void) {
     this.waiting.push({owner, flight, start, cancel}); this.schedule();
   }
   release(flight: Flight) {
-    this.active.delete(flight); this.reservations.delete(flight);
+    const held=this.retained.get(flight);
+    if(held)held.released=true;else this.active.delete(flight);
+    this.reservations.delete(flight);
     const index = this.waiting.findIndex(item => item.flight === flight);
     if (index !== -1) this.waiting.splice(index, 1);
     this.schedule();

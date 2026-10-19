@@ -32,7 +32,7 @@ export type HistoryEnv = {
   clock?:PageClock;
   /** Budget work may live outside this reader; quota history also owns activity. */
   workInPresentation?:boolean;
-  read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection, meta?: HistoryBasis, activityOnly?:boolean): Promise<HistoryAnswer>;
+  read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection, meta?: HistoryBasis, activityOnly?:boolean,retainSlot?:()=>()=>void): Promise<HistoryAnswer>;
   now(): number;
   /** Elapsed time stays independent of corrections to the estimated hub clock. */
   elapsedNow?(): number;
@@ -784,7 +784,7 @@ export class HistoryStore {
       if(flight.controller.signal.aborted||flight.epoch!==this.epoch){this.abort(flight);return;}
       if(flight.activityOnly&&!this.nativeFull(target.cell,from,to))flight.activityOnly=false;
       flight.startedAt=this.elapsedNow();
-      this.env.read(board, target.cell, from, to, flight.controller.signal, meters, meta,flight.activityOnly).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
+      this.env.read(board, target.cell, from, to, flight.controller.signal, meters, meta,flight.activityOnly,this.pool?()=>this.pool!.retain(flight):undefined).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
     };
     if(this.pool)this.pool.request(this,flight,start,()=>this.abort(flight));else start();
   }
@@ -1057,7 +1057,7 @@ export {historyPool} from './historyPool';
 function reader(scope: HistoryScope, family: MoneyFamily = 'budget') {
   const value=new HistoryStore({
     workInPresentation:scope!=='budget',
-    read: (_board, cell, from, to, signal, meters, meta,activityOnly) => boardPeriod.transport.read(family==='funds'?'funds':scope,{cell:String(cell),from:String(from),to:String(to),...(pan.get()?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{...(meters.sources?{sources:JSON.stringify(meters.sources)}:{}),unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})},signal,activityOnly).then(reply=>expandHistory(reply,meta)),
+    read: (_board, cell, from, to, signal, meters, meta,activityOnly,retainSlot) => boardPeriod.transport.read(family==='funds'?'funds':scope,{cell:String(cell),from:String(from),to:String(to),...(pan.get()?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{...(meters.sources?{sources:JSON.stringify(meters.sources)}:{}),unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})},signal,activityOnly,retainSlot).then(reply=>expandHistory(reply,meta)),
     now: hubNow,
     setTimeout: (run, ms) => setTimeout(run, ms),
     clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
