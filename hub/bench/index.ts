@@ -38,7 +38,7 @@ import {creditSnapshot} from './credits.js';
 import {dotChangesAt,dotOf,FADE_FOR,PULSE_FOR} from '../ui/lib/quota.js';
 import {observeReversal} from './reversalDiagnostic.js';
 import {reloadHubProbe} from './panningReload.js';
-import {traceIdle} from './idleTiming.js';
+import {timeIdle,traceIdle,idleTimingVersion} from './idleTiming.js';
 import {IdleCpuDiagnostic,sourceIdentity,idleBoundaryProfile,retirementReadScript,gridSnapshotScript} from './idleCpuDiagnostic.js';
 import {idleRetentionScript,idleRetentionProblems,type IdleRetention} from './idleRetention.js';
 import {preparationOwnersScript} from './preparationOwners.js';
@@ -356,8 +356,8 @@ async function main() {
       const calendar=heard!.calendar();
       const idle = {from, to, cellMs, requests, events:boardEvents, calendar, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
       evidence.save('idle', {...idle, allEvents:events, boardEvents, deviceContacts, deviceHints, planned, phase, retentionBefore,retentionAfter,counterFrom, counterTo, actualSeconds, phaseProblems,
-        performance:{before:{Timestamp:before.Timestamp??null,ScriptDuration:before.ScriptDuration??null},
-          after:{Timestamp:after.Timestamp??null,ScriptDuration:after.ScriptDuration??null},instrumentMs:reading.instrumentMs}});
+        performance:{before:{Timestamp:before.Timestamp??null,ScriptDuration:before.ScriptDuration??null,ThreadTime:before.ThreadTime??null},
+          after:{Timestamp:after.Timestamp??null,ScriptDuration:after.ScriptDuration??null,ThreadTime:after.ThreadTime??null},instrumentMs:reading.instrumentMs}});
       if (idleTimingDiagnostic || idleCpu || shortIdleProfile) {
         originalIdleTimingProblems = [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
         evidence.save(idleCpuMode?'idle-cpu-result':'idle-timing-result', {mode: 'diagnostic', problems: originalIdleTimingProblems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
@@ -366,9 +366,17 @@ async function main() {
       return {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo,retentionBefore};
     };
     let routingStatus:string|undefined;
+    let routingClockComplete=false,routingVersionComplete=false;
     const observedIdle=async()=>{
       if(!idleTimingDiagnostic)return readIdle();
-      const result=await observePreparations(()=>idleRoutingDiagnostic?readIdle():traceIdle(cdp,browser!,readIdle,evidence),cdp,evidence,
+      const timed=()=>timeIdle(cdp,browser!,readIdle,{save:(name,value)=>{
+        evidence.save(name,value);
+        if(name==='idle-timing'){
+          const receipt=value as {status?:string;measurement?:{status?:string}};
+          routingClockComplete=receipt.status==='complete'&&receipt.measurement?.status==='complete';
+        }
+      }});
+      const result=await observePreparations(()=>idleRoutingDiagnostic?timed():traceIdle(cdp,browser!,readIdle,evidence),cdp,evidence,
         idleRoutingDiagnostic?'idle-retirement-routes':'idle-preparation-owners',owner.signal);
       if(idleRoutingDiagnostic)routingStatus=result.status;
       return result.reading;
@@ -398,12 +406,14 @@ async function main() {
       await finish(diagnosticProblems.length||edge.status!=='complete'?1:0);return;
     }
     if (idleTimingDiagnostic) {
-      if(idleRoutingDiagnostic)owner.signal.throwIfAborted();
+      if(idleRoutingDiagnostic){owner.signal.throwIfAborted();routingVersionComplete=await idleTimingVersion(cdp,browser!,evidence);owner.signal.throwIfAborted();}
       if (idleBinding) await idleBinding.afterFamily([1]);
       const originalProblems = originalIdleTimingProblems ?? [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
       const diagnosticProblems:string[]=[];
       if(idleRoutingDiagnostic){
         if(routingStatus!=='complete')diagnosticProblems.push('idle retirement routing evidence incomplete');
+        if(!routingClockComplete)diagnosticProblems.push('idle retirement thread-clock evidence incomplete');
+        if(!routingVersionComplete)diagnosticProblems.push('idle retirement browser version evidence incomplete');
         if(boundaryBinding?.status!=='complete'||boundaryBinding.debuggerDisabled!==true||boundaryBinding.injected?.status!=='complete')diagnosticProblems.push('idle retirement received or injected source binding incomplete');
       }
       const problems=[...originalProblems,...diagnosticProblems];

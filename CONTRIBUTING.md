@@ -258,6 +258,14 @@ measurement. Interrupted readings produce no further observer command. These are
 factory-call and input counts, not numeric-operation counts or CPU attribution;
 observer overhead is unqualified. The original idle verdict remains separate and
 cannot be repaired by the diagnostic.
+The route diagnostic also uses the existing secondary thread counter session without
+tracing. Both its enclosing counters and the original measurement must be complete;
+browser version provenance is read after timing and session cleanup. The ordinary
+idle artifact retains the main thread's total CPU counters from the same existing
+performance reads. Those bound script CPU from above, and the secondary script
+counters cover a wider interval. Neither counter identifies an application operation;
+wall-clock probe duration is never subtracted from CPU time. Diagnostic setup keeps
+the original stop time and all opening, closing and retirement checks.
 
 Manual `QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING=1` uses elapsed and thread counters.
 Diagnostics without `--scope dashboard` retain the full prefix. A second connection to

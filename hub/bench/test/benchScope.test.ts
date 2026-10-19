@@ -30,7 +30,7 @@ const declarations=['parseArgs','main'].map(name=>{
 const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={main,parseArgs};',{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},
 }).outputText;
-type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace-cancel'|'idle-trace-throw'|'idle-binding'|'idle-profile-incomplete'|'idle-profile-close'|'retirement-binding-mismatch'|'retirement-debugger-active'|'retirement-probe-missing'|'idle-request'|'double-no-growth'|'owner-read'|'route-incomplete'|'route-read'|'route-past-abort';
+type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace-cancel'|'idle-trace-throw'|'idle-binding'|'idle-profile-incomplete'|'idle-profile-close'|'retirement-binding-mismatch'|'retirement-debugger-active'|'retirement-probe-missing'|'idle-request'|'double-no-growth'|'owner-read'|'route-incomplete'|'route-read'|'route-past-abort'|'route-clock'|'route-clock-measurement'|'route-version'|'route-version-abort';
 async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),diagnosticFiles=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
   const injected:{interval:number;expression:string;kind:'idle-probe'}[]=[];
@@ -113,7 +113,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     metrics:async()=>{const opening=metricReads++===0;
       if(opening&&fault==='route-read')throw Error('route-read-original');
       if(opening&&fault==='opening-metrics')now=(saved.get('idle-plan') as {quotaBoundary:number}).quotaBoundary+1;
-      mark(opening?'metrics-before':'metrics-after');return{Timestamp:now/1000,ScriptDuration:opening?0:red('idle')?.1:env.QUOTUM_BENCH_DIAGNOSE_IDLE==='double'?.012:0};},
+      mark(opening?'metrics-before':'metrics-after');return{Timestamp:now/1000,ScriptDuration:opening?0:red('idle')?.1:env.QUOTUM_BENCH_DIAGNOSE_IDLE==='double'?.012:0,ThreadTime:opening?.4:.45};},
     cellOf,idleObservationProblems,idleProblems,chartProblems,measuredProblems,percentile,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil,idleRetentionScript,idleRetentionProblems,preparationOwnersScript,retirementRoutesScript,observePreparations,
     delta,round,scriptPerSecond,tally,measure:async()=>{mark('measure');return{source:'fixture',from:now,to:now,
       ingestLatencies:[1],latencies:[red('measure')?Infinity:1],chartLatencies:[red('measure')?Infinity:1],historyBytes:1,
@@ -152,6 +152,17 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
       assert.equal(actualBrowser,browser);mark('idle-trace');
       if(fault==='idle-trace-cancel'){listeners.get('SIGTERM')!();await exited;throw Error('cancelled-idle-trace');}
       const value=await read();if(fault==='idle-trace-throw')throw Error('idle-trace-original');mark('idle-trace-complete');return value;
+    },
+    timeIdle:async(_target:unknown,actualBrowser:unknown,read:()=>Promise<unknown>,output:Evidence)=>{
+      assert.equal(actualBrowser,browser);mark('idle-thread-before');
+      try{return await read();}finally{
+        mark('idle-thread-after');output.save('idle-timing',{status:fault==='route-clock'?'insufficient-evidence':'complete',measurement:{status:fault==='route-clock-measurement'?'insufficient-evidence':'complete'}});
+      }
+    },
+    idleTimingVersion:async(_target:unknown,actualBrowser:unknown)=>{
+      assert.equal(actualBrowser,browser);mark('idle-version');
+      if(fault==='route-version-abort'){cancellationStarted=true;listeners.get('SIGTERM')!();return false;}
+      return fault!=='route-version';
     },
   };
   runInNewContext(code,context);
@@ -215,6 +226,9 @@ for(const args of [[],['--scope','all'],['--scope','dashboard']])test('actual ma
   assert.ok(result.calls.indexOf('phase:idle')<result.calls.indexOf('measure'));
   assert.equal((result.saved.get('panning') as {reports:unknown[]}).reports.length,10);
   assert.ok(!result.calls.includes('owner-start'));assert.ok(!result.calls.includes('owner-stop'));assert.equal(result.injected.length,0);
+  assert.ok(!result.calls.includes('idle-thread-before'));assert.ok(!result.calls.includes('idle-version'));
+  const idle=result.saved.get('idle') as {counterFrom:number;counterTo:number;performance:unknown};
+  assert.deepEqual(safeEvidence(idle.performance),{before:{Timestamp:idle.counterFrom/1000,ScriptDuration:0,ThreadTime:.4},after:{Timestamp:idle.counterTo/1000,ScriptDuration:0,ThreadTime:.45},instrumentMs:0});
 });
 test('history-only runs its matrix and closes all owners without opening the dashboard',async()=>{
   const result=await run(['--scope','history']);assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);
@@ -303,18 +317,21 @@ test('an owner-observer read failure preserves the original successful idle verd
   assert.equal(result.calls.filter(call=>call==='owner-stop').length,1);
   assert.deepEqual(safeEvidence(result.saved.get('idle-preparation-owners')),{mode:'diagnostic',status:'insufficient-evidence',reason:'preparation observer read unavailable'});
 });
-for(const scope of ['all','dashboard'])test('retirement routing '+scope+' uses direct original idle without owner or thread tracing',async()=>{
+for(const scope of ['all','dashboard'])test('retirement routing '+scope+' brackets original idle with thread counters without tracing',async()=>{
   const result=await run(['--scope',scope],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING:'routes'});
   assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);assert.deepEqual(result.statuses,['diagnostic']);
   assert.equal(result.calls.includes('history'),scope==='all');assert.ok(!result.calls.includes('idle-trace'));assert.ok(!result.saved.has('idle-preparation-owners'));
   assert.equal(result.calls.filter(value=>value==='owner-start').length,1);assert.equal(result.calls.filter(value=>value==='owner-stop').length,1);
   assert.ok(result.calls.indexOf('metrics-after')<result.calls.indexOf('owner-stop'));assert.ok(result.calls.indexOf('owner-stop')<result.calls.indexOf('idle-binding'));
+  assert.equal(result.calls.filter(value=>value==='idle-thread-before').length,1);assert.equal(result.calls.filter(value=>value==='idle-thread-after').length,1);
+  assert.ok(result.calls.indexOf('idle-thread-before')<result.calls.indexOf('metrics-before'));assert.ok(result.calls.indexOf('metrics-after')<result.calls.indexOf('idle-thread-after'));
+  assert.ok(result.calls.indexOf('idle-thread-after')<result.calls.indexOf('idle-version'));assert.ok(result.calls.indexOf('idle-version')<result.calls.indexOf('idle-binding'));
   assert.ok(tail.every(name=>!result.calls.includes(name)));assert.equal((result.saved.get('idle') as {to:number;from:number}).to-(result.saved.get('idle') as {from:number}).from,120_000);
   assert.deepEqual(result.injected.map(value=>value.interval),[1]);assert.ok(result.injected[0].expression.includes(retirementRoutesScript()));
   const report=result.saved.get('idle-timing-result') as {originalProblems:unknown[];diagnosticProblems:unknown[];problems:unknown[]};
   assert.equal(report.originalProblems.length,0);assert.equal(report.diagnosticProblems.length,0);assert.equal(report.problems.length,0);
 });
-for(const fault of ['idle','owner-read','route-incomplete','retirement-binding-mismatch','retirement-debugger-active','retirement-probe-missing'] as const)test('actual retirement routing separates original and diagnostic failure '+fault,async()=>{
+for(const fault of ['idle','owner-read','route-incomplete','retirement-binding-mismatch','retirement-debugger-active','retirement-probe-missing','route-clock','route-clock-measurement','route-version'] as const)test('actual retirement routing separates original and diagnostic failure '+fault,async()=>{
   const result=await run(['--scope','dashboard'],fault,{QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING:'routes'});
   assert.equal(result.error,undefined);assert.deepEqual(result.exits,[1]);assert.deepEqual(result.statuses,['failed']);
   assert.ok(!result.calls.includes('idle-trace'));assert.ok(result.saved.has('idle'));assert.ok(tail.every(name=>!result.calls.includes(name)));
@@ -328,6 +345,13 @@ for(const fault of ['route-read','route-past-abort'] as const)test('interrupted 
   assert.equal(result.calls.filter(value=>value==='owner-start').length,1);assert.ok(!result.calls.includes('owner-stop'));assert.ok(!result.calls.includes('idle-binding'));
   assert.equal((result.saved.get('idle-retirement-routes') as {status:string}).status,'insufficient-evidence');
   if(fault==='route-read')assert.ok(result.logs.some(value=>value.includes('route-read-original')));else assert.ok(result.saved.has('idle'));
+  for(const name of ['browser-close','demo-stop','idle-binding-close'])assert.equal(result.calls.filter(value=>value===name).length,1);
+});
+test('cancellation during version provenance preserves idle and prevents new source-binding commands',async()=>{
+  const result=await run(['--scope','dashboard'],'route-version-abort',{QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING:'routes'});
+  assert.equal(result.error,undefined);assert.deepEqual(result.exits,[1]);assert.deepEqual(result.statuses,['cancelled']);
+  assert.ok(result.saved.has('idle'));assert.ok(result.calls.includes('idle-thread-after'));assert.ok(result.calls.includes('owner-stop'));assert.ok(result.calls.includes('idle-version'));
+  assert.ok(!result.calls.includes('idle-binding'));
   for(const name of ['browser-close','demo-stop','idle-binding-close'])assert.equal(result.calls.filter(value=>value===name).length,1);
 });
 test('the routing caller binds its exact bootstrap with the real source binding',async()=>{
