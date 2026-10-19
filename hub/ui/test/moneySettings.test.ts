@@ -33,7 +33,7 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
   state.open('u','b');const filters=defaultFilters();filters.wallet={mode:'only',values:[{source:budget?.source.id??'s',kind:'balance'},...selected.filter(([,id])=>id.endsWith(':cap')).map(([source,id])=>({source,kind:'keyCap' as const,key:id.slice(4,-4)}))]};
   state.accept({filters,revision:1,authority:'a',unavailable:{}} as FilterEnvelope);
   state.subscribe(()=>publishDataFilters(state.get().current));publishDataFilters(state.get().current);
-  let revision=1,prefs={money:readMoney(budget?{unit:'USD',...(selected.length?{selected:{USD:selected}}:{})}:{unit:'USD',selected:{USD:[['s','balance'],...selected]}})};
+  let active=true,revision=1,prefs={money:readMoney(budget?{unit:'USD',...(selected.length?{selected:{USD:selected}}:{})}:{unit:'USD',selected:{USD:[['s','balance'],...selected]}})};
   let source:Named={id:'s',title:'Account',provider:'openrouter',plan:'',successAt:revision,error:null,stale:false,windows:[],resets:null,owners:[],staleAfterMs:1000,measureIntervalMs:null,meters:[meter('balance')],keys:[],keysCount:20};
   if(budget)source=budget.source;
   const reads:string[]=[];
@@ -43,7 +43,7 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
     const ids=query.get('ids'),from=Number(query.get('after')??0),keys=ids?all.filter(k=>(JSON.parse(ids) as string[]).includes(k.id)):all.slice(from,from+10);
     return {keys,meters:keys.flatMap(k=>[meter(`key:${k.id}:usage`),...(revision===1?[meter(`key:${k.id}:cap`)]:[])]),total:20,inventory:null,next:ids||from===10?null:'10'};
   };
-  const context={exports:{} as {KeyMoneySettings:(props:{sources:Named[];hidden:string[];series:[]})=>Node},require:(name:string)=>{
+  const context={exports:{} as {KeyMoneySettings:(props:{sources:Named[];hidden:string[];series:[];active:boolean})=>Node},require:(name:string)=>{
     if(name==='../../server/domain/dataFilters')return filterModel;
     if(name.endsWith('/dataFilters'))return {useDataFilters:state.get,dataFilters:state};
     if(name==='react')return {useState:hooks.useState,useRef:hooks.useRef,useEffect:hooks.useLayoutEffect};
@@ -65,14 +65,14 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
   }};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/MoneySettings.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   let tree:Node;
-  const render=()=>{hooks.begin();tree=context.exports.KeyMoneySettings({sources:[source,...budget?.others??[]],hidden:[],series:[]});hooks.commit();return nodes(tree);};
+  const render=()=>{hooks.begin();tree=context.exports.KeyMoneySettings({sources:[source,...budget?.others??[]],hidden:[],series:[],active});hooks.commit();return nodes(tree);};
   const settle=async()=>{render();await flush();return render();};
   const more=()=>nodes(tree).find(n=>n.type==='button'&&n.props.className==='popover-row filter-load-more');
   const slots=()=>nodes(tree).filter(n=>typeof n.props.className==='string'&&n.props.className.includes('key-slot'));
   const keys=()=>nodes(tree).find(n=>n.type==='details'&&n.props.className==='filter-key-details');
   const openKeys=async(open=true)=>{const details=keys();assert.ok(details);(details.props.onToggle as (event:unknown)=>void)({currentTarget:{open}});await settle();};
   const loadMore=async()=>{const button=more();assert.ok(button);(button.props.onClick as ()=>void)();await settle();};
-  return {settle,render,more,keys,slots,reads,openKeys,loadMore,selection:()=>moneySelection([source],[],prefs.money,budget?.context).selection,switches:()=>nodes(tree).filter(n=>n.type===switchRow),refresh:()=>{revision++;source={...source,successAt:revision};}};
+  return {settle,render,more,keys,slots,reads,openKeys,loadMore,setActive:(value:boolean)=>{active=value;},selection:()=>moneySelection([source],[],prefs.money,budget?.context).selection,switches:()=>nodes(tree).filter(n=>n.type===switchRow),refresh:()=>{revision++;source={...source,successAt:revision};}};
 }
 
 test('native and converted balance-only sources have balance switches without archived key controls',async t=>{
@@ -124,6 +124,15 @@ test('an expanded key list refreshes names and caps without losing the loaded ra
   const key=f.switches().find(n=>n.key==='10')!;assert.equal(key.props.disabled,true,'usage without a reported cap is not a balance choice');
   assert.equal(key.props.value,'money.noCap');
   assert.ok(!f.selection()!.ids.some(([,meter])=>meter==='key:10:usage'));
+});
+
+test('a collapsed resource pauses key reads and preserves its loaded rows until it reopens',async()=>{
+  const f=fixture();await f.settle();await f.openKeys();await f.loadMore();const before=f.reads.length;
+  f.setActive(false);f.refresh();await f.settle();
+  assert.equal(f.reads.length,before);assert.equal(f.slots().length,20,'retained rows keep the disclosure geometry while hidden');
+  f.setActive(true);await f.settle();
+  assert.equal(f.reads.length,before+2);assert.equal(f.slots().length,20);
+  assert.ok(f.slots().every(row=>row.props.children===`Key ${Number(row.key)} revision 2`));
 });
 
 test('chart settings contain only owner presentation controls',()=>{

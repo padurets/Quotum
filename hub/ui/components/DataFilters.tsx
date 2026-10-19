@@ -23,7 +23,7 @@ export function openDataFilters(){requested=true;setPrefs({filtersVisible:true})
 /** Reset stays beside its filter, outside the button that opens the menu. */
 export function FilterPopover({label,count,changed,onReset,children,open,onOpenChange,width}:{label:Key;count?:number;changed:boolean;onReset:()=>void;children:ReactNode;open?:boolean;onOpenChange?:(open:boolean)=>void;width?:number}){
   const root=useRef<HTMLDivElement>(null);
-  return <div className="filter-control" ref={root}>
+  return <div className="filter-control" data-filter={label} ref={root}>
     <Popover label={t(label)} trigger={<span className="filter-trigger"><span>{t(label)}</span>
       {!!count&&<span className="filter-count" aria-label={t('filters.excludedCount',{count})}>−{count}</span>}
       {changed&&count===undefined&&<i className="filter-changed" aria-hidden="true"/>}

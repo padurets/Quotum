@@ -44,8 +44,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
     document.head.append(style); document.querySelector('.analytics-head')?.scrollIntoView();
   })()`);
     // A manual horizon keeps the 30d source's full 1.25-width path inside retention.
-    await click('.analytics-head .controls .picker > button');
-    await click('.analytics-head .popover .popover-section:last-child .segmented button', 1);
+    await click('.filter-control[data-filter="history.horizon"] .picker > button');
+    await click('.filter-control[data-filter="history.horizon"] .popover .popover-row', 1);
     await key(true, 'Escape', 27); await key(false, 'Escape', 27);
     for (const [period, index] of [['24h', 4], ['30d', 8]] as const) {
       progress(`${initiator}/${period}/select`);
@@ -309,8 +309,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
     if (interception) await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
     await cdp.evaluate(`(() => {window.__quotumPan?.cleanup();document.getElementById('quotum-pan-layout')?.remove();})()`);
     try {
-      if (await cdp.evaluate<boolean>(`!document.querySelector('.analytics-head .popover')`)) await click('.analytics-head .controls .picker > button');
-      await click('.analytics-head .popover .popover-section:last-child .segmented button', Math.max(0, ['auto', '1d', '3d', '7d'].indexOf(originalHorizon)));
+      if (await cdp.evaluate<boolean>(`!document.querySelector('.filter-control[data-filter="history.horizon"] .popover')`)) await click('.filter-control[data-filter="history.horizon"] .picker > button');
+      await click('.filter-control[data-filter="history.horizon"] .popover .popover-row', Math.max(0, ['auto', '1d', '3d', '7d'].indexOf(originalHorizon)));
       await key(true, 'Escape', 27); await key(false, 'Escape', 27);
     } catch {
       // A failed setup retains its original error; the benchmark owns and closes its tab.
