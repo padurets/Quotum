@@ -110,12 +110,16 @@ export function Popover({
       const read = !list ? element.scrollTop : scroller === element ? element.scrollTop - list.offsetTop : list.scrollTop || -list.offsetTop;
       element.style.maxHeight = '';
       element.style.translate = '';
+      const at = picker.getBoundingClientRect();
+      const anchor = horizontalAnchor?.current?.getBoundingClientRect();
+      // Align in layout: a compensating transform can resample text as a badge grows.
+      element.style.left = anchor ? align === 'left' ? `${anchor.left - at.left}px` : 'auto' : '';
+      element.style.right = anchor ? align === 'right' ? `${at.right - anchor.right}px` : 'auto' : '';
       element.classList.remove('is-capped', 'is-cramped');
       // Measured above its button only, where it cannot lengthen the page as it is measured; the
       // stylesheet sets it as far below its button as above.
       element.classList.add('is-up');
       const rect = element.getBoundingClientRect();
-      const at = picker.getBoundingClientRect();
       const {above, below} = roomOf(at, at.top - rect.bottom, Math.max(room.top, coverOf(at.bottom, trigger, bars)), room.bottom);
       const {up: next, cap} = sideOf(rect.height, above, below, upwards ?? up, upwards !== null);
       const least = list ? parseFloat(getComputedStyle(list).getPropertyValue('--least')) || 0 : 0;
@@ -132,9 +136,7 @@ export function Popover({
       // or of its dialog, either without its own scrollbar.
       const placed = element.getBoundingClientRect();
       size = {width: placed.width, height: placed.height};
-      const anchor = horizontalAnchor?.current?.getBoundingClientRect();
-      const offset = anchor ? align === 'left' ? anchor.left - at.left : anchor.right - at.right : 0;
-      const shift = offset + shiftOf(placed.left + offset - room.left, placed.right + offset - room.left, room.right - room.left);
+      const shift = shiftOf(placed.left - room.left, placed.right - room.left, room.right - room.left);
       if (shift) element.style.translate = `${shift}px 0`;
       setSide(same => (same?.up === next && same.cap === cap && same.cramped === cramped ? same : {up: next, cap, cramped}));
     };
