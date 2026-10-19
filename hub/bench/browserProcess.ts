@@ -14,15 +14,23 @@ export function processIdentity(pid: number, stat: string): ProcessIdentity | nu
     minorFaults: counter(7), majorFaults: counter(9), userTicks: counter(11), systemTicks: counter(12), blockIoTicks: counter(39)};
 }
 
-const identity = async (pid: number) => processIdentity(pid, await readFile(`/proc/${pid}/stat`, 'utf8').catch(() => ''));
+const identity = async (pid: number, signal?: AbortSignal) => {
+  const stat = await readFile(`/proc/${pid}/stat`, {encoding: 'utf8', signal}).catch(() => '');
+  signal?.throwIfAborted();
+  return processIdentity(pid, stat);
+};
 
 /** Only numeric identities are read. No command lines, process-name matching, or foreign signals. */
-async function processes(): Promise<ProcessIdentity[]> {
+async function processes(signal?: AbortSignal): Promise<ProcessIdentity[]> {
+  signal?.throwIfAborted();
   const entries = await readdir('/proc');
+  signal?.throwIfAborted();
   const result: ProcessIdentity[] = [];
   // Limit concurrent reads on a shared machine.
   for (let from = 0; from < entries.length; from += 64) {
-    const batch = await Promise.all(entries.slice(from, from + 64).filter(value => /^\d+$/.test(value)).map(value => identity(Number(value))));
+    signal?.throwIfAborted();
+    const batch = await Promise.all(entries.slice(from, from + 64).filter(value => /^\d+$/.test(value)).map(value => identity(Number(value), signal)));
+    signal?.throwIfAborted();
     result.push(...batch.filter((value): value is ProcessIdentity => value !== null));
   }
   return result;
@@ -37,9 +45,11 @@ export function browserProcess(child: ChildProcess, group: boolean) {
   child.once('exit', () => {exited = true;});
   child.once('close', () => {pipesClosed = true;});
   const live = () => !exited && child.exitCode === null && child.signalCode === null;
-  const observe = async () => {
+  const observe = async (signal?: AbortSignal) => {
+    signal?.throwIfAborted();
     if (!child.pid || !group || process.platform !== 'linux') return [];
-    const all=await processes();
+    const all=await processes(signal);
+    signal?.throwIfAborted();
     const current = all.filter(value=>value.group===child.pid&&value.session===child.pid);
     const anchored = current.some(value => (value.pid === child.pid && live()) || known.get(value.pid) === value.birth);
     if (anchored && !released) for (const value of current) known.set(value.pid, value.birth);

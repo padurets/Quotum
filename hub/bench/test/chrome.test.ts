@@ -74,6 +74,13 @@ test('silent real DevTools readiness and idempotent cleanup close the endpoint a
     assert.equal(report.startupSamples?.omitted,0);
     assert.ok(report.startupSamples!.samples.every(sample=>sample.pid===report.pid&&sample.userTicks!==null&&sample.majorFaults!==null));
     assert.ok(report.portMs!<=report.readyMs!);
+    const rows = await browser.observeProcesses!(new AbortController().signal);
+    assert.ok(rows.some(row => row.pid === report.pid && row.birth && row.userTicks !== null));
+    assert.ok(rows.every(row => row.group === report.pid && row.session === report.pid), 'only the owned stand-in group is retained');
+    assert.ok(!rows.some(row => row.pid === process.pid), 'the observing process is not owned');
+    const abort = new AbortController(), reason = new Error('process read cancelled');
+    const cancelled = browser.observeProcesses!(abort.signal); abort.abort(reason);
+    await assert.rejects(cancelled, error => error === reason);
   }
   assert.equal((await fetch(browser.endpoint + '/json/version')).status, 200);
   await browser.close(); await browser.close();

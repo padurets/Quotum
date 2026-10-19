@@ -271,6 +271,7 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
     if (waits) state.startupWaits = waits.freeze();
     console.error('bench: Chrome ready ' + JSON.stringify(snapshot()));
     return {endpoint, owned: true, close, launchReport: snapshot,
+      ...(group && process.platform === 'linux' ? {observeProcesses: processOwner.observe} : {}),
       diagnostics: async (pids, _candidate, signal) => ({processes: child.pid && child.exitCode === null && child.signalCode === null ? await nativeProcesses(child.pid, pids, signal) : []})};
   } catch (error) {
     state.startupSpans = spans.freeze();

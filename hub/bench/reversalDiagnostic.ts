@@ -1,11 +1,13 @@
 import {Cdp, type Browser} from './cdp.js';
 import {deadline, devtoolsJson} from './deadline.js';
 import {safeEvidence} from './evidence.js';
+import type {ProcessIdentity} from './browserProcess.js';
 
 type DocumentMark={atMs:number;frame?:string;loader?:string};
 export type DiagnosticOrigin={startedAt:number;navigation:()=>{requested?:DocumentMark;committed?:DocumentMark;loadAtMs:number|null}};
 type Options = {mode?: 'canonical' | 'diagnostic'; profileBeforeInput?: boolean; postmortem?:boolean; closeTarget?: () => Promise<void>;signal?:AbortSignal;origin?:DiagnosticOrigin};
 type Process = {type: string; id: number; cpuTime: number};
+type ProcessSample = {status: 'pending' | 'observed' | 'unavailable'; fromMs: number; toMs: number | null; processes?: ProcessIdentity[]; omitted?: number};
 let serial = 0;
 
 /** Cancellation releases the underlying CDP waiters, not just the outer Promise. */
@@ -17,6 +19,7 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
   const diagnostic = options.mode === 'diagnostic';
   const id = ++serial, signal = options.signal&&browser.owner?AbortSignal.any([options.signal,browser.owner.signal]):options.signal??browser.owner?.signal;
   let intervention = false, capture: Promise<void> | undefined, released = false;
+  let cancelPassive: (() => void) | undefined;
   const report: Record<string, unknown> = {id, mode: diagnostic ? 'diagnostic' : 'canonical', ownedBrowser: Boolean(browser.owned)};
   if(diagnostic||options.postmortem&&browser.owned){
     const sources:{scriptId:string;sourceHash:string;sourceLength:number}[]=[];
@@ -34,6 +37,16 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
     console.error('reversal diagnostic ' + JSON.stringify(safe));
   };
   const send = (method: string, pending: AbortSignal) => page.send(method, {}, pending);
+  // Host read brackets and raw proc ticks do not identify page work or continuous liveness.
+  const sampleProcesses = async (pending?: AbortSignal): Promise<ProcessSample> => {
+    const fromMs = performance.now();
+    try {
+      if (!browser.owned || !browser.observeProcesses) throw new Error('owned process observation unavailable');
+      const processes = await bounded('owned process observation', reading => browser.observeProcesses!(reading), 1000, pending);
+      pending?.throwIfAborted();
+      return {status: processes.length ? 'observed' : 'unavailable', fromMs, toMs: performance.now(), processes: processes.slice(0, 32), omitted: Math.max(0, processes.length - 32)};
+    } catch {return {status: 'unavailable', fromMs, toMs: performance.now()};}
+  };
   const release = async () => {
     if (!intervention || released) return;
     released = true;
@@ -88,6 +101,7 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
     try {
       await bounded('failure collection', async pending => {
         await Promise.all([
+          sampleProcesses(pending).then(sample => {if (!pending.aborted) report.failedProcesses = sample;}),
           liveness(pending),
           bounded('page liveness', async probe => {
             report.page = await page.evaluate('({visibility:document.visibilityState,focus:document.hasFocus(),ready:document.readyState})', probe);
@@ -115,9 +129,24 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
     async diagnose(label:string){signal?.throwIfAborted();capture??=collect(label);await capture;signal?.throwIfAborted();},
     async watch<T>(label: string, run: () => Promise<T>) {
       signal?.throwIfAborted();
+      delete report.waiting; delete report.waitingProcesses;
+      const passive = new AbortController(), pending = signal ? AbortSignal.any([signal, passive.signal]) : passive.signal;
+      let waiting: {scenario: string; command: ReturnType<Cdp['snapshot']>; sample: ProcessSample} | undefined;
+      const cancel = () => {
+        passive.abort();
+        if (waiting?.sample.status === 'pending') waiting.sample = {status: 'unavailable', fromMs: waiting.sample.fromMs, toMs: performance.now()};
+      };
+      cancelPassive = cancel;
       const timer = setTimeout(() => {
+        if (pending.aborted) return;
         report.waiting = page.snapshot();
         if (diagnostic) capture ??= collect(label);
+        else {
+          waiting = {scenario: label, command: page.snapshot(), sample: {status: 'pending', fromMs: performance.now(), toMs: null}};
+          report.waitingProcesses = waiting;
+          const entry = waiting;
+          void sampleProcesses(pending).then(sample => {if (!pending.aborted) entry.sample = sample;});
+        }
       }, 5000);
       try {
         const result = await run();
@@ -125,13 +154,15 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
         return result;
       } catch (error) {
         clearTimeout(timer);
+        cancel();
         report.status = 'failed';
         capture ??= collect(label);
         await capture;
         throw error;
-      } finally {clearTimeout(timer);}
+      } finally {clearTimeout(timer); cancel(); if (cancelPassive === cancel) cancelPassive = undefined;}
     },
     async close() {
+      cancelPassive?.();
       try {if (capture) await capture;}
       finally {await release();}
     },

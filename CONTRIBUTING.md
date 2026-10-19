@@ -47,6 +47,13 @@ short prefix. Separate jobs retain normal warmup, chart-grid alignment and budge
 DevTools commands keep their thirty-second response deadline. An explicit renderer
 crash or target-detach event fails pending commands immediately, even if the socket
 stays open, and retains the original failure before cleanup. It does not retry work.
+The existing five-second pending-command observation also retains at most 32 owned
+Linux process identities and raw proc counters, followed by one read after failure
+before debugger intervention. Each cancellable read is bounded to one second within
+the existing observation/collection windows. Host monotonic timestamps bracket the
+reads; missing processes and capped entries remain unknown. Attached browsers are
+not inspected. Matching process IDs and birth ticks permit counter differences,
+not page attribution, continuous responsiveness or a cause of the timeout.
 Page-evaluation exceptions retain their original command and scenario too, without
 page text or source. Later cleanup timeouts or crashes cannot replace the first failure.
 Gesture-completion frames follow each data plot's actual HTML or SVG animation,

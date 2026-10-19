@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {bounded, observeReversal} from '../reversalDiagnostic.js';
 import {Cdp, attachedChrome} from '../cdp.js';
+import type {ProcessIdentity} from '../browserProcess.js';
 
 const flush = async () => {await new Promise<void>(resolve => setImmediate(resolve));};
 function pageFixture(send: (method: string, signal?: AbortSignal) => Promise<unknown> = async () => ({})) {
@@ -13,6 +14,8 @@ function pageFixture(send: (method: string, signal?: AbortSignal) => Promise<unk
     on() {},close() {},
   } as unknown as Cdp};
 }
+const processRow = (pid: number, ticks: number): ProcessIdentity => ({pid, parent: 1, group: 100, session: 100, birth: '42', state: 'S',
+  userTicks: ticks, systemTicks: 2, minorFaults: 3, majorFaults: 0, blockIoTicks: 0});
 
 test('a diagnostic deadline cancels its child operation and releases the timer', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
@@ -32,6 +35,102 @@ test('canonical commands acknowledged after five seconds retain the thirty-secon
   const result = observer.watch('slow acknowledgement', () => new Promise<void>(resolve => {release = resolve;}));
   t.mock.timers.tick(6000); release(); await result; await observer.close();
   assert.deepEqual(commands, []);
+});
+
+test('a passive owned read cannot turn a successful slow command into an intervention failure', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const {page, commands} = pageFixture(), reads: AbortSignal[] = [];
+  t.mock.method(globalThis, 'fetch', async () => {throw new Error('no browser probe before failure');});
+  const observer = await observeReversal(page, {owned: true, endpoint: 'fixture', close: async () => {}, observeProcesses: async signal => {
+    reads.push(signal); return new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), {once: true}));
+  }});
+  let release!: () => void;
+  const result = observer.watch('slow success', () => new Promise<void>(resolve => {release = resolve;}));
+  t.mock.timers.tick(5000); await flush(); assert.equal(reads.length, 1);
+  t.mock.timers.tick(1000); await flush(); assert.equal(reads[0].aborted, true);
+  release(); await result; await observer.close(); assert.deepEqual(commands, []);
+});
+
+test('original failure retains matching in-flight counters and bounded postfailure counters before debugger commands', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const logs: string[] = [], order: string[] = [];
+  t.mock.method(console, 'error', (line: string) => logs.push(line));
+  t.mock.method(globalThis, 'fetch', async () => new Response('{}'));
+  const {page} = pageFixture(async (method, signal) => {
+    order.push(method);
+    if (method === 'Runtime.evaluate') return new Promise((_, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), {once: true}));
+    return method === 'Profiler.stop' ? {profile: {}} : {};
+  });
+  let reads = 0, reject!: (error: Error) => void;
+  const observer = await observeReversal(page, {owned: true, endpoint: 'fixture', close: async () => {}, observeProcesses: async () => {
+    order.push('process read'); return Array.from({length: ++reads === 1 ? 1 : 35}, (_, i) => processRow(100 + i, reads === 1 ? 10 : 20));
+  }}, {postmortem: true});
+  const original = new Error('original gesture timeout');
+  const failed = assert.rejects(observer.watch('warm return', () => new Promise<never>((_, fail) => {reject = fail;})), error => error === original);
+  t.mock.timers.tick(5000); await flush(); assert.deepEqual(order, ['process read']);
+  t.mock.timers.tick(25000); page.snapshot = () => ({failure: {method: 'Input.synthesizeScrollGesture'}}) as ReturnType<Cdp['snapshot']>;
+  reject(original); await flush(); t.mock.timers.tick(2000); await failed; await observer.close();
+  assert.ok(order.lastIndexOf('process read') < order.indexOf('Debugger.enable'));
+  const report = JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));
+  assert.equal(report.waitingProcesses.scenario, 'warm return');
+  assert.equal(report.waitingProcesses.command.pending[0].id, 1);
+  assert.equal(report.waitingProcesses.sample.processes[0].userTicks, 10);
+  assert.equal(report.failedProcesses.processes[0].userTicks, 20);
+  assert.equal(report.failedProcesses.processes.length, 32); assert.equal(report.failedProcesses.omitted, 3);
+  for (const sample of [report.waitingProcesses.sample, report.failedProcesses]) {
+    assert.equal(sample.status, 'observed'); assert.ok(sample.toMs >= sample.fromMs);
+    assert.equal(sample.processes[0].birth, '42');
+  }
+});
+
+test('success cancels its unfinished process read and a later command cannot inherit that sample', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const logs: string[] = [], signals: AbortSignal[] = [];
+  t.mock.method(console, 'error', (line: string) => logs.push(line));
+  t.mock.method(globalThis, 'fetch', async () => new Response('{}'));
+  const {page, commands} = pageFixture();
+  let late!: (rows: ProcessIdentity[]) => void, release!: () => void;
+  const observer = await observeReversal(page, {owned: true, endpoint: 'fixture', close: async () => {}, observeProcesses: async signal => {
+    signals.push(signal); return signals.length === 1 ? new Promise(resolve => {late = resolve;}) : [processRow(100, 30)];
+  }});
+  const success = observer.watch('earlier command', () => new Promise<void>(resolve => {release = resolve;}));
+  t.mock.timers.tick(5000); await flush(); release(); await success;
+  assert.equal(signals[0].aborted, true);
+  late([processRow(100, 999)]); await flush();
+  const original = new Error('later command failed');
+  await assert.rejects(observer.watch('later command', async () => {throw original;}), error => error === original);
+  await observer.close();
+  const report = JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));
+  assert.equal(report.scenario, 'later command'); assert.equal(report.waiting, undefined); assert.equal(report.waitingProcesses, undefined);
+  assert.equal(report.failedProcesses.processes[0].userTicks, 30); assert.deepEqual(commands, []);
+});
+
+test('a missing postfailure process read is cancelled inside collection and preserves the command error', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const logs: string[] = [], signals: AbortSignal[] = [];
+  t.mock.method(console, 'error', (line: string) => logs.push(line));
+  t.mock.method(globalThis, 'fetch', async () => new Response('{}'));
+  const {page} = pageFixture();
+  const observer = await observeReversal(page, {owned: true, endpoint: 'fixture', close: async () => {}, observeProcesses: async signal => {
+    signals.push(signal); return new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('secret-canary')), {once: true}));
+  }});
+  const original = new Error('original error'); let finished = false;
+  const failed = assert.rejects(observer.watch('failed command', async () => {throw original;}), error => error === original).then(() => {finished = true;});
+  await flush(); assert.equal(finished, false);
+  t.mock.timers.tick(1000); await failed; await observer.close();
+  assert.equal(signals[0].aborted, true);
+  const report = JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));
+  assert.equal(report.failedProcesses.status, 'unavailable'); assert.doesNotMatch(logs.join(''), /secret-canary/);
+});
+
+test('an attached browser cannot grant process observation even if a reader is supplied', async t => {
+  t.mock.method(console, 'error', () => {});
+  t.mock.method(globalThis, 'fetch', async () => new Response('{}'));
+  let reads = 0;
+  const {page} = pageFixture();
+  const observer = await observeReversal(page, {...attachedChrome('fixture'), observeProcesses: async () => {reads++; return [processRow(100, 1)];}});
+  await assert.rejects(observer.watch('attached failure', async () => {throw new Error('original');}), /original/);
+  await observer.close(); assert.equal(reads, 0);
 });
 
 for(const method of ['Runtime.evaluate','Input.synthesizeScrollGesture'])test('an owned unresponsive page is inspected after '+method+' fails and always released',async t=>{
