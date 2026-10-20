@@ -1717,9 +1717,10 @@ const measurementDevices:DemoSet={id:'devices',about:'Measurement participation,
 export const CALENDAR_SCENES=[{id:'registered',expect:['ninety-local-dates','parallel-hours','midnight-split','fixed-opacity','source-free','keyboard-touch','partial-date']},{id:'empty',expect:['empty-filter','registered-zero']},{id:'unavailable',expect:['unavailable-history']} ] as const;
 const calendar:DemoSet={id:'calendar',about:'Ninety calendar dates of registered agent-hours, without subscription cards',scene:'quiet',workHistoryMs:90*DAY,entries:[
   {kind:'person',id:'ana',name:'Ana',expect:[{state:'widgets'}],look:['Agent-hours uses the first Nord Warm colour with fixed opacity thresholds. Inspect a date with pointer, keyboard or touch; Open day selects analytics and Back restores it.']},
-  {kind:'person',id:'boris',name:'Boris',expect:[{state:'widgets'}],look:['The calendar has no available work history; it does not claim ninety idle days.']},
+  {kind:'person',id:'boris',name:'Boris',expect:[{state:'widgets'}],look:['The personal calendar has zero registered work. No available work history is a separate shared board without admitted devices.']},
   {kind:'machine',id:'laptop',person:'ana',expect:[{name:'laptop'}]},
-  {kind:'board',id:'team',name:'Registered calendar',owner:'ana',members:[],expect:[{state:'widgets'}]},
+  {kind:'board',id:'team',name:'Registered calendar',owner:'ana',members:['boris'],expect:[{state:'widgets'}]},
   {kind:'board',id:'empty',name:'Empty project selection',owner:'ana',members:[],filterProjects:{mode:'include',values:[]},expect:[{state:'widgets'}]},
+  {kind:'board',id:'unavailable',name:'No available work history',owner:'boris',members:[],expect:[{state:'widgets'}]},
 ]};
 export const SETS: DemoSet[] = [all, showcase, activity,dataFilters,SESSION_ANALYTICS,money,quotas,analytics, machineClients,linkedClients,measurementDevices, ONBOARDING,calendar];

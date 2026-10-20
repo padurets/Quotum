@@ -2,7 +2,7 @@ import type {Store} from '../server/store/store.js';
 import type {Directory} from '../server/store/directory.js';
 import {AGENT_HOURS_HEATMAP,showWidgets} from '../server/domain/widgets.js';
 import type {Stand} from './setup.js';
-import {DAY,HOUR,MIN} from './model.js';
+import {boards,DAY,HOUR,MIN} from './model.js';
 
 /** Real retained work feeds both the calendar and its daily analytical drill. */
 export function seedCalendar(store:Store,directory:Directory,stand:Stand){
@@ -24,7 +24,8 @@ export function seedCalendar(store:Store,directory:Directory,stand:Stand){
     const board=directory.boards(user.id).find(b=>b.personal)!;
     directory.saveView(board.id,showWidgets(directory.view(board.id),[AGENT_HOURS_HEATMAP,'agents','activity']),user.id,stand.start);
   }
-  for(const board of stand.boards.values()){
-    directory.saveView(board,showWidgets(directory.view(board),[AGENT_HOURS_HEATMAP,'agents','activity']),owner.id,stand.start);
+  for(const board of boards(stand.set)){
+    const id=stand.boards.get(board.id)!;
+    directory.saveView(id,showWidgets(directory.view(id),[AGENT_HOURS_HEATMAP,'agents','activity']),stand.people.get(board.owner)!.id,stand.start);
   }
 }
