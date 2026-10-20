@@ -14,7 +14,7 @@ const edgeSeries=():PanReading['edgeSeries']=>['wheel','drag'].map(stage=>({stag
 const source = readFileSync(new URL('../panning.ts', import.meta.url), 'utf8');
 const probe = source.match(/await cdp\.evaluate\(`(\(\(\) => \{\n\s*const initiator=[\s\S]+?\}\)\(\))`\);/)![1];
 
-function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quota') {
+function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quota', typed = false) {
   let time = 0;
   let observe:(records:unknown[])=>void=()=>{};
   const callbacks: ((stamp: number) => void)[] = [], listeners = new Map<string, (event: object) => void>(), bubble = new Map<string, (event: object) => void>();
@@ -48,12 +48,21 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quo
   const context = {
     performance: {now: () => time, timeOrigin: 0}, URL, URLSearchParams, location: {href: 'https://example.test/', search: ''},
     document: {body: {}, querySelector: (selector: string) => selector.includes('quota-session-history')?sessionSvg:selector.includes('quota-history')?historySvg:selector.includes('budget-history')?budgetSvg:selector.includes('subscription-funds')?fundsSvg:activitySvg},
-    history: {pushState: (..._args: unknown[]) => {}}, getComputedStyle: (node: {style: {transform: string}}) => ({opacity: '1', transform: node.style.transform}),
+    history: {pushState: (..._args: unknown[]) => {}}, getComputedStyle: (node: {style: {transform: string}}) => {
+      if (typed && 'getAnimations' in node) throw new Error('used-value transform read');
+      return {opacity: '1', transform: node.style.transform};
+    },
     requestAnimationFrame: schedule, cancelAnimationFrame: () => {},
     MutationObserver: class {constructor(read:(records:unknown[])=>void){observe=read;}observe() {} disconnect() {}},
     DOMMatrix: class {a: number; e: number; constructor(value: string | undefined) {this.a = Number(value?.match(/scaleX\(([-.\d]+)\)/)?.[1] ?? 1);this.e = Number(value?.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0);if(value?.startsWith('scaleX'))this.e*=this.a;}},
     window: {fetch: async () => ({}), requestAnimationFrame: schedule, addEventListener: (type: string, callback: (event: object) => void) => bubble.set(type, callback), removeEventListener: (type:string,callback:(event:object)=>void) => {if(bubble.get(type)===callback)bubble.delete(type);}},
   };
+  const computed = new Map<object,string>();
+  if (typed) for (const layer of [historyLayer,activityLayer,budgetLayer,fundsLayer,sessionLayer]) for (const owner of [layer,layer.slides]) {
+    computed.set(owner,'none');
+    Object.assign(owner,{computedStyleMap:()=>new Map([['transform',computed.get(owner)==='none'?{value:'none'}:{toMatrix:()=>new context.DOMMatrix(computed.get(owner))}]])});
+  }
+  const paintFold = (owner:{style:{transform:string}},transform:string) => {if (typed) computed.set(owner,transform);else owner.style.transform=transform;};
   runInNewContext(probe.replace('${JSON.stringify(initiator)}', JSON.stringify(initiator)).replace('${JSON.stringify(period)}', JSON.stringify('24h')).replace('${panTransactionsScript()}', panTransactionsScript()).replace('${panErrorsScript()}',panErrorsScript()), context);
   const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {running:boolean; feeding: boolean; cleanup(): void; readTransactions(): PanTransactions; pending: object[]}}).__quotumPan;
   for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg, sessionSvg]) Object.assign(svg.dataset, {panMinEnd: '-1000000000', panMaxEnd: '1000000000'});
@@ -77,7 +86,7 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quo
   };
   const frame = (at: number) => {time = at; return callbacks.splice(0);};
   const runFrame = (at: number) => frame(at).forEach(callback => callback(at));
-  return {reading, wheel, limits, listeners, bubble, update, frame, runFrame,observe:(records:unknown[])=>observe(records), requestFrame: context.window.requestAnimationFrame, context,sessionSvg,sessionLayer,historySvg, activitySvg, budgetSvg, fundsSvg, fundsLayer, budgetLayer, historyLayer, activityLayer, activityClip};
+  return {reading, wheel, limits, listeners, bubble, update, frame, runFrame,paintFold,observe:(records:unknown[])=>observe(records), requestFrame: context.window.requestAnimationFrame, context,sessionSvg,sessionLayer,historySvg, activitySvg, budgetSvg, fundsSvg, fundsLayer, budgetLayer, historyLayer, activityLayer, activityClip};
 }
 
 test('the original probe records a native generation pause before a handler writes the address', () => {
@@ -409,8 +418,8 @@ test('unpainted final input is credited only after its geometry commits', () => 
 });
 
 test('the probe measures a delayed HTML or SVG fold and cannot credit final input while it is moving', () => {
-  for (const html of [true, false]) {
-    const f = fixture(); f.wheel(0, 0);
+  for (const typed of [false,true]) for (const html of [true, false]) {
+    const f = fixture('quota',typed); f.wheel(0, 0);
     for (const svg of [f.historySvg, f.activitySvg, f.budgetSvg, f.fundsSvg, f.sessionSvg]) {
       delete svg.dataset.panEnd;
       svg.parentElement.dataset.axisEnd = '12';
@@ -418,22 +427,22 @@ test('the probe measures a delayed HTML or SVG fold and cannot credit final inpu
     f.context.location.search = '?from=0&to=12';
     const moving = html ? f.historyLayer : f.historyLayer.slides;
     moving.getAnimations = () => [{playState: 'running'}];
-    moving.style.transform = 'translateX(40px) scaleX(.6)'; f.runFrame(10);
+    f.paintFold(moving,'translateX(40px) scaleX(.6)'); f.runFrame(10);
     f.runFrame(20);
     assert.equal(f.reading.updated, 0, 'an animation without actual movement creates no frames');
-    moving.style.transform = 'translateX(30px) scaleX(.7)'; f.runFrame(30);
-    moving.style.transform = 'translateX(10px) scaleX(.9)'; f.runFrame(110);
+    f.paintFold(moving,'translateX(30px) scaleX(.7)'); f.runFrame(30);
+    f.paintFold(moving,'translateX(10px) scaleX(.9)'); f.runFrame(110);
     assert.equal(f.reading.updated, 2);
     assert.deepEqual(Array.from(f.reading.frames), [80], 'a slow fold remains in the original moving-frame budget');
     assert.equal(f.reading.latency.length, 0, 'final geometry alone cannot credit an unfinished animation');
-    moving.getAnimations = () => []; moving.style.transform = 'none'; f.runFrame(120);
+    moving.getAnimations = () => []; f.paintFold(moving,'none'); f.runFrame(120);
     assert.deepEqual(Array.from(f.reading.latency), [120]);
   }
 });
 
 test('each follower fold cannot be skipped or credited early by an idle initiator', () => {
-  for (const initiator of ['quota', 'session', 'activity', 'budget', 'funds'] as const) for (const family of ['quota', 'session', 'activity', 'budget', 'funds'] as const) for (const html of [true, false]) {
-    const f = fixture(initiator); f.wheel(0, 0);
+  for (const typed of [false,true]) for (const initiator of ['quota', 'session', 'activity', 'budget', 'funds'] as const) for (const family of ['quota', 'session', 'activity', 'budget', 'funds'] as const) for (const html of [true, false]) {
+    const f = fixture(initiator,typed); f.wheel(0, 0);
     for (const svg of [f.historySvg, f.activitySvg, f.budgetSvg, f.fundsSvg, f.sessionSvg]) {
       delete svg.dataset.panEnd; svg.parentElement.dataset.axisEnd = '12';
     }
@@ -441,16 +450,51 @@ test('each follower fold cannot be skipped or credited early by an idle initiato
     const layer = ({quota:f.historyLayer,session:f.sessionLayer,activity:f.activityLayer,budget:f.budgetLayer,funds:f.fundsLayer})[family];
     const moving = html ? layer : layer.slides;
     moving.getAnimations = () => [{playState: 'running'}];
-    moving.style.transform = 'translateX(40px) scaleX(.6)'; f.runFrame(10); f.runFrame(20);
+    f.paintFold(moving,'translateX(40px) scaleX(.6)'); f.runFrame(10); f.runFrame(20);
     assert.equal(f.reading.latency.length, 0, 'quota metadata cannot credit another plot that is still moving');
     assert.equal(f.reading.updated, 0, 'a running but stationary animation creates no frames');
-    moving.style.transform = 'translateX(30px) scaleX(.7)'; f.runFrame(30);
-    moving.style.transform = 'translateX(10px) scaleX(.9)'; f.runFrame(110);
+    f.paintFold(moving,'translateX(30px) scaleX(.7)'); f.runFrame(30);
+    f.paintFold(moving,'translateX(10px) scaleX(.9)'); f.runFrame(110);
     assert.deepEqual(Array.from(f.reading.frames), [80], 'the resource fold keeps its full delayed movement interval');
     assert.equal(f.reading.latency.length, 0);
-    moving.getAnimations = () => []; moving.style.transform = 'none'; f.runFrame(120);
+    moving.getAnimations = () => []; f.paintFold(moving,'none'); f.runFrame(120);
     assert.deepEqual(Array.from(f.reading.latency), [120]);
   }
+});
+
+test('a computed none transform does not finish a running fold or credit final input',()=>{
+  const f=fixture('quota',true);f.wheel(0,0);
+  for(const svg of [f.historySvg,f.activitySvg,f.budgetSvg,f.fundsSvg,f.sessionSvg]){delete svg.dataset.panEnd;svg.parentElement.dataset.axisEnd='12';}
+  f.context.location.search='?from=0&to=12';
+  f.historyLayer.style.transform='translateX(40px)';
+  f.historyLayer.getAnimations=()=>[{playState:'running'}];
+  f.runFrame(10);f.runFrame(30);
+  assert.equal(f.reading.updated,0);assert.equal(f.reading.latency.length,0);
+  f.historyLayer.getAnimations=()=>[];f.runFrame(120);
+  assert.deepEqual(Array.from(f.reading.latency),[120]);
+});
+
+test('unavailable or unconvertible computed transforms retain the used-value fallback',()=>{
+  for(const value of [undefined,{}, {toMatrix:()=>{throw new TypeError('unresolved units');}}]){
+    const f=fixture();f.wheel(0,0);
+    for(const svg of [f.historySvg,f.activitySvg,f.budgetSvg,f.fundsSvg,f.sessionSvg])delete svg.dataset.panEnd;
+    Object.assign(f.historyLayer,{computedStyleMap:()=>new Map([['transform',value]])});
+    const original=f.context.getComputedStyle;let reads=0;
+    f.context.getComputedStyle=node=>{if(node===f.historyLayer)reads++;return original(node);};
+    f.historyLayer.getAnimations=()=>[{playState:'running'}];
+    f.historyLayer.style.transform='translateX(40px)';f.runFrame(10);
+    f.historyLayer.style.transform='translateX(30px)';f.runFrame(30);
+    f.historyLayer.style.transform='translateX(10px)';f.runFrame(110);
+    assert.equal(reads,3);assert.deepEqual(Array.from(f.reading.frames),[80]);
+  }
+});
+
+test('active input reads inline transforms without touching computed transforms',()=>{
+  const f=fixture();
+  for(const layer of [f.historyLayer,f.activityLayer,f.budgetLayer,f.fundsLayer,f.sessionLayer])for(const owner of [layer,layer.slides])
+    Object.defineProperty(owner,'computedStyleMap',{get:()=>{throw new Error('computed transform during input');}});
+  f.wheel(0,0);f.requestFrame(()=>f.update(1,16.7));f.runFrame(16.7);
+  assert.equal(f.reading.synchronized,true);assert.deepEqual(Array.from(f.reading.latency),[16.7]);
 });
 
 test('the fold interval remains open until the last data plot finishes its animation', () => {

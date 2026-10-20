@@ -111,6 +111,13 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         const owner=root.parentElement,types=['wheel','pointerdown','pointermove','pointerup'];
         const transforms=new Map();
         const matrixOf=value=>{const key=value||'none';let matrix=transforms.get(key);if(!matrix){const raw=new DOMMatrix(key==='none'?undefined:key);matrix={a:raw.a,e:raw.e};transforms.set(key,matrix);if(transforms.size>64)transforms.delete(transforms.keys().next().value);}return matrix;};
+        // The plot's px/scale animations expose computed matrices without used-value layout.
+        const foldMatrix=owner=>{
+          const value=owner.computedStyleMap?.().get('transform');
+          if(value?.value==='none')return matrixOf('none');
+          try{if(typeof value?.toMatrix==='function')return value.toMatrix();}catch{}
+          return matrixOf(getComputedStyle(owner).transform);
+        };
         let gesture=null;
         const capturedInputs=new WeakMap();
         const capture=e=>{const delivered=performance.now(),at=e.timeStamp>1e12?e.timeStamp-performance.timeOrigin:e.timeStamp;capturedInputs.set(e,{at:Math.min(delivered,at),delivered});if(probe.running&&probe.feeding&&e.type==='wheel')transactions.input(at,delivered,probe.segment);};
@@ -185,7 +192,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
             return null;
           }),folding=folds.some(Boolean);
           probe.sizeStable&&=connected()&&charts.every((svg,i)=>svg.isConnected&&size(svg)===sizes[i]);
-          const matrices=layers.map((layer,i)=>{const owner=folds[i]?.owner,transform=active?layer.style.transform:owner?getComputedStyle(owner).transform:'none',matrix=matrixOf(transform);return owner&&owner!==layer?{a:matrix.a,e:matrix.e*scales[i]}:matrix;}),current=matrices.map(matrix=>matrix.e+':'+matrix.a);
+          const matrices=layers.map((layer,i)=>{const owner=folds[i]?.owner,matrix=active?matrixOf(layer.style.transform):owner?foldMatrix(owner):matrixOf('none');return owner&&owner!==layer?{a:matrix.a,e:matrix.e*scales[i]}:matrix;}),current=matrices.map(matrix=>matrix.e+':'+matrix.a);
           const nextPhase=active?'pan':folding?'fold':'idle';
           // The wheel's intentional 200 ms rest is stationary, before the fold begins.
           if(nextPhase!==phase||active&&paintedToken!==root.dataset.panToken){probe.last=0;lastFrame=null;previous=nextPhase==='pan'?charts.map(svg=>(Number(svg.dataset.panBase||0))+':1'):current;phase=nextPhase;paintedToken=root.dataset.panToken;}
