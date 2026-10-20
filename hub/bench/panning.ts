@@ -216,8 +216,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
               probe.updated++;
               if(probe.last){
                 const ms=now-probe.last;probe.frames.push(ms);
-                const receipt={ms,segment:folding?'fold':probe.segment,pending:demand,requests:probe.flights.size};
-                if(ms>50){receipt.callbacksSinceMovingFrame=callbacksSinceMovingFrame;receipt.maxCallbackGapMs=maxCallbackGapMs;receipt.samplerMs=samplerMs;}
+                const receipt={at:now,stamp,ms,segment:folding?'fold':probe.segment,inputSegment:probe.segment,pending:demand,requests:probe.flights.size};
+                if(ms>50){receipt.callbacksSinceMovingFrame=callbacksSinceMovingFrame;receipt.maxCallbackGapMs=maxCallbackGapMs;receipt.samplerMs=samplerMs;receipt.foldMask=folds.reduce((mask,fold,i)=>mask|(fold?1<<i:0),0);receipt.svgFoldMask=folds.reduce((mask,fold,i)=>mask|(fold&&fold.owner===slides[i]?1<<i:0),0);receipt.movedMask=moved.reduce((mask,changed,i)=>mask|(changed?1<<i:0),0);}
                 probe.samples.push(receipt);
               }
               probe.last=now;lastFrame=stamp;callbacksSinceMovingFrame=0;maxCallbackGapMs=0;samplerMs=0;

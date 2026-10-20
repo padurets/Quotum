@@ -333,7 +333,7 @@ async function main() {
     const measured = await measure(stand, cdp);
     evidence.save('measured', measured);
     evidence.begin('work');
-    const worked = await work(demo, stand, cdp);
+    const worked = await work(demo, stand, cdp, evidence);
     evidence.save('work', worked);
     const observedWork=await workObserved(stand,cdp);
     const privateWork = await workPrivate(demo, stand, cdp);
@@ -800,10 +800,11 @@ async function drain(requests: Requests) {
 }
 
 /** Every credited tick is observed separately; the stand remains the sole list writer. */
-async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
+async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp, evidence:Pick<Evidence,'save'>) {
   const source = stand.sources.get(MEASURED)!;
   const reports: {at: number; reads: number; bytes: number}[] = [];
   const problems: string[] = [];
+  const traffic:Requests[]=[];
   demo.work(true);
   await demo.nextReport('laptop'); // First list starts the work; the next credits it.
   await sleep(1000);
@@ -814,7 +815,7 @@ async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cd
     const calendarFrom=Date.now()-2*3_600_000;
     const calendarTotal=`Array.from(document.querySelectorAll('.agent-hours-heatmap [data-agent-ms]')).filter(node=>Number(node.getAttribute('data-heatmap-cell'))>=${calendarFrom}).reduce((sum,node)=>sum+Number(node.getAttribute('data-agent-ms')),0)`;
     const calendarBefore=await cdp.evaluate<number>(calendarTotal);
-    const requests = new Requests(cdp); requests.counting = true;
+    const requests = new Requests(cdp,true); requests.counting = true;traffic.push(requests);
     const from = Date.now();
     if (i === 2) demo.work(false); // This report credits the last working list.
     const at = await demo.nextReport('laptop');
@@ -828,7 +829,14 @@ async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cd
     if(calendarAfter<=calendarBefore)problems.push('work report did not update recent registered calendar hours');
     problems.push(...renderProblems({card: source, renders: reading.renders, mutations: reading.mutations, from, to: Date.now()}));
   }
-  return {reports, problems};
+  const original={reports,problems,traffic:{reports:traffic.map(requests=>requests.trafficReading)}};
+  evidence.save('work',original);
+  if(!problems.some(problem=>problem.startsWith('work report read history')))return original;
+  const originalCommandFailure=cdp.snapshot().failure;
+  cdp.at('work/traffic-diagnostic');
+  const diagnostics=await Promise.all(traffic.map(requests=>requests.diagnose(cdp)));
+  cdp.at('work');
+  return {reports,problems,traffic:{originalCommandFailure,reports:diagnostics}};
 }
 
 /** The interval endpoint has the same history and rendering budget as the released writer. */

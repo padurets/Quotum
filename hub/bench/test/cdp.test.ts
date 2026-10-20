@@ -2,9 +2,13 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import ts from 'typescript';
 import {attachedChrome, Cdp, openTab,nativeProcesses, threadWait,threadCall} from '../cdp.js';
 import {Requests} from '../index.js';
 import {safeEvidence} from '../evidence.js';
+import {HISTORY_BYTES_PER_MEASUREMENT,renderProblems} from '../budget.js';
 
 /** Stands in for what the benchmark hears of the browser: events by name, emitted by the test. */
 function browser() {
@@ -338,6 +342,67 @@ test('history bytes are counted by path after reads finish, separately from othe
   cdp.emit('Network.loadingFinished', {requestId: 'history', encodedDataLength: 2345});
   assert.equal(requests.historyPending, 0);
   assert.equal(requests.bytesByPath['/api/history'], 2345);
+});
+
+test('work diagnostics partition the original compact body without changing physical traffic or exporting its contents',async()=>{
+  const events=browser(),calls:string[]=[];
+  const body='{"basis":{"evidenceCut":3e3,"run":"private-run"},"sessions":{"state":"delta","value":{"cursor":"private-cursor","refs":["private-ref"]}},"calendar":{"value":{"updates":[[0,3e3]]}},"private-key":[1,2]}';
+  const cdp={...events,send:async<T>(method:string)=>{calls.push(method);return {body,base64Encoded:false} as T;}};
+  const requests=new Requests(cdp as unknown as Cdp,true);requests.counting=true;
+  const postData=JSON.stringify({selection:{mode:'live',periodMs:86400000,private:'private-selection'},evaluatedAt:3000,quota:{from:'0',to:'3000',cell:'1000',cells:'skip',evidence:'private-evidence'},sessions:{cursor:'private-cursor'},calendar:{zone:'private-zone',cursor:'private-calendar'}});
+  cdp.emit('Network.requestWillBeSent',{requestId:'private-request',type:'Fetch',request:{url:'http://localhost/api/boards/private-board/period',postData}});
+  cdp.emit('Network.responseReceived',{requestId:'private-request',response:{status:200,headers:{'Content-Encoding':'gzip','Content-Length':'4300',Authorization:'private-header'}}});
+  cdp.emit('Network.dataReceived',{requestId:'private-request',encodedDataLength:4200,dataLength:Buffer.byteLength(body)});
+  requests.counting=false;
+  cdp.emit('Network.loadingFinished',{requestId:'private-request',encodedDataLength:4712});
+  assert.deepEqual(calls,[],'the measurement sends no body command');
+  assert.equal(requests.historyBytes,4712);assert.equal(requests.historyRequests,1);assert.equal(requests.historyPending,0);
+  const result=await requests.diagnose(cdp);assert.equal(result.status,'complete');assert.ok('body' in result);
+  assert.equal(result.body.partition,Buffer.byteLength(body));assert.equal(result.body.decodedBytes,Buffer.byteLength(body));
+  assert.equal(result.body.sections.basis,Buffer.byteLength('{"evidenceCut":3e3,"run":"private-run"}'));
+  assert.deepEqual(result.body.unknown,{count:1,bytes:5});assert.equal(result.body.headerBytes,null);
+  assert.equal(result.reads[0].encodedTotal,4712);assert.equal(result.reads[0].encodedBodyLower,4200);assert.equal(result.reads[0].contentLength,4300);
+  assert.equal(requests.historyBytes,4712,'decoded and encoded body observations cannot replace the original budget');
+  assert.deepEqual(calls,['Network.getResponseBody']);assert.doesNotMatch(JSON.stringify(safeEvidence(result)),/private-/);
+});
+
+test('ambiguous, cancelled and omitted work reads cannot cause speculative response-body commands',async()=>{
+  for(const count of [1,2,9]){
+    const events=browser(),cdp={...events,send:async()=>{throw Error('unexpected diagnostic body request');}};
+    const requests=new Requests(cdp as unknown as Cdp,true);requests.counting=true;
+    for(let i=0;i<count;i++){
+      const requestId=String(i);cdp.emit('Network.requestWillBeSent',{requestId,type:'Fetch',request:{url:'http://localhost/api/boards/b/period'}});
+      cdp.emit('Network.dataReceived',{requestId,encodedDataLength:123});
+      cdp.emit(count===1?'Network.loadingFailed':'Network.loadingFinished',{requestId,encodedDataLength:4712});
+    }
+    const before=requests.historyBytes,result=await requests.diagnose(cdp);
+    assert.equal(result.status,'insufficient-evidence');assert.equal(requests.historyBytes,before);
+    assert.equal(result.omitted,count===9?1:0);assert.equal(result.reads.length,Math.min(8,count));
+    if(count===1){assert.equal(before,123);assert.equal(result.reads[0].request,null);}
+  }
+});
+
+test('the actual work phase freezes all three original verdicts before optional body diagnostics, whose failure cannot erase the budget failure',async()=>{
+  const source=readFileSync(new URL('../index.ts',import.meta.url),'utf8'),ast=ts.createSourceFile('index.ts',source,ts.ScriptTarget.Latest,true);
+  const node=ast.statements.find((node):node is ts.FunctionDeclaration=>ts.isFunctionDeclaration(node)&&node.name?.text==='work')!;
+  const code=ts.transpileModule('('+node.getText(ast)+')',{compilerOptions:{target:ts.ScriptTarget.ESNext}}).outputText;
+  for(const overBudget of [false,true])for(const failedBody of [false,true]){
+    const events=browser(),order:string[]=[],saved:unknown[]=[],originalFailure={method:'Original.command',id:99};let reports=0,calendar=0;
+    const cdp={...events,evaluate:async(expression:string)=>expression.startsWith('Array.from')?++calendar:expression==='__quotumBench.read()'?{renders:[],mutations:[]}:undefined,
+      snapshot:()=>({failure:originalFailure}),at:(stage:string)=>order.push(stage),send:async<T>(method:string)=>{order.push(method);if(failedBody)throw Error('private-response-error');return {body:'{"sessions":{"state":"delta","value":[]}}',base64Encoded:false} as T;}};
+    const demo={work:()=>{},nextReport:async()=>{order.push('report'+(++reports));if(reports>1){const requestId=String(reports),bytes=overBudget&&reports===2?4712:3842;
+      events.emit('Network.requestWillBeSent',{requestId,type:'Fetch',request:{url:'http://localhost/api/boards/b/period',postData:'{"selection":{"mode":"live","periodMs":86400000}}'}});
+      events.emit('Network.loadingFinished',{requestId,encodedDataLength:bytes});}return reports*1000;}};
+    const work=runInNewContext(code,{Requests,Date,MEASURED:'measured',HISTORY_BYTES_PER_MEASUREMENT,renderProblems,sleep:async()=>{},drain:async(requests:Requests)=>assert.equal(requests.historyPending,0)});
+    const result=await work(demo,{sources:new Map([['measured','source']])},cdp,{save:(_name:string,value:unknown)=>{order.push('save');saved.push(JSON.parse(JSON.stringify(value)));}});
+    assert.equal(result.reports.length,3);assert.equal(saved.length,1);
+    assert.deepEqual(Array.from(result.reports,(row:{bytes:number})=>row.bytes),overBudget?[4712,3842,3842]:[3842,3842,3842]);
+    assert.equal(result.problems.length,overBudget?1:0);
+    assert.equal(order.filter(value=>value==='Network.getResponseBody').length,overBudget?3:0);
+    if(overBudget){assert.equal(result.problems[0],'work report read history 1 times, 4712 bytes');assert.ok(order.indexOf('Network.getResponseBody')>order.indexOf('report4'));assert.ok(order.indexOf('save')<order.indexOf('Network.getResponseBody'));assert.deepEqual(result.traffic.originalCommandFailure,originalFailure);assert.ok(result.traffic.reports.every((row:{status:string})=>row.status===(failedBody?'insufficient-evidence':'complete')));}
+    const original=saved[0] as {reports:unknown;problems:unknown};
+    assert.deepEqual(JSON.parse(JSON.stringify({reports:result.reports,problems:result.problems})),{reports:original.reports,problems:original.problems});
+  }
 });
 
 test('composite and detail attempts stay in the accounting budget after cancellation and the measurement window',()=>{

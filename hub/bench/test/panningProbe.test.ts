@@ -379,8 +379,9 @@ test('unpainted final input is credited only after its geometry commits', () => 
 });
 
 test('the probe measures a delayed HTML or SVG fold and cannot credit final input while it is moving', () => {
-  for (const typed of [false,true]) for (const html of [true, false]) for(const cost of [0,72]) {
+  for(const inputSegment of ['wheel','drag','return'])for (const typed of [false,true]) for (const html of [true, false]) for(const cost of [0,72]) {
     const f = fixture('quota',typed); f.wheel(0, 0);
+    Object.assign(f.reading,{segment:inputSegment});
     for (const svg of [f.historySvg, f.activitySvg, f.budgetSvg, f.fundsSvg, f.sessionSvg]) {
       delete svg.dataset.panEnd;
       svg.parentElement.dataset.axisEnd = '12';
@@ -401,6 +402,11 @@ test('the probe measures a delayed HTML or SVG fold and cannot credit final inpu
     assert.equal(f.reading.samples[0].callbacksSinceMovingFrame,1);
     assert.equal(f.reading.samples[0].maxCallbackGapMs,80);
     assert.equal(f.reading.samples[0].samplerMs,cost,'observer work is identified without subtracting it from the failing gap');
+    const partial=runInNewContext(panPartialScript('quota','24h'),f.context);
+    assert.equal(partial.outliersOmitted,0);
+    const saved=safeEvidence(partial.outliers[0]) as NonNullable<PanReading['outliers']>[number];
+    assert.equal(saved.at,110);assert.equal(saved.stamp,110);assert.equal(saved.inputSegment,inputSegment);
+    assert.equal(saved.foldMask,1);assert.equal(saved.svgFoldMask,html?0:1);assert.equal(saved.movedMask,1);
     assert.equal(f.reading.latency.length, 0, 'final geometry alone cannot credit an unfinished animation');
     moving.getAnimations = () => []; f.paintFold(moving,'none'); f.runFrame(120);
     assert.deepEqual(Array.from(f.reading.latency), [120]);
