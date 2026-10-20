@@ -144,6 +144,28 @@ test('a port file timestamp cannot authorize publication or replace real silent 
   await assert.rejects(fetch(browser.endpoint + '/json/version'));
 });
 
+test('publication between a port scan and its wait wakes full validation without a polling tick', {timeout: 15_000}, async t => {
+  const {profile, launch, publishPort} = fixture(t, 'ready', true);
+  await until(() => existsSync(profile + '/started'));
+  const controller = new AbortController();
+  const cancel = () => {t.mock.timers.reset(); controller.abort();};
+  t.signal.addEventListener('abort', cancel, {once: true});
+  t.mock.timers.enable({apis: ['setTimeout']});
+  let published = false, browser: Awaited<ReturnType<typeof launch>> | undefined;
+  try {
+    browser = await launch(controller.signal, report => {
+      if (!published && report.failure === 'no-port') {published = true; publishPort();}
+    });
+    const report = browser.launchReport!() as LaunchReport;
+    assert.equal(published, true); assert.equal(report.stage, 'ready');
+    assert.equal(report.version, 'Chrome/fixture'); assert.equal(report.probes!.attempts, 1);
+  } finally {
+    t.mock.timers.reset(); t.signal.removeEventListener('abort', cancel);
+    if (browser) await browser.close();
+  }
+  assert.equal(existsSync(profile), false);
+});
+
 test('startup span tails retain omissions and cannot rewrite a terminal receipt', () => {
   const spans = new StartupSpans();
   let last: ReturnType<StartupSpans['scan']>;

@@ -1,5 +1,5 @@
 import {spawn, type ChildProcess} from 'node:child_process';
-import {closeSync, constants, fstatSync, mkdtempSync, openSync, readSync, rmSync} from 'node:fs';
+import {closeSync, constants, fstatSync, mkdtempSync, openSync, readSync, rmSync, watch, type FSWatcher} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {browserProcess, type ProcessCleanup, type ProcessIdentity} from './browserProcess.js';
@@ -199,12 +199,25 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
     console.error('bench: Chrome cleanup ' + JSON.stringify(snapshot()));
     if (state.cleanup.status !== 'closed') throw new Error('Chrome cleanup unconfirmed; owned profile retained');
   })();
+  let portWatch: FSWatcher | undefined, portRevision = 0, wakePort: (() => void) | undefined;
+  const closePortWatch = () => {
+    const watcher = portWatch; portWatch = undefined;
+    try {watcher?.close();} catch { /* Watching cannot replace the startup outcome or block owned cleanup. */ }
+  };
   try {
     progress?.(snapshot());
     const endpoint = await deadline(20_000, async pending => {
+      try {
+        // A publication wakes validation; polling still covers missing filesystem events.
+        portWatch = watch(profile, {persistent: false}, (_event, file) => {
+          if (portWatch && file === 'DevToolsActivePort') {portRevision++; wakePort?.();}
+        });
+        portWatch.on('error', () => {closePortWatch(); wakePort?.();});
+      } catch { /* Unsupported watching falls back to the existing poll. */ }
       let failure: Failure = 'no-port';
       while (true) {
         pending.throwIfAborted();
+        const scannedRevision = portRevision;
         const scan = spans.scan();
         let processes: ProcessIdentity[];
         try {processes = await processOwner.observe(pending);} finally {scan.observeTo = spans.clock();}
@@ -256,12 +269,19 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
             pending.throwIfAborted();
           } finally {span.to = spans.clock(); span.reason = probe.reason; probe.elapsedMs=Math.round(performance.now()-probeStarted);progress?.(snapshot());}
         }
-        await deadline(150, pending => new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, 100);
-          pending.addEventListener('abort', () => {clearTimeout(timer); reject(pending.reason);}, {once: true});
+        await deadline(150, waiting => new Promise<void>((resolve, reject) => {
+          const done = () => {
+            clearTimeout(timer); waiting.removeEventListener('abort', done);
+            if (wakePort === done) wakePort = undefined;
+            if (waiting.aborted) reject(waiting.reason); else resolve();
+          };
+          const timer = setTimeout(done, 100);
+          wakePort = done;
+          waiting.addEventListener('abort', done, {once: true});
+          if (waiting.aborted || scannedRevision !== portRevision) done();
         }), pending);
       }
-    }, startup.signal);
+    }, startup.signal).finally(() => {closePortWatch(); wakePort = undefined;});
     signal?.removeEventListener('abort', cancel);
     state.startupSpans = spans.freeze();
     console.error('bench: Chrome ready ' + JSON.stringify(snapshot()));
