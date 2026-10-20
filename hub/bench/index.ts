@@ -219,6 +219,10 @@ async function main() {
       if (Date.now() > shownBy) throw new Stop(`The board showed no cards in ${SHOWN_MS / 1000} s.`);
       await sleep(250);
     }
+    while(!await cdp.evaluate<boolean>(`!!document.querySelector('.agent-hours-heatmap[data-calendar-ready="true"]')`)){
+      if(Date.now()>shownBy)throw new Stop('The enabled agent-hours calendar did not receive its baseline.');
+      await sleep(100);
+    }
     const opened = Date.now();
     // Measure with the shared controls open, as before they could be collapsed.
     await cdp.evaluate(`(async () => {
@@ -727,6 +731,7 @@ async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cd
   await sleep(1000);
   for (let i = 0; i < 3; i++) {
     await cdp.evaluate('__quotumBench.reset()');
+    const calendarBefore=await cdp.evaluate<number>(`Array.from(document.querySelectorAll('.agent-hours-heatmap [data-agent-ms]')).reduce((sum,node)=>sum+Number(node.getAttribute('data-agent-ms')),0)`);
     const requests = new Requests(cdp); requests.counting = true;
     const from = Date.now();
     if (i === 2) demo.work(false); // This report credits the last working list.
@@ -737,6 +742,8 @@ async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cd
     const bytes = requests.historyBytes;
     reports.push({at, reads, bytes});
     if (reads !== 1 || bytes > HISTORY_BYTES_PER_MEASUREMENT) problems.push(`work report read history ${reads} times, ${bytes} bytes`);
+    const calendarAfter=await cdp.evaluate<number>(`Array.from(document.querySelectorAll('.agent-hours-heatmap [data-agent-ms]')).reduce((sum,node)=>sum+Number(node.getAttribute('data-agent-ms')),0)`);
+    if(calendarAfter<=calendarBefore)problems.push('work report did not update registered calendar hours');
     problems.push(...renderProblems({card: source, renders: reading.renders, mutations: reading.mutations, from, to: Date.now()}));
   }
   return {reports, problems};

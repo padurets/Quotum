@@ -1,3 +1,4 @@
+import {seedCalendar} from './workCalendar.js';
 import {seedSessionClients} from './sessionClients.js';
 import {spawn, type ChildProcess} from 'node:child_process';
 import {existsSync, mkdtempSync, realpathSync, rmSync} from 'node:fs';
@@ -208,6 +209,7 @@ export class Demo {
     const store = new Store(path.join(this.dir, 'quotum.sqlite'));
     try {
       seedWork(store, stand);
+      if(set.id==='calendar')seedCalendar(store,new Directory(store.db),stand);
       if(set.id==='devices')await seedMeasurementDevices(store,new Directory(store.db),stand);
       if(set.id==='clients')await seedClients(store,new Directory(store.db),stand);
       if(set.id==='links')await seedLinks(store,new Directory(store.db),stand);

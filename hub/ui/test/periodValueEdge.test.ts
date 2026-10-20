@@ -64,7 +64,8 @@ for(const limit of ['reset','ttl'] as const)test(`rounded native values evaluate
   // A stored future reply must not enter a range merely because rounding puts its edge later.
   h.store.record(id,{observedAt:now+5_000,plan:'',resets:null,staleAfterMs:H,windows:[{id:'future',kind:'session',label:null,minutes:300,used:99,remaining:1,resetAt:now+H}]});
   for(const to of [deadline,deadline-1,deadline+1,now+35_000]){
-    const value=(await h.values([id],to))[0],window=value.windows[0];
+    const base=(await h.values([id],to))[0];assert.equal(base.windows[0].stale,false,'a future selected edge evaluates at the current clock');
+    const value=periodValueAt(base,to)!;assert.ok(value);const window=value.windows[0];
     assert.equal(window.id,'weekly');assert.equal(window.observedAt,at);assert.equal(window.remaining,83);
     const html=cardHTML(window);
     assert.equal(html.includes('Measurements stale'),to>=deadline,'the rendered value explains expired evidence');
@@ -84,7 +85,7 @@ test('rounded wallet, cap and subscription funds keep exact amounts, admission a
   h.store.record(cap,{type:'meters',observedAt:now+5_000,staleAfterMs:H,meters:[{...meter('quota:credit:5h','0',now+5_000,H),kind:'cap',unit:'credits:zai',limit:'1000',minutes:300}],keys:[],inventoryComplete:true,inventoryError:null});
   h.store.record(funds,{observedAt:now+5_000,plan:'',resets:null,staleAfterMs:H,windows:[],balances:[{id:'balance:credits',unit:'credits:codex',status:'finite',amount:'0',hasCredits:true}]});
   for(const edge of [deadline-1,deadline,to]){
-    const values=await h.values([wallet,cap,funds],edge),walletValue=values.find(v=>v.id===wallet)!,capValue=values.find(v=>v.id===cap)!,fundsValue=values.find(v=>v.id===funds)!;
+    const values=(await h.values([wallet,cap,funds],edge)).map(value=>periodValueAt(value,edge)!),walletValue=values.find(v=>v.id===wallet)!,capValue=values.find(v=>v.id===cap)!,fundsValue=values.find(v=>v.id===funds)!;
     const balance=walletValue.meters.find(m=>m.id==='balance')!,converted=walletValue.meters.find(m=>m.conversion?.original.meterId==='balance')!;
     assert.equal(balance.amount,'9007199254740993');assert.equal(balance.at,at);assert.equal(balance.stale,edge>=deadline);
     assert.equal(converted.amount,'18014398509481986');assert.equal(converted.conversion!.original.amount,balance.amount);assert.equal(converted.conversion!.original.at,at);assert.equal(converted.stale,edge>=deadline);
@@ -99,10 +100,10 @@ test('nearby cached values cross future deadlines without admitting future obser
   const h=await fixture(t),id=h.source(),at=now-M,deadline=now+10_001,from=now-H,to=now+35_000;
   h.record(id,at,'0',70_000);
   const result=await h.read(id,from,to),value=result.value;
-  assert.equal(result.summary.end,null);assert.deepEqual(result.fixed.range,{from,to});
+  assert.equal(result.summary.end,'100000000','the incomplete interval uses the elapsed state point');assert.deepEqual(result.fixed.range,{from,to});
   for(const edge of [now-5_000,deadline-1,deadline,deadline+1,to,to+1]){
     const cached=periodValueAt(value,edge);assert.ok(cached,`cached edge ${edge}`);
-    const fresh=(await h.values([id],edge))[0];
+    const fresh=periodValueAt((await h.values([id],edge))[0],edge)!;
     assert.deepEqual(cached.meters,fresh.meters);assert.deepEqual(cached.windows,fresh.windows);assert.deepEqual(cached.keys,fresh.keys);
     assert.equal(cached.meters.find(m=>m.id==='balance')!.amount,'100000000');
     assert.equal(cached.meters.find(m=>m.id==='balance')!.stale,edge>=deadline);

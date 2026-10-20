@@ -2,6 +2,22 @@ import type {Catalog} from './index';
 
 /** Русский. Разница двух долей лимита тоже в «%»: всё здесь — доля лимита. */
 export const ru = {
+  "calendar.loading": "Загрузка зарегистрированной работы…",
+  "calendar.title": "Агенто-часы",
+  "calendar.window": "90 дат",
+  "calendar.registered": "Зарегистрированные агенто-часы",
+  "calendar.zero": "Нет зарегистрированной работы",
+  "calendar.unavailable": "Нет доступной истории",
+  "calendar.pending": "Данных пока нет",
+  "calendar.partial": "Доступна часть этой даты",
+  "calendar.bounds": "Доступный интервал",
+  "calendar.observations": "Показана зарегистрированная работа. Полнота наблюдений не подтверждена.",
+  "calendar.openDay": "Открыть день",
+  "calendar.settings": "Настройки агенто-часов",
+  "calendar.hours": "ч",
+  "calendar.exact": "Зарегистрированные агенто-часы: {hours}",
+  "calendar.empty": "Нет зарегистрированной работы с этими фильтрами.",
+
   "filters.resources": "Ресурсы",
   "filters.projects": "Проекты",
   "filters.devices": "Устройства",

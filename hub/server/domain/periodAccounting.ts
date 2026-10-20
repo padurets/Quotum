@@ -105,14 +105,14 @@ class QuotaIndex {
     return points.sort((a,b)=>a[0]-b[0]);
   }
 
-  at(range:PeriodRange):QuotaSummary {
+  at(range:PeriodRange,stateAt=range.to):QuotaSummary {
     const lo=lower(this.times,range.from),hi=Math.max(0,lower(this.times,range.to)-1),last=sampleAt(this.series.samples,lower(this.times,range.to)-1);
     const first=sampleAt(this.series.samples,lower(this.times,range.from+1)-1);
     const valid=(sample:typeof first,at:number)=>sample&&at<Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity)?100-sample.used:null;
     const sum=(values:Numbers)=>hi>lo?numberAt(values,hi)!-numberAt(values,lo)!:0;
     const workRange={from:Math.max(range.from,this.known),to:range.to};
     const workLo=lower(this.times,workRange.from);
-    return {consumed:sum(this.spent),coveredMs:sum(this.covered),remainingAtStart:valid(first,range.from),remainingAtEnd:valid(last,range.to),work:Number.isFinite(this.known)?{from:workRange.from,ms:workRange.to>workRange.from?this.activity?.read(workRange,true)??0:null,agentMs:workRange.to>workRange.from?this.activity?.read(workRange)??0:0,consumed:hi>workLo?numberAt(this.spent,hi)!-numberAt(this.spent,workLo)!:0,coveredMs:sum(this.worked),duringWork:sum(this.during)}:null};
+    return {consumed:sum(this.spent),coveredMs:sum(this.covered),remainingAtStart:valid(first,range.from),remainingAtEnd:valid(last,stateAt),work:Number.isFinite(this.known)?{from:workRange.from,ms:workRange.to>workRange.from?this.activity?.read(workRange,true)??0:null,agentMs:workRange.to>workRange.from?this.activity?.read(workRange)??0:0,consumed:hi>workLo?numberAt(this.spent,hi)!-numberAt(this.spent,workLo)!:0,coveredMs:sum(this.worked),duringWork:sum(this.during)}:null};
   }
 }
 
@@ -284,13 +284,13 @@ class MoneyIndex {
     }
     return points.sort((a,b)=>a.at-b.at||(a.knownFrom??0)-(b.knownFrom??0));
   }
-  at(range:PeriodRange):Pick<MeterHistory,'start'|'end'|'startScale'|'endScale'|'spent'|'topup'|'unlocated'|'topupUnlocated'|'coveredMs'|'semantics'> {
+  at(range:PeriodRange,stateAt=range.to):Pick<MeterHistory,'start'|'end'|'startScale'|'endScale'|'spent'|'topup'|'unlocated'|'topupUnlocated'|'coveredMs'|'semantics'> {
     const spent=this.spent.at(range),topup=this.topup.at(range),authority=this.group.accounting;
     const last=this.observation(range.to),first=this.observation(range.from,true);
     const semantics=last?this.semantics(last.reading,last.observed,last.native):null;
     const scale=(observation:typeof last)=>observation?(this.group.displayUnit&&this.group.displayUnit!==observation.reading.unit?6:observation.reading.scale):undefined;
     const coveredMs=this.coverage.in(range);
-    return {start:this.value(first,range.from),end:this.value(last,range.to),startScale:scale(first),endScale:scale(last),semantics,spent:authority?.spending==='unavailable'||!coveredMs?null:spent.value,topup:authority?.topups==='unavailable'||!coveredMs?null:topup.value,unlocated:authority?.spending==='unavailable'?[]:spent.unlocated,topupUnlocated:authority?.topups==='unavailable'?[]:topup.unlocated,coveredMs};
+    return {start:this.value(first,range.from),end:this.value(last,stateAt),startScale:scale(first),endScale:scale(last),semantics,spent:authority?.spending==='unavailable'||!coveredMs?null:spent.value,topup:authority?.topups==='unavailable'||!coveredMs?null:topup.value,unlocated:authority?.spending==='unavailable'?[]:spent.unlocated,topupUnlocated:authority?.topups==='unavailable'?[]:topup.unlocated,coveredMs};
   }
   changesAt(now:number,period:number) {
     let next=Infinity;
@@ -387,20 +387,20 @@ export class PeriodAccounting {
   moneyWorkSummary(source:string,range:PeriodRange){const fixed=this.tape.fixed?.moneyWork?.find(row=>row.source===source);if(fixed)return fixed;const index=this.moneyWork.get(source);if(!index)return;const selected=this.directWork(source,range,index.counter.workFrom??Infinity);return {...index.at(range),selectedWork:{from:selected.from,activeMs:selected.ms,agentMs:selected.agentMs}};}
   fixed(range:PeriodRange,cell:number):NonNullable<PeriodTape['fixed']> {
     const blank:History={range:'',live:false,since:range.from,to:range.to,cellMs:cell,historyStart:0,series:[],events:[],activity:{since:range.from,known:null,barMs:cell,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
-    const quota=this.project(blank,range,undefined,true).series;
-    const money=[...this.money.values()].flatMap(index=>{const group=index.group,last=group.readings.filter(row=>row.at<range.to).at(-1);return last?[{sourceId:group.source,meterId:group.meter,kind:group.paired?'balance' as const:last.kind,unit:group.displayUnit??last.unit,accounting:group.accounting,role:group.role,pointMode:last.kind==='cap'?'cell' as const:'observation' as const,...index.at(range),points:index.plot(range,cell,[])}]:[];});
+    const quota=this.project(blank,range,undefined,true,Math.min(range.to,this.tape.cut)).series;
+    const money=[...this.money.values()].flatMap(index=>{const group=index.group,last=group.readings.filter(row=>row.at<range.to).at(-1);return last?[{sourceId:group.source,meterId:group.meter,kind:group.paired?'balance' as const:last.kind,unit:group.displayUnit??last.unit,accounting:group.accounting,role:group.role,pointMode:last.kind==='cap'?'cell' as const:'observation' as const,...index.at(range,Math.min(range.to,this.tape.cut)),points:index.plot(range,cell,[])}]:[];});
     return {range,cell,quota,money,...(this.moneyWork.size?{moneyWork:[...this.moneyWork.keys()].map(source=>this.moneyWorkSummary(source,range)!)}:{})};
   }
-  project(history:History,range:PeriodRange,values?:ReadonlyMap<string,PeriodValues>,boundaryOnly=false):History {
-    if(range.from<this.tape.from)return history;
+  project(history:History,range:PeriodRange,values?:ReadonlyMap<string,PeriodValues>,boundaryOnly=false,stateAt=range.to):History {
+    if(range.from<this.tape.from&&!this.tape.fixed&&!boundaryOnly)return history;
     const fixed=this.tape.fixed;
     if(fixed){
       if(range.from!==fixed.range.from||range.to!==fixed.range.to||history.cellMs!==fixed.cell)return history;
       const leftEnd=(Math.floor(range.from/fixed.cell)+1)*fixed.cell,rightStart=Math.floor((range.to-1)/fixed.cell)*fixed.cell;
       const interior=(at:number)=>at>=leftEnd&&at<rightStart;
       return {...history,exact:true,since:range.from,to:range.to,...(fixed.moneyWork?{moneyWork:fixed.moneyWork}:{}),
-        series:fixed.quota.map(row=>({...row,points:[...(history.series.find(s=>s.sourceId===row.sourceId&&s.windowId===row.windowId)?.points??[]).filter(([at])=>interior(at)),...row.points].sort((a,b)=>a[0]-b[0])})),
-        meterSeries:fixed.money.map(row=>({...row,points:[...moneyInterior(history.meterSeries?.find(s=>s.sourceId===row.sourceId&&s.meterId===row.meterId&&s.unit===row.unit)?.points??[],range,fixed.cell,{from:history.since,to:history.to}),...row.points].sort((a,b)=>a.at-b.at)}))};
+        series:fixed.quota.map(row=>({...row,...(stateAt<range.to&&values?.get(row.sourceId)?{remainingAtEnd:values.get(row.sourceId)!.windows.find(w=>w.id===row.windowId&&stateAt<w.validUntil)?.remaining??null}:{}),points:[...(history.series.find(s=>s.sourceId===row.sourceId&&s.windowId===row.windowId)?.points??[]).filter(([at])=>interior(at)),...row.points].sort((a,b)=>a[0]-b[0])})),
+        meterSeries:fixed.money.map(row=>({...row,...(stateAt<range.to&&values?.get(row.sourceId)&&values.get(row.sourceId)!.meters.some(m=>m.id===row.meterId&&stateAt>=(m.validUntil??m.at+m.staleAfterMs+1))?{end:null}:{}),points:[...moneyInterior(history.meterSeries?.find(s=>s.sourceId===row.sourceId&&s.meterId===row.meterId&&s.unit===row.unit)?.points??[],range,fixed.cell,{from:history.since,to:history.to}),...row.points].sort((a,b)=>a.at-b.at)}))};
     }
     const previous=new Map(history.series.map(s=>[s.sourceId+'\n'+s.windowId,s]));
     const series:HistorySeries[]=[];
@@ -412,7 +412,7 @@ export class PeriodAccounting {
       const windowValue=membership?.windows.find(w=>w.id===row.window)??descriptor?.value;
       if(!history.live&&(membership?!membership.windows.some(w=>w.id===row.window):row.descriptors?numberAt(times,lower(times,range.to)-1)!==batches.get(row.source):row.member===false))continue;
       const old=previous.get(key);if(!old&&history.live)continue;
-      const summary=this.quotaSummary(row.source,row.window,range)!,points=!history.live?index.plot(range,history.cellMs,old?.points??[],boundaryOnly):old!.points;
+      const summary={...this.quotaSummary(row.source,row.window,range)!,...index.at(range,stateAt)},points=!history.live?index.plot(range,history.cellMs,old?.points??[],boundaryOnly):old!.points;
       series.push({...old,sourceId:row.source,windowId:row.window,staleAfterMs:sampleAt(row.samples,sampleCount(row.samples)-1)?.staleAfterMs??0,...summary,points,...(!history.live?{pointMode:'observation' as const,windowValue:windowValue??row.windowValue}:{})});
     }
     return {...history,exact:true,since:range.from,to:range.to,series,...(this.moneyWork.size?{moneyWork:[...this.moneyWork.keys()].map(source=>this.moneyWorkSummary(source,range)!)}:{}),meterSeries:history.meterSeries?.map(series=>{const index=this.money.get(series.sourceId+'\n'+series.meterId+'\n'+series.unit);return index?{...series,...index.at(range),...(!history.live?{points:index.plot(range,history.cellMs,series.points,{from:history.since,to:history.to}),...(series.kind!=='cap'?{pointMode:'observation' as const}:{})}:{})}:series;})};

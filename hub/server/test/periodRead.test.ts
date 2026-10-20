@@ -1,3 +1,4 @@
+import {calendarWindow} from '../../ui/lib/workCalendar.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {Store} from '../store/store.js';
@@ -65,16 +66,16 @@ test('project selection precedes live and fixed union, facets and cursor-bound d
   assert.equal(empty.sessions.value.refs.length,0);assert.notEqual(empty.sessions.value.available,false);
   assert.equal(sourceWorkCurves(empty.sourceWork.value).groups.source.get(h.source)!.read(empty.basis.range,true),120*M);
 });
-async function fixture() {
-  const store=new Store(':memory:',now-3*H),directory=new Directory(store.db);
-  const user=directory.createUser('a@example.com','A','unused',now-3*H),board=directory.boards(user.id)[0].id;
-  const token=newSecret('qt_s');directory.createSession(token,user.id,now-3*H,24*H);
-  const source=store.source('codex','a'.repeat(24),now-3*H);store.hold(source,user.id,now-3*H);
-  const device=directory.saveDevice({userId:user.id,machine:{id:'machine-0123456789',name:'Laptop',os:'linux',arch:'x86_64'},agent:'quotum/0.6.0',tokenId:null},now-3*H).id;
+async function fixture(start=now-3*H) {
+  const store=new Store(':memory:',start),directory=new Directory(store.db);
+  const user=directory.createUser('a@example.com','A','unused',start),board=directory.boards(user.id)[0].id;
+  const token=newSecret('qt_s');directory.createSession(token,user.id,Date.now(),24*H);
+  const source=store.source('codex','a'.repeat(24),start);store.hold(source,user.id,start);
+  const device=directory.saveDevice({userId:user.id,machine:{id:'machine-0123456789',name:'Laptop',os:'linux',arch:'x86_64'},agent:'quotum/0.6.0',tokenId:null},start).id;
   const hub:Hub={store,directory,ingest:new Ingest(store,directory,new Duty(),new Cadence()),resets:new ResetFeed(undefined,()=>{}),pairing:new Pairing(directory),setup:new Setup(false,null),local:null};
   const app=await buildApp(hub);
   const read=(body:PeriodRequest,asBoard=board)=>app.inject({method:'POST',url:`/api/boards/${asBoard}/period`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`},payload:body});
-  const credit=(from:number,to:number,id='stable')=>store.creditWork(device,from,to,[{source,origin:'terminal',startedAt:now-3*H,project:'Project',folder:'folder',identity:{kind:'stable',sessionId:id}}]);
+  const credit=(from:number,to:number,id='stable')=>store.creditWork(device,from,to,[{source,origin:'terminal',startedAt:start,project:'Project',folder:'folder',identity:{kind:'stable',sessionId:id}}]);
   const details=(body:unknown)=>app.inject({method:'POST',url:`/api/boards/${board}/period/sessions`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`},payload:body as object});
   return {store,directory,hub,app,user,board,source,device,read,credit,details};
 }
@@ -569,4 +570,75 @@ test('quota unavailability ends both historical values and exact tape coverage a
   const summary=reply.quota.value.tape!.fixed!.quota[0];assert.equal(summary.remainingAtEnd,null);assert.equal(summary.points.at(-1)![3],boundary);
   const before=periodValues(h.store,h.store.sources(h.board),h.user.id,boundary-1,()=>{})[0];
   assert.equal(before.windows[0].stale,false);assert.equal(before.validFor!.to,boundary);
+});
+
+
+test('calendar totals use the selected admitted cohort and share extraction with sessions and facets',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture(now-100*24*H);t.after(async()=>{await h.app.close();h.store.close();});
+  const window=calendarWindow(now,'UTC'),start=window.edges[89];
+  for(let i=0;i<4;i++)h.credit(start+H,start+3*H,'parallel'+i);
+  h.credit(window.edges[69]+H,window.edges[69]+2*H,'old');
+  const original=h.store.agentWork.bind(h.store);let reads=0;
+  t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{reads++;return original(...args);});
+  const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:24*H},evaluatedAt:now,calendar:{zone:window.zone,edges:window.edges},sessions:{},facets:true};
+  const result=await h.read(body);assert.equal(result.statusCode,200,result.body);const reply=expandPeriod(result.json());
+  if(reply.calendar?.state!=='complete'||reply.sessions?.state!=='complete'||reply.facets?.state!=='complete')throw new Error('calendar baseline');
+  assert.equal(reply.calendar.value.cells[89].agentMs,8*H);assert.equal(reply.calendar.value.cells[69].agentMs,H);assert.equal(reads,1);
+  assert.equal(workedSessions(reply.sessions.value,reply.basis.range,now).reduce((n,r)=>n+r.workedMs,0),8*H);
+  assert.deepEqual(reply.facets.value.ranges,[{from:window.edges[0],to:now}]);
+  const filters=defaultFilters();filters.projects={mode:'include',values:[]};
+  const empty=expandPeriod((await h.read({...body,workFilter:workFilter(filters)})).json());
+  if(empty.calendar?.state!=='complete')throw new Error('empty calendar');assert.equal(empty.calendar.value.cells[89].agentMs,0);
+});
+
+test('calendar-only deltas replace the original date and never read native history or session presence',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture(now-100*24*H);t.after(async()=>{await h.app.close();h.store.close();});
+  const window=calendarWindow(now,'UTC'),start=window.edges[89];h.credit(start+H,start+2*H);
+  for(const method of ['financialGroups','cells'] as const)t.mock.method(h.store,method,()=>{throw new Error('unrelated native history');});
+  t.mock.method(h.hub.ingest.live,'presenceSnapshot',()=>{throw new Error('calendar has no presence dependency');});
+  const body:PeriodRequest={version:1,selection:{mode:'range',from:now-24*H,to:now-H},evaluatedAt:now,calendar:{zone:window.zone,edges:window.edges}};
+  const initial=(await h.read(body)).json<PeriodReply>();if(initial.calendar?.state!=='complete')throw new Error('baseline');
+  h.credit(start+2*H,start+3*H);
+  const result=await h.read({...body,calendar:{...body.calendar!,cursor:initial.calendar.value.cursor}});assert.equal(result.statusCode,200,result.body);
+  const delta=result.json<PeriodReply>();if(delta.calendar?.state!=='delta')throw new Error('delta');
+  assert.deepEqual(delta.calendar.value.updates.map(([i,c])=>[i,c.agentMs]),[[89,2*H]]);
+  assert.ok(!result.body.includes('edges'));assert.ok(!result.body.includes('producer'));
+  const retry=(await h.read({...body,calendar:{...body.calendar!,cursor:initial.calendar.value.cursor}})).json<PeriodReply>();assert.deepEqual(retry.calendar,delta.calendar);
+  const foreign=(await h.read({...body,calendar:{...body.calendar!,cursor:'invalid'}})).json<PeriodReply>();assert.equal(foreign.calendar?.state,'complete');
+});
+
+test('calendar parser keeps ordinary limits and rejects invalid partitions',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const window=calendarWindow(now,'UTC'),body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,calendar:{zone:'UTC',edges:window.edges}};
+  for(const calendar of [{zone:'invalid/zone',edges:window.edges},{zone:'UTC',edges:window.edges.slice(1)},{zone:'UTC',edges:window.edges.map((n,i)=>i===4?n+.5:n)},{zone:'UTC',edges:window.edges.map(n=>n-24*H)}])assert.equal((await h.read({...body,calendar})).statusCode,400);
+  assert.equal((await h.read({...body,selection:{mode:'live',periodMs:32*24*H}})).statusCode,400);
+  const first=(await h.read(body)).json<PeriodReply>();if(first.calendar?.state!=='complete')throw new Error('availability');
+  assert.equal(first.calendar.value.cells[0].agentMs,null);assert.equal(first.calendar.value.cells[89].agentMs,0);
+});
+
+test('current-day drill evaluates native states at elapsed time and keeps the full selected date',async t=>{
+  const at=Date.UTC(2027,0,1,0,1);t.mock.method(Date,'now',()=>at);const h=await fixture(at-24*H);t.after(async()=>{await h.app.close();h.store.close();});
+  const from=at-M,to=from+24*H;
+  h.store.record(h.source,{observedAt:from,plan:'',resets:null,staleAfterMs:15*M,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:to+H}]});
+  const result=await h.read({version:1,selection:{mode:'range',from,to},evaluatedAt:at,values:[h.source],sessions:{}});assert.equal(result.statusCode,200,result.body);
+  const reply=expandPeriod(result.json());assert.deepEqual(reply.basis.range,{from,to});assert.equal(reply.basis.evidenceCut,at);
+  if(reply.values?.state!=='complete')throw new Error('values');assert.equal(reply.values.value[0].windows[0].stale,false);assert.equal(reply.values.value[0].windows[0].validUntil,from+15*M+1);
+});
+
+
+test('retention and a current credit replace disjoint calendar dates in one sparse extraction',async t=>{
+  let at=Date.parse('2026-11-02T03:50:00Z');t.mock.method(Date,'now',()=>at);
+  const h=await fixture(at-100*24*H);t.after(async()=>{await h.app.close();h.store.close();});
+  const window=calendarWindow(at,'America/New_York'),oldest=window.edges[0];
+  h.credit(oldest,oldest+H,'oldest');
+  const request:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:at,calendar:{zone:window.zone,edges:window.edges}};
+  const initial=(await h.read(request)).json<PeriodReply>();if(initial.calendar?.state!=='complete')throw new Error('baseline');
+  assert.equal(initial.calendar.value.cells[0].agentMs,H);
+  at+=20*M;h.credit(at-2*M,at-M,'current');
+  const ranges:(readonly {from:number;to:number}[]|undefined)[]=[];const original=h.store.agentWork.bind(h.store);
+  t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{ranges.push(args[7]);return original(...args);});
+  const response=await h.read({...request,evaluatedAt:at,calendar:{...request.calendar!,cursor:initial.calendar.value.cursor}});assert.equal(response.statusCode,200,response.body);
+  const reply=response.json<PeriodReply>();if(reply.calendar?.state!=='delta')throw new Error('sparse delta');
+  assert.deepEqual(reply.calendar.value.updates.map(([i,c])=>[i,c.agentMs]),[[0,50*M],[89,M]]);
+  assert.equal(ranges.length,1);assert.equal(ranges[0]?.length,2);assert.ok(ranges[0]![0].to<ranges[0]![1].from);
 });

@@ -6,8 +6,8 @@ import {type View} from './types';
 import {FALLBACK_COLOR, PROVIDERS} from './providers';
 
 import {EMPTY_VIEW as EMPTY, VIEW_VERSION_HEADER, VIEW_KEEPALIVE_LIMIT, VIEW_VERSION, encodeView, sameView, viewBytes} from '../../server/domain/view';
-import {widgetHidden, splitWidget, ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, QUOTA_SESSION_HISTORY, QUOTA_SESSION_TABLE, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE} from '../../server/domain/widgets';
-export {ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, QUOTA_SESSION_HISTORY, QUOTA_SESSION_TABLE, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE};
+import {widgetHidden, splitWidget, optionalWidget, AGENT_HOURS_HEATMAP, ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, QUOTA_SESSION_HISTORY, QUOTA_SESSION_TABLE, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE} from '../../server/domain/widgets';
+export {AGENT_HOURS_HEATMAP, ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, QUOTA_SESSION_HISTORY, QUOTA_SESSION_TABLE, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE};
 import {cardId} from '../../server/domain/presentation';
 export {cardId} from '../../server/domain/presentation';
 import {isWindowHidden as legacyWindowHidden,keyShown as legacyKeyShown} from '../../server/domain/presentation';
@@ -15,7 +15,7 @@ import {effectiveFilters,filterWalletUnit} from './filterSelection';
 import {matchesSelection,matchesWallet,walletRule} from '../../server/domain/dataFilters';
 export const isWindowHidden=(view:View,source:string,id:string)=>{const filters=effectiveFilters();return filters?!matchesSelection(filters.windows,[source,id]):legacyWindowHidden(view,source,id);};
 export const keyShown=(view:View,source:string,key:string,preview:readonly {id:string}[])=>{const filters=effectiveFilters();return filters?matchesWallet(walletRule(filters,filterWalletUnit()),{source,kind:'keyCap',key},preview.some(part=>part.id===key)):legacyKeyShown(view,source,key,preview);};
-export const isOffByDefault = (id: string) => id === AGENTS || splitWidget(id);
+export const isOffByDefault = optionalWidget;
 
 /** A card's own name; empty gives it back the automatic one. */
 export const withName = (view: View, sourceId: string, name: string): View => {
@@ -67,7 +67,7 @@ export const withColumn = (view: View, widget: string, column: string, shown: bo
  * widgets, or a way to bring them back when every one of them is hidden.
  */
 export function boardState(sources: {id: string}[], view: View): 'onboarding' | 'widgets' | 'allHidden' {
-  if (!sources.length) return [...(view.enabledWhenEmpty ?? []), ...view.shown.filter(splitWidget)].some(id => !isHidden(view, id)) ? 'widgets' : 'onboarding';
+  if (!sources.length) return [...(view.enabledWhenEmpty ?? []), ...view.shown.filter(id=>id===AGENT_HOURS_HEATMAP||splitWidget(id))].some(id => !isHidden(view, id)) ? 'widgets' : 'onboarding';
   const widgets = [...sources.map(source => cardId(source.id)), AGENTS, ...ANALYTICS];
   return widgets.every(id => isHidden(view, id)) ? 'allHidden' : 'widgets';
 }

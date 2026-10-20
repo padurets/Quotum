@@ -1,3 +1,4 @@
+import {seedCalendar} from '../workCalendar.js';
 import {matchesSelection,workFilter,type FilterEnvelope} from '../../server/domain/dataFilters.js';
 import {sourceWorkCurves} from '../../server/domain/periodCurves.js';
 import {currentCohort,capturedCohort} from './sessionOracle.js';
@@ -471,6 +472,7 @@ async function bringUp(t: TestContext, set: DemoSet, start: number) {
   });
   const stand = await setUp(hub.base, set, start, SETUP, () => Date.now());
   seedWork(hub.store, stand);
+  if(set.id==='calendar')seedCalendar(hub.store,new Directory(hub.store.db),stand);
   if(set.id==='sessions')await seedSessionClients(hub.store,new Directory(hub.store.db),stand);
   return {stand, trackers, hub};
 }

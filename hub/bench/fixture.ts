@@ -1,3 +1,4 @@
+import {AGENT_HOURS_HEATMAP,showWidgets} from '../server/domain/widgets.js';
 import {DAY, type DemoSet} from '../demo/model.js';
 
 /** Twelve real sources continue beyond the 30d strip's rebuild and read-ahead edges. */
@@ -41,6 +42,7 @@ export function seedPanningBudgets(file:string,stand:Stand) {
       }
       const view=directory.view(owner.personalBoard);view.names[source]=index>=12?`Subscription funds ${index-11}`:`Budget ${index+1}`;directory.saveView(owner.personalBoard,view,owner.id,now);
     }
+    directory.saveView(owner.personalBoard,showWidgets(directory.view(owner.personalBoard),[AGENT_HOURS_HEATMAP]),owner.id,now);
     const saved=directory.filtersState(owner.personalBoard).filters;
     saved.wallet={mode:'only',values:store.sources(owner.personalBoard).filter(source=>moneyFamily(providerOf(source.provider))==='budget').map(source=>({source:source.id,kind:'balance'}))};
     directory.saveFilters(owner.personalBoard,saved,owner.id,now);

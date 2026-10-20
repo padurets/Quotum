@@ -1538,6 +1538,19 @@ caches and selections. The two monetary readers share the budget history protoco
 selected source IDs isolate their invalidations.
 Budget reads never query native quota or agent-work history, and money never enters
 quota forecasts. Legacy unscoped history replies retain their combined contract.
+The optional Agent-hours calendar has an independent 90-local-date partition inside
+the same period transport. It sums admitted, filtered work into exact integer daily
+durations and uses signed cursors to replace changed dates, sharing one sparse raw
+extraction with other work demands. It requests neither financial history nor a
+full session ledger just for the calendar. Its range survives common-period changes.
+Opened work-filter choices cover the union of demanded ranges, including the visible
+calendar; closed filters request nothing. The shared clock advances civil dates and
+clears retention-expired evidence without polling. Null history, registered zero,
+partial bounds and observation completeness remain distinct. An explicit day action
+selects the full local date; only elapsed, retained evidence is counted, and current
+native states use the elapsed clock for validity. The fixed Nord Warm Red opacity
+scale represents agent-hours, including totals above 24 hours from parallel agents.
+
 The page makes cells from `since` stale and reads only those its frame needs,
 without a rate limit or a timer. Reconnect, a new lineup, or a change of whose work the
 board shows or its names (`Store.workKey`) makes all tiles stale. The last frame stays

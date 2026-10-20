@@ -5,7 +5,7 @@ import {ApiError} from './http';
 import {expandPeriod,type PeriodWireReply} from '../../server/domain/periodWire';
 import type {HistoryPool,HistoryMember} from './historyPool';
 
-export type PeriodIntent={board:string;generation:number;resourceGeneration?:number;facetGeneration?:number;revision:number;proofEpoch?:number;request:PeriodRequest};
+export type PeriodIntent={board:string;generation:number;resourceGeneration?:number;facetGeneration?:number;calendarGeneration?:number;revision:number;proofEpoch?:number;request:PeriodRequest};
 type Demand={scope:PeriodScope;query:HistoryQuery;signal?:AbortSignal;activityOnly:boolean;releaseSlot?:()=>void;resolve(value:HistoryReply):void;reject(error:unknown):void};
 type Flight={role:'visible';intent:PeriodIntent;controller:AbortController;demands:Demand[];ownSlot:boolean;extras:boolean;preparing?:boolean};
 const aborted=()=>new DOMException('Aborted','AbortError');
@@ -85,13 +85,13 @@ export class PeriodTransport implements HistoryMember {
     const baseline=PERIOD_SCOPES.some(scope=>intent.request[scope]&&!this.cursors.has(cursorKey(intent.board,scope,intent.request[scope]!)));
     // First retain the bounded drawing cells, then its exact evidence. Their full
     // decoded bodies must not coexist while either is still waiting for preparation.
-    const extras=(!baseline||!this.queue.length&&!this.flights.size)&&(!!intent.request.values||!!intent.request.sessions||!!intent.request.facets||!!intent.request.sourceWork||!!intent.request.quota||!!intent.request.budget||!!intent.request.funds)&&key!==this.completed&&key!==this.failed&&![...this.flights].some(f=>f.extras&&(this.key(f.intent)===key||this.resourcesCurrent(f.intent)));
+    const extras=(!baseline||!this.queue.length&&!this.flights.size)&&(!!intent.request.values||!!intent.request.sessions||!!intent.request.facets||!!intent.request.sourceWork||!!intent.request.calendar||!!intent.request.quota||!!intent.request.budget||!!intent.request.funds)&&key!==this.completed&&key!==this.failed&&![...this.flights].some(f=>f.extras&&(this.key(f.intent)===key||this.resourcesCurrent(f.intent)));
     if(!this.queue.length&&!extras)return;
     const demands:Demand[]=[];
     for(const scope of PERIOD_SCOPES){const index=this.queue.findIndex(d=>d.scope===scope&&!d.signal?.aborted);if(index!==-1)demands.push(this.queue.splice(index,1)[0]);}
     const flight:Flight={role:'visible',intent,controller:new AbortController(),demands,ownSlot:!demands.length,extras};
     this.flights.add(flight);
-    const body:PeriodRequest={...intent.request,...(!extras?{values:undefined,sessions:undefined,facets:undefined,sourceWork:undefined,quota:undefined,budget:undefined,funds:undefined}:{}),...Object.fromEntries(demands.map(d=>[d.scope,d.activityOnly&&d.scope==='quota'&&!intent.request.quota
+    const body:PeriodRequest={...intent.request,...(!extras?{values:undefined,sessions:undefined,facets:undefined,sourceWork:undefined,calendar:undefined,quota:undefined,budget:undefined,funds:undefined}:{}),...Object.fromEntries(demands.map(d=>[d.scope,d.activityOnly&&d.scope==='quota'&&!intent.request.quota
       ?{cell:d.query.cell,from:d.query.from,to:d.query.to,sources:'[]',evidence:'skip',meta:''}
       :{...d.query}]))};
     const pendingBaseline=(['quota','funds','budget'] as const).filter(scope=>body[scope]&&!this.baselineParts.has(scope));
@@ -101,7 +101,7 @@ export class PeriodTransport implements HistoryMember {
       // Live ledgers remain independent by family. Compact fixed summaries and
       // changed measurements share one body and its bounded reservation.
       for(const scope of PERIOD_SCOPES)if(scope!==pendingBaseline[0])delete body[scope];
-      for(const part of ['values','sessions','facets'] as const)if(this.baselineParts.has(part))delete body[part];
+      for(const part of ['values','sessions','facets','calendar'] as const)if(this.baselineParts.has(part))delete body[part];
     }
     for(const scope of PERIOD_SCOPES){const original=body[scope];if(!original)continue;const query=body[scope]={...original};
       query.evidence??=!extras?'skip':this.cursors.get(cursorKey(intent.board,scope,query));
@@ -112,7 +112,7 @@ export class PeriodTransport implements HistoryMember {
       }
     }
     if(body.sourceWork&&!body.quota&&body.budget?.work!=='1')delete body.sourceWork;
-    if(!body.quota&&!body.sessions&&!body.facets&&body.budget?.work!=='1')delete body.workFilter;
+    if(!body.quota&&!body.sessions&&!body.facets&&!body.calendar&&body.budget?.work!=='1')delete body.workFilter;
     const activityOnly=demands.some(d=>d.activityOnly&&d.scope==='quota')&&!intent.request.quota;
     // Empty-source activity has its own metadata. It cannot confirm a native baseline.
     const appliedIntent={...intent,request:activityOnly?{...body,quota:undefined}:body};
@@ -121,7 +121,7 @@ export class PeriodTransport implements HistoryMember {
       if(flight.controller.signal.aborted)return;
       if(extras&&!this.current(intent)&&!this.resourcesCurrent(intent)){this.abort(flight);this.schedule();return;}
       let decodedBytes=0;
-      const response=jsonBytes(body)>PERIOD_BODY_BYTES||body.workFilter&&(body.quota||body.sessions||body.facets||body.budget?.work==='1')&&!executableWorkFilters(body.workFilter)?Promise.reject(new ApiError(413,'history_limit')):this.send(intent.board,body,flight.controller.signal,bytes=>{if(!this.pool.reserve(flight,bytes))return false;decodedBytes=bytes;return true;});
+      const response=jsonBytes(body)>PERIOD_BODY_BYTES||body.workFilter&&(body.quota||body.sessions||body.facets||body.calendar||body.budget?.work==='1')&&!executableWorkFilters(body.workFilter)?Promise.reject(new ApiError(413,'history_limit')):this.send(intent.board,body,flight.controller.signal,bytes=>{if(!this.pool.reserve(flight,bytes))return false;decodedBytes=bytes;return true;});
       response.then(async reply=>{
         if(flight.controller.signal.aborted)return;
         // A→B→A is three generations. Equal target text does not revive the first response.
@@ -130,7 +130,7 @@ export class PeriodTransport implements HistoryMember {
         if(current?.generation===intent.generation&&current.revision===intent.revision) {
           const adopted=await this.adopt(evidenceReply,appliedIntent,flight);
           if(flight.controller.signal.aborted)return;
-          if(adopted&&extras){if(!deferredBaseline)this.completed=key;if(baseline)for(const part of [...PERIOD_SCOPES,'values','sessions','facets','sourceWork'] as const)if(appliedIntent.request[part])this.baselineParts.add(part);}
+          if(adopted&&extras){if(!deferredBaseline)this.completed=key;if(baseline)for(const part of [...PERIOD_SCOPES,'values','sessions','facets','sourceWork','calendar'] as const)if(appliedIntent.request[part])this.baselineParts.add(part);}
         }
         else if(this.resourcesCurrent(intent)){
           const current=this.intent()!;
@@ -139,14 +139,14 @@ export class PeriodTransport implements HistoryMember {
           let copiedBytes=0;
           const charge=(bytes:number)=>{copiedBytes+=bytes;if(!this.pool.reserve(flight,decodedBytes+copiedBytes))throw new ApiError(413,'history_limit');};
           charge(512);
-          const resources={...evidenceReply,sessions:undefined,facets:undefined};
+          const resources={...evidenceReply,sessions:undefined,facets:undefined,calendar:undefined};
           for(const scope of PERIOD_SCOPES){const part=resources[scope];if(part?.state==='complete'){
             charge(512);
             const tape=part.value.tape,fixed=withoutSelectedWork(tape?.fixed,charge);
             resources[scope]={...part,value:{...part.value,chunks:[],...(tape?{tape:{...tape,...(fixed?{fixed}:{})}}:{})}};
           }}
           // The captured chart still needs the original body until adoption finishes.
-          await this.adopt(resources,{...current,request:{...appliedIntent.request,sessions:undefined,facets:undefined}},flight,decodedBytes+copiedBytes);
+          await this.adopt(resources,{...current,request:{...appliedIntent.request,sessions:undefined,facets:undefined,calendar:undefined}},flight,decodedBytes+copiedBytes);
           if(flight.controller.signal.aborted)return;
         }
         for(const demand of demands) {
@@ -157,9 +157,9 @@ export class PeriodTransport implements HistoryMember {
       }).catch(error=>{
         if(flight.controller.signal.aborted)return;
         if(error instanceof ApiError&&[401,403,404].includes(error.status)&&this.current(intent))this.accessLost();
-        if(extras){if(!deferredBaseline)this.failed=key;if(baseline&&this.baselineKey===key)for(const part of [...PERIOD_SCOPES,'values','sessions','facets','sourceWork'] as const)if(appliedIntent.request[part])this.baselineParts.add(part);}
+        if(extras){if(!deferredBaseline)this.failed=key;if(baseline&&this.baselineKey===key)for(const part of [...PERIOD_SCOPES,'values','sessions','facets','sourceWork','calendar'] as const)if(appliedIntent.request[part])this.baselineParts.add(part);}
         for(const demand of demands)demand.reject(error);
-        if(extras){const current=this.intent();if(current?.generation===intent.generation&&current.revision===intent.revision){const section={state:'error' as const,error:error instanceof ApiError&&error.code==='history_limit'?'history_limit' as const:'unavailable' as const};this.receive({basis:{run:'',revision:'',evaluatedAt:intent.request.evaluatedAt,evidenceCut:0,range:{from:0,to:0}},...Object.fromEntries(PERIOD_SCOPES.filter(scope=>appliedIntent.request[scope]).map(scope=>[scope,section])),...(body.values?{values:section}:{}),...(body.sessions?{sessions:section}:{}),...(body.facets?{facets:section}:{}),...(body.sourceWork?{sourceWork:section}:{})},appliedIntent);}}
+        if(extras){const current=this.intent();if(current?.generation===intent.generation&&current.revision===intent.revision){const section={state:'error' as const,error:error instanceof ApiError&&error.code==='history_limit'?'history_limit' as const:'unavailable' as const};this.receive({basis:{run:'',revision:'',evaluatedAt:intent.request.evaluatedAt,evidenceCut:0,range:{from:0,to:0}},...Object.fromEntries(PERIOD_SCOPES.filter(scope=>appliedIntent.request[scope]).map(scope=>[scope,section])),...(body.values?{values:section}:{}),...(body.sessions?{sessions:section}:{}),...(body.facets?{facets:section}:{}),...(body.sourceWork?{sourceWork:section}:{}),...(body.calendar?{calendar:section}:{})},appliedIntent);}}
       })
         .finally(()=>{for(const demand of demands){if(flight.controller.signal.aborted)demand.reject(aborted());demand.releaseSlot?.();}this.pool.release(flight);this.flights.delete(flight);if(resetEpoch===this.resetEpoch)this.schedule();});
     };

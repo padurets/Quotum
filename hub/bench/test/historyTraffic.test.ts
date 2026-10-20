@@ -313,7 +313,7 @@ test('warm failure diagnostics distinguish exact reads and gesture stages withou
   observer.stage='cached repeat';
   finish({postData:JSON.stringify({selection:{mode:'live',periodMs:30*86_400_000},evaluatedAt:900,
     quota:{cell:'1',from:'0',to:'60',cells:'skip',evidence:'private-cursor',meters:'[["private-source","private-meter"]]'},
-    funds:{cell:'1',from:'0',to:'60',evidence:'skip'},values:['private-source'],sessions:{cursor:'private-work-cursor'}})});
+    funds:{cell:'1',from:'0',to:'60',evidence:'skip'},values:['private-source'],sessions:{cursor:'private-work-cursor'},calendar:{zone:'private-zone',edges:[1,2],cursor:'private-calendar-cursor'}})});
   await Promise.all([...observer.pending]);
   emit('Network.dataReceived',{requestId:'private-request',encodedDataLength:123});
   emit('Network.loadingFailed',{requestId:'private-request',canceled:true});
@@ -322,7 +322,7 @@ test('warm failure diagnostics distinguish exact reads and gesture stages withou
   const diagnostic=observer.diagnostic('warm');
   assert.equal(diagnostic.attempts,2);assert.equal(diagnostic.omitted,0);
   assert.deepEqual(diagnostic.reads[0],{stage:'cached return',endpoint:'period',request:{selection:{mode:'live',periodMs:30*86_400_000},evaluatedAt:900,
-    sections:[{scope:'quota',cell:1,from:0,to:60,cells:'skip',evidence:'cursor'},{scope:'funds',cell:1,from:0,to:60,cells:'read',evidence:'skip'}],values:1,sessions:true},canceled:true,complete:false,decoded:undefined,encodedLower:123,encodedUpper:undefined});
+    sections:[{scope:'quota',cell:1,from:0,to:60,cells:'skip',evidence:'cursor'},{scope:'funds',cell:1,from:0,to:60,cells:'read',evidence:'skip'}],values:1,sessions:true,calendar:true},canceled:true,complete:false,decoded:undefined,encodedLower:123,encodedUpper:undefined});
   assert.equal(diagnostic.reads[1].stage,'cached repeat');assert.equal(diagnostic.reads[1].endpoint,'period/sessions');
   assert.deepEqual(diagnostic.reads[1].request?.selection,{mode:'range',from:10,to:20});
   assert.equal(JSON.stringify(diagnostic).includes('private'),false);

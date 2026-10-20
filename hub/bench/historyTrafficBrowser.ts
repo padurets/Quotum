@@ -11,7 +11,7 @@ import {historyPoolReceiptScript} from './historyPoolReceipt';
 
 const DAY = 86_400_000;
 type ResourceRead={scope?:PeriodScope;selection:string;from:number;to:number;cell:number;answer?:Pick<HistoryAnswer,'run'|'now'|'known'>;chunks?:[number,number][]};
-type RequestDiagnostic={selection?:{mode:'live';periodMs:number}|{mode:'range';from:number;to:number};evaluatedAt?:number;sections:{scope:PeriodScope;from:number;to:number;cell:number;cells:'skip'|'read';evidence:'skip'|'cursor'|'baseline'}[];values:number;sessions:boolean};
+type RequestDiagnostic={selection?:{mode:'live';periodMs:number}|{mode:'range';from:number;to:number};evaluatedAt?:number;sections:{scope:PeriodScope;from:number;to:number;cell:number;cells:'skip'|'read';evidence:'skip'|'cursor'|'baseline'}[];values:number;sessions:boolean;calendar?:boolean};
 type Read = {endpoint?:'history'|'period'|'period/sessions';stage?:string;diagnostic?:RequestDiagnostic;sections?:ResourceRead[];request?:Promise<void>;selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
 const lowerHeaders = (headers: Record<string, string>) => Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
 let pageSerial = 0;
@@ -78,7 +78,7 @@ export class HistoryBodies {
         const classify=(postData:string)=>{
           const body=JSON.parse(postData) as PeriodRequest;
           const selection=body.selection;
-          read.diagnostic={...(selection?{selection:selection.mode==='live'?{mode:'live',periodMs:Number(selection.periodMs)}:{mode:'range',from:Number(selection.from),to:Number(selection.to)}}:{}),evaluatedAt:Number(body.evaluatedAt),sections:PERIOD_SCOPES.flatMap(scope=>{const query=body[scope];return query?[{scope,from:Number(query.from),to:Number(query.to),cell:Number(query.cell),cells:query.cells==='skip'?'skip' as const:'read' as const,evidence:query.evidence==='skip'?'skip' as const:query.evidence?'cursor' as const:'baseline' as const}]:[];}),values:body.values?.length??0,sessions:!!body.sessions};
+          read.diagnostic={...(selection?{selection:selection.mode==='live'?{mode:'live',periodMs:Number(selection.periodMs)}:{mode:'range',from:Number(selection.from),to:Number(selection.to)}}:{}),evaluatedAt:Number(body.evaluatedAt),sections:PERIOD_SCOPES.flatMap(scope=>{const query=body[scope];return query?[{scope,from:Number(query.from),to:Number(query.to),cell:Number(query.cell),cells:query.cells==='skip'?'skip' as const:'read' as const,evidence:query.evidence==='skip'?'skip' as const:query.evidence?'cursor' as const:'baseline' as const}]:[];}),values:body.values?.length??0,sessions:!!body.sessions,calendar:!!body.calendar};
           for(const scope of PERIOD_SCOPES)if(body[scope]&&body[scope]!.cells!=='skip'){const query=new URL('/api/history',url);query.search=new URLSearchParams({board:decodeURIComponent(url.pathname.split('/')[3]),scope:scope==='funds'?'budget':scope,...body[scope]}).toString();read.sections!.push({scope,selection:historyReadSelection(query),from:Number(body[scope]!.from),to:Number(body[scope]!.to),cell:Number(body[scope]!.cell)});}
           if(read.sections![0])Object.assign(read,read.sections![0]);
         };

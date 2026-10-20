@@ -18,6 +18,7 @@ export type Candidate = {
 };
 export const LABELS: Record<WidgetId, Key> = {
   agents: 'agents.title',
+  'agent-hours-heatmap':'calendar.title',
   activity: 'activity.title',
   'quota-history': 'history.title',
   'subscription-funds': 'widgets.subscriptionFunds',

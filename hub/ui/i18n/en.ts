@@ -7,6 +7,22 @@ import type {Message} from './types';
  * monetary measurements keep their explicit units and never become window percentages.
  */
 export const en = {
+  "calendar.loading": "Loading registered work…",
+  "calendar.title": "Agent-hours",
+  "calendar.window": "90 dates",
+  "calendar.registered": "Registered agent-hours",
+  "calendar.zero": "No recorded work",
+  "calendar.unavailable": "No available history",
+  "calendar.pending": "No data yet",
+  "calendar.partial": "Part of this date is available",
+  "calendar.bounds": "Available interval",
+  "calendar.observations": "Registered work is shown. Complete observation is not confirmed.",
+  "calendar.openDay": "Open day",
+  "calendar.settings": "Agent-hours settings",
+  "calendar.hours": "h",
+  "calendar.exact": "Registered agent-hours: {hours}",
+  "calendar.empty": "No recorded work matches these filters.",
+
   "filters.resources": "Resources",
   "filters.projects": "Projects",
   "filters.devices": "Devices",

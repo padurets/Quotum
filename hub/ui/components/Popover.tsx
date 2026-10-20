@@ -1,4 +1,5 @@
-import {useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode, type RefObject} from 'react';
+import {createPortal} from 'react-dom';
+import {useCallback, useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type FocusEvent, type ReactNode, type RefObject} from 'react';
 import {barsOf, coverOf, crampedOf, roomOf, shiftOf, sideOf} from '../lib/place';
 import {settler} from '../lib/settle';
 import {X} from 'lucide-react';
@@ -18,8 +19,13 @@ export function Popover({
   up = false,
   width,
   horizontalAnchor,
+  buttonProps,
+  portal,
 }: {
   label: string;
+  /** Escape an enclosing scroller while keeping the same anchored surface. */
+  portal?:HTMLElement|null;
+  buttonProps?:ButtonHTMLAttributes<HTMLButtonElement>&{[key:`data-${string}`]:string|number|undefined};
   icon?: ReactNode;
   /** A text trigger instead of an icon button. */
   trigger?: ReactNode;
@@ -43,6 +49,7 @@ export function Popover({
   const box = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const portalAnchor=useRef<HTMLDivElement>(null);
   const panelRef = useCallback((element: HTMLDivElement | null) => {
     // A form can close its panel directly. Return focus before its focused control is removed.
     if (!element && panel.current?.contains(document.activeElement)) button.current?.focus({preventScroll: true});
@@ -85,10 +92,15 @@ export function Popover({
     // news, as a panel cut anew as its button moves would be cut again and again, and a hidden one
     // placed again at each scroll; only its content changing it is.
     let size = {width: 0, height: 0};
+    const clips:HTMLElement[]=[];
+    if(portal)for(let parent=trigger.parentElement;parent&&parent!==portal;parent=parent.parentElement){
+      const style=getComputedStyle(parent);
+      if(/auto|scroll|hidden|clip/.test(style.overflowX+' '+style.overflowY))clips.push(parent);
+    }
     const seen = () => {
       const at = picker.getBoundingClientRect();
       const room = bounds();
-      return at.bottom > Math.max(room.top, coverOf(at.bottom, trigger, bars)) && at.top < room.bottom;
+      return at.bottom > Math.max(room.top, coverOf(at.bottom, trigger, bars)) && at.top < room.bottom&&clips.every(clip=>{const box=clip.getBoundingClientRect();return at.right>box.left&&at.left<box.right&&at.bottom>box.top&&at.top<box.bottom;});
     };
     // Focus in the panel goes back to the button, as on Escape, without scrolling the page to it.
     const unfocus = () => {
@@ -101,6 +113,10 @@ export function Popover({
     const place = () => {
       element.style.display = '';
       const room = bounds();
+      if(portal&&portalAnchor.current){
+        const at=picker.getBoundingClientRect(),origin=portal.getBoundingClientRect();
+        Object.assign(portalAnchor.current.style,{left:`${at.left-origin.left-portal.clientLeft}px`,top:`${at.top-origin.top-portal.clientTop}px`,width:`${at.width}px`,height:`${at.height}px`});
+      }
       if (dialog) element.style.setProperty('--popover-room', `${Math.max(0, room.right - room.left - 16)}px`);
       const list = element.querySelector<HTMLElement>('.popover-scroll');
       // Measuring takes the cut off, and what scrolls may change: its reader keeps their place in
@@ -234,6 +250,7 @@ export function Popover({
     // with its own widget held, which it goes along with.
     const scrolled = (event: Event) => {
       if (event.target instanceof Node && element.contains(event.target)) return;
+      if(portal&&event.target instanceof Element&&event.target.contains(trigger))return seen()?place():close();
       if (dialog && event.target === dialog) return seen() ? place() : close();
       const holds = held();
       if (seen()) {
@@ -261,12 +278,12 @@ export function Popover({
   useEffect(() => {
     if (!open) return;
     const close = (event: Event) => {
-      if (!box.current?.contains(event.target as Node)) setOpen(false);
+      if (!(box.current?.contains(event.target as Node)||panel.current?.contains(event.target as Node))) setOpen(false);
     };
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       // Focus inside the panel would fall to the page's start; it goes back to the button.
-      if (box.current?.contains(document.activeElement)) button.current?.focus();
+      if ((box.current?.contains(document.activeElement)||panel.current?.contains(document.activeElement))) button.current?.focus();
       setOpen(false);
     };
     document.addEventListener('mousedown', close);
@@ -283,8 +300,19 @@ export function Popover({
   // (a click on the panel's text, the focused control gone, another window) leaves it open.
   const leave = (event: FocusEvent<HTMLDivElement>) => {
     const next = event.relatedTarget;
-    if (open && next instanceof Node && !box.current?.contains(next)) setOpen(false);
+    if (open && next instanceof Node && !(box.current?.contains(next)||panel.current?.contains(next))) setOpen(false);
   };
+
+  const surface=(<div
+          className={`popover glass ${align === 'left' ? 'is-left' : ''} ${(side?.up ?? up) ? 'is-up' : ''} ${side?.cap != null ? 'is-capped' : ''} ${side?.cramped ? 'is-cramped' : ''}`}
+          style={width !== undefined || side?.cap != null ? {...(width !== undefined ? {width, minWidth: 0, maxWidth: 'min(calc(100vw - 32px), var(--popover-room, 100vw))'} : {}), ...(side?.cap != null ? {maxHeight: side.cap} : {})} : undefined}
+          role="dialog"
+          aria-label={label}
+          tabIndex={side?.cap != null ? 0 : undefined}
+          ref={panelRef}
+        >
+          {children}
+        </div>);
 
   return (
     <div className="picker" ref={box} onBlur={leave}>
@@ -295,23 +323,13 @@ export function Popover({
         ref={button}
         aria-label={trigger && !triggerClass ? undefined : label}
         title={label}
+        {...buttonProps}
         onClick={() => setOpen(!open)}
       >
         {trigger ?? icon}
         {!!badge && <i className="badge">{badge}</i>}
       </button>
-      {open && (
-        <div
-          className={`popover glass ${align === 'left' ? 'is-left' : ''} ${(side?.up ?? up) ? 'is-up' : ''} ${side?.cap != null ? 'is-capped' : ''} ${side?.cramped ? 'is-cramped' : ''}`}
-          style={width !== undefined || side?.cap != null ? {...(width !== undefined ? {width, minWidth: 0, maxWidth: 'min(calc(100vw - 32px), var(--popover-room, 100vw))'} : {}), ...(side?.cap != null ? {maxHeight: side.cap} : {})} : undefined}
-          role="dialog"
-          aria-label={label}
-          tabIndex={side?.cap != null ? 0 : undefined}
-          ref={panelRef}
-        >
-          {children}
-        </div>
-      )}
+      {open&&(portal?createPortal(<div className="picker popover-anchor" ref={portalAnchor}>{surface}</div>,portal):surface)}
     </div>
   );
 }
