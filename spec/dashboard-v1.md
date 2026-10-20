@@ -222,7 +222,7 @@ materialization intents remain dirty even when the visible projection equals sav
 The adjacent cross shows all for its family; Resources resets sources, windows,
 wallets and funds atomically.
 
-Snapshots and board frames carry only `filtersRevision` and `filtersAuthority`.
+Snapshots carry only `filtersRevision` and `filtersAuthority`.
 A separate `filters` frame carries the projected envelope, after its snapshot or
 board frame and before dependent notification admission. A replacement snapshot
 requires its matching configuration. Same-revision authority changes reproject
