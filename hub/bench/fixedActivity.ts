@@ -40,7 +40,7 @@ export function activityOracle(trace:WorkTrace,from:number,to:number):Numbers {
   return {agentMs,activeMs,agents:identities.size};
 }
 
-function observationScript(period:string){return historyPoolReceiptScript()+historyIdentityScript()+`;(() => {
+export function fixedActivityScript(period:string){return historyPoolReceiptScript()+';'+historyIdentityScript()+`;(() => {
   localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d',activityBy:'project'}));
   const original=window.__quotumInspectHistoryPool,ids=new WeakMap();let serial=0,pool,stats;
   const reset=()=>stats={bytes:0,flights:0,subsetFlights:0,advances:0,subsetAdvances:0,preparationMs:0,failedReservations:0,preferenceWrites:0};reset();
@@ -85,7 +85,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:probeScript()});
       await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
       const split=owner.cookie.indexOf('=');await cdp.send('Network.setCookie',{name:owner.cookie.slice(0,split),value:owner.cookie.slice(split+1),url:owner.base,httpOnly:true,sameSite:'Lax'});
-      await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:observationScript(days===1?'24h':'30d')});
+      await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:fixedActivityScript(days===1?'24h':'30d')});
       await cdp.send('Page.navigate',{url:owner.base+`/?from=${selection.from}&to=${selection.to}`});
       const waitFor=async(test:string)=>{const deadline=Date.now()+30_000;while(!await cdp.evaluate<boolean>(test)){if(Date.now()>deadline){const state=await cdp.evaluate('window.__quotumFixedActivity?.status()').catch(()=>null);throw Error(`fixed Activity ${days}d did not become coherent: ${JSON.stringify(state)}`);}await pause(30);}};
       await waitFor(`document.querySelectorAll('.activity .legend-item').length>2&&!document.querySelector('.activity.is-loading')`);
