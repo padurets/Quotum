@@ -89,7 +89,7 @@ export class WorkCalendar {
     let value:CalendarValue;
     if(part.state==='delta'){
       if(!old||!previous||(['calendarKey','filterKey','workAuthority','run'] as const).some(key=>previous[key]!==part.basis[key]))return;
-      if(!reserve(this.bytes+JSON.stringify(part).length*3+old.cells.length*16)){this.receive({state:'error',error:'history_limit'},generation,()=>true);return;}
+      if(!reserve(JSON.stringify(part).length*3+old.cells.length*16)){this.receive({state:'error',error:'history_limit'},generation,()=>true);return;}
       const cells=old.cells.slice();let prior=-1;
       for(const [i,cell] of part.value.updates){if(!Number.isInteger(i)||i<=prior||i>=cells.length)return;prior=i;cells[i]=cell;}
       value={...old,availableFrom:part.value.availableFrom,retainedFrom:part.value.retainedFrom,cursor:part.value.cursor,cells};

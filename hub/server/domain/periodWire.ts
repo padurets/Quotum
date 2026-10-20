@@ -2,6 +2,7 @@ import {PERIOD_SCOPES,type PeriodReply} from './periodRead.js';
 import type {MeterSemantics} from './meters.js';
 import type {Conversion,RateLeg} from './currency.js';
 import {packPeriodSequences,expandPeriodSequences} from './periodSequenceWire.js';
+import {packCalendar,expandCalendar} from './workCalendarWire.js';
 
 /** The dictionary applies only to monetary cell semantics, never to native evidence. */
 type WireSemantics=Omit<MeterSemantics,'conversion'>&{conversion?:Omit<Conversion,'rate'>&{rate:RateLeg|number}};
@@ -23,6 +24,7 @@ export function periodDictionary(reply:PeriodReply,reserve:(bytes:number)=>void,
   const sharedBases=new WeakSet<object>();
   if(compactBases)for(const scope of [...PERIOD_SCOPES,'values','sessions','facets','sourceWork'] as const){const part=reply[scope];if(part&&'basis' in part&&part.basis===reply.basis){reserve(64);sharedBases.add(part);}}
   const sequences=packPeriodSequences(reply,reserve);
+  const calendar=packCalendar(reply.calendar,reply.basis,reserve);
   type Entry={value:WireSemantics;count:number;index?:number};
   const entries=new Map<string,Entry>();
   const keys=new WeakMap<object,Partial<Record<'semantics'|'openSemantics',Entry>>>();
@@ -45,6 +47,7 @@ export function periodDictionary(reply:PeriodReply,reserve:(bytes:number)=>void,
   const moneySemantics:WireSemantics[]=[];
   for(const entry of entries.values())if(entry.count>1){entry.index=moneySemantics.length;moneySemantics.push(entry.value);}
   return {moneySemantics,rateLegs,replacer:function(this:unknown,key:string,value:unknown){
+    if(key==='calendar'&&value===reply.calendar&&calendar)return calendar;
     if(key==='basis'&&this&&typeof this==='object'&&sharedBases.has(this))return 0;
     if(value&&typeof value==='object'&&sequences.has(value))return sequences.get(value);
     if(!this||typeof this!=='object'||key!=='semantics'&&key!=='openSemantics')return value;
@@ -55,6 +58,7 @@ export function periodDictionary(reply:PeriodReply,reserve:(bytes:number)=>void,
 
 /** Restore aliases in the already charged native JSON body without copying its cells. */
 export function expandPeriod(reply:PeriodWireReply,reserve:(bytes:number)=>void=()=>{}):PeriodReply{
+  if(reply.calendar)reply.calendar=expandCalendar(reply.calendar,reply.basis,reserve);
   for(const scope of [...PERIOD_SCOPES,'values','sessions','facets','sourceWork'] as const){
     const part=reply[scope] as {basis?:unknown}|undefined;
     if(part?.basis===0)part.basis=reply.basis;

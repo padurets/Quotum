@@ -594,16 +594,16 @@ test('heatmap-only deltas replace fine intervals, bind selection, and read no fi
   for(const method of ['financialGroups','cells'] as const)t.mock.method(h.store,method,()=>{throw new Error('unrelated history');});
   t.mock.method(h.hub.ingest.live,'presenceSnapshot',()=>{throw new Error('no presence dependency');});
   const body:PeriodRequest={version:1,selection:{mode:'range',from:now-H,to:now},evaluatedAt:now,calendar:{zone:'UTC'}};
-  const initial=(await h.read(body)).json<PeriodReply>();if(initial.calendar?.state!=='complete')throw new Error('baseline');
+  const initial=expandPeriod((await h.read(body)).json<PeriodWireReply>());if(initial.calendar?.state!=='complete')throw new Error('baseline');
   h.credit(now-20*M,now-19*M);
   const result=await h.read({...body,calendar:{...body.calendar!,cursor:initial.calendar.value.cursor}});assert.equal(result.statusCode,200,result.body);
-  const delta=result.json<PeriodReply>();if(delta.calendar?.state!=='delta')throw new Error('delta');
+  const delta=expandPeriod(result.json<PeriodWireReply>());if(delta.calendar?.state!=='delta')throw new Error('delta');
   const cells=initial.calendar.value.cells.slice();for(const [i,c] of delta.calendar.value.updates)cells[i]=c;
   assert.equal(cells.reduce((n,c)=>n+(c.agentMs??0),0),11*M);assert.ok(!result.body.includes('edges'));assert.ok(!result.body.includes('producer'));
-  const retry=(await h.read({...body,calendar:{...body.calendar!,cursor:initial.calendar.value.cursor}})).json<PeriodReply>();assert.deepEqual(retry.calendar,delta.calendar);
-  const foreign=(await h.read({...body,selection:{mode:'range',from:now-2*H,to:now-H},calendar:{...body.calendar!,cursor:initial.calendar.value.cursor}})).json<PeriodReply>();assert.equal(foreign.calendar?.state,'complete');
+  const retry=expandPeriod((await h.read({...body,calendar:{...body.calendar!,cursor:initial.calendar.value.cursor}})).json<PeriodWireReply>());assert.deepEqual(retry.calendar,delta.calendar);
+  const foreign=expandPeriod((await h.read({...body,selection:{mode:'range',from:now-2*H,to:now-H},calendar:{...body.calendar!,cursor:initial.calendar.value.cursor}})).json<PeriodWireReply>());assert.equal(foreign.calendar?.state,'complete');
   if(foreign.calendar?.state!=='complete')throw new Error('historical baseline');
-  const unchanged=(await h.read({...body,selection:{mode:'range',from:now-2*H,to:now-H},calendar:{zone:'UTC',cursor:foreign.calendar.value.cursor}})).json<PeriodReply>();if(unchanged.calendar?.state!=='delta')throw new Error('historical delta');assert.deepEqual(unchanged.calendar.value.updates,[],'time after the fixed endpoint does not dirty padding');
+  const unchanged=expandPeriod((await h.read({...body,selection:{mode:'range',from:now-2*H,to:now-H},calendar:{zone:'UTC',cursor:foreign.calendar.value.cursor}})).json<PeriodWireReply>());if(unchanged.calendar?.state!=='delta')throw new Error('historical delta');assert.deepEqual(unchanged.calendar.value.updates,[],'time after the fixed endpoint does not dirty padding');
 });
 
 test('heatmap request derives its bounded partition and rejects independent reader edges',async t=>{
@@ -611,7 +611,7 @@ test('heatmap request derives its bounded partition and rejects independent read
   const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,calendar:{zone:'UTC'}};
   for(const calendar of [{zone:'invalid/zone'},{zone:'UTC',edges:[now-H,now]},{zone:'UTC',cursor:'é'},{zone:'UTC',cursor:'x'.repeat(2049)}])assert.equal((await h.read({...body,calendar})).statusCode,400);
   assert.equal((await h.read({...body,selection:{mode:'live',periodMs:32*24*H}})).statusCode,400);
-  const first=(await h.read(body)).json<PeriodReply>();if(first.calendar?.state!=='complete')throw new Error('availability');
+  const first=expandPeriod((await h.read(body)).json<PeriodWireReply>());if(first.calendar?.state!=='complete')throw new Error('availability');
   assert.ok(first.calendar.value.cells.length<=2880);assert.ok(first.calendar.value.cells.some(c=>c.agentMs===0));assert.ok(first.calendar.value.cells.some(c=>c.agentMs===null));
 });
 
@@ -629,10 +629,10 @@ test('retention replaces only selected historical intervals while later work sta
   let at=Date.UTC(2026,10,2,12);t.mock.method(Date,'now',()=>at);const h=await fixture(at-100*24*H);t.after(async()=>{await h.app.close();h.store.close();});
   const oldest=at-90*24*H;h.credit(oldest,oldest+H,'oldest');
   const request:PeriodRequest={version:1,selection:{mode:'range',from:oldest,to:oldest+H},evaluatedAt:at,calendar:{zone:'UTC'}};
-  const initial=(await h.read(request)).json<PeriodReply>();if(initial.calendar?.state!=='complete')throw new Error('baseline');assert.equal(initial.calendar.value.cells.reduce((n,c)=>n+(c.agentMs??0),0),H);
+  const initial=expandPeriod((await h.read(request)).json<PeriodWireReply>());if(initial.calendar?.state!=='complete')throw new Error('baseline');assert.equal(initial.calendar.value.cells.reduce((n,c)=>n+(c.agentMs??0),0),H);
   at+=10*M;h.credit(at-2*M,at-M,'outside');
   const result=await h.read({...request,evaluatedAt:at,calendar:{zone:'UTC',cursor:initial.calendar.value.cursor}});assert.equal(result.statusCode,200,result.body);
-  const reply=result.json<PeriodReply>();if(reply.calendar?.state!=='delta')throw new Error('delta');
+  const reply=expandPeriod(result.json<PeriodWireReply>());if(reply.calendar?.state!=='delta')throw new Error('delta');
   const cells=initial.calendar.value.cells.slice();for(const [i,c] of reply.calendar.value.updates)cells[i]=c;assert.equal(cells.reduce((n,c)=>n+(c.agentMs??0),0),50*M);
   assert.deepEqual(reply.calendar.basis.range,request.selection.mode==='range'?{from:request.selection.from,to:request.selection.to}:null);
 });

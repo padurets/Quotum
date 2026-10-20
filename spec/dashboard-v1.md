@@ -643,6 +643,17 @@ A delta replaces sorted unique `[cellIndex, cell]` entries, alongside replacemen
 `availableFrom`, `retainedFrom` and `cursor`. It never adds totals or repeats edges.
 Invalid or foreign signed cursors receive a bounded complete baseline.
 
+On the wire, a complete partition uses `grid: [start, step, count]` instead of
+`edges`, with step 60000 or 900000 and count at most 3072. Its cells use `null`
+for an unavailable point at `max(edge, min(edge + step, range.to, evidenceCut))`,
+`0` for an available full-cell zero, `[agentMs, validUntil]` for full bounds, or
+`[agentMs, validUntil, from, to]` for explicit bounds. Delta values use
+`patch: [index, agentMs, from, to, validUntil][]` instead of `updates`.
+When the common basis matches, the calendar basis is
+`[calendarKey, workAuthority, filterKey]`, extending the top-level basis.
+The shared decoder restores the logical objects and reserves their memory before
+allocating them. These encodings never round amounts, bounds or expiry times.
+
 The signed frontier binds reader, board, selection, partition, zone, work authority,
 filter, run, revision, cut and retained floor. Dirty intervals include work changes,
 newly elapsed evidence, the moving left boundary and retention. Requested work

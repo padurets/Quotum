@@ -7,6 +7,38 @@ import {compactJSON} from '../history.js';
 import {withShiftWindow,shifted} from '../domain/periodShift.js';
 import {withValueStates,periodValueAt,type PeriodValues} from '../domain/periodValues.js';
 import {brotliCompressSync,constants} from 'node:zlib';
+import type {CalendarCell,CalendarSection} from '../domain/workCalendar.js';
+
+test('calendar wire preserves fine bounds, unknowns, parallel work and expiry without repeated edges',()=>{
+  const start=Date.UTC(2026,9,1),step=900_000,count=3072;
+  const basis={run:'r',revision:'2',evaluatedAt:start+count*step,evidenceCut:start+count*step,range:{from:start+17,to:start+count*step-23}};
+  const extended={...basis,calendarKey:'partition',workAuthority:'authority',filterKey:'filter'};
+  const cells:CalendarCell[]=Array.from({length:count},(_,i)=>({agentMs:0,from:start+i*step,to:start+(i+1)*step,validUntil:null}));
+  cells[0]={agentMs:1,from:start+17,to:start+step,validUntil:start+86_400_018};
+  cells[1]={agentMs:null,from:start+2*step,to:start+2*step,validUntil:null};
+  cells[2]={agentMs:4*step,from:start+2*step,to:start+3*step,validUntil:start+2*step+86_400_001};
+  cells[count-1]={agentMs:0,from:start+(count-1)*step,to:basis.range.to,validUntil:null};
+  const reply:PeriodReply={basis,calendar:{state:'complete',basis:extended,value:{zone:'Europe/Berlin',availableFrom:start,retainedFrom:start,cursor:'signed',edges:Array.from({length:count+1},(_,i)=>start+i*step),cells}}};
+  const dictionary=periodDictionary(reply,()=>{}),text=compactJSON(reply,dictionary.replacer),wire=JSON.parse(text);
+  assert.deepEqual(wire.calendar.value.grid,[start,step,count]);assert.equal(wire.calendar.value.edges,undefined);
+  assert.deepEqual(wire.calendar.basis,['partition','authority','filter']);
+  assert.ok(text.length<JSON.stringify(reply).length/20);
+  let reserved=0;assert.deepEqual(expandPeriod(wire,bytes=>reserved+=bytes),reply);assert.ok(reserved>count*100);
+  const foreign={...extended,revision:'1'},other={...reply,calendar:{...reply.calendar!,basis:foreign}} as PeriodReply;
+  const otherDictionary=periodDictionary(other,()=>{});assert.deepEqual(expandPeriod(JSON.parse(compactJSON(other,otherDictionary.replacer))),other);
+});
+
+test('calendar sparse wire roundtrips exact replacements and rejects malformed grids and tuples',()=>{
+  const basis={run:'r',revision:'2',evaluatedAt:180_000,evidenceCut:180_000,range:{from:0,to:180_000}};
+  const calendar:CalendarSection={state:'delta',basis:{...basis,calendarKey:'c',workAuthority:'w',filterKey:'f'},value:{availableFrom:17,retainedFrom:0,cursor:'signed',updates:[[0,{agentMs:1,from:17,to:60_000,validUntil:200_001}],[2,{agentMs:null,from:180_000,to:180_000,validUntil:null}]]}};
+  const reply:PeriodReply={basis,calendar},dictionary=periodDictionary(reply,()=>{}),text=compactJSON(reply,dictionary.replacer),wire=JSON.parse(text);
+  assert.equal(wire.calendar.value.updates,undefined);assert.ok(text.length<JSON.stringify(reply).length-200);
+  assert.deepEqual(expandPeriod(structuredClone(wire)),reply);
+  const invalid=structuredClone(wire);invalid.calendar.value.patch[1][0]=0;assert.throws(()=>expandPeriod(invalid),/invalid_calendar_patch/);
+  const invalidCell=structuredClone(wire);invalidCell.calendar.value.patch[0][1]=.5;assert.throws(()=>expandPeriod(invalidCell),/invalid_calendar_cell/);
+  for(const grid of [[0,60_000,3073],[0,1,3],[0,60_000,2]])assert.throws(()=>expandPeriod({basis,calendar:{state:'complete',basis:['c','w','f'],value:{grid,cells:[0,0,0]}}}),/invalid_calendar_grid/);
+  const denied=structuredClone(wire);assert.throws(()=>expandPeriod(denied,()=>{throw new Error('history_limit');}),/history_limit/);
+});
 
 test('filter-aware section bases share the top-level commit without changing legacy replies',()=>{
   const basis={run:'shared',revision:'17',evaluatedAt:1_800_000_000_123,evidenceCut:1_800_000_000_123,range:{from:1_799_996_400_123,to:1_800_000_000_123}};
