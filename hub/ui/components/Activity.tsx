@@ -132,18 +132,22 @@ function useActivitySubset(history:History|null,by:ActivityDimension,muted:Recor
     accessLost:()=>{page.dispatch({type:'board-close'});window.dispatchEvent(new Event(UNAUTHORIZED));},
   }));
   const selected=useTimeRange(),range=usePref('range');
-  useLayoutEffect(()=>{
+  const configure=useRef(()=>{});
+  configure.current=()=>{
     const off=activityMutedKeys(muted,by),board=page.get().board;
-    reader.configure(scoped&&!allOff&&off.length&&history&&board?{board:board.id,authority:JSON.stringify([authority,board.workAuthority]),workAuthority:board.workAuthority,by,muted:off,filters:workFilter(effectiveFilters()??defaultFilters()),
+    reader.configure(scoped&&!allOff&&off.length&&history&&board&&history.board===board.id?{board:board.id,authority:JSON.stringify([authority,board.workAuthority]),workAuthority:board.workAuthority,by,muted:off,filters:workFilter(effectiveFilters()??defaultFilters()),
       selection:selected?{mode:'range',...selected}:{mode:'live',periodMs:periodOf(range).ms},rangeKey:selected?timeRangeKey(selected):range,barMs:history.activity.barMs}:null);
-  });
+  };
+  useLayoutEffect(()=>configure.current());
   useEffect(()=>{
     const stops=[boardPeriod.subscribe(reader.refresh),onDataFilters(()=>reader.reset()),page.listen((event,state)=>{
       if(!state.board||event.type==='board-close')reader.reset();
       else if(event.type==='hub'){
         if(event.event.type==='history'&&event.event.data.workSince!==undefined){
           reader.changed(event.event.data.workSince,event.event.data.workAuthority);
-        }else if(['hello','snapshot','mine','lineup'].includes(event.event.type))reader.reset();
+          configure.current();
+        }else if(['snapshot','mine','lineup'].includes(event.event.type)){reader.reset();configure.current();}
+        else if(event.event.type==='hello')reader.reset();
       }
     })];
     return()=>{stops.forEach(stop=>stop());reader.reset();};

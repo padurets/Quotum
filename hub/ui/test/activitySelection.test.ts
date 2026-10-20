@@ -25,17 +25,19 @@ test('the mounted subset accepts ordinary history events carrying unchanged work
   const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
   const context={exports:{} as any,ActivitySelection,historyPool:pool,hubNow:()=>NOW,page:h.page,boardPeriod:h.period,
     fetchPeriod:async(_board:string,body:PeriodRequest)=>{requests.push(body);return expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,body)));},
-    useState:(init:()=>unknown)=>[init()],useTimeRange:()=>({from:NOW-H,to:NOW}),usePref:()=> '1h',
+    useState:(init:()=>unknown)=>[init()],useRef:(current:unknown)=>({current}),useTimeRange:()=>({from:NOW-H,to:NOW}),usePref:()=> '1h',
     useLayoutEffect:(effect:()=>void)=>effect(),useEffect:(effect:()=>()=>void)=>cleanups.push(effect()),
     activityMutedKeys:()=>['"Work project"'],effectiveFilters:()=>defaultFilters(),workFilter,defaultFilters,timeRangeKey:()=> 'fixed',
     onDataFilters:()=>()=>{},UNAUTHORIZED:'unauthorized',window:{dispatchEvent:()=>{throw Error('unexpected access loss');}}};
   runInNewContext(ts.transpileModule(source.slice(source.indexOf('function useActivitySubset('),source.indexOf('function useSubsetNumbers('))+'\nexports.hook=useActivitySubset;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
-  const reader:ActivitySelection=context.exports.hook({activity:{barMs:M}},'project',{},1,false,true);
+  const reader:ActivitySelection=context.exports.hook({board:h.board,activity:{barMs:M}},'project',{},1,false,true);
   try{
     await flush();assert.equal(reader.numbers(NOW)!.agentMs,10*M);assert.equal(requests.length,1);
     add(NOW-10*M,NOW-5*M);await flush();
     assert.equal(requests.length,2,'one replacement follows a real same-authority history event');
     assert.equal(reader.numbers(NOW)!.agentMs,15*M);
+    h.reconnect();await flush();
+    assert.equal(reader.numbers(NOW)?.agentMs,15*M,'a same-authority snapshot restores the subset without relying on a chart render');
     const nextAuthority='replacement';
     h.page.dispatch({type:'hub',event:{type:'history',data:{sources:[],since:NOW-5*M,workSince:NOW-5*M,workAuthority:nextAuthority}}});
     assert.equal(reader.numbers(NOW),null,'changed authority retires numerical evidence immediately');
