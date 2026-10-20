@@ -45,7 +45,8 @@ export type WorkKey = WorkContext & {identity: {kind: 'legacy'; ordinal: number}
  * of it.
  */
 export type Shown = Map<string, {since: number; holders: {user: string; from: number}[]}>;
-export type WorkRead = ((from: number, to: number) => Stretch[]) & {access?:WorkAccess;authority?:string;reserve?:(bytes:number)=>void;release?:(bytes:number)=>void;ensureAccess?:()=>WorkAccess};
+export type WorkRead = ((from: number, to: number) => Stretch[]) & {access?:WorkAccess;authority?:string;filterKey?:string;reserve?:(bytes:number)=>void;release?:(bytes:number)=>void;ensureAccess?:()=>WorkAccess};
+export type WorkViews = {selected:WorkRead;sourceWide:WorkRead};
 export type SessionDevice = {id:string;name:string;disconnected:boolean;enabled:boolean;since:number|null;revision:string};
 
 /** Settings, admission and funding use the same connected or retained device inventory. */
@@ -201,8 +202,8 @@ export class Store {
       .all(userId) as Source[];
   }
 
-  /** Whose work a board shows (`Shown`), but for the subscriptions of the cards `hidden` (view ids, `source:<id>`). */
-  shown(board: string, hidden: readonly string[]): Shown {
+  /** Source grants and their historical cutoffs, independent of display and layout. */
+  authorizedSources(board: string): Shown {
     const kind = this.db.prepare('SELECT personal FROM boards WHERE id = ?').get(board) as {personal: number} | undefined;
     if (!kind) return new Map();
     const joined = new Map(
@@ -213,7 +214,6 @@ export class Store {
     );
     const shown: Shown = new Map();
     for (const source of this.sources(board)) {
-      if (hidden.includes(`source:${source.id}`)) continue;
       const since = kind.personal ? 0 : (sharedAt.get(source.id) ?? 0);
       const holders = source.holders.filter(user => joined.has(user)).map(user => ({user, from: kind.personal ? 0 : Math.max(joined.get(user)!, since)}));
       shown.set(source.id, {since, holders});
@@ -706,8 +706,8 @@ export class Store {
     });
   }
 
-  cells(board: string, cellMs: number, from: number, to: number, {now = Date.now(), shown = this.shown(board, []), meters, scope, work,sourceWork=false,reserve}: {now?: number; shown?: Shown; meters?: MeterSelection; scope?: HistoryScope; work?: WorkRead;sourceWork?:boolean;reserve?:(bytes:number)=>void} = {}): Chunk<number>[] {
-    const sources = this.sources(board);
+  cells(board: string, cellMs: number, from: number, to: number, {now = Date.now(), shown = this.authorizedSources(board), meters, scope, work,selectedWork,sourceWork=false,reserve}: {now?: number; shown?: Shown; meters?: MeterSelection; scope?: HistoryScope; work?: WorkRead;selectedWork?:WorkRead;sourceWork?:boolean;reserve?:(bytes:number)=>void} = {}): Chunk<number>[] {
+    const sources = this.sources(board).filter(source=>shown.has(source.id));
     // Subscription caps accompany native windows; wallet selections retain their cheaper read.
     const withWindows=scope ? scope==='quota' : !meters||meters.ids.some(([id])=>sources.some(source=>source.id===id&&providerOf(source.provider)?.funding==='subscription'));
     if(scope==='budget') {
@@ -742,7 +742,7 @@ export class Store {
     const stretches=work?work(readFrom,Math.min(to,now)):this.admittedWork(access,readFrom,Math.min(to,now));
     const devices = Object.fromEntries((this.db.prepare('SELECT id, COALESCE(label, name) AS name FROM devices WHERE id IN (SELECT value FROM json_each(?))')
       .all(JSON.stringify([...new Set(stretches.map(s => s.device))])) as {id: string; name: string}[]).map(d => [d.id, d.name]));
-    const chunks = cellsOf(groups,stretches,devices,cellMs,from,to,known,work?.reserve);
+    const chunks = cellsOf(groups,stretches,devices,cellMs,from,to,known,work?.reserve,selectedWork?.(readFrom,Math.min(to,now)));
     const grants = this.db.prepare("SELECT source_id, at, detail FROM events WHERE source_id IN (SELECT value FROM json_each(?)) AND kind = 'resets_granted' AND at >= ? AND at < ?")
       .all(JSON.stringify(sources.map(s => s.id)), from, to) as {source_id: string; at: number; detail: string}[];
     for (const event of grants) chunks[tileOf(event.at, cellMs) - tileOf(from, cellMs)].grants.push([event.source_id, event.at, Number(event.detail)]);

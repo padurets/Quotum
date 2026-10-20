@@ -1,3 +1,9 @@
+import * as filterModelBindings from '../../server/domain/dataFilters';
+import * as filterRuntimeBindings from '../lib/filterSelection';
+import * as filterCurveBindings from '../../server/domain/periodCurves';
+import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
+import {publishDataFilters} from '../lib/filterSelection';
+import {fixture as runtimeFixture,flush as runtimeFlush,NOW as runtimeNow} from './periodRuntimeFixture';
 import * as retention from '../../server/domain/periodRetention';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,7 +13,7 @@ import ts from 'typescript';
 import {PeriodTransport,type PeriodIntent} from '../lib/periodTransport';
 import {HistoryPool} from '../lib/historyPool';
 import {HistoryStore} from '../lib/history';
-import {drain} from '../lib/prepare';
+import {drain,Preparations} from '../lib/prepare';
 import {PeriodAccounting} from '../lib/periodAccounting';
 import {PeriodIndex} from '../lib/periodIndex';
 import {PeriodActivity} from '../lib/periodActivity';
@@ -27,6 +33,68 @@ import {EMPTY_VIEW} from '../../server/domain/view';
 import {AGENTS,ACTIVITY,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,widgetVisible} from '../../server/domain/widgets';
 
 const NOW=5_000_000;
+
+for(const failure of ['memory refusal','cancelled preparation'] as const)test('late native evidence survives '+failure+' and recovers through the actual coordinator',async t=>{
+  t.mock.method(Date,'now',()=>runtimeNow);publishDataFilters(defaultFilters(),true);
+  const h=await runtimeFixture(),jobs:(()=>void)[]=[];let pinned=0,time=0;
+  const scheduler=new Preparations({now:()=>++time,post:run=>jobs.push(run)});
+  try{
+    assert.equal(h.period.tapes.get('quota').tape.quota.length,1);
+    h.period.activate(false);const pending=h.hold();h.period.activate(true);await runtimeFlush();
+    assert.equal(h.requests[0].quota?.evidence,undefined,'the held response is a cold native baseline');
+    const resourceGeneration=h.period.intent().resourceGeneration;
+    const filters=defaultFilters();filters.projects={mode:'exclude',values:['Absent B']};publishDataFilters(filters,true);h.period.changed();
+    assert.equal(h.period.intent().resourceGeneration,resourceGeneration,'work selection preserves the resource flight');
+    if(failure==='memory refusal'){
+      pinned=h.pool.budget-100;h.pool.register({get estimatedBytes(){return pinned;},evictionCandidates:()=>[]});
+    }else h.prepareWith(scheduler);
+    pending.release();await runtimeFlush();
+    if(failure==='memory refusal'){
+      assert.equal(h.period.projectionState({range:'1h'},'quota').error,'history_limit');
+      pinned=0;h.requests.length=0;h.period.retryHistory('quota');await runtimeFlush();
+    }else{
+      assert.ok(scheduler.size,'the actual recipient is awaiting preparation');
+      assert.ok(h.pool.estimatedBytes>h.period.estimatedBytes,'cancelled preparation owns real staging');
+      const next=defaultFilters();next.projects={mode:'exclude',values:['Absent C']};publishDataFilters(next,true);h.period.changed();await runtimeFlush();
+      for(let i=0;jobs.length||h.pool.activeFlights;i++){assert.ok(i<1000);jobs.shift()?.();await runtimeFlush();}
+    }
+    assert.equal(h.period.projectionState({range:'1h'},'quota').error,undefined);
+    assert.equal(h.period.tapes.get('quota').tape.quota.length,1,'an unadopted cursor must not turn the retry into an empty native delta');
+    assert.equal(h.requests.filter(body=>body.quota).at(-1)?.quota?.meta,'','unadopted metadata must not suppress the retry baseline either');
+    assert.equal(h.period.tapes.get('quota').accounting.quotaSummary(h.source,'w',{from:runtimeNow-3_600_000,to:runtimeNow}).remainingAtEnd,83);
+    assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes,'rejected and cancelled staging is released');
+  }finally{pinned=0;h.prepareWith(null);await h.close();scheduler.dispose();publishDataFilters(null,false);}
+});
+
+test('final transport admission fails requested extras without sending, losing the predicate, or retrying unchanged intent',async()=>{
+  const pool=new HistoryPool(),replies:PeriodReply[]=[];let sent=0;
+  const request:PeriodRequest={version:1,selection:{mode:'range',from:0,to:3_600_000},evaluatedAt:3_600_000,workFilter:workFilter(defaultFilters()),values:Array.from({length:2000},(_,i)=>'s'.repeat(255)+i),sessions:{},facets:true};
+  const intent={board:'board',generation:1,revision:1,request};
+  const transport=new PeriodTransport(pool,()=>intent,reply=>{replies.push(reply);},async()=>{sent++;throw new Error('unexpected HTTP');});
+  try{
+    transport.change();await flush();assert.equal(sent,0);assert.equal(replies.length,1);
+    for(const key of ['values','sessions','facets'] as const)assert.deepEqual(replies[0][key],{state:'error',error:'history_limit'});
+    transport.change();await flush();assert.equal(replies.length,1);assert.ok(request.workFilter);assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);
+  }finally{transport.reset();}
+});
+
+test('resource-only transport omits an unused predicate while work and facet reads retain their admission boundary',async()=>{
+  const pool=new HistoryPool(),sent:PeriodRequest[]=[],replies:PeriodReply[]=[];
+  const filters=defaultFilters();filters.projects={mode:'include',values:Array.from({length:1000},(_,i)=>`${i}`.padStart(83,'p'))};
+  let request:PeriodRequest={version:1,selection:{mode:'range',from:0,to:NOW},evaluatedAt:NOW,workFilter:workFilter(filters),values:['A']};
+  let generation=0;
+  const transport=new PeriodTransport(pool,()=>({board:'b',generation,revision:generation,request}),reply=>{replies.push(reply);},async(_board,body)=>{sent.push(body);return {basis:{run:'r',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range:{from:0,to:NOW}}};});
+  try{
+    transport.change();await flush();assert.equal(sent.length,1);assert.equal(sent[0].workFilter,undefined);assert.ok(request.workFilter);
+    request={...request,values:undefined,facets:true};generation++;transport.change();await flush();
+    assert.equal(sent.length,1);assert.deepEqual(replies.at(-1)?.facets,{state:'error',error:'history_limit'});
+    request={...request,values:undefined,facets:undefined,sessions:{}};generation++;transport.change();await flush();
+    assert.equal(sent.length,1);assert.deepEqual(replies.at(-1)?.sessions,{state:'error',error:'history_limit'});assert.equal(pool.activeFlights,0);
+    const valid=defaultFilters();valid.projects={mode:'exclude',values:['Absent project']};
+    request={...request,sessions:undefined,facets:true,workFilter:workFilter(valid)};generation++;transport.change();await flush();
+    assert.equal(sent.length,2);assert.deepEqual(sent[1].workFilter,workFilter(valid),'an independent facet read needs explicit choices too');
+  }finally{transport.reset();}
+});
 const flush=async()=>{for(let i=0;i<180;i++)await Promise.resolve();};
 type Coordinator={activate(active:boolean):void;changed():void;retry():void;retryHistory(scope:PeriodScope):void;transport:PeriodTransport;get():{value:WorkTrace|null;loading:boolean;error:string|null};getValue(id:string):{loading:boolean;error:string|null};projectionState(history:Pick<History,'range'>,scope:PeriodScope):{ready:boolean;error?:string}};
 type Attempt={body:PeriodRequest;signal:AbortSignal};
@@ -51,7 +119,7 @@ function harness(visible:string[]=['quota-history']) {
   const context={exports:{} as {BoardPeriod:new()=>Coordinator},hubNow:()=>NOW,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod:send,page:{get:()=>({board})},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:async(_owner:object,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,
     empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>selected,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
-  runInNewContext(coordinatorCode,context);
+  runInNewContext(coordinatorCode,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   const period=new context.exports.BoardPeriod();
   return {board,settings,pool,period,attempts,fail,select:(range:PeriodRange|null)=>{selected=range;period.changed();},hold:(fn:typeof held)=>{held=fn;},failWork:(value:boolean)=>{failWork=value;},failValues:(value:boolean)=>{failValues=value;}};
 }
@@ -174,7 +242,7 @@ function readerFor(period:Coordinator,pool:HistoryPool,scope:'quota'|'budget',fa
   const source=readFileSync(new URL('../lib/history.ts',import.meta.url),'utf8');
   const code=source.slice(source.indexOf('function reader('),source.indexOf('export const quotaHistory'));
   const context={reader:null as unknown as (scope:'quota'|'budget',family:'budget'|'funds')=>HistoryStore,HistoryStore,boardPeriod:period,retention,historyPool:pool,STORED_BYTES:15*1024*1024,hubNow:()=>NOW,pan:{get:()=>null},expandHistory,setTimeout,clearTimeout};
-  runInNewContext(ts.transpileModule(code+'\nglobalThis.reader=reader;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+  runInNewContext(ts.transpileModule(code+'\nglobalThis.reader=reader;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   return context.reader(scope,family);
 }
 

@@ -1,8 +1,8 @@
 import {createHash,createHmac,randomBytes,timingSafeEqual} from 'node:crypto';
 import type {FastifyInstance} from 'fastify';
 import type {Guards,Hub} from '../api.js';
-import {sourceHidden} from '../domain/presentation.js';
 import {utcPeriods} from '../domain/meters.js';
+import {KEY_IDS_LIMIT,KEY_IDS_QUERY_LIMIT} from '../domain/sourceKeys.js';
 
 /** Cursors carry only safe key identity, bound to this source, ordering and hub run. */
 export function sourceKeyRoutes(app:FastifyInstance,hub:Hub,guards:Guards) {
@@ -11,15 +11,15 @@ export function sourceKeyRoutes(app:FastifyInstance,hub:Hub,guards:Guards) {
   app.get<{Params:{board:string;source:string};Querystring:{after?:string;limit?:string;ids?:string}}>('/api/boards/:board/sources/:source/keys',(request,reply)=>{
     const {board,source}=request.params,access=guards.board(request,reply,board);
     if(!access)return reply;
-    if(!hub.store.sources(board).some(s=>s.id===source)||sourceHidden(hub.directory.view(board),source))return reply.code(404).send({error:'not_found'});
+    if(!hub.store.sources(board).some(s=>s.id===source&&s.budget?.enabled!==false))return reply.code(404).send({error:'not_found'});
     const limit=request.query.limit===undefined?50:Number(request.query.limit);
     if(!Number.isInteger(limit)||limit<1||limit>50||Object.keys(request.query).some(k=>!['after','limit','ids'].includes(k)))return reply.code(400).send({error:'invalid_request'});
     let selected:Set<string>|null=null;
     if(request.query.ids!==undefined) {
       try {
-        if(request.query.after!==undefined||request.query.limit!==undefined||request.query.ids.length>8192)throw new Error();
+        if(request.query.after!==undefined||request.query.limit!==undefined||request.query.ids.length>KEY_IDS_QUERY_LIMIT)throw new Error();
         const ids:unknown=JSON.parse(request.query.ids);
-        if(!Array.isArray(ids)||!ids.length||ids.length>50||ids.some(id=>typeof id!=='string'||!id||id.length>120))throw new Error();
+        if(!Array.isArray(ids)||!ids.length||ids.length>KEY_IDS_LIMIT||ids.some(id=>typeof id!=='string'||!id||id.length>120))throw new Error();
         selected=new Set(ids);
       }catch{return reply.code(400).send({error:'invalid_request'});}
     }

@@ -516,6 +516,8 @@ export type Board = {
   name: string;
   owner: string;
   members: string[];
+  /** Saved opening selection, independent of the board's layout. */
+  filterProjects?: {mode:'include'|'exclude';values:(string|null)[]};
   /** The table of running agents is turned on. */
   agents?: boolean;
   agentsPlace?: Place;

@@ -37,6 +37,7 @@ for(const compressed of [false,true])test(`ordered quota deadlines keep retireme
   assert.deepEqual(result.value.quotaSummary('s','w',{from:0,to:(count-1)*step+1}),{
     consumed:(count/cycle)*(cycle-1)*.125,coveredMs:(count/cycle)*(cycle-1)*step,
     remainingAtStart:90,remainingAtEnd:100-10-(cycle-1)*.125,work:null,
+    selectedWork:{from:(count-1)*step+1,ms:null,agentMs:0},
   });
   assert.equal(JSON.stringify(evidence),before);
 });

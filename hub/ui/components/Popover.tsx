@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode} from 'react';
+import {useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode, type RefObject} from 'react';
 import {barsOf, coverOf, crampedOf, roomOf, shiftOf, sideOf} from '../lib/place';
 import {settler} from '../lib/settle';
 import {X} from 'lucide-react';
@@ -17,6 +17,7 @@ export function Popover({
   triggerClass,
   up = false,
   width,
+  horizontalAnchor,
 }: {
   label: string;
   icon?: ReactNode;
@@ -33,6 +34,8 @@ export function Popover({
   align?: 'left' | 'right';
   /** A content width, still capped to the viewport by the shared panel style. */
   width?: number;
+  /** Align horizontally with this part of the trigger, leaving its badges outside the anchor. */
+  horizontalAnchor?: RefObject<HTMLElement | null>;
 }) {
   const [own, setOwn] = useState(false);
   const open = controlled ?? own;
@@ -107,12 +110,16 @@ export function Popover({
       const read = !list ? element.scrollTop : scroller === element ? element.scrollTop - list.offsetTop : list.scrollTop || -list.offsetTop;
       element.style.maxHeight = '';
       element.style.translate = '';
+      const at = picker.getBoundingClientRect();
+      const anchor = horizontalAnchor?.current?.getBoundingClientRect();
+      // Align in layout: a compensating transform can resample text as a badge grows.
+      element.style.left = anchor ? align === 'left' ? `${anchor.left - at.left}px` : 'auto' : '';
+      element.style.right = anchor ? align === 'right' ? `${at.right - anchor.right}px` : 'auto' : '';
       element.classList.remove('is-capped', 'is-cramped');
       // Measured above its button only, where it cannot lengthen the page as it is measured; the
       // stylesheet sets it as far below its button as above.
       element.classList.add('is-up');
       const rect = element.getBoundingClientRect();
-      const at = picker.getBoundingClientRect();
       const {above, below} = roomOf(at, at.top - rect.bottom, Math.max(room.top, coverOf(at.bottom, trigger, bars)), room.bottom);
       const {up: next, cap} = sideOf(rect.height, above, below, upwards ?? up, upwards !== null);
       const least = list ? parseFloat(getComputedStyle(list).getPropertyValue('--least')) || 0 : 0;
@@ -212,7 +219,7 @@ export function Popover({
     });
     const shifts = new MutationObserver(moved);
     const widgets = document.querySelectorAll('.widget');
-    for (const watched of [element, document.getElementById('root')!, ...widgets, trigger.closest('.dialog')]) {
+    for (const watched of [element, trigger, horizontalAnchor?.current, document.getElementById('root')!, ...widgets, trigger.closest('.dialog')]) {
       if (watched) observer.observe(watched);
     }
     for (const moving of [...widgets, trigger.closest('.widget-body')]) {
@@ -296,7 +303,7 @@ export function Popover({
       {open && (
         <div
           className={`popover glass ${align === 'left' ? 'is-left' : ''} ${(side?.up ?? up) ? 'is-up' : ''} ${side?.cap != null ? 'is-capped' : ''} ${side?.cramped ? 'is-cramped' : ''}`}
-          style={width !== undefined || side?.cap != null ? {...(width !== undefined ? {width, maxWidth: 'min(calc(100vw - 32px), var(--popover-room, 100vw))'} : {}), ...(side?.cap != null ? {maxHeight: side.cap} : {})} : undefined}
+          style={width !== undefined || side?.cap != null ? {...(width !== undefined ? {width, minWidth: 0, maxWidth: 'min(calc(100vw - 32px), var(--popover-room, 100vw))'} : {}), ...(side?.cap != null ? {maxHeight: side.cap} : {})} : undefined}
           role="dialog"
           aria-label={label}
           tabIndex={side?.cap != null ? 0 : undefined}

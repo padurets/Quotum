@@ -1,3 +1,7 @@
+import {DataFilterState} from '../lib/filterState';
+import {defaultFilters,type FilterEnvelope} from '../../server/domain/dataFilters';
+import * as filterModel from '../../server/domain/dataFilters';
+import {publishDataFilters} from '../lib/filterSelection';
 import * as currency from '../../server/domain/currency';
 import {defaultCurrencyContext,type CurrencyContext} from '../../server/domain/currency';
 import {test} from 'node:test';
@@ -15,33 +19,46 @@ import {referenceBalance,budgetVisible,balanceGroups,balanceRoleLabel,keyName} f
 import type {Named} from '../lib/board';
 import type {KeyPage} from '../lib/moneyKeys';
 import type {Meter} from '../../server/domain/meters';
-import {EMPTY_VIEW} from '../../server/domain/view';
-import type {Arrange} from '../lib/view';
+import * as keyBounds from '../../server/domain/sourceKeys';
 
 type Node={type:unknown;props:Record<string,unknown>;key?:string};
 const component=(name:string)=>({name});
-const pages=component('pages'),content=component('content'),switchRow=component('switch');
+const switchRow=component('switch');
 const nodes=(value:unknown):Node[]=>Array.isArray(value)?value.flatMap(nodes):value&&typeof value==='object'&&'props' in value?[value as Node,...nodes((value as Node).props.children)]:[];
-const flush=async()=>{for(let i=0;i<10;i++)await Promise.resolve();};
+const flush=async()=>{for(let i=0;i<60;i++)await Promise.resolve();};
 const meter=(id:string,amount='1'):Meter=>({id,amount,kind:id.endsWith(':cap')?'cap':'balance',unit:'USD',at:1,staleAfterMs:1000,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null});
 
 function fixture(selected:[string,string][]=[],budget?:{source:Named;context:CurrencyContext;others?:Named[]}) {
   const hooks=preparationFixture();
-  let revision=1,prefs={money:readMoney(budget?{unit:'USD',...(selected.length?{selected:{USD:selected}}:{})}:{unit:'USD',selected:{USD:[['s','balance'],...selected]}})};
+  const state=new DataFilterState({save:async()=>{throw new Error('explicit save only');}});
+  state.open('u','b');const filters=defaultFilters();filters.wallet={mode:'only',values:[{source:budget?.source.id??'s',kind:'balance'},...selected.filter(([,id])=>id.endsWith(':cap')).map(([source,id])=>({source,kind:'keyCap' as const,key:id.slice(4,-4)}))]};
+  state.accept({filters,revision:1,authority:'a',unavailable:{}} as FilterEnvelope);
+  state.subscribe(()=>publishDataFilters(state.get().current));publishDataFilters(state.get().current);
+  let active=true,revision=1,prefs={money:readMoney(budget?{unit:'USD',...(selected.length?{selected:{USD:selected}}:{})}:{unit:'USD',selected:{USD:[['s','balance'],...selected]}})};
   let source:Named={id:'s',title:'Account',provider:'openrouter',plan:'',successAt:revision,error:null,stale:false,windows:[],resets:null,owners:[],staleAfterMs:1000,measureIntervalMs:null,meters:[meter('balance')],keys:[],keysCount:20};
   if(budget)source=budget.source;
   const reads:string[]=[];
-  const call=async(_method:string,path:string):Promise<KeyPage>=>{
+  let paused=false;
+  const pending:{signal?:AbortSignal;reply:KeyPage;resolve:(reply:KeyPage)=>void}[]=[];
+  const call=async(_method:string,path:string,_body?:unknown,_timeout?:number,signal?:AbortSignal):Promise<KeyPage>=>{
     reads.push(path);const query=new URL(path,'https://fixture.invalid').searchParams;
     const all=Array.from({length:20},(_,i)=>({id:String(i),name:`Key ${i} revision ${revision}`,disabled:false,expiresAt:null,includeByok:false,at:revision,staleAfterMs:1000,presence:'observed' as const,missCount:0,periods:{day:null,week:null,month:null}}));
     const ids=query.get('ids'),from=Number(query.get('after')??0),keys=ids?all.filter(k=>(JSON.parse(ids) as string[]).includes(k.id)):all.slice(from,from+10);
-    return {keys,meters:keys.flatMap(k=>[meter(`key:${k.id}:usage`),...(revision===1?[meter(`key:${k.id}:cap`)]:[])]),total:20,inventory:null,next:ids||from===10?null:'10'};
+    if(ids&&(JSON.parse(ids) as string[]).length>50)throw new ApiError(400,'invalid_request');
+    const reply:KeyPage={keys,meters:keys.flatMap(k=>[meter(`key:${k.id}:usage`),...(revision===1?[meter(`key:${k.id}:cap`)]:[])]),total:20,inventory:null,next:ids||from===10?null:'10'};
+    if(ids&&paused)return new Promise(resolve=>pending.push({signal,reply,resolve}));
+    return reply;
   };
-  const context={exports:{} as {KeyMoneySettings:(props:{sources:Named[];hidden:string[];series:[]})=>Node},require:(name:string)=>{
-    if(name==='react')return {useState:hooks.useState,useEffect:hooks.useLayoutEffect};
+  const keyContext={exports:{} as typeof import('../lib/keyReads'),require:(name:string)=>name.endsWith('/http')?{ApiError,call}:keyBounds};
+  runInNewContext(ts.transpileModule(readFileSync(new URL('../lib/keyReads.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,keyContext);
+  const context={AbortController,exports:{} as {KeyMoneySettings:(props:{sources:Named[];hidden:string[];series:[];active:boolean})=>Node},require:(name:string)=>{
+    if(name==='../../server/domain/dataFilters')return filterModel;
+    if(name.endsWith('/dataFilters'))return {useDataFilters:state.get,dataFilters:state};
+    if(name==='react')return {useState:hooks.useState,useRef:hooks.useRef,useEffect:hooks.useLayoutEffect};
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),jsxs:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),Fragment:'fragment'};
     if(name.endsWith('/board'))return {useBoardId:()=> 'b',useCurrencyContext:()=>budget?.context??defaultCurrencyContext};
     if(name.endsWith('/http'))return {ApiError,call};
+    if(name.endsWith('/keyReads'))return keyContext.exports;
     if(name.endsWith('/moneySelection'))return {moneySelection,archivedKeyGroups,keyMeter,moneyChoices,toggleMoneyChoice};
     if(name.endsWith('/prefs'))return {usePref:(key:keyof typeof prefs)=>prefs[key],setPrefs:(patch:typeof prefs)=>{prefs=patch;}};
     if(name.endsWith('/money'))return {keyName,balanceRoleLabel,balanceGroups,referenceBalance,budgetVisible};
@@ -50,19 +67,22 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
     if(name.endsWith('/meterHistory'))return {MAX_METERS:32};
     if(name.endsWith('/view'))return {};
     if(name.endsWith('/i18n'))return {t:(key:string)=>key};
-    if(name==='./Popover')return {SwitchRow:switchRow};
-    if(name==='./KeyPages')return {KEYS_PER_PAGE:10,KeyPages:pages,KeyPageContent:content};
+    if(name==='./Filters')return {FilterRow:switchRow};
+    if(name==='./Popover')return {};
+    if(name==='./KeyPages')return {KEYS_PER_PAGE:10};
     if(name==='./Kit')return {ErrorLine:component('error')};
     throw new Error(name);
   }};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/MoneySettings.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   let tree:Node;
-  const render=()=>{hooks.begin();tree=context.exports.KeyMoneySettings({sources:[source,...budget?.others??[]],hidden:[],series:[]});hooks.commit();return nodes(tree);};
+  const render=()=>{hooks.begin();tree=context.exports.KeyMoneySettings({sources:[source,...budget?.others??[]],hidden:[],series:[],active});hooks.commit();return nodes(tree);};
   const settle=async()=>{render();await flush();return render();};
-  const pager=()=>nodes(tree).find(n=>n.type===pages)!.props as {page:number;pages:number;next:boolean;previous:boolean;loading:boolean;onNext:()=>void;onPrevious:()=>void};
+  const more=()=>nodes(tree).find(n=>n.type==='button'&&n.props.className==='popover-row filter-load-more');
   const slots=()=>nodes(tree).filter(n=>typeof n.props.className==='string'&&n.props.className.includes('key-slot'));
-  const openKeys=async()=>{const button=nodes(tree).find(n=>n.type==='button'&&nodes(n).some(child=>child.props.children==='money.keySeries'));assert.ok(button);(button.props.onClick as ()=>void)();await settle();};
-  return {settle,render,pager,slots,reads,openKeys,selection:()=>moneySelection([source],[],prefs.money,budget?.context).selection,switches:()=>nodes(tree).filter(n=>n.type===switchRow),refresh:()=>{revision++;source={...source,successAt:revision};}};
+  const keys=()=>nodes(tree).find(n=>n.type==='details'&&n.props.className==='filter-key-details');
+  const openKeys=async(open=true)=>{const details=keys();assert.ok(details);(details.props.onToggle as (event:unknown)=>void)({currentTarget:{open}});await settle();};
+  const loadMore=async()=>{const button=more();assert.ok(button);(button.props.onClick as ()=>void)();await settle();};
+  return {settle,render,more,keys,slots,reads,openKeys,loadMore,pending,pauseMembership:()=>{paused=true;},resumeMembership:()=>{paused=false;pending.splice(0).forEach(({reply,resolve})=>resolve(reply));},setActive:(value:boolean)=>{active=value;},selection:()=>moneySelection([source],[],prefs.money,budget?.context).selection,switches:()=>nodes(tree).filter(n=>n.type===switchRow),refresh:()=>{revision++;source={...source,successAt:revision};}};
 }
 
 test('native and converted balance-only sources have balance switches without archived key controls',async t=>{
@@ -86,87 +106,79 @@ test('native and converted balance-only sources have balance switches without ar
   assert.equal(multiple.switches().length,2);assert.equal(multiple.render().some(n=>n.props.children==='money.selectedDetails'),false);
 });
 
-test('the real settings keep ten slots when a selected live key moves off page',async()=>{
+test('loading more keys appends rows without replacing a selected live key',async()=>{
   const f=fixture();await f.settle();await f.openKeys();
   const usage=f.switches().find(n=>n.key==='0')!;
   (usage.props.onChange as (on:boolean)=>void)(true);await f.settle();
   assert.ok(f.selection()!.ids.some(([,meter])=>meter==='key:0:cap'));
   assert.ok(!f.selection()!.ids.some(([,meter])=>meter==='key:0:usage'));
-  f.pager().onNext();await f.settle();
-  assert.equal(f.slots().length,10);assert.equal(f.pager().page,2);assert.equal(f.pager().pages,2);
-  assert.equal(f.switches().some(n=>n.key==='0'),false);
+  const before=f.reads.length;await f.loadMore();
+  assert.equal(f.slots().length,20);assert.equal(f.more(),undefined);
+  assert.equal(f.switches().some(n=>n.key==='0'),true);
+  assert.equal(f.reads.length,before+1,'only the new batch is read');
+  const loaded=f.reads.length;await f.openKeys(false);await f.openKeys();assert.equal(f.reads.length,loaded,'reopening the disclosure reuses its rows');
 });
 
-test('selected archived scales use the same pages and remain removable',async()=>{
+test('selected archived scales remain removable beside the live key list',async()=>{
   const f=fixture([['s','key:gone:usage'],['s','key:gone:cap']]);await f.settle();await f.openKeys();
-  assert.equal(f.pager().pages,3);f.pager().onNext();await f.settle();
-  assert.equal(f.slots().length,10);f.pager().onNext();await f.settle();
-  assert.equal(f.slots().length,1);assert.equal(f.pager().page,3);assert.equal(f.pager().loading,false);
+  assert.equal(f.slots().length,11);await f.loadMore();assert.equal(f.slots().length,21);
   const row=f.switches().find(n=>n.key==='gone')!;assert.equal(row.props.disabled,false);(row.props.onChange as (on:boolean)=>void)(false);await f.settle();assert.ok(!f.selection()!.ids.some(([,meter])=>meter.startsWith('key:gone:')));
-  assert.equal(f.pager().pages,2);assert.equal(f.slots().length,10);
+  assert.equal(f.slots().length,20);assert.equal(f.more(),undefined);
 });
 
-test('an open settings page reloads its names and caps on a successful source update',async()=>{
-  const f=fixture();await f.settle();await f.openKeys();f.pager().onNext();await f.settle();
+test('a migrated selection above the key lookup limit keeps every archived cap individually removable',async()=>{
+  const f=fixture(Array.from({length:51},(_,i)=>['s',`key:gone-${i}:cap`]));await f.settle();await f.openKeys();
+  assert.equal(f.slots().length,61,'all 51 archived choices appear beside the first live page');
+  const membership=()=>f.reads.filter(path=>new URL(path,'https://fixture.invalid').searchParams.has('ids'));
+  assert.equal(membership().length,2);
+  for(let i=0;i<20;i++){
+    const row=f.switches().find(n=>n.key===`gone-${i}`);assert.ok(row);assert.equal(row.props.disabled,false);
+    (row.props.onChange as (on:boolean)=>void)(false);await f.settle();
+  }
+  assert.equal(f.selection()!.ids.length,32);assert.equal(membership().length,2,'deselecting a covered key needs no new membership read');
+});
+
+test('closing a resource cancels selected key membership and reopening uses its refreshed identity',async()=>{
+  const f=fixture([['s','key:gone:cap']]);f.pauseMembership();await f.settle();await f.openKeys();
+  assert.equal(f.pending.length,1);assert.equal(f.slots().length,10);
+  f.setActive(false);await f.settle();assert.equal(f.pending[0].signal?.aborted,true);
+  f.resumeMembership();await f.settle();assert.equal(f.slots().length,10,'a closed consumer ignores its late membership response');
+  f.refresh();await f.settle();const before=f.reads.length;
+  f.setActive(true);await f.settle();
+  assert.equal(f.reads.length,before+2,'the refreshed source reads its page and selected membership');
+  assert.equal(f.slots().length,11);assert.equal(f.switches().find(n=>n.key==='gone')?.props.disabled,false);
+});
+
+test('an expanded key list refreshes names and caps without losing the loaded range',async()=>{
+  const f=fixture();await f.settle();await f.openKeys();await f.loadMore();
   const before=f.reads.length;f.refresh();await f.settle();
-  assert.equal(f.reads.length,before+1);assert.equal(f.pager().page,2);
+  assert.equal(f.reads.length,before+2);assert.equal(f.slots().length,20);
   assert.ok(f.slots().every(n=>n.props.children===`Key ${Number(n.key)} revision 2`));
   const key=f.switches().find(n=>n.key==='10')!;assert.equal(key.props.disabled,true,'usage without a reported cap is not a balance choice');
   assert.equal(key.props.value,'money.noCap');
   assert.ok(!f.selection()!.ids.some(([,meter])=>meter==='key:10:usage'));
 });
 
-test('shared settings expose reader data selection while keeping board actions owner-only',()=>{
+test('a collapsed resource pauses key reads and preserves its loaded rows until it reopens',async()=>{
+  const f=fixture();await f.settle();await f.openKeys();await f.loadMore();const before=f.reads.length;
+  f.setActive(false);f.refresh();await f.settle();
+  assert.equal(f.reads.length,before);assert.equal(f.slots().length,20,'retained rows keep the disclosure geometry while hidden');
+  f.setActive(true);await f.settle();
+  assert.equal(f.reads.length,before+2);assert.equal(f.slots().length,20);
+  assert.ok(f.slots().every(row=>row.props.children===`Key ${Number(row.key)} revision 2`));
+});
+
+test('chart settings contain only owner presentation controls',()=>{
   const popover=component('popover'),hide=component('hide');
-  let available=1,settings=readMoney({unit:'USD'});
   const modules:Record<string,unknown>={
-    'react/jsx-runtime':{jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props}),Fragment:'fragment'},
-    '../lib/board':{useCurrencyContext:()=>defaultCurrencyContext},
-    '../lib/prefs':{usePref:()=>settings},
-    '../lib/moneySelection':{moneySelection:()=>({selection:{ids:Array.from({length:available},(_,i)=>['s',String(i)])}})},
-    '../../server/domain/currency':currency,'../../server/domain/meterHistory':{MAX_METERS:32},
-    '../i18n':{t:(key:string)=>key},'./Popover':{Popover:popover,HideRow:hide,SwitchRow:switchRow},
+    'react/jsx-runtime':{jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props})},
+    '../i18n':{t:(key:string)=>key},'./Popover':{Popover:popover,HideRow:hide},
   };
-  const load=(file:string)=>{
-    const context={exports:{} as Record<string,(props:Record<string,unknown>)=>Node|null>,require:(name:string)=>modules[name]??{}};
-    runInNewContext(ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
-    return context.exports;
-  };
-  const money=load('../components/MoneySettings.tsx'),table=load('../components/AnalyticsTable.tsx');
-  for(const owner of [false,true]) {
-    const arrange:Arrange={view:EMPTY_VIEW,owner,update:()=>{throw new Error('opening reader settings must not write the board');}};
-    const props={arrange,widget:'budget-history',sources:[{id:'s'}],series:[]};
-    const chart=money.MoneyChartSettings(props)!;
-    assert.equal(chart.type,popover);assert.equal(chart.props.label,'history.settings');
+  const context={exports:{} as {MoneyChartSettings:(props:unknown)=>Node|null},require:(name:string)=>modules[name]??{}};
+  runInNewContext(ts.transpileModule(readFileSync(new URL('../components/MoneySettings.tsx',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
+  for(const owner of [false,true]){
+    const chart=context.exports.MoneyChartSettings({arrange:{owner},widget:'budget-history'});
+    assert.equal(chart===null,!owner);
     assert.equal(nodes(chart).filter(node=>node.type===hide).length,Number(owner));
-    const picker=nodes(chart).find(node=>node.type===money.MoneySettings)!;
-    assert.ok(picker);assert.equal(nodes(money.MoneySettings(picker.props)).filter(node=>node.type===money.KeyMoneySettings).length,1);
-    const grid=table.TableSettings({...props,columns:[{id:'value',title:'Balance'}],visible:['value'],children:picker})!;
-    assert.equal(grid.type,popover);assert.ok(nodes(grid).includes(picker));
-    assert.equal(nodes(grid).filter(node=>node.type===switchRow).length,Number(owner),'column controls stay owner-only');
-    assert.equal(nodes(grid).filter(node=>node.type===hide).length,Number(owner));
-    const funds={...props,family:'funds'};
-    const ordinary=money.MoneyChartSettings(funds);
-    assert.equal(ordinary===null,!owner);
-    assert.equal(nodes(ordinary).some(node=>node.type===money.FundsSettings),false,'ordinary funds have no duplicate visibility list');
-    available=33;
-    assert.equal(nodes(money.MoneyChartSettings(funds)).filter(node=>node.type===money.FundsSettings).length,1);
-    available=1;settings=readMoney({unit:'USD',selected:{USD:[]}});
-    assert.equal(nodes(money.MoneyChartSettings(funds)).filter(node=>node.type===money.FundsSettings).length,1,'explicit empty data selection remains recoverable');
-    settings=readMoney({unit:'USD'});
-  }
-  modules.react={memo:(component:unknown)=>component,useMemo:(read:()=>unknown)=>read(),useRef:(current:unknown)=>({current})};
-  modules['../lib/board']={useCurrencyContext:()=>defaultCurrencyContext,useNamed:()=>[]};
-  modules['../lib/history']={useBudgetHistory:()=>({history:null}),budgetHistory:{retry:()=>{}}};
-  modules['../lib/view']={columnShown:()=>true,BUDGET_TABLE:'budget-table'};
-  modules['../i18n']={t:(key:string)=>key,useLocale:()=> 'en'};
-  modules['./AnalyticsTable']=table;modules['./MoneySettings']=money;
-  const analytics=load('../components/MoneyAnalytics.tsx');
-  for(const owner of [false,true]) {
-    const panel=analytics.MoneyTable({arrange:{owner,view:EMPTY_VIEW}})!;
-    assert.equal(panel.props.controls,undefined);
-    const settings=panel.props.settings as Node;
-    assert.equal(settings.type,table.TableSettings);
-    assert.equal((settings.props.children as Node).type,money.MoneySettings,'the table uses the same reader selection inside its existing settings');
   }
 });

@@ -40,7 +40,7 @@ function fixture(budget?: number) {
   let calls = 0;
   const original = store.cells.bind(store);
   store.cells = (...args) => {calls++; return original(...args);};
-  const read = (from = start, to = start + H, now = start + 3 * H, hidden: string[] = []) => tiles.read(board, M, from, to, now, store.shown(board, hidden));
+  const read = (from = start, to = start + H, now = start + 3 * H, _hidden: string[] = []) => tiles.read(board, M, from, to, now, store.authorizedSources(board));
   return {store, directory, user, board, device, source, tiles, sample, read, calls: () => calls};
 }
 
@@ -85,10 +85,10 @@ test('late work and renames invalidate closed tiles, while hiding retains admitt
   assert.notEqual(h.tiles.ref('other', 1), ref);
   assert.notEqual(new HistoryTiles(h.store).ref(h.board, 1), ref);
   assert.equal(JSON.parse(h.read(start, start + H, start + 3 * H, [`source:${h.source}`])[0]).activity.sessions.length,1);
-  assert.equal(h.calls(), 3);
-  h.read(); assert.equal(h.calls(), 4);
+  assert.equal(h.calls(), 2);
+  h.read(); assert.equal(h.calls(), 2);
   h.store.db.prepare('UPDATE devices SET label = ? WHERE id = ?').run('Desk', h.device);
-  assert.equal(JSON.parse(h.read()[0]).activity.devices[h.device], 'Desk'); assert.equal(h.calls(), 5);
+  assert.equal(JSON.parse(h.read()[0]).activity.devices[h.device], 'Desk'); assert.equal(h.calls(), 3);
   h.store.close();
 });
 
@@ -197,7 +197,7 @@ test('work and event deletions also invalidate a held tile without changing its 
   const agent = {source: h.source, origin: 'terminal' as const, startedAt: start, project: 'P', folder: '', identity: {kind: 'legacy' as const, ordinal: 0}};
   h.store.creditWork(h.device, now - 91 * day, now - 91 * day + M, [agent]);
   h.store.creditWork(h.device, start, start + M, [agent]);
-  const shown = h.store.shown(h.board, []), key = h.store.workKey(h.board, shown);
+  const shown = h.store.authorizedSources(h.board), key = h.store.workKey(h.board, shown);
   h.read(); h.store.prune(now);
   assert.equal(h.store.workKey(h.board, shown), key);
   h.read(); assert.equal(h.calls(), 2);
@@ -210,7 +210,7 @@ test('work and event deletions also invalidate a held tile without changing its 
 test('scoped caches and metadata isolate quota/work changes from monetary tiles',()=>{
   const h=fixture();try {
     h.sample(start,20);
-    const shown=h.store.shown(h.board,[]),selection={unit:'USD',ids:[] as [string,string][]};
+    const shown=h.store.authorizedSources(h.board),selection={unit:'USD',ids:[] as [string,string][]};
     const read=(scope:'quota'|'budget')=>h.tiles.read(h.board,M,start,start+H,start+3*H,shown,scope==='budget'?selection:undefined,scope);
     read('quota');read('budget');assert.equal(h.calls(),2);
     h.sample(start+M,21);read('budget');assert.equal(h.calls(),2);read('quota');assert.equal(h.calls(),3);

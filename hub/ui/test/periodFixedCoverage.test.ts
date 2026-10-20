@@ -1,3 +1,6 @@
+import * as filterModelBindings from '../../server/domain/dataFilters';
+import * as filterRuntimeBindings from '../lib/filterSelection';
+import * as filterCurveBindings from '../../server/domain/periodCurves';
 import * as retention from '../../server/domain/periodRetention';
 import {test,type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
@@ -67,7 +70,7 @@ async function harness(t:TestContext,initial:PeriodRange|null,emptyWidgets?:stri
     fetchPeriod:async(_board:string,body:PeriodRequest)=>{attempts.push(body);await held;const response=await read(body);assert.equal(response.statusCode,200,response.body);const reply=expandPeriod(response.json<PeriodWireReply>());replies.push(reply);if(emptyWidgets)now++;return reply;},
     page:{get:()=>({board})},pan:{get:()=>null},preparations:()=>null,prepareAsync:async(_owner:object,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,
     empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>selected,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
-  runInNewContext(coordinatorCode,context);const period=new context.exports.BoardPeriod();
+  runInNewContext(coordinatorCode,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));const period=new context.exports.BoardPeriod();
   t.after(async()=>{period.activate(false);await app.close();store.close();});
   const settle=async()=>{for(let i=0;i<300;i++){await new Promise(setImmediate);if(i>20&&!pool.activeFlights)return;}assert.fail('period request did not settle');};
   const ready=(expected:boolean)=>{const range=selected?periodKey({mode:'range',...selected}):settings.range;for(const scope of PERIOD_SCOPES)assert.equal(period.projectionState({range},scope).ready,expected,scope);};

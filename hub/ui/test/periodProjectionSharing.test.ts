@@ -24,7 +24,9 @@ test('shared fixed frames follow real observations and selected endpoint changes
   t.mock.method(Date,'now',()=>NOW);
   const h=await fixture({fixed:true}),d=await drawings(h);
   try {
-    d.loader.choose('1h',{from:NOW-H,to:NOW});await flush();
+    // The fixture already selected this fixed range; establish real rapid choices.
+    d.loader.choose('1h',null);d.loader.choose('1h',{from:NOW-H,to:NOW});
+    assert.deepEqual(d.runScheduled(),[300]);await flush();
     const initial=d.loader.get().history;assert.ok(initial);
     assert.equal(h.period.project(initial,'quota',NOW).series.find((s:any)=>s.sourceId===h.source).remainingAtEnd,83);
     h.store.record(h.source,{observedAt:NOW-60_000,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:45,remaining:55,resetAt:NOW+H}]});

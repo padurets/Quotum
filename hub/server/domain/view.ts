@@ -8,13 +8,13 @@ import type {Place, Layout} from './layout.js';
 /**
  * How a board is arranged: the places of its widgets (a card per source, the history
  * chart, the table and agent activity), how wide each is, the names given to cards, the hidden widgets,
- * the windows hidden inside cards, the weekly spending plan per source (or none) and the
+ * the weekly spending plan per source (or none) and the
  * colours given to cards. The owner
  * arranges it and everyone on the board sees it this way. Nothing here changes what is
  * measured or stored.
  */
 export type View = {
-  version: 4;
+  version: 5;
   layout: Layout;
   /** Boards arranged before the grid: the hub migrates these; POST never saves them. */
   order?: string[];
@@ -22,9 +22,9 @@ export type View = {
   /** Card names the board's owner gave, by source id, instead of the automatic one. */
   names: Record<string, string>;
   hidden: string[];
-  /** Widgets off by default and explicitly enabled key scales beyond the card preview. */
+  /** Widgets off by default. */
   shown: string[];
-  /** Hidden windows (`source/window`) and card key scales (`source/key:opaque-id`). */
+  /** Reserved for compatibility; v5 always leaves it empty. */
   windows: string[];
   plans: Record<string, number[]>;
   /** Source ids whose plan is switched off on this board. */
@@ -39,9 +39,10 @@ export type View = {
 };
 
 /** The released two-grid shape is read only by its migration. */
+export type FixedView = Omit<View, 'version'> & {version: 4};
 export type SplitView = Omit<View, 'version'> & {version: 2};
 export type UnifiedView = Omit<View, 'version'> & {version: 3};
-export const VIEW_VERSION = 4;
+export const VIEW_VERSION = 5;
 export const VIEW_VERSION_HEADER = 'X-Quotum-View-Version';
 // A pre-grid view may materialize 200 ordered and 200 separately sized places.
 export const VIEW_BODY_LIMIT = 80 * 1024;
@@ -110,15 +111,16 @@ const isColumns = (value: unknown): value is string[] =>
   Array.isArray(value) && value.length <= LIMITS.columns && value.every(id => typeof id === 'string' && /^[a-z]{1,20}$/.test(id));
 
 /** A view as a page sent it, or null when anything in it is off. */
-function parseFields(body: unknown, version: 2 | 3 | 4): View | UnifiedView | SplitView | null {
+function parseFields(body: unknown, version: 2 | 3 | 4 | 5): View | FixedView | UnifiedView | SplitView | null {
   if (!body || typeof body !== 'object') return null;
   const input = body as Record<string, unknown>;
   if (input.version !== version) return null;
   const layout = parseLayout(input.layout);
-  const extra = version === 4 ? 11 : 4;
+  const extra = version >= 4 ? 11 : 4;
   const hidden = ids(input.hidden ?? [], LIMITS.widgets + extra);
-  const shown = ids(input.shown ?? [], LIMITS.widgets + (version === 4 ? 15 : version === 3 ? 11 : 4));
+  const shown = ids(input.shown ?? [], LIMITS.widgets + (version >= 4 ? 15 : version === 3 ? 11 : 4));
   const windows = ids(input.windows ?? [], LIMITS.windows);
+  if (version === 5 && (windows?.length || shown?.some(id => id.includes('/key:')))) return null;
   const names = byId(input.names, isName);
   const plans = byId(input.plans, isValidPlan);
   const unplanned = ids(input.unplanned ?? [], LIMITS.widgets);
@@ -128,12 +130,13 @@ function parseFields(body: unknown, version: 2 | 3 | 4): View | UnifiedView | Sp
   const enabledWhenEmpty = ids(input.enabledWhenEmpty ?? [], 2);
   if (!layout || !hidden || !shown || !windows || !names || !plans || !unplanned || !colors || !columns || !shownColumns || !enabledWhenEmpty || enabledWhenEmpty.some(id => !['agents', 'activity'].includes(id))) return null;
   const uniqueColumns = (map: Record<string, string[]>) => Object.fromEntries(Object.entries(map).map(([id, list]) => [id, [...new Set(list)]]));
-  const builtins = version === 4 ? BUILTIN_WIDGETS : V3_WIDGETS;
+  const builtins = version >= 4 ? BUILTIN_WIDGETS : V3_WIDGETS;
   if (version >= 3 && shown.filter(id => !builtins.includes(id)).length > LIMITS.widgets + 4) return null;
   return {version, layout, names, hidden, shown, windows, plans, unplanned, colors, columns: uniqueColumns(columns), shownColumns: uniqueColumns(shownColumns), enabledWhenEmpty};
 }
 
-export const parseView = (body: unknown) => parseFields(body, 4) as View | null;
+export const parseView = (body: unknown) => parseFields(body, 5) as View | null;
+export const parseFixedView = (body: unknown) => parseFields(body, 4) as FixedView | null;
 export const parseUnifiedView = (body: unknown) => parseFields(body, 3) as UnifiedView | null;
 export const parseSplitView = (body: unknown) => parseFields(body, 2) as SplitView | null;
 
@@ -143,12 +146,12 @@ const V3_WIDGETS: readonly string[] = ['agents', 'activity', 'quota-history', 'b
 const BUILTIN_WIDGETS = [...V3_WIDGETS, 'quota-session-history', 'quota-session-table', 'budget-spending-history', 'budget-spending-table'];
 const GEOMETRY = [[0,2],[0,3],[0,4],[0,6],[2,2],[2,3],[2,4],[3,2],[3,3],[4,2]] as const;
 const FIELDS = ['names','hidden','shown','windows','plans','unplanned','colors','columns','shownColumns','enabledWhenEmpty'] as const;
-type EncodedFields = [3 | 4, ([string | number, number] | [string | number, number, number])[], number, ...unknown[]];
-export type EncodedView = [4, EncodedFields[1], number, ...unknown[]];
+type EncodedFields = [3 | 4 | 5, ([string | number, number] | [string | number, number, number])[], number, ...unknown[]];
+export type EncodedView = [5, EncodedFields[1], number, ...unknown[]];
 
 /** Storage and every writer use this same lossless representation and byte count. */
-function encodeFields(view: View | UnifiedView): EncodedFields {
-  const builtins = view.version === 4 ? BUILTIN_WIDGETS : V3_WIDGETS;
+function encodeFields(view: View | FixedView | UnifiedView): EncodedFields {
+  const builtins = view.version >= 4 ? BUILTIN_WIDGETS : V3_WIDGETS;
   const encodeId = (id: string) => builtins.includes(id) ? builtins.indexOf(id) : id;
   const places: EncodedView[1] = Object.entries(view.layout.places)
     .sort(([a,p],[b,q]) => p.y - q.y || p.x - q.x || (a < b ? -1 : a > b ? 1 : 0))
@@ -169,11 +172,12 @@ function encodeFields(view: View | UnifiedView): EncodedFields {
 }
 
 export const encodeView = (view: View): EncodedView => encodeFields(view) as EncodedView;
+export const encodeFixedView = (view: FixedView) => encodeFields(view) as [4, EncodedFields[1], number, ...unknown[]];
 export const encodeUnifiedView = (view: UnifiedView) => encodeFields(view) as [3, EncodedFields[1], number, ...unknown[]];
 
 /** A wire draft has no implicit object fields, duplicate ids or unknown mask bits. */
-function decodeFields(input: unknown, version: 3 | 4): View | UnifiedView | null {
-  const builtins = version === 4 ? BUILTIN_WIDGETS : V3_WIDGETS;
+function decodeFields(input: unknown, version: 3 | 4 | 5): View | FixedView | UnifiedView | null {
+  const builtins = version >= 4 ? BUILTIN_WIDGETS : V3_WIDGETS;
   if (!Array.isArray(input) || input[0] !== version || !Array.isArray(input[1]) || !Number.isInteger(input[2]) || input[2] < 0 || input[2] >= 1 << FIELDS.length) return null;
   const places: [string, Place][] = [], seen = new Set<string>();
   for (const tuple of input[1]) {
@@ -201,11 +205,12 @@ function decodeFields(input: unknown, version: 3 | 4): View | UnifiedView | null
     fields[FIELDS[i]] = value;
   }
   if (at !== input.length) return null;
-  const view = parseFields({...fields,version,layout:{columns:COLUMNS,places:Object.fromEntries(places)}},version) as View | UnifiedView | null;
-  return view && new TextEncoder().encode(JSON.stringify(view)).byteLength <= (version === 4 ? VIEW_DECODED_LIMIT : 128 * 1024) ? view : null;
+  const view = parseFields({...fields,version,layout:{columns:COLUMNS,places:Object.fromEntries(places)}},version) as View | FixedView | UnifiedView | null;
+  return view && new TextEncoder().encode(JSON.stringify(view)).byteLength <= (version >= 4 ? VIEW_DECODED_LIMIT : 128 * 1024) ? view : null;
 }
 
-export const decodeView = (input: unknown) => decodeFields(input, 4) as View | null;
+export const decodeView = (input: unknown) => decodeFields(input, 5) as View | null;
+export const decodeFixedView = (input: unknown) => decodeFields(input, 4) as FixedView | null;
 export const decodeUnifiedView = (input: unknown) => decodeFields(input, 3) as UnifiedView | null;
 
 export const viewBytes = (view: View) => new TextEncoder().encode(JSON.stringify(encodeView(view))).byteLength;

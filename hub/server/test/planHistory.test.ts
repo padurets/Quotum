@@ -39,7 +39,7 @@ test('both transports expose recorded facts, authorized predecessors and histori
   h.store.share(h.board.id,h.source,h.user.id,T+2*H);
   for(const chunks of [h.legacy(h.board.id,T,T+4*H).chunks,h.composite(h.board.id,T,T+4*H)])assert.deepEqual(h.plans(chunks).map(([,at,plan,previous])=>[at,plan,previous]),[[T+3*H,'max',null]]);
   h.directory.saveView(h.board.id,{...h.directory.view(h.board.id),hidden:['source:'+h.source]},h.user.id,T+4*H);
-  assert.deepEqual(h.plans(h.legacy(h.board.id,T,T+4*H).chunks),[]);assert.deepEqual(h.plans(h.composite(h.board.id,T,T+4*H)),[]);
+  assert.equal(h.plans(h.legacy(h.board.id,T,T+4*H).chunks).length,1);assert.equal(h.plans(h.composite(h.board.id,T,T+4*H)).length,1);
   h.directory.saveView(h.board.id,{...h.directory.view(h.board.id),hidden:[]},h.user.id,T+4*H);
   assert.equal(h.plans(h.legacy(h.board.id,T,T+4*H).chunks).length,1);
   h.store.unshare(h.board.id,h.source);
@@ -75,7 +75,7 @@ test('plan bytes participate in bounded admission and malformed facts do not bec
   t.mock.method(Date,'now',()=>T+3*H);const h=fixture();t.after(h.close);
   h.record(T,'pro');h.record(T+H,'max');
   const small=new HistoryTiles(h.store,300);
-  assert.throws(()=>small.read(h.personal,M,T,T+2*H,T+3*H,h.store.shown(h.personal,[]),undefined,'quota'),HistoryLimit);
+  assert.throws(()=>small.read(h.personal,M,T,T+2*H,T+3*H,h.store.authorizedSources(h.personal),undefined,'quota'),HistoryLimit);
   h.store.db.prepare("INSERT INTO events VALUES (?,?,?,?)").run(h.source,T+2*H,'plan','\u0000invalid');
   assert.equal(h.plans(h.legacy(h.personal,T,T+3*H).chunks).length,2);
 });

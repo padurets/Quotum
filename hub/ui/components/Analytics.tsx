@@ -8,7 +8,8 @@ import {QUOTA_WIDGETS, BUDGET_WIDGETS, ACTIVITY, SUBSCRIPTION_FUNDS} from '../..
 import {t, useLocale} from '../i18n';
 import {pan} from '../lib/pan';
 import {Popover} from './Popover';
-import {Segmented} from './Kit';
+import {DataFilterControls,FilterSaveActions} from './DataFilters';
+import {FilterChoice,FilterPopover} from './Filters';
 
 const Arrow = ({back}: {back: boolean}) => (
   <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -108,7 +109,7 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
       {selected && (
         <button
           type="button"
-          className="icon-button"
+          className="icon-button period-clear"
           aria-label={t('history.rangeClear')}
           title={t('history.rangeClear')}
           onClick={() => {
@@ -143,20 +144,17 @@ export function AnalyticsHead({widgets, visible}: {widgets: string[]; visible: b
 
 function ViewingControls({widgets}: {widgets: string[]}) {
   const horizon = usePref('horizon');
+  const [horizonOpen,setHorizonOpen]=useState(false);
   const historyStart = useHistoryBegins();
   const charts = [ACTIVITY,...QUOTA_WIDGETS.filter(id=>id.endsWith('history')),...BUDGET_WIDGETS.filter(id=>id.endsWith('history')),SUBSCRIPTION_FUNDS].some(id=>widgets.includes(id));
   const horizonName = (value: typeof horizon) => value === 'auto' ? t('history.horizonAuto') : t('history.daysShort', {count: parseInt(value)});
   return (
     <div className="analytics-head-inner">
-      <div className="controls">
-        {charts && <Popover label={t('history.horizon')} trigger={<span className="period-name">{t('history.horizon')}: {horizonName(horizon)}<ChevronIcon /></span>}>
-          <div className="popover-section">
-            <div className="popover-title">{t('history.horizon')}</div>
-            <div className="popover-pad"><Segmented value={horizon} onChange={horizon => setPrefs({horizon})} options={HORIZONS.map(h => [h, horizonName(h)])} label={t('history.horizon')} /></div>
-          </div>
-        </Popover>}
-      </div>
-      <PeriodSwitch historyStart={historyStart} />
+      <DataFilterControls/>
+      {charts && <FilterPopover label="history.horizon" width={128} changed={horizon!=='auto'} onReset={()=>setPrefs({horizon:'auto'})} open={horizonOpen} onOpenChange={setHorizonOpen}>
+        {HORIZONS.map(value=><FilterChoice key={value} selected={horizon===value} onSelect={()=>{setPrefs({horizon:value});setHorizonOpen(false);}}>{horizonName(value)}</FilterChoice>)}
+      </FilterPopover>}
+      <div className="filter-viewing"><PeriodSwitch historyStart={historyStart} /><FilterSaveActions/></div>
     </div>
   );
 }

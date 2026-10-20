@@ -17,7 +17,7 @@ import {Chart, type Marker} from './Chart';
 import {chartMoments, type ForecastLine, type PlanLine} from '../lib/readout';
 import {useBoardId, useForecastsOf, useLineup, useNamed, usePastResets, useResetNews, useResetsFor} from '../lib/board';
 import {useClock} from '../lib/clock';
-import {quotaHistory, useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
+import {quotaHistory, useQuotaFinancialHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 type QuotaKind='session'|'weekly';
 import {t, useLocale} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
@@ -26,6 +26,7 @@ import {pan, usePanning} from '../lib/pan';
 import {usePrepared} from './prepared';
 import {axisNavigation, navigationKey} from '../lib/axisNavigation';
 import {historyProjection, type ProjectionHints} from '../lib/historyProjection';
+import {useQuotaPresentation} from '../lib/dataFilters';
 
 /**
  * The chart's own settings: whether it draws the plan and the forecast (where either has
@@ -59,14 +60,15 @@ function HistorySettings({arrange, kind, planAvailable, forecastAvailable}: {arr
 
 /**
  * The remaining share of every window of one kind over the period, with its legend under
- * it. It reads the history on screen (`useHistory`, which another answer replaces while
+ * it. It reads the native history on screen (which another answer replaces while
  * loading) and the board's cards, not their agents or pace; with time it moves on a cell of
  * the history's grid at a time, a label past its right edge counts down on its own, and a
  * forecast's line goes when the table no longer says where its window leads.
  */
 const WindowHistory = memo(function WindowHistory({arrange,kind='weekly'}: {arrange: Arrange;kind?:QuotaKind}) {
+  const selection=useQuotaPresentation();
   const widget=kind==='session'?QUOTA_SESSION_HISTORY:QUOTA_HISTORY;
-  const {history,drawing,loading,error,presentation:authority} = useHistory();
+  const {history,drawing,loading,error,presentation:authority} = useQuotaFinancialHistory();
   const strip = useHistoryPlot();
   const registry = useRef<{authority: number; token: number; seed: PlotLine[]; lines: PlotLine[]} | null>(null);
   if (registry.current?.authority !== authority) registry.current = null;
@@ -178,7 +180,7 @@ const WindowHistory = memo(function WindowHistory({arrange,kind='weekly'}: {arra
       if (points.length) forecasts.push({key: line.key, name: line.name, color: line.color, dash: line.dash, points, zero: drawn.zero, at: drawn.at, until: drawn.until}); yield;
     }
     return {futureFacts: ahead.map(a => ({zero: a.drawn.zero, until: a.drawn.until})), hints, lines, visible, markers, plans: [...plans.values()], forecasts, to, from, measured, now: strip ? now : measured, cellMs: strip?.cell ?? history?.cellMs ?? 60_000, strip, frame, planAvailable, forecastAvailable, planShown, forecastShown, moments: [...chartMoments(markers, ahead.map(a => a.drawn), to), ...[...plans.values()].map(plan => plan.until!)], registry: nextRegistry};
-  }, [drawing, strip, sources, view, prefs, locale, futureSources, futureForecasts, futureLineup, futureNews, futureCodex, futureView, navigationKey(navigation)], `${authority}:${history?.board}:${prefs.kind}`);
+  }, [drawing, strip, sources, view, prefs, locale, futureSources, futureForecasts, futureLineup, futureNews, futureCodex, futureView, navigationKey(navigation),selection], `${authority}:${history?.board}:${prefs.kind}`);
   const model = prepared.value;
   useLayoutEffect(() => {if (model) registry.current = model.registry;}, [model]);
   const lines = model?.lines ?? [];

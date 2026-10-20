@@ -1,3 +1,5 @@
+import {matchesSelection,workFilter,type FilterEnvelope} from '../../server/domain/dataFilters.js';
+import {sourceWorkCurves} from '../../server/domain/periodCurves.js';
 import {currentCohort,capturedCohort} from './sessionOracle.js';
 import {seedSessionClients} from '../sessionClients.js';
 import type {PeriodReply} from '../../server/domain/periodRead.js';
@@ -35,8 +37,8 @@ import {cadenceOf, dotOf, level, resetLine, titled, windowName} from '../../ui/l
 import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.js';
 import {ANALYTICS_KINDS, type History, type LiveSession, type Pace, type SourceForecast, type View} from '../../ui/lib/types.js';
 import type {Snapshot} from '../../ui/lib/board.js';
-import {ACTIVITY, AGENTS, boardState, cardId, columnShown, QUOTA_TABLE, QUOTA_HISTORY, isHidden, isWindowHidden, planOf} from '../../ui/lib/view.js';
-import {SCENES, SETS,PERIOD_SCENES,SESSION_ACTIVITY_SCENES} from '../catalogue.js';
+import {ACTIVITY, AGENTS, boardState, cardId, columnShown, QUOTA_TABLE, QUOTA_HISTORY, isHidden, planOf} from '../../ui/lib/view.js';
+import {SCENES, SETS,PERIOD_SCENES,SESSION_ACTIVITY_SCENES,FILTER_SCENES} from '../catalogue.js';
 import {
   awake,
   cards,
@@ -116,6 +118,8 @@ const within = (entry: Entry, check: Span, t: number) => {
 
 /** A board as the page puts it together from its snapshot: each card named from the whole board, with its agents and its pace. */
 type Overview = {unattributedSessions?:LiveSession[];view: View; historyStart: number; sources: (Snapshot['sources'][number] & {title: string; sessions: LiveSession[]; cadence: Pace; refresh: Snapshot['refresh'][string]; forecast: SourceForecast})[]};
+// A scene's saved opening filters do not change as its measurement clock advances.
+const configurations=new WeakMap<Stand,Map<string,Promise<FilterEnvelope>>>();
 
 /** What the hub shows at one moment, read once per board as the page would. */
 class Reading {
@@ -133,6 +137,12 @@ class Reading {
   private reader(board: string) {
     const entry = this.stand.set.entries.find(e => e.kind === 'board' && e.id === board);
     return this.stand.people.get(entry?.kind === 'board' ? entry.owner : board)!;
+  }
+
+  filters(board:string) {
+    let saved=configurations.get(this.stand);if(!saved)configurations.set(this.stand,saved=new Map());
+    if(!saved.has(board))saved.set(board,this.reader(board).get<FilterEnvelope>('/api/boards/'+encodeURIComponent(this.stand.boards.get(board)!)+'/filters'));
+    return saved.get(board)!;
   }
 
   overview(board: string): Promise<Overview> {
@@ -250,7 +260,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       const history = await reading.history(entry.id, range);
       const {activity} = history;
       if ('activityEmpty' in check) {
-        const shown = overview.sources.filter(source => !isHidden(overview.view, cardId(source.id))).length;
+        const shown = overview.sources.length;
         return {activityEmpty: activityEmpty(history, shown)?.key ?? null, range};
       }
       const tenth = (ms: number) => Math.round(ms / 360_000) / 10;
@@ -322,7 +332,8 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
   const weekly = planOf(overview.view, source.id);
   if ('window' in card && live) {
     const note = planNote(live, source.successAt, now, weekly);
-    const hidden = isWindowHidden(overview.view, source.id, live.id);
+    const filters=await reading.filters(board);
+    const hidden = !matchesSelection(filters.filters.windows,[source.id,live.id]);
     // A hidden window keeps its name (the card's settings list it) and draws nothing else.
     const onCard = (value: unknown) => (hidden ? 'not drawn: the window is hidden' : value);
     Object.assign(values, {
@@ -881,6 +892,35 @@ test('seed and live credit share producer IDs and expose known positive, zero, l
   assert.ok(byName('ios-app').rows.some(row => row.session.workedMs !== null), 'a mixed group contains known credit too');
 });
 
+
+test('data filter catalogue keeps empty work recoverable beside supplier measurements',async t=>{
+  const set=setOf('filters'),start=Math.floor(Date.now()/MIN)*MIN,{stand}=await bringUp(t,set,start);
+  const owner=stand.people.get('ana')!,member=stand.people.get('ben')!,board=stand.boards.get('compact')!;
+  const filters=await owner.get<FilterEnvelope>('/api/boards/'+board+'/filters');
+  assert.deepEqual(filters.filters.projects,{mode:'include',values:[]});
+  const overview=await owner.get<Snapshot>('/api/overview?board='+board);assert.ok(overview.sources.some(source=>source.windows.length));
+  const response=expandPeriod(await owner.post<PeriodWireReply>('/api/boards/'+board+'/period',{version:1,selection:{mode:'live',periodMs:HOUR},evaluatedAt:start-MIN,sessions:{},facets:true,workFilter:workFilter(filters.filters),quota:{cell:String(MIN),from:String(start-HOUR),to:String(start-MIN),cells:'skip'},sourceWork:{}}));
+  assert.equal(response.sessions?.state,'complete');assert.equal(response.facets?.state,'complete');assert.equal(response.sourceWork?.state,'complete');
+  if(response.sessions?.state!=='complete'||response.facets?.state!=='complete'||response.sourceWork?.state!=='complete')throw new Error('incomplete filters scene');
+  assert.equal(response.sessions.value.refs.length,0);assert.ok(response.facets.value.projects.includes('recent-1'));
+  assert.ok([...sourceWorkCurves(response.sourceWork.value).groups.source.values()].some(curve=>curve.read(response.basis.range,true)>0));
+  assert.deepEqual((await member.get<FilterEnvelope>('/api/boards/'+board+'/filters')).filters,filters.filters);
+  await assert.rejects(member.saveFilters(board,filters.filters),(error:unknown)=>(error as {status:number}).status===403);
+  const all=structuredClone(filters.filters);all.projects={mode:'exclude',values:[]};await owner.saveFilters(board,all);
+  assert.deepEqual((await owner.get<FilterEnvelope>('/api/boards/'+board+'/filters')).filters.projects,all.projects);
+  const populated=stand.boards.get('team')!,opening=await owner.get<FilterEnvelope>('/api/boards/'+populated+'/filters');
+  assert.deepEqual(opening.filters.projects,{mode:'exclude',values:[]});
+  const mixed=await owner.get<Snapshot>('/api/overview?board='+populated);
+  const native=mixed.sources.filter(source=>cards(set).some(card=>card.id.startsWith('sessions-')&&stand.sources.get(card.id)===source.id));
+  assert.equal(native.length,4);
+  assert.ok(native.every(source=>source.windows.some(window=>window.kind==='session'&&window.resetAt!==null&&window.resetAt>start)),'five-hour limits must remain current when the review starts');
+  const choices=expandPeriod(await owner.post<PeriodWireReply>('/api/boards/'+populated+'/period',{version:1,selection:{mode:'live',periodMs:24*HOUR},evaluatedAt:start,sessions:{},facets:true}));
+  assert.equal(choices.facets?.state,'complete');assert.equal(choices.sessions?.state,'complete');
+  if(choices.facets?.state!=='complete'||choices.sessions?.state!=='complete')throw new Error('incomplete populated filters scene');
+  assert.ok(choices.facets.value.projects.length>=57);assert.ok(choices.facets.value.devices.length>=5);
+  assert.ok(choices.sessions.value.refs.length>=125);
+  assert.deepEqual(FILTER_SCENES,['mixed-resources','populated-work','selected-empty','unfiltered-facets','resources-continue','member-current','save-restore']);
+});
 
 test('session comparison catalogue exposes grouped session columns and retained work with a whole union total',async t=>{
   const set=setOf('all'),start=Math.floor(Date.now()/MIN)*MIN;

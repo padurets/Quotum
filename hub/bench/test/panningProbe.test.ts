@@ -154,7 +154,7 @@ test('actual postconditions preserve failure and cleanup after motion sampling s
         if(code.includes('const p=window.__quotumPan;p.cleanup()')||code.includes("const until=Date.now()+15000,p=new URLSearchParams")||code.includes("status:'partial'")||code.includes("window.__quotumPan?.cleanup()")||code.startsWith('new Promise(')||code==='window.__quotumPan.returnInput=null')return read(code);
         if(code.startsWith('new DOMMatrix('))return ++matrices*12;
         if(code.startsWith("[...document.querySelectorAll('.activity-legend-tip"))return ++legends===1;
-        if(code.includes('.tooltip,')||code.startsWith("!document.querySelector('.analytics-head"))return false;
+        if(code.includes('.tooltip,')||code===`!document.querySelector('.filter-control[data-filter="history.horizon"] .popover')`)return false;
         if(code.startsWith('new URLSearchParams(')||code.startsWith('!new URLSearchParams(')||code.startsWith("!!document.querySelector('[data-pan-end]')")||code.startsWith("!document.querySelector('[data-pan-end]')"))return true;
         if(code==='history.back()'||code==='history.forward()'||code==="document.querySelector('.activity .legend-item').focus()")return;
         assert.fail('Unexpected integration boundary: '+code.slice(0,80));

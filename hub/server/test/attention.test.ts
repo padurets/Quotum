@@ -1,3 +1,4 @@
+import {defaultFilters} from '../domain/dataFilters.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync, rmSync} from 'node:fs';
@@ -240,8 +241,7 @@ test('attention shares board visibility, and keeps stale low figures distinct fr
   assert.equal(h.projection.attention(h.board, T).level, 'crit');
   assert.equal(h.projection.attention(h.board, T + 205_000).quality, 'partial');
   assert.equal(h.projection.attention(h.board, T + 600_001).minimum?.remaining, 8);
-  const view = h.directory.view(h.board);
-  h.directory.saveView(h.board, {...view, windows: [`${card.id}/week`]}, h.user.id, T);
+  h.directory.saveFilters(h.board,{...defaultFilters(),windows:{mode:'exclude',values:[[card.id,'week']]}},h.user.id,T);
   assert.deepEqual(h.projection.attention(h.board, T), {boardId: h.board, level: null, quality: 'unavailable', minimum: null});
 });
 
@@ -259,20 +259,20 @@ test('tracker scheduled events baseline on first success and failure recovery', 
 
 test('hidden events are consumed and visibility is checked again before stream delivery', t => {
   const h = setup(t);
+  const view=h.directory.view(h.board);
   h.open();
   h.deliver([[T, 35]]);
   const card = h.store.states(h.board)[0];
-  const view = h.directory.view(h.board);
   h.directory.saveView(h.board, {...view, hidden: [`source:${card.id}`]}, h.user.id, T);
   h.deliver([[T + 1000, 29]]);
   h.directory.saveView(h.board, view, h.user.id, T + 2000);
   h.events.flush();
   assert.equal(notifications(h.frames).length, 0);
   h.deliver([[T + 3000, 9]]);
-  h.directory.saveView(h.board, {...view, windows: [`${card.id}/week`]}, h.user.id, T + 3000);
+  h.directory.saveFilters(h.board,{...defaultFilters(),windows:{mode:'exclude',values:[[card.id,'week']]}},h.user.id,T+3000);
   h.events.flush();
   assert.equal(notifications(h.frames).length, 0, 'hidden after enqueue');
-  h.directory.saveView(h.board, view, h.user.id, T + 4000);
+  h.directory.saveFilters(h.board,defaultFilters(),h.user.id,T+4000);
   h.deliver([[T + 5000, 12], [T + 6000, 9]]);
   h.events.flush();
   assert.equal(notifications(h.frames).length, 0, 'corrections do not reset consumed thresholds');

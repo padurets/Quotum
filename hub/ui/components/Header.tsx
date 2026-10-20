@@ -10,6 +10,8 @@ import {ChevronDown, Funnel, Settings as SettingsIcon} from 'lucide-react';
 import {t} from '../i18n';
 import {boardHref, navigate, useLocation} from '../lib/router';
 import {useTimeRange} from '../lib/timeRange';
+import {useDataFilters} from '../lib/dataFilters';
+import {defaultFilters,sameFilters} from '../../server/domain/dataFilters';
 
 /** The connection lost this long (by the hub's clock) is said in the header. */
 const OFFLINE_AFTER = 45_000;
@@ -28,7 +30,8 @@ function BoardHome({board}: {board: Board | null}) {
 /** The range indicator follows navigation without waking the board controls. */
 function FilterToggle({expanded, onToggle}: {expanded: boolean; onToggle: () => void}) {
   const selected = useTimeRange();
-  const label = [t(expanded ? 'header.hideFilters' : 'header.showFilters'), selected && t('header.historicalPeriod')].filter(Boolean).join('\n');
+  const filters=useDataFilters().current,filtered=!!filters&&!sameFilters(filters,defaultFilters());
+  const label = [t(expanded ? 'header.hideFilters' : 'header.showFilters'), selected && t('header.historicalPeriod'),filtered&&t('filters.active')].filter(Boolean).join('\n');
   return (
     <div className="filter-toggle">
       <button
@@ -41,7 +44,7 @@ function FilterToggle({expanded, onToggle}: {expanded: boolean; onToggle: () => 
         onClick={onToggle}
       >
         <Funnel size={16} aria-hidden="true" />
-        {selected && <span className="filter-range-dot" aria-hidden="true" />}
+        {(selected||filtered) && <span className="filter-range-dot" aria-hidden="true" />}
       </button>
     </div>
   );

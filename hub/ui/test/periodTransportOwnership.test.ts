@@ -183,7 +183,7 @@ test('retiring a drawing restores its independently wanted exact query and captu
   for(const explicit of [true,false]){
     const pool=new HistoryPool(),q=owner(),blockers=[{role:'visible' as const},{role:'visible' as const}],sent:PeriodRequest[]=[];
     const exact={cell:'60000',from:'10800000',to:'14400000',meta:'exact-metadata',cells:'skip',...(explicit?{evidence:'explicit-exact'}:{})};
-    const captured={...exact,evidence:explicit?'explicit-exact':'captured-cursor'},cursorKey=JSON.stringify(['b','quota',undefined,undefined,undefined]);
+    const captured={...exact,evidence:explicit?'explicit-exact':'captured-cursor'},cursorKey=JSON.stringify(['b','quota',undefined,undefined,undefined,undefined]);
     const intent:PeriodIntent={board:'b',generation:1,revision:1,request:{version:1,selection:{mode:'range',from:NOW-H,to:NOW},evaluatedAt:NOW,quota:exact}};
     const transport=new PeriodTransport(pool,()=>intent,()=>{},(_board,body,signal)=>new Promise((_resolve,reject)=>{sent.push(body);signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')),{once:true});}));
     try{

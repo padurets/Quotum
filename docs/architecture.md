@@ -770,10 +770,10 @@ under a twentieth of a percent an hour foresee nothing past a week of work. A re
 what is left unknown until the next measurement, used up or not: the forecast by work
 waits for it where agents worked, and where none did says so. Where none of the agents
 worked, there is no share either. The share counts a step that any work
-touches whole, so it is an upper bound. A board shows the work of its
-members who hold each subscription it shows, but those of hidden cards: on a shared
-board from the later of their joining it and the subscription coming to it, on a
-personal board all of it. Work the board does not show (off the board, from before) is
+touches whole, so it is an upper bound. Source-wide quota estimates use admitted
+work with held, disclosed subscription funding, independently of card layout. Shared
+boards clip it at device admission and the source's grant; personal boards retain
+their own captured credit. Work outside these bounds is
 not in its hours while the window's spending is, and so is spending outside tracked
 agents (claude.ai, a phone, machines without Quotum, cloud tasks): the share while
 active says how far to trust the pace.
@@ -872,7 +872,7 @@ them), kept for 90 days.
   tooltip; the verdict stays.
 
   The producer records the actual observed plan boundary used at its confirmation
-  hour. Each board filters this provenance by visibility, sharing and retention;
+  hour. Each board filters this provenance by source grants, sharing and retention;
   expiry updates only the provenance, leaving the shared numeric model intact. A
   compatible weekly forecast's tooltip gives the plan observation and explains its
   confirmation after an hour, including a forecast waiting for more data.
@@ -1131,7 +1131,7 @@ remaining amount once. Composition stays in the existing disclosure.
 Money history first computes native accounting and coverage, then applies the reader's
 currency outside the shared native tile cache. Original CNY provenance avoids repeated
 rounding. Exchange movements cannot create spending or top-up events; balance-only
-accounting stays unavailable. History requests validate board visibility and ownership
+accounting stays unavailable. History requests validate board membership, source grants and ownership
 of the selected currency. A price revision refreshes the selected monetary history when
 a previously missing path becomes available. Native reference mode keeps its existing
 request, packing and performance behavior. Subscription selection remains independent.
@@ -1421,7 +1421,7 @@ and its limits.
   needs is measured, never stored), names and colours
   given to cards, the hidden widgets (and those
   off by default, the list of agents, turned on), the columns hidden in a widget's table,
-  the agents' and the limits' (and those off by default turned on), the windows hidden inside cards and the spending
+  the agents' and the limits' (and those off by default turned on), and the spending
   plans, or that a card has none. Agent sessions and activity include admitted device
   work independently of card visibility or subscription sharing.
   It is stored once per board, like a dashboard in Grafana: the owner arranges it and
@@ -1576,16 +1576,95 @@ Its translucent surface remains distinct from the page background. On wide scree
 the backing shares the content's 1240 px maximum width and 28 px inner side spacing,
 with rounded lower corners. Hiding filters reduces that same surface to the header.
 Narrow screens keep edge-to-edge bars.
+The row also owns data selection for Resources, Projects, Devices and Clients.
+Provided-data authority, these predicates and layout visibility are independent.
+The v1 defaults live in `board_filters`, with their own revision and an opaque
+projection-authority precondition. Owner Save compares both atomically, merges
+authorized changes while retaining dormant raw rules, and explicitly adopts the
+initial revision zero. Readers keep current filters and dirty drafts per user,
+board and tab; foreign saves only update Restore. Compact consumes saved defaults
+and follows the layout's hidden-card visibility. Native attention consumes saved
+defaults with its existing hidden-card admission, including a final check before
+notification delivery.
+Legacy wallet and funds preferences seed revision zero until that user edits the
+family or restores the board defaults. A receipt for each user, board and family
+survives clean tab drafts; the original preferences can still seed other boards.
+Separate stream configuration frames carry the authorized filter projection;
+snapshots carry only matching revision/authority references.
+The period coordinator applies work predicates to authorized intervals before
+building session, activity or direct-hour indexes. Facets come from the unfiltered
+period, adding the current roster only for a live period. One raw read also supplies independent source-wide
+curves for supplier rates and forecasts, transported as a source-only live sweep
+or compact fixed summary. Work-filter changes retire selected indexes and details,
+while source evidence retains its own cursor, cache identity and generation.
+Late source-only adoption shares native arrays and copies only changed fixed
+summaries after reserving their metadata. The captured response remains charged
+beside recipient staging until adoption and its chart consumers finish.
+The private storage wrapper keeps boolean decisions that coincide with a changed
+rule's default; repeated include/exclude or wallet auto/only transitions cannot
+forget a dormant exclusion. Its filters and retained decisions together fit
+256 KiB. Public projections disclose no unavailable references or private ledger.
+Per-unit migration branches retain their own decisions until materialization or reset.
+Dirty tab drafts retain their origin projection for authority-only rebase after reload;
+reset intent stays dirty even when the visible projection is unchanged. Restore
+creates a new edit boundary that a pending Save cannot overwrite.
+Canonical defaults fit 256 KiB and their merge/projection envelopes 272 KiB. Full
+period requests fit 256 KiB; Save and runtime share a 76 KiB minimal work template
+and 80 KiB detail limit. The transport checks the final encoded body after inserting
+evidence and metadata. Native-only reads omit an unused work predicate; work-sensitive
+reads preserve it in full, including a separate facet read for removable explicit choices.
+An inherited oversized predicate remains exact and
+recoverable through successive decreasing local edits, without an oversized work
+request. Parsed queued input, its canonical allowance and prepared membership sets
+share the existing 32 MiB server reservation; retained and staged facets share the
+browser's 15 MiB history pool. The selected-work matcher is prepared on its first
+consuming read. A failed preparation or raw read releases its matcher charge; a
+capacity failure stays within that section while independent native sections remain
+readable. Source cursor planning has the same section boundary: a refused plan does
+not widen the shared raw range or discard native siblings. Work authority changes
+retire closed-menu facets too.
+Ordinary session and work changes invalidate their cached choices without a closed-menu
+read. Reopening checks that generation and the live evaluated range; an older reply
+cannot mark newer choices complete.
+The response keeps the period's facet universe separate from authorized explicit choices
+outside that period. Those choices remain individually removable. The hub confirms their
+project/device admission before returning labels; browser draft references do not provide
+that authority. Their metadata follows predicate, range and work-authority generations.
+Source-work tape, curves and cursor are adopted together after bounded preparation.
+A limit refusal retains the previous baseline and cursor while making its estimates
+unavailable; failed preparation releases only successfully admitted scratch.
+Quota charts and tables subscribe to source/window presentation choices separately from
+their native history identity, so a window-only edit updates both on a quiet board without
+reading unchanged history or rebuilding for unrelated project-only presentation changes.
 The filter button forms its own group after the board controls. A small dot marks a
-selected historical range, including when the row is hidden; returning to live removes it.
+non-default data selection or historical range, including while the row is hidden.
 The row starts closed and remembers its visibility in the reader's browser.
+Each data filter has on/off choices, a small minus-count tag for exclusions and an
+adjacent cross that shows all again. Include counts use a confirmed cached universe;
+until one is available, the existing changed dot appears without reading a closed menu.
+Shared filter rows keep every switch on the
+right, including group headings and unknown resources. Dropdowns align with the
+filter label independently of its exclusion badge; unchanged filters reserve no
+status space. Search uses a short placeholder and an accessible hidden label,
+outside the scrolling options so it stays in view.
+On phones the four data dimensions keep two columns sized to their content, so an
+exclusion badge cannot move the open control to another row.
+Resource groups use provider logos and inline
+disclosures; disabling a parent hides its children without changing their choices.
+Expandable and plain resource rows align their names; child guides have inset ends
+and a gap before the row's hover surface.
+Wallet key batches append within that disclosure instead of replacing the menu
+with another screen. The horizon uses the same dropdown style without its selected
+value in the trigger. Restore precedes Save at the right end of the complete row;
+the date arrows stay beside them as the period caption changes.
 Hiding it preserves the selected period and shared chart horizon; while open,
 it keeps them available during scrolling. Board navigation and widget management
 stay in the header. Five-hour limits, weekly limits and wallet balance
-each have independent chart/table pairs. Both wallet widgets share
-an accounts-and-keys picker in their settings. Each chart's legend controls
-only its own visibility. Subscription funds use their own family and expose data
-selection only for a bounded cohort or a retained explicit selection. Table columns
+each have independent chart/table pairs. The common Resources control selects logical windows, wallet balances and key caps
+for cards, charts and tables together. Each chart's legend controls
+only its own visibility. Subscription funds use their own filter family. Projects, devices and clients
+intersect the session cohort before aggregation; source-wide quota and financial
+estimates retain a separate source-only work sweep from the same authorized read. Table columns
 remain owner settings, while shared data controls are available to every reader. Each
 analytics panel uses the same heading and reader-error component. The selected
 period and its back/forward buttons appear together at the right end of the shared
@@ -1684,7 +1763,7 @@ reading order, with the heights chosen where the least their content can show fi
 arranging is available only on the wide grid.
 The hub migrates pre-grid views and legacy analytics anchors atomically, retaining
 hidden intent, heights, unrelated geometry and each table's columns. A board view and
-revision are read as one reconciled pair. Saves use the compact version 4 codec and its writer header;
+revision are read as one reconciled pair. Saves use the compact version 5 codec and its writer header;
 a stale runtime cannot save a version it merely echoed from a snapshot. The ordinary
 body limit is 80 KiB UTF-8 of the encoded request; decoded drafts fit 132 KiB.
 Storage and POST use the same tuple codec; readers receive a semantic View object.
@@ -1724,8 +1803,8 @@ is only about how one person looks (the board's period, the chart's
 horizon, lines and groups switched off in either chart's legend, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
 the agents and quota tables' sort orders, the chosen board and language) stays in their browser.
 The controls above the mixed widget grid own the common period and forecast
-horizon. Shared wallet data selection is accessible from both wallet widgets,
-including a table whose chart is hidden. Each widget keeps its display settings, such as
+horizon. Shared wallet data selection lives in the common Resources filter and remains
+accessible when either wallet widget is hidden. Each widget keeps its display settings, such as
 columns, forecast visibility, stacking and legend choices.
 A fixed accounting interval is exactly `[from,to)`: card values use the latest retained
 observation strictly before `to`, with validity evaluated at `to`. Missing predecessors
@@ -1859,7 +1938,14 @@ composite and detail reads, cancellations and responses that finish after measur
 Quota history, wallet budgets, subscription funds and agent activity read and move along time alike
 (`ui/components/timeAxis.ts`), each with its legend under it. Pointing to a legend
 entry or focusing it with the keyboard highlights that series and dims its peers.
-Wallet charts and tables use a common accounts-and-keys picker inside their settings. Its shared reader selection is independent of the table’s owner-only display settings. An account selects its total balance; a key selects its reported remaining cap within the shared 32-meter bound. Retired spending preferences are discarded without replacing an explicit empty selection with default accounts. Balance components remain in card details. Each fixed chart has independent legend visibility. Ordinary subscription funds use only the legend; the accounts picker appears for more than 32 eligible balances or an explicit retained data selection. Legacy funds subsets remain global visibility intent across boards, without changing bounded admission on legend clicks.
+The common Resources filter selects accounts, key caps and subscription funds
+across cards, charts and tables. An account selects its total balance; a key selects
+its reported remaining cap within the shared 32-meter bound. Balance components
+remain in card details. Widget settings retain presentation and placement; each
+chart has independent legend visibility. Board opening defaults are saved separately
+from each tab's current selection. Legacy per-unit subsets remain intact until an
+explicit family edit materializes that unit or a reset clears the family; they do
+not create a second picker or change admission when a legend is clicked.
 
 All five charts share `ui/components/seriesFocus.ts`: inherited CSS variables change
 paint without rebuilding prepared paths, updating reader preferences or rendering data
@@ -1937,10 +2023,12 @@ abort or reversal; entering them restores the allowance. A disjoint jump inside 
 held tile also reads the minimum unknown or stale bridge to its retained interval,
 without rereading its fresh component. Empty tiles have no head to fill. At most
 one foreground read per resource family and one purely speculative flight overall share
-the two aggregate HTTP slots; foreground requests take priority. The shared transport
-collects visible family reads before requesting a slot, so all three families can
-share one response. A waiting reader anchors its hub-clock estimate when HTTP
-actually starts. The final range uses the same batching without a buffer. Writes to the same tile are
+the two aggregate HTTP slots. The shared transport collects visible family reads before
+requesting a slot, so all three families can share one response. A coalesced response
+retains its borrowed drawing slots until its HTTP read and recipient preparation settle,
+including after that drawing is cancelled. Foreground requests take priority. A waiting
+reader anchors its hub-clock estimate when HTTP actually starts. The final range uses
+the same batching without a buffer. Writes to the same tile are
 serialized, obsolete requests are aborted and speculative errors cannot drop the
 selection. The existing 15 MiB tile estimate protects the visible frame. On release,
 speculation stops and exact totals switch only after the final frame is complete.
@@ -1973,6 +2061,24 @@ selected series, target bounds and pinned entries still decide whether that work
 Financial and work ledgers share their immutable native observations only when every
 reading agrees. Retention preserves that shared suffix, and the pool charges its storage
 once; differing observations and each ledger's spans retain their own charges.
+
+Selected activity cells have their own filter identity, coverage and prepared strip.
+Changing a project, device or client retires those cells and pending selected jobs,
+while native buffers, their coverage and the quota chart's prepared strip survive.
+When native coverage is already fresh, the same quota reader can refill activity with
+an empty source selection and skipped native evidence. Its metadata never replaces
+the native basis, and it cannot complete a pending native summary. Both projections
+keep the same transport slots and memory budget. A hidden activity widget defers its
+refill until shown; activity failures do not discard the native frame.
+Their error state and retry belong to activity alone: new native measurements still
+read and commit their own cells, including while activity waits for memory or its
+retry deadline. Retry also repeats failed selected period evidence. Native failures
+remain visible to their own chart while its last complete frame is retained.
+A stored work predicate that exceeds the executable limit makes selected activity
+unavailable until the selection is narrowed. Native drawings continue through their
+own coverage; their unselected activity cells cannot fill a selected strip, including
+after a pan, period change or retry. Native period ledgers and supplier work keep
+their independently keyed queries while selected work is unavailable.
 
 Each chart replaces one typed drawing model whole after preparation, then publishes
 its geometry and painters after the DOM commits. Input keeps the displayed model and

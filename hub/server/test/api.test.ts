@@ -1,6 +1,6 @@
 import {migrateFixed} from '../domain/fixedView.js';
 import {migrateUnified as migrateSplit} from '../domain/unifiedView.js';
-const migrateUnified=(...args:Parameters<typeof migrateSplit>)=>migrateFixed(migrateSplit(...args),args[1]);
+const migrateUnified=(...args:Parameters<typeof migrateSplit>)=>({...migrateFixed(migrateSplit(...args),args[1]),version:5 as const,windows:[]});
 import {decodeView, encodeView, parseView, VIEW_VERSION, VIEW_VERSION_HEADER} from '../domain/view.js';
 import {cellOf, compose, targetOf, tileOf, tileStart, type HistoryAnswer} from '../domain/history.js';
 import {test} from 'node:test';
@@ -29,7 +29,7 @@ const periodOf = (id: string) => PERIODS.find(p => p.id === id)!;
 const iso = (ms: number) => new Date(ms).toISOString();
 const ORIGIN = 'http://localhost';
 const SETUP = 'BCDF-GHJK';
-const EMPTY = {version: 4 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}, enabledWhenEmpty: []};
+const EMPTY = {version: 5 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}, enabledWhenEmpty: []};
 
 async function hub() {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'quotum-api-')), 'db.sqlite'));
@@ -303,7 +303,7 @@ test('people share their subscriptions with a shared board; its owner arranges, 
   const old = (await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view;
   assert.deepEqual(old, decodeView(encodeView(migrateUnified({order: ['history'], sizes: {history: 3}},store.sources(team)))), 'migration is shared by every reader');
   assert.deepEqual(shared.view.shown, ['quota-history','quota-table','quota-session-history','quota-session-table'], 'applicable analytics are placed when the first source appears');
-  const view = decodeView(encodeView({...EMPTY, layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}, [`source:${source}`]: {x: 0, y: 0, w: 3}}}, names: {[source]: 'Bob’s Codex'}, hidden: ['forecast'], shown: ['agents','quota-history','quota-table','quota-session-history','quota-session-table'], windows: [`${source}/weekly`], plans: {[source]: [50, 50, 0, 0, 0, 0, 0]}, unplanned: [source], colors: {[source]: '#1fa89c'}, columns: {agents: ['machine', 'origin']}, shownColumns: {agents: ['state']}}))!;
+  const view = decodeView(encodeView({...EMPTY, layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}, [`source:${source}`]: {x: 0, y: 0, w: 3}}}, names: {[source]: 'Bob’s Codex'}, hidden: ['forecast'], shown: ['agents','quota-history','quota-table','quota-session-history','quota-session-table'], windows: [], plans: {[source]: [50, 50, 0, 0, 0, 0, 0]}, unplanned: [source], colors: {[source]: '#1fa89c'}, columns: {agents: ['machine', 'origin']}, shownColumns: {agents: ['state']}}))!;
   assert.deepEqual((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: view})).body.view, view);
   assert.deepEqual((await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view, view);
   assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'bob', body: EMPTY})).status, 403, 'a member only looks');
@@ -388,13 +388,8 @@ test('a full view request has a small UTF-8 migration reserve above the keepaliv
   const board = await person('alice');
   // Places with chosen heights count as any other part of the view.
   const places = Object.fromEntries(Array.from({length: 50}, (_, i) => [`source:${i}`, {x: 0, y: i * 10, w: 6, h: i % 2 ? MAX_ROWS : 1}]));
-  for (const unit of ['x', 'я']) {
-    const view={...EMPTY,layout:{columns:6,places},windows:[] as string[]};
-    for (let i=0;i<500;i++) {
-      const next={...view,windows:[...view.windows,unit.repeat(116)+String(i)]};
-      if(Buffer.byteLength(JSON.stringify(encodeView(next)))>VIEW_BODY_LIMIT)break;
-      view.windows=next.windows;
-    }
+  for (const name of ['x', 'я']) {
+    const view={...EMPTY,layout:{columns:6,places},names:{card:name}};
     const wire=JSON.stringify(encodeView(view));
     const exact=wire+' '.repeat(VIEW_BODY_LIMIT-Buffer.byteLength(wire));
     assert.equal(Buffer.byteLength(exact), VIEW_BODY_LIMIT);
@@ -716,8 +711,8 @@ test('history metadata reuse is opt-in and cannot bypass board access or a chang
   assert.ok(other.body.known); assert.notEqual(other.body.meta, first.body.meta);
   await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {...EMPTY, hidden: [`source:${source}`]}});
   const hidden = await read(suffix);
-  assert.equal(hidden.status, 200); assert.notEqual(hidden.body.meta, first.body.meta);
-  assert.equal(hidden.body.known.sources[source], undefined);
+  assert.equal(hidden.status, 200); assert.equal(hidden.body.meta, first.body.meta);
+  assert.equal(hidden.body.known, undefined);
   assert.equal((await read('&meta=invalid')).status, 400);
   assert.ok((await read('&meta=' + 'x'.repeat(43))).body.known, 'an unknown valid token returns complete metadata');
 });
@@ -783,7 +778,7 @@ async function worked() {
   work('bob', 3, 1, 'billing');
   work('carol', 1.5, 0.5, 'quotum');
   // Whose agents' work the board shows and under which names: when it changes, open pages hear of it (events.ts).
-  const workKey = () => store.workKey(team, store.shown(team, new Directory(store.db).view(team).hidden));
+  const workKey = () => store.workKey(team, store.authorizedSources(team));
   return {call, store, team, alices, bobs, source, later, invite, now, hour, ago, device: device('alice'), workKey};
 }
 
@@ -1086,7 +1081,7 @@ test('view writes require an independent current writer header even when an old 
     assert.equal(reply.status,428);assert.equal(reply.body.error,'view_reload_required');
     assert.deepEqual(store.db.prepare('SELECT * FROM views WHERE board_id=?').get(board),before);
   }
-  assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:{...current,version:5}})).status,400);
+  assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:{...current,version:4}})).status,400);
   assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:{...current,version:1}})).status,400);
   assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:current,headers:{'If-Match':'"0"'}})).status,409);
 });

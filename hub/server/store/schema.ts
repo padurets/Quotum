@@ -1,6 +1,7 @@
 import {migrateAnalyticsViews, migrateUnifiedViews, migrateFixedViews} from './analyticsView.js';
 import type {DatabaseSync} from 'node:sqlite';
 import {adoptDeclaredLayout} from './legacyDeclared.js';
+import {migrateDataFilters} from './dataFilters.js';
 
 /**
  * The database layout. Each version is one step applied in order; a database records
@@ -476,6 +477,16 @@ export const STEPS = [
     DELETE FROM device_activity_witnesses WHERE device_id=OLD.id;
   END;
   `,
+  // 33 — opening data filters are independent of the board's layout.
+  `
+  CREATE TABLE board_filters (
+    board_id TEXT PRIMARY KEY,payload TEXT NOT NULL,revision INTEGER NOT NULL,
+    updated_by TEXT NOT NULL,updated_at INTEGER NOT NULL
+  );
+  CREATE TRIGGER filters_board_removed AFTER DELETE ON boards BEGIN
+    DELETE FROM board_filters WHERE board_id=OLD.id;
+  END;
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;
@@ -493,11 +504,13 @@ export function migrate(db: DatabaseSync, now: number) {
   db.exec('BEGIN IMMEDIATE');
   try {
     for (const step of STEPS.slice(adoptDeclaredLayout(db,current))) db.exec(step);
+    const originalViewRevisions = new Map((db.prepare('SELECT board_id,revision FROM views').all() as {board_id:string;revision:number}[]).map(row => [row.board_id,row.revision]));
     // All view formats in this upgrade are one change visible at transaction commit.
     const viewRevisions = current < 22 ? new Map((db.prepare('SELECT board_id,revision FROM views').all() as {board_id:string;revision:number}[]).map(row => [row.board_id,row.revision])) : undefined;
     if (current < 19) migrateAnalyticsViews(db, now);
     if (current < 22) migrateUnifiedViews(db, now);
     if (current < 26) migrateFixedViews(db, now, viewRevisions);
+    if (current < 33) migrateDataFilters(db, now, originalViewRevisions);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.prepare('INSERT OR IGNORE INTO meta VALUES (?, ?)').run('historyStart', String(now));
     // Before this, how agents worked is not known (the sums of layout 2 are gone), rather than none worked.

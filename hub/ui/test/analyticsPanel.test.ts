@@ -12,6 +12,15 @@ import {HistoryFailure} from '../components/HistoryFailure';
 import {AnalyticsTable} from '../components/AnalyticsTable';
 import type {History} from '../lib/types';
 
+test('an oversized selected predicate names its recovery without offering an ineffective retry',()=>{
+  for(const locale of ['en','ru'] as const){
+    i18n.setLocale(locale,false);
+    const html=renderToStaticMarkup(React.createElement(HistoryFailure,{error:'filters_limit',retry:()=>{throw new Error('not retryable');}}));
+    assert.ok(html.includes(i18n.t('api.filters_limit')));assert.ok(!html.includes('<button'));
+  }
+  i18n.setLocale('en',false);
+});
+
 test('every analytics panel names a retained answer only while a different range is selected', () => {
   let selected: timeRange.TimeRange | null = null;
   const modules: Record<string, unknown> = {'react/jsx-runtime': jsx, '../i18n': i18n, '../lib/prefs': {usePref: () => '24h'}, '../lib/timeRange': {...timeRange, useTimeRange: () => selected}, './HistoryFailure': {HistoryFailure}};

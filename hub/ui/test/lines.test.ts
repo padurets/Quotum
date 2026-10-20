@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {linesOf, valueIn} from '../lib/lines';
 import type {History, HistorySeries, View, Win} from '../lib/types';
 
-const view: View = {version:4 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
+const view: View = {version:5 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 const series = (windowId: string): HistorySeries => ({
   sourceId: 'codex:1', windowId, consumed: 0, coveredMs: 0, remainingAtStart: 50, remainingAtEnd: 50, staleAfterMs: 300_000, points: [[0, 50, 0]], work: null,
 });
@@ -11,10 +11,10 @@ const history = {range: '24h', live: true, since: 0, to: 0, cellMs: 60_000, hist
 const weekly: Win = {id: 'weekly', kind: 'weekly', label: null, used: 40, remaining: 60, resetAt: null, minutes: 10080};
 const sources = [{id: 'codex:1', provider: 'codex', windows: [weekly]}];
 
-test('the chart and the table show only what the cards show', () => {
+test('layout visibility keeps authorized chart and table series', () => {
   assert.deepEqual(linesOf(history, sources, view, 'weekly').map(l => [l.windowId, l.current]), [['weekly', 60]], 'a window no longer reported is left out');
   assert.deepEqual(linesOf(history, sources, {...view, windows: ['codex:1/weekly']}, 'weekly'), [], 'nor one hidden on the board');
-  assert.deepEqual(linesOf(history, sources, {...view, hidden: ['source:codex:1']}, 'weekly'), [], 'nor any of a hidden card');
+  assert.equal(linesOf(history, sources, {...view, hidden: ['source:codex:1']}, 'weekly').length, 1, 'hiding a card does not filter its measurements');
   assert.deepEqual(linesOf(history, null, view, 'weekly'), [], 'nothing before the board is known');
 });
 

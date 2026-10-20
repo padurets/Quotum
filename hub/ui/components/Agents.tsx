@@ -126,7 +126,7 @@ export function Agents({sessions, roomy = true, period}: {sessions: LiveSession[
   });
   const working = sessions.filter(s => s.working).length;
   const summary = sessions.length?t('agents.summary', {count: sessions.length, working}):t('agents.title');
-  const status=period?.error?t(period.error==='history_limit'?'period.limit':'period.failed'):period?.loading?t('period.loading'):'';
+  const status=period?.error?t(period.error==='filters_limit'?'api.filters_limit':period.error==='history_limit'?'period.limit':'period.failed'):period?.loading?t('period.loading'):'';
   const label=[summary,status,pending&&period?.basis?t('analytics.retainedRange',{range:timeRangeLabel(period.basis.range)}):null].filter(Boolean).join('\n');
   return (
     <Popover

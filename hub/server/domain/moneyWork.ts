@@ -10,7 +10,7 @@ export const sourceWorkEligible=(provider:string,meter:string)=>sourceCounterOf(
 export type MoneyWorkCell = [index: number, activeMs: number, agentMs: number, spent: string, eligibleActiveMs: number, eligibleAgentMs: number, coveredMs: number, duringWork: string];
 export type MoneyWorkEdge = [from: number, to: number, spent: string, eligibleActiveMs: number, eligibleAgentMs: number, coveredMs: number, duringWork: string, evidence: 'continuous' | 'gap'];
 export type MoneyWorkCells = {source: string; unit: string; knownFrom: number | null; partial: boolean; cells: MoneyWorkCell[]; edges: MoneyWorkEdge[]};
-export type MoneyWork = {source: string; unit: string; activeMs: number; agentMs: number; spent: string; duringWork: string; eligibleActiveMs: number; eligibleAgentMs: number; coveredMs: number; knownFrom: number | null; partial: boolean; estimate: true};
+export type MoneyWork = {selectedWork?:{from:number;activeMs:number|null;agentMs:number};source: string; unit: string; activeMs: number; agentMs: number; spent: string; duringWork: string; eligibleActiveMs: number; eligibleAgentMs: number; coveredMs: number; knownFrom: number | null; partial: boolean; estimate: true};
 export type MoneyWorkInput = {source: string; unit: string; knownFrom: number | null; readings: Reading[]; spans: MeterSpan[]; work: Span[]};
 
 /** Prefix integrals count overlapping agents once for active time, separately for agent time. */

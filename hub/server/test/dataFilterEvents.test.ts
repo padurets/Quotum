@@ -1,0 +1,37 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {Store} from '../store/store.js';
+import {Directory} from '../store/directory.js';
+import {Ingest} from '../ingest.js';
+import {Cadence} from '../cadence.js';
+import {Duty} from '../duty.js';
+import {ResetFeed} from '../resets.js';
+import {Events,type Frame} from '../events.js';
+import {config} from '../config.js';
+import {defaultFilters,type FilterEnvelope} from '../domain/dataFilters.js';
+
+test('filters are a separate ordered configuration frame and an unrelated layout does not republish them',async t=>{
+  const now=Date.now(),store=new Store(':memory:',now),directory=new Directory(store.db);
+  const owner=directory.createUser('filters@example.test','Owner','unused',now),board=directory.boards(owner.id)[0].id;
+  directory.createSession('synthetic-filters',owner.id,now,60_000);
+  const hub={store,directory,ingest:new Ingest(store,directory,new Duty(),new Cadence()),resets:new ResetFeed(undefined,()=>{})};
+  const events=new Events(hub,{...config.events,recheckMs:0},{now:()=>now,after:()=>()=>{}},null);events.attach();
+  t.after(()=>{events.close();store.close();});
+  const reader={user:owner.id,board,secret:'synthetic-filters'},frames:Frame[]=[];
+  const initial=events.open({...reader,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});
+  assert.ok(initial&&initial!=='limit');
+  assert.deepEqual(initial.frames.map(frame=>frame.type),['hello','snapshot','filters']);
+  const snapshot=JSON.parse(initial.frames[1].data),saved=JSON.parse(initial.frames[2].data) as FilterEnvelope;
+  assert.equal(snapshot.filtersRevision,saved.revision);assert.equal(snapshot.filtersAuthority,saved.authority);assert.equal(snapshot.filters,undefined);
+  const filters=defaultFilters();filters.clients={mode:'include',values:['codex']};
+  directory.saveFilters(board,filters,owner.id,now);events.flush();
+  assert.equal(frames.filter(frame=>frame.type==='filters').length,1);
+  assert.equal(JSON.parse(frames.find(frame=>frame.type==='filters')!.data).revision,1);
+  frames.length=0;directory.saveFilters(board,filters,owner.id,now);events.flush();
+  assert.equal(frames.length,0,'semantic no-op has no configuration event');
+  directory.saveView(board,{...directory.view(board),hidden:['agents']},owner.id,now);events.flush();
+  assert.equal(frames.some(frame=>frame.type==='filters'),false);
+  const poll=await events.poll(reader,undefined);assert.ok(poll&&poll!=='limit');
+  assert.deepEqual(poll.frames.map(frame=>frame.type),['hello','snapshot','filters']);
+  assert.deepEqual(JSON.parse(poll.frames[2].data).filters.clients,filters.clients);
+});

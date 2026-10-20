@@ -1,5 +1,8 @@
+import {useDataFilters} from '../lib/dataFilters';
+import {followDataFilters} from '../lib/filterSession';
+import {matchesWork} from '../../server/domain/dataFilters';
 import {budgetVisible, subscriptionFundsVisible} from '../lib/money';
-import {memo, useEffect, useRef} from 'react';
+import {memo, useEffect, useLayoutEffect, useRef} from 'react';
 import {useBoard} from '../lib/session';
 import {useApp, useBoardId, useCard, useConnection, useVisibleLimits, useServerView, useSessions, useTitle} from '../lib/board';
 import {app, inApp} from '../lib/app';
@@ -21,7 +24,8 @@ const Row = memo(function Row({id}: {id: string}) {
   const card = useCard(id);
   const board=useBoardId();
   const title = useTitle(id);
-  const sessions = useSessions(id);
+  const liveSessions = useSessions(id),filters=useDataFilters().current;
+  const sessions=filters?liveSessions.filter(row=>matchesWork(filters,{...row,source:id,device:row.device.id})):[];
   const view = useServerView();
   if (!card || !view) return null;
   const windows = card.windows.filter(w => !isWindowHidden(view, id, w.id));
@@ -46,14 +50,21 @@ const Row = memo(function Row({id}: {id: string}) {
   </section>;
 });
 
-export function Compact({live}: {live: ReturnType<typeof startLive>}) {
+export function Compact({live,user}: {live: ReturnType<typeof startLive>;user:string}) {
   useLocale();
   const [board] = useBoard();
-  const lineup = useVisibleLimits();
+  useLayoutEffect(()=>board?followDataFilters(user,board.id,true):undefined,[user,board?.id]);
+  const filters=useDataFilters();
+  const lineup = useVisibleLimits(filters.current);
   const view = useServerView();
   const state = useApp();
   const connection = useConnection();
   const root = useRef<HTMLDivElement>(null);
+  useEffect(()=>{
+    const open=()=>inApp()?void app.openMain():location.assign('/');
+    window.addEventListener('quotum:open-filters',open);
+    return()=>window.removeEventListener('quotum:open-filters',open);
+  },[]);
   useEffect(() => { if (board) live.open(board.id); return () => live.close(); }, [board?.id, live]);
   useEffect(() => {
     if (state?.agent.state === 'held' || state?.agent.state === 'taking_over') void app.openMain();
@@ -73,7 +84,7 @@ export function Compact({live}: {live: ReturnType<typeof startLive>}) {
     observer.observe(element);
     return () => { observer.disconnect(); cancelAnimationFrame(frame); };
   }, []);
-  const ids = view ? ordered(view.layout, lineup.map(cardId)).map(w => w.id).filter(id => !isHidden(view, id)).map(id => id.slice(7)) : [];
+  const ids = view ? ordered(view.layout,lineup.map(cardId)).map(w => w.id).filter(id => !isHidden(view, id)).map(id => id.slice(7)) : [];
   return <div className={`compact glass${inApp() ? " is-native" : ""}`} ref={root}>
     <header>
       <h1>{t('desktop.limits')}</h1>

@@ -40,6 +40,17 @@ test('spending reads keep exact prefix totals without decoding availability or r
   }
 });
 
+test('selected work cannot reuse a supplier curve across a different knowledge boundary',()=>{
+  const work={anchor:0,knownFrom:17,cut:1000,refs:[{ref:'r',source:'s',device:{id:'d',name:'D'},origin:'terminal' as const,project:null,folder:null,startedAt:0}],spans:[[0,17,1000] as [number,number,number]]};
+  const curves=new PeriodIndex(work).curves;
+  const tape={from:0,cut:1000,replaceFrom:0,cursor:'c',money:[],quota:[{source:'s',window:'w',samples:packSamples([{at:0,used:10,resetAt:null,staleAfterMs:2000},{at:1000,used:20,resetAt:null,staleAfterMs:2000}])}]};
+  const supplier={groups:{source:curves.groups.source},knownFrom:17,available:true};
+  const accounting=drain(PeriodAccounting.prepare(tape,{...work,knownFrom:500},curves,undefined,undefined,undefined,supplier));
+  const value=accounting.quotaSummary('s','w',{from:0,to:1000})!;
+  assert.equal(value.work!.ms,983);assert.equal(value.work!.agentMs,983);
+  assert.deepEqual(value.selectedWork,{from:500,ms:500,agentMs:500});
+});
+
 const source=readFileSync(new URL('../components/Forecast.tsx',import.meta.url),'utf8');
 const first=source.indexOf('    const lineAt='),last=source.indexOf('    const rangeCells=',first);
 const cellStart=source.indexOf('      spent: {time:'),cellEnd=source.indexOf('\n      forecast:',cellStart);

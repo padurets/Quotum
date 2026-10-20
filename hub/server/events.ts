@@ -217,7 +217,7 @@ export class Events implements Touches {
   }
 
   private attentionOverflow(sub: Subscriber): boolean {
-    if (sub.pendingBytes <= this.options.bufferBytes) return false;
+    if (sub.pendingBytes <= 256*1024) return false;
     sub.pending = [];
     sub.invalidations.clear();
     sub.pendingBytes = 0;
@@ -513,7 +513,7 @@ export class Events implements Touches {
         if(!frames.length&&!sub.desktop)continue;
         try {
           const replacement=this.financialSnapshot(sub,financialKey,sub.workKey);
-          if(replacement)frames=[frame('snapshot',replacement.snapshot)];
+          if(replacement)frames=this.snapshotFrames(replacement.snapshot,sub.board);
           sub.workKey=this.projection.workKey(sub.board,undefined,this.clock.now());
         }catch(error){trouble(error);this.end(sub,'restart');continue;}
         if (sub.desktop && (sources.has(watched.id) || whole.has(watched.id) || frames.length || sub.pending.length || sub.invalidations.size || sub.rebaseline)) {
@@ -622,6 +622,8 @@ export class Events implements Touches {
       const sources = this.changed(base, 'lineup', ids);
       if (sources !== null) frames.push({type: 'lineup', data: `{"sources":${sources}}`});
     }
+    const filters=this.changed(base,'filters',projection.filtersPart(watched.id));
+    if(filters!==null)frames.push({type:'filters',data:filters});
     this.arm(watched, now);
     return frames;
   }
@@ -852,7 +854,7 @@ export class Events implements Touches {
     sub.fresh = false;
     if (sub.kind === 'stream') sub.stopPing = this.every(this.options.heartbeatMs, () => this.ping(sub));
     const hello = {epoch: this.epoch, now, client: this.client, heartbeatMs: this.options.heartbeatMs};
-    const frames = [frame('hello', hello), frame('snapshot', snapshot)];
+    const frames = [frame('hello', hello), ...this.snapshotFrames(snapshot as Snapshot,reader.board)];
     if (sub.desktop) {
       const attention = this.attentionFrames(sub, true, now);
       frames.push(...attention.before, ...attention.after);
@@ -968,7 +970,7 @@ export class Events implements Touches {
       kind: 'lease',
       send: frames => {
         lease.queue.push(...frames);
-        lease.bytes += frames.reduce((sum, f) => sum + f.data.length, 0);
+        lease.bytes += Math.max(Buffer.byteLength(sse(frames)),Buffer.byteLength(polled(frames)));
         // Too far behind: dropped, and the next request starts over with a snapshot.
         if (lease.bytes > this.options.bufferBytes) {
           const waiting = lease.waiting;
@@ -1002,7 +1004,7 @@ export class Events implements Touches {
     if(reason){this.expire(lease);return [bye(reason)];}
     try {
       const replacement=this.financialSnapshot(lease,lease.financialKey,lease.workKey);
-      if(replacement){lease.financialKey=replacement.key;lease.workKey=replacement.workKey;return [frame('snapshot',replacement.snapshot)];}
+      if(replacement){lease.financialKey=replacement.key;lease.workKey=replacement.workKey;return this.snapshotFrames(replacement.snapshot,lease.board);}
     }catch(error){trouble(error);this.expire(lease);return [bye('restart')];}
     lease.workKey=this.projection.workKey(lease.board,undefined,this.clock.now());
     return frames.flatMap(packet=>{
@@ -1017,6 +1019,11 @@ export class Events implements Touches {
       const devices=data.devices.filter(contact=>this.parts.directory.deviceById(contact.deviceId)?.userId===lease.user && this.parts.directory.deviceLive(contact.deviceId));
       return devices.length ? [frame('deviceContacts',{devices})] : [];
     });
+  }
+
+  private snapshotFrames(snapshot:Snapshot,board:string):Frame[]{
+    const filters=this.projection.filtersPart(board);
+    return [frame('snapshot',{...snapshot,filtersRevision:filters.revision,filtersAuthority:filters.authority}),frame('filters',filters)];
   }
 
   /** Prepared frames are not yet disclosed: replace their dataset and private bindings together. */

@@ -5,6 +5,7 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {follow,followPan, historyBegins, HistoryStore} from '../lib/history';
 import {HistoryPool} from '../lib/historyPool';
+import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
 import {Pan} from '../lib/pan';
 import {covered} from '../lib/historyPlot';
 import {HistoryTile} from '../lib/historyTiles';
@@ -98,6 +99,103 @@ test('metadata tokens belong to the retained board, run and meter selection', as
     h.store.hello('next-run');assert.equal(h.store.metadataToken('b'),undefined);
     h.store.open('other');assert.equal(h.store.metadataToken('b'),undefined);
     h.store.close();assert.equal(h.store.metadataToken('b'),undefined);
+  }finally{h.store.close();}
+});
+
+for(const blocked of [false,true])test(`a delayed native-only strip fills without new input when activity is ${blocked?'blocked':'hidden'}`,async()=>{
+  const h=harness(undefined,undefined,'quota');
+  const answer=async(remaining:number)=>{
+    const read=pending(h)[0];assert.ok(read);const chunks:Chunk[]=[];
+    for(let from=read.from;from<read.to;){const to=Math.min(read.to,tileEnd(tileOf(from,read.cell),read.cell)),chunk=empty(from,to);chunk.series=[{source:'s',window:'w',hold:H,open:null,cells:[[0,remaining,0,0]]}];chunks.push(chunk);from=to;}
+    await read.answer({chunks});
+  };
+  try{
+    h.store.choose('1h',{from:NOW-H,to:NOW-5*M});await h.start();
+    if(blocked){const filters=defaultFilters();filters.projects={mode:'include',values:Array.from({length:1600},(_,i)=>String(i).padStart(4,'0')+'x'.repeat(60))};h.store.setWorkFilter('large',workFilter(filters));}
+    else{h.store.setActivityActive(false);h.store.setWorkFilter('A');}
+    await flush();await answer(83);
+    h.store.pan({token:1,length:H,from:NOW-4*H,to:NOW-3*H,direction:-1});await flush();
+    const before=h.store.getPlot();assert.ok(before);assert.equal(before.series.length,0);
+    await answer(72);
+    const after=h.store.getPlot();assert.notEqual(after,before);assert.equal(after?.token,1);
+    assert.equal(after?.series.length,1);assert.ok(after!.coverage.length);assert.equal(h.store.getActivityPlot(),null);
+    if(blocked)assert.equal(h.store.get().error,'filters_limit');
+  }finally{h.store.close();}
+});
+
+test('selected activity COW refusal retains native buffers and recovers under the same real pool budget',async()=>{
+  const pool=new HistoryPool(100_000),h=harness(undefined,undefined,'quota',pool);let pinned=0;
+  pool.register({get estimatedBytes(){return pinned;},evictionCandidates:()=>[]});
+  h.store.setWorkFilter('A');h.store.choose('1h',{from:NOW-H,to:NOW-5*M});
+  const answer=async(remaining=80)=>{
+    const read=pending(h)[0];assert.ok(read);
+    const chunks:Chunk[]=[];
+    for(let from=read.from;from<read.to;){
+      const to=Math.min(read.to,tileEnd(tileOf(from,read.cell),read.cell)),chunk=empty(from,to);
+      chunk.series=[{source:'s',window:'w',hold:H,open:null,cells:[[0,remaining,0,0]]}];
+      chunk.activity={sessions:[['a','s','A','device']],devices:{device:'Device'},cells:[[0,M,[0],[['p','A',M]]]]};
+      chunks.push(chunk);from=to;
+    }
+    await read.answer({chunks});
+  };
+  try{
+    await h.start();await answer();
+    const grid=cacheOf(h.store),old=[...grid.values()].flatMap(tiles=>[...tiles.values()]);assert.ok(old.length);
+    const financial=h.store.getFinancial();h.store.setWorkFilter('B');
+    pinned=pool.budget-pool.estimatedBytes-32;await flush();await answer();
+    assert.equal(h.store.get().error,'history_limit');assert.equal(h.store.getFinancial(),financial);
+    for(const tile of old){const kept=grid.get(tile.cell)!.get(tileOf(tile.from,tile.cell))!;assert.ok(kept);assert.equal((kept as any).series.get('s w').values,(tile as any).series.get('s w').values);}
+    h.store.news(NOW-10*M);await flush();await answer(72);
+    assert.equal(h.store.getFinancial().history!.series[0].points.at(-1)![1],72,'native updates still fit under the original pinned budget');
+    assert.equal(h.store.getFinancial().error,undefined);assert.equal(h.store.get().error,'history_limit');
+    pinned=0;h.store.retry();await flush();await answer();assert.equal(h.store.get().error,undefined);
+    assert.equal(h.store.get().history?.series.length,1);
+    assert.equal(h.store.getFinancial().history!.series[0].points.at(-1)![1],72,'the selected retry cannot replace fresh native facts');
+  }finally{pinned=0;h.store.close();assert.equal(pool.estimatedBytes,0);assert.equal(pool.activeFlights,0);}
+});
+
+test('a native drawing failure remains visible to its financial subscriber while its complete frame is retained',async()=>{
+  const h=harness(undefined,undefined,'quota');
+  try{
+    h.store.choose('1h',{from:NOW-H,to:NOW-5*M});await h.start();await pending(h)[0].answer();
+    const frame=h.store.getFinancial().history;assert.ok(frame);
+    h.store.news(NOW-10*M);await flush();await pending(h)[0].fail(new Error('offline'));
+    assert.equal(h.store.getFinancial().history,frame);assert.equal(h.store.getFinancial().error,'history_failed');
+    h.store.retry();await flush();await pending(h)[0].answer();assert.equal(h.store.getFinancial().error,undefined);
+  }finally{h.store.close();}
+});
+
+test('an activity retry waits independently while new native cells continue through the same reader',async()=>{
+  const h=harness(undefined,undefined,'quota');
+  const answer=async(remaining:number)=>{
+    const read=pending(h)[0];assert.ok(read);const chunks:Chunk[]=[];
+    for(let from=read.from;from<read.to;){const to=Math.min(read.to,tileEnd(tileOf(from,read.cell),read.cell)),chunk=empty(from,to);chunk.series=[{source:'s',window:'w',hold:H,open:null,cells:[[0,remaining,0,0]]}];chunks.push(chunk);from=to;}
+    await read.answer({chunks});
+  };
+  try{
+    h.store.setWorkFilter('A');h.store.choose('1h',{from:NOW-H,to:NOW-5*M});await h.start();await answer(83);
+    h.store.setWorkFilter('B');await flush();await pending(h)[0].fail(new Error('offline'));
+    assert.equal(h.store.get().error,'history_failed');assert.equal(h.timers.size,1);
+    h.store.news(NOW-10*M);await flush();await answer(72);
+    assert.equal(h.store.getFinancial().history!.series[0].points.at(-1)![1],72);assert.equal(h.store.getFinancial().error,undefined);
+    assert.equal(h.store.get().error,'history_failed');assert.equal(h.timers.size,1);
+    const reads=h.reads.length;await h.advance(14_999);assert.equal(h.reads.length,reads);
+    await h.advance(1);assert.equal(h.reads.length,reads+1);await answer(83);
+    assert.equal(h.store.get().error,undefined);assert.equal(h.store.getFinancial().history!.series[0].points.at(-1)![1],72);
+  }finally{h.store.close();assert.equal(h.timers.size,0);}
+});
+
+test('the same error code in activity cannot conceal a new native failure from its subscriber',async()=>{
+  const h=harness(undefined,undefined,'quota');
+  try{
+    h.store.setWorkFilter('A');h.store.choose('1h',{from:NOW-H,to:NOW-5*M});await h.start();await pending(h)[0].answer();
+    const frame=h.store.getFinancial().history;assert.ok(frame);
+    h.store.setWorkFilter('B');await flush();await pending(h)[0].fail(new Error('offline'));
+    assert.equal(h.store.get().error,'history_failed');assert.equal(h.store.getFinancial().error,undefined);
+    h.store.news(NOW-10*M);await flush();await pending(h)[0].fail(new Error('offline'));
+    assert.equal(h.store.get().error,'history_failed');assert.equal(h.store.getFinancial().error,'history_failed');
+    assert.equal(h.store.getFinancial().history,frame);
+    h.store.retry();await flush();await pending(h)[0].answer();assert.equal(h.store.getFinancial().error,undefined);
   }finally{h.store.close();}
 });
 
@@ -979,6 +1077,32 @@ for (const scope of ['quota', 'budget'] as const) {
     } finally {h.store.close();}
   });
 }
+test('changing selected work between a native commit and composition cannot credit the previous financial frame',async()=>{
+  const h=cooperativeHarness(undefined,'quota');
+  const answer=async(remaining:number)=>{
+    const read=pending(h)[0];assert.ok(read);
+    const chunks:Chunk[]=[];
+    for(let from=read.from;from<read.to;){
+      const to=Math.min(read.to,tileEnd(tileOf(from,read.cell),read.cell)),chunk=empty(from,to);
+      chunk.series=[{source:'s',window:'w',hold:H,open:null,cells:[[0,remaining,0,0]]}];
+      chunks.push(chunk);from=to;
+    }
+    await read.answer({chunks});
+  };
+  try{
+    h.store.setWorkFilter('A');h.store.choose('1h',{from:NOW-H,to:NOW-5*M});
+    await h.start();await answer(83);await h.finish();
+    assert.equal(h.store.getFinancial().history!.series[0].points.at(-1)![1],83);
+    h.store.news(NOW-10*M);await flush();await answer(72);
+    assert.ok(h.internals.responses.size);
+    for(let i=0;h.internals.responses.size&&i<10_000;i++)h.tick();
+    assert.equal(h.internals.responses.size,0,'the new native cells have atomically committed');
+    assert.equal(h.store.getFinancial().history!.series[0].points.at(-1)![1],83,'composition has not run yet');
+    h.store.setWorkFilter('B');h.store.setActivityActive(false);
+    await h.finish();
+    assert.equal(h.store.getFinancial().history!.series[0].points.at(-1)![1],72,'only the completed native frame advances its publication version');
+  }finally{h.store.close();}
+});
 
 test('release retains its last strip while preparing only the complete selected frame', async () => {
   const h = cooperativeHarness(); await h.start(); await h.reads[0].answer(); await h.finish();
@@ -1664,6 +1788,23 @@ test('a financial grant revision clears warm history and rejects a response from
   assert.equal(b.store.get().history?.meterSeries?.length??0,0);b.store.close();
 });
 
+
+test('private device contacts reuse selected resources while new card evidence scans them again',async()=>{
+  const h=harness(undefined,undefined,'budget'),store=createStore(reduce,INITIAL),stop=follow(h.store,store);
+  let scans=0;
+  const meters=[{id:'balance',unit:'USD',kind:'balance' as const,amount:'10000000',at:NOW,staleAfterMs:10*M,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null}];
+  const card={id:'wallet',provider:'openrouter',plan:'',resets:null,owners:[],windows:[],error:null,successAt:NOW,stale:false,staleAfterMs:10*M,measureIntervalMs:null,get meters(){scans++;return meters;}};
+  const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:EMPTY_VIEW,historyStart:0,sources:[card],sessions:{},cadence:{},refresh:{},forecast:{},mine:[],boards:[],resets:{resets:{},trackers:[],past:{}}};
+  try{
+    store.dispatch({type:'board-open',id:'b'});store.dispatch({type:'hub',event:{type:'hello',data:{epoch:'run'}}});store.dispatch({type:'hub',event:{type:'snapshot',data:snapshot}});await flush();
+    assert.deepEqual(h.reads[0].meters?.ids,[['wallet','balance']]);await h.reads[0].answer();scans=0;
+    for(let i=0;i<20;i++)store.dispatch({type:'hub',event:{type:'deviceContacts',data:{devices:[{deviceId:'d',lastSeenAt:NOW+i}]}}});
+    assert.equal(scans,0,'a heartbeat must not inspect unchanged financial resources');assert.equal(h.reads.length,1);
+    const changed={...card,successAt:NOW+1,get meters(){scans++;return meters;}};scans=0;
+    store.dispatch({type:'hub',event:{type:'card',data:changed}});
+    assert.ok(scans>0,'new card evidence invalidates the cached selection');
+  }finally{stop();h.store.close();}
+});
 
 test('subscription funds read independently from wallet budgets and retire on financial revoke',async()=>{
   const before=prefs(),pool=new HistoryPool(),b=harness(undefined,undefined,'budget',pool),f=harness(undefined,undefined,'budget',pool),store=createStore(reduce,INITIAL);

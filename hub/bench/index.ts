@@ -18,7 +18,7 @@ import {activityCreditProblems, chartProblems, creditRenderProblems, HISTORY_BYT
 import {attachedChrome, findChrome, launchChrome, openTab, type Browser, type Cdp} from './cdp.js';
 import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
-import {MARGIN_MS, fixtureTiming, foreseenAt, idlePhaseProblems, idlePhaseScript, idleWindow, overviewCards, stillProblems, stillSnapshot, warmUntil, type IdlePhase} from './still.js';
+import {fixtureTiming, idlePhaseProblems, idlePhaseScript, idleWindow, overviewCards, quietAfter, stillProblems, stillSnapshot, warmUntil, type IdlePhase} from './still.js';
 import {hear, type Heard} from './stream.js';
 import {frequencyKeys, moneyView, selectMoney} from './controls.js';
 import {panning} from './panning.js';
@@ -496,16 +496,16 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
   const quotaAt=Date.now();
   await agent.ingest([stillSnapshot(card,stand.start,quotaAt)],[],quotaAt);
   await deliver('2500',quotaAt-25_000);
-  // Quota resets and forecasts change the unrelated data baseline. Dot clocks
-  // keep their ordinary allowance in each update's unchanged render budget.
+  await selectMoney(cdp,[[source,'balance:credits']],'funds');
+  // Finish selection before qualifying unrelated quota resets and forecasts.
+  // Dot clocks keep their ordinary allowance in each update's render budget.
   const readCards=()=>overviewCards(path=>owner.get<Snapshot>(path),overview.board.id);
   const windowMs=4*(2*SHOWN_WITHIN+100),setupUntil=Date.now()+60_000,waits:{from:number;until:number;resets:number[];forecasts:number[]}[]=[];
   for(;;) {
     const cards=await readCards(),from=Date.now();
-    const resets=cards.flatMap(card=>card.windows.map(window=>window.resetAt)).filter((at):at is number=>at!==null&&at>=from&&at<=from+windowMs+SHOWN_WITHIN);
-    const forecasts=cards.map(foreseenAt).filter((at):at is number=>at!==null&&at>=from-MARGIN_MS&&at<=from+windowMs+MARGIN_MS);
-    if(!resets.length&&!forecasts.length)break;
-    const until=Math.max(...resets,...forecasts)+MARGIN_MS;
+    const quiet=quietAfter(cards,from,from+windowMs+SHOWN_WITHIN);
+    if(!quiet)break;
+    const {resets,forecasts,until}=quiet;
     if(until>setupUntil){
       const fadingCards=cards.filter(card=>card.id!==source&&card.successAt!==null&&card.successAt+PULSE_FOR+FADE_FOR>=from)
         .map(card=>({id:card.id,successAt:card.successAt,stale:card.stale,warning:dotOf(card,from).warn,nextChangeAt:dotChangesAt(card,from)}));
@@ -513,10 +513,9 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
       evidence.save('credit-setup-failure',{from,until,setupUntil,windowMs,resets,fades,forecasts,waits,fadingCards});
       throw new Stop('credit measurement has no quiet quota interval');
     }
-    waits.push({from,until,resets,forecasts});
+    waits.push({from,...quiet});
     await sleep(until-from);
   }
-  await selectMoney(cdp,[[source,'balance:credits']],'funds');
   const qualifiedFrom=Date.now(),qualifiedTo=qualifiedFrom+windowMs;
   const changing=stillProblems(await readCards(),qualifiedFrom,qualifiedTo,source,{allowDotClock:true});
   if(changing.length)throw new Stop('credit measurement baseline changes independently: '+changing.join('; '));
@@ -578,10 +577,10 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
   })()`);
   const record=await owner.post<Credential>('/api/credentials',{provider:'openrouter',secret:MONEY_KEY(1),allowNoExpiry:true});
   const source=record.sourceId!;
+  // The dense panning wallets must not exclude this newly connected account.
+  await selectMoney(cdp, [[source, 'balance']]);
   const shownBy=Date.now()+SHOWN_WITHIN;
   while(!await cdp.evaluate<boolean>(`!!document.querySelector('[data-card="${source}"] [data-money]')`)){if(Date.now()>shownBy)throw new Stop('money card did not appear');await sleep(20);}
-  // The dense panning wallets must not change the single-account update baseline.
-  await selectMoney(cdp, [[source, 'balance']]);
   const readyBy=Date.now()+SHOWN_WITHIN;
   while(!await cdp.evaluate<boolean>(`!!document.querySelector('[data-series="${source} balance"]')`)){if(Date.now()>readyBy)throw new Stop('money chart did not appear');await sleep(20);}
   await cdp.evaluate(`(async () => {

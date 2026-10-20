@@ -8,7 +8,9 @@ import type {PlotBuffer} from './historyPlot';
 import {hasSubscriptionCaps} from './providers';
 import {capPercent} from './money';
 import {seriesName} from './quota';
-import {cardId,colorOf} from './view';
+import {colorOf} from './view';
+import {effectiveFilters} from './filterSelection';
+import {matchesSource,matchesSelection} from '../../server/domain/dataFilters';
 import {windowKey} from './types';
 import {drain,type Preparation} from './prepare';
 import {ordered} from '../../server/domain/prepare';
@@ -28,14 +30,15 @@ export function quotaRemaining(source:Card,id:string):number|null {
 
 /** Both periods travel with ordinary subscription history, not a separate analytics mode. */
 export function subscriptionSelection(cards:readonly Card[],view:Pick<View,'hidden'|'windows'>):MeterSelection|undefined {
-  const shown=cards.filter(c=>hasSubscriptionCaps(c.provider)&&!view.hidden.includes(cardId(c.id)));
-  if(!shown.length)return undefined;
+  const filters=effectiveFilters(),sources=filters&&!(filters.sources.mode==='exclude'&&!filters.sources.values.length)?cards.filter(card=>matchesSource(filters,card.id)).map(card=>card.id):undefined;
+  const shown=cards.filter(c=>hasSubscriptionCaps(c.provider)&&(!filters||matchesSource(filters,c.id)));
+  if(!shown.length)return sources?{unit:'USD',ids:[],sources}:undefined;
   const unit=shown.flatMap(c=>(c.meters??[]).filter(m=>quotaMeter(providerOf(c.provider),m.id))).find(m=>m.kind==='cap')?.unit??'credits:zai';
   const ids=subscriptionIds(shown,view);
-  if(!ids.length)return undefined;
-  return selectionOf(ids.slice(0,MAX_METERS),unit);
+  if(!ids.length)return sources?{unit,ids:[],sources}:undefined;
+  return {...selectionOf(ids.slice(0,MAX_METERS),unit),...(sources?{sources}:{})};
 }
-const subscriptionIds=(cards:readonly Card[],view:Pick<View,'hidden'|'windows'>)=>cards.filter(c=>hasSubscriptionCaps(c.provider)&&!view.hidden.includes(cardId(c.id))).flatMap(c=>quotaIds(c.provider).filter(id=>!view.windows.includes(windowKey(c.id,id))).map(id=>[c.id,id] as [string,string]));
+const subscriptionIds=(cards:readonly Card[],view:Pick<View,'hidden'|'windows'>)=>{const filters=effectiveFilters();return cards.filter(c=>hasSubscriptionCaps(c.provider)&&(!filters||matchesSource(filters,c.id))).flatMap(c=>quotaIds(c.provider).filter(id=>filters?matchesSelection(filters.windows,[c.id,id]):!view.windows.includes(windowKey(c.id,id))).map(id=>[c.id,id] as [string,string]));};
 export const subscriptionOverflow=(cards:readonly Card[],view:Pick<View,'hidden'|'windows'>)=>Math.max(0,subscriptionIds(cards,view).length-MAX_METERS);
 
 const leftPercent=(left:string,limit:string|null|undefined):number|null=>{
@@ -51,7 +54,8 @@ export function* capLinesPrepared(series:readonly MeterHistory[],sources:readonl
     yield;
     const source=sources.find(c=>c.id===entry.sourceId);
     const period=source&&quotaPeriods(source).find(q=>q.id===entry.meterId&&q.kind===kind);
-    if(entry.kind!=='cap'||!source||!hasSubscriptionCaps(source.provider)||!period||view.hidden.includes(cardId(source.id))||view.windows.includes(windowKey(source.id,period.id)))continue;
+    const filters=effectiveFilters();
+    if(entry.kind!=='cap'||!source||!hasSubscriptionCaps(source.provider)||!period||(filters?!matchesSource(filters,source.id)||!matchesSelection(filters.windows,[source.id,period.id]):view.windows.includes(windowKey(source.id,period.id))))continue;
     const points:Line['points']=[],capCells:CapCell[]=[];
     for(const point of entry.points) {
       const value=leftPercent(point.value,point.semantics?.limit);

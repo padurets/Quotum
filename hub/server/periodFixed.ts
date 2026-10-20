@@ -1,7 +1,7 @@
 import type {PeriodRange} from './domain/period.js';
 import {decodeSamples,sampleCount,sampleAt,rateObservations,type PeriodTape} from './domain/periodTape.js';
 import {drain,type Preparation} from './domain/prepare.js';
-import {PeriodCurves} from './domain/periodCurves.js';
+import {PeriodCurves,type SourceWorkCurves} from './domain/periodCurves.js';
 import {PeriodAccounting} from './domain/periodAccounting.js';
 import {PeriodIndex} from './domain/periodIndex.js';
 import {PeriodActivity} from './domain/periodActivity.js';
@@ -15,12 +15,12 @@ import type {History} from './domain/history.js';
 export function fixedTape(tape:PeriodTape,work:WorkTrace|null,range:PeriodRange,cell:number,reserve:(bytes:number)=>void,release:(bytes:number)=>void=()=>{}):PeriodTape {
   return drain(prepareFixedTape(tape,work,range,cell,reserve,release));
 }
-export function* prepareFixedTape(tape:PeriodTape,work:WorkTrace|null,range:PeriodRange,cell:number,reserve:(bytes:number)=>void,release:(bytes:number)=>void=()=>{}):Preparation<PeriodTape> {
+export function* prepareFixedTape(tape:PeriodTape,work:WorkTrace|null,range:PeriodRange,cell:number,reserve:(bytes:number)=>void,release:(bytes:number)=>void=()=>{},sourceWide?:SourceWorkCurves):Preparation<PeriodTape> {
   for(const series of tape.quota)if(series.samplesEncoding==='delta'){reserve(sampleCount(series.samples)*40);series.samples=decodeSamples(series.samples);delete series.samplesEncoding;}
   if(work)reserve(workPreparationBytes(work));
   const curves=work?yield*PeriodCurves.prepare(work):undefined;
   let scratch=0;
-  const accounting=yield*PeriodAccounting.prepare(tape,work,curves,undefined,undefined,bytes=>{if(bytes>scratch)reserve(bytes-scratch);else release(scratch-bytes);scratch=bytes;});
+  const accounting=yield*PeriodAccounting.prepare(tape,work,curves,undefined,undefined,bytes=>{if(bytes>scratch)reserve(bytes-scratch);else release(scratch-bytes);scratch=bytes;},sourceWide);
   const base=accounting.fixed(range,cell);
   reserve(JSON.stringify(base).length*6);
   function* anchors(){
@@ -35,6 +35,7 @@ export function* prepareFixedTape(tape:PeriodTape,work:WorkTrace|null,range:Peri
     }
     for(const group of tape.money){if(group.workCounter){yield group.workCounter.knownFrom??Infinity;yield group.workCounter.workFrom??Infinity;}for(const [,at] of rateObservations(group))yield at;}
     if(work)yield*workAnchors(work);
+    if(sourceWide)for(const timeline of sourceWide.groups.source.values()){let at=timeline.next(-Infinity);while(Number.isFinite(at)){yield at;at=timeline.next(at);}}
   }
   const fixed=yield*reusable(base,offset=>accounting.fixed({from:range.from+offset,to:range.to+offset},cell),cell,tape.from,tape.cut,[cell],anchors(),reserve,release);
   return {...tape,quota:[],money:[],fixed};

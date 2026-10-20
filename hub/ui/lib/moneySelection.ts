@@ -10,6 +10,8 @@ import type {Card} from './types';
 import type {MeterHistory} from './moneyView';
 import {referenceBalance,budgetVisible} from './money';
 import {providerOf, budgetMeter, moneyFamily, type MoneyFamily} from '../../server/domain/providers';
+import {fundsRule,matchesSelection,matchesSource,matchesWallet,walletRule,type MoneyRef} from '../../server/domain/dataFilters';
+import {effectiveFilters} from './filterSelection';
 
 export type MoneyPrefs={version:1;unit:string|null;selected:Record<string,[string,string][]>;legacySelected?:Record<string,[string,string][]>;removed?:number};
 export const DEFAULT_MONEY:MoneyPrefs={version:1,unit:DEFAULT_CURRENCY,selected:{}};
@@ -50,22 +52,38 @@ export function toggleMoneyChoice(selected:readonly [string,string][],source:str
   const next=on?[...remaining,...meters.map(meter=>[source,meter] as [string,string])]:remaining;
   return next.length<=MAX_METERS?next:[...selected];
 }
-export function moneySelection(cards:readonly Card[],hidden:readonly string[],settings:MoneyPrefs,context:CurrencyContext=defaultCurrencyContext,family:MoneyFamily='budget'):{selection:MeterSelection|undefined;omitted:number;removed:number} {
+export function moneySelection(cards:readonly Card[],_hidden:readonly string[],settings:MoneyPrefs,context:CurrencyContext=defaultCurrencyContext,family:MoneyFamily='budget'):{selection:MeterSelection|undefined;omitted:number;removed:number;limited?:boolean} {
   const unit=settings.unit??DEFAULT_CURRENCY;
-  const shown=cards.filter(c=>moneyFamily(providerOf(c.provider))===family&&budgetVisible(c)&&!hidden.includes('source:'+c.id)),visible=new Set(shown.map(c=>c.id));
-  const explicit=settings.selected[unit];
+  const filters=effectiveFilters();
+  const shown=cards.filter(c=>moneyFamily(providerOf(c.provider))===family&&budgetVisible(c)&&(!filters||matchesSource(filters,c.id)&&
+    (family!=='funds'||matchesSelection(fundsRule(filters,unit),c.id)))),visible=new Set(shown.map(c=>c.id));
+  const rule=filters&&walletRule(filters,unit);
+  const balance=(card:Card)=>unit===DEFAULT_CURRENCY?referenceBalance(card,context.target.id!==DEFAULT_CURRENCY||card.provider==='codex')?.total:card.meters?.find(m=>m.kind==='balance'&&m.unit===unit&&balanceDescriptor(card.provider,m.id)?.role==='total');
+  const resolve=(ref:MoneyRef):[string,string][]=>{
+    const card=shown.find(card=>card.id===ref.source);if(!card)return [];
+    if(ref.kind==='balance'){const total=balance(card);return total?[[ref.source,total.id]]:[];}
+    return [[ref.source,`key:${ref.key}:cap`]];
+  };
+  const preview=shown.flatMap(card=>(card.keys??[]).slice(0,5).filter(key=>card.meters?.some(m=>m.id===`key:${key.id}:cap`&&m.kind==='cap')).map(key=>({source:card.id,kind:'keyCap' as const,key:key.id})));
+  const automatic:MoneyRef[]=[...shown.filter(card=>balance(card)).map(card=>({source:card.id,kind:'balance' as const})),...preview];
+  const candidates=rule?.mode==='only'?rule.values:rule?.mode==='auto'?[...rule.include,...automatic]:[];
+  const filtered=rule&&candidates.filter(ref=>matchesWallet(rule,ref,automatic.some(other=>JSON.stringify(ref)===JSON.stringify(other)))).flatMap(resolve);
+  const explicit=filters?family==='budget'?filtered:undefined:settings.selected[unit];
   let ids=explicit??shown.flatMap(card=>{
     const balance=unit===DEFAULT_CURRENCY?(referenceBalance(card,context.target.id!==DEFAULT_CURRENCY||card.provider==='codex')?.total):card.meters?.find(m=>m.kind==='balance'&&m.unit===unit&&balanceDescriptor(card.provider,m.id)?.role==='total');
     return balance?[[card.id,balance.id] as [string,string]]:[];
   });
-  if(family==='funds'&&!explicit&&ids.length>MAX_METERS&&settings.legacySelected?.[unit]){
+  const preferredSources=filters?.legacy?.fundsPreferredByUnit?.[unit];
+  const legacyPriority=!filters?settings.legacySelected?.[unit]:undefined;
+  if(family==='funds'&&!explicit&&ids.length>MAX_METERS&&(preferredSources||legacyPriority)){
     const identity=([source,meter]:[string,string])=>JSON.stringify([source,conversionOrigin(meter)?.meter??meter]);
-    const preferred=new Set(settings.legacySelected[unit].map(identity));
+    const preferred=new Set(preferredSources?ids.filter(([source])=>preferredSources.includes(source)).map(identity):(legacyPriority??[]).map(identity));
     ids=[...ids.filter(pair=>preferred.has(identity(pair))),...ids.filter(pair=>!preferred.has(identity(pair)))];
   }
   const unique=moneyChoices(shown,ids,unit);
   const admitted=unique.filter(([source,meter])=>visible.has(source)&&budgetMeter(providerOf(shown.find(card=>card.id===source)?.provider??''),meter));
-  return {selection:{...selectionOf(admitted.slice(0,MAX_METERS),unit),...(shown.some(c=>c.provider==='codex')?{resourceRevision:JSON.stringify(shown.filter(c=>c.provider==='codex').map(c=>[c.id,c.budget]))}:{}),...(unit===DEFAULT_CURRENCY&&(context.target.id!==DEFAULT_CURRENCY||shown.some(c=>c.provider==='codex'))?{displayCurrency:context.target.id,...(context.revision?{displayRevision:context.revision}:{})}:{})},omitted:Math.max(0,admitted.length-MAX_METERS),removed:unique.length-admitted.length};
+  const limited=admitted.length>MAX_METERS&&!!filters&&(family==='budget'?rule?.mode==='only':fundsRule(filters,unit).mode==='include');
+  return {selection:{...selectionOf(limited?[]:admitted.slice(0,MAX_METERS),unit),...(shown.some(c=>c.provider==='codex')?{resourceRevision:JSON.stringify(shown.filter(c=>c.provider==='codex').map(c=>[c.id,c.budget]))}:{}),...(unit===DEFAULT_CURRENCY&&(context.target.id!==DEFAULT_CURRENCY||shown.some(c=>c.provider==='codex'))?{displayCurrency:context.target.id,...(context.revision?{displayRevision:context.revision}:{})}:{})},omitted:Math.max(0,admitted.length-MAX_METERS),removed:unique.length-admitted.length,...(limited?{limited:true}:{})};
 }
 
 /** The old global subset is visibility intent, including accounts on other boards. */

@@ -391,7 +391,7 @@ fn stream(
                     shell.attention.board.lock().unwrap_or_else(|e| e.into_inner()).snapshot(value);
                     snapshot = true;
                 }
-                "view" | "lineup" | "card" if snapshot => {
+                "view" | "lineup" | "card" | "filters" if snapshot => {
                     let value = serde_json::from_str(&data).map_err(|_| "attention invalid board change")?;
                     shell.attention.board.lock().unwrap_or_else(|e| e.into_inner()).apply(&kind, value);
                 }

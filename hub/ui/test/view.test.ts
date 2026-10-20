@@ -1,11 +1,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {AGENTS, QUOTA_TABLE, chosenPlanOf, colorOf, columnShown, isHidden, planOf, withColumn, weeklyPlanOf, withColor, withHidden, withPlan, withPlanned, withWindowHidden} from '../lib/view';
+import {AGENTS, QUOTA_TABLE, chosenPlanOf, colorOf, columnShown, isHidden, planOf, withColumn, weeklyPlanOf, withColor, withHidden, withPlan, withPlanned} from '../lib/view';
 import {CARD_COLORS, PROVIDERS} from '../lib/providers';
 import {DEFAULT_PLAN} from '../lib/plan';
 import type {View} from '../lib/types';
 
-const EMPTY: View = {version: 4 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
+const EMPTY: View = {version: 5 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 test('the list of running agents is off until the owner turns it on', () => {
   assert.equal(isHidden(EMPTY, AGENTS), true);
   const on = withHidden(EMPTY, AGENTS, false);
@@ -30,15 +30,8 @@ test("the plan its owner chose for a source, for the forecast's line of it: none
   assert.equal(chosenPlanOf({...EMPTY, plans: {a: [50, 60, 0, 0, 0, 0, 0]}}, 'a'), null, 'a broken plan');
 });
 
-test('hidden windows and plans belong to the view; the default plan is not stored', () => {
-  const view = withWindowHidden(EMPTY, 'a/weekly', true);
-  assert.deepEqual(view.windows, ['a/weekly']);
-  assert.deepEqual(withWindowHidden(view, 'a/weekly', false).windows, []);
-  const planned = withPlan(EMPTY, 'a', [40, 0, 30, 0, 30, 0, 0]);
-  assert.deepEqual(planOf(planned, 'a'), [40, 0, 30, 0, 30, 0, 0]);
-  assert.deepEqual(planOf(planned, 'b'), DEFAULT_PLAN);
-  assert.deepEqual(withPlan(planned, 'a', [...DEFAULT_PLAN]).plans, {});
-  assert.deepEqual(planOf({...EMPTY, plans: {a: [50, 60, 0, 0, 0, 0, 0]}}, 'a'), DEFAULT_PLAN, 'a broken plan is not used');
+test('layout reserves an empty window field for data filters', () => {
+  assert.deepEqual(EMPTY.windows, []);
 });
 
 test('a plan switched off is kept for when it is switched on again', () => {

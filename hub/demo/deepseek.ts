@@ -51,7 +51,7 @@ export async function seedDeepSeek(store:Store,directory:Directory,stand:Stand) 
       store.db.prepare('UPDATE credentials SET last_error=? WHERE source_id=?').run(code,source);
     }
     const view=directory.view(personal.id);view.names[source]='DeepSeek '+scene.id;directory.saveView(personal.id,view,owner.id,now);
-    shareConnectorScene(store,stand,source,owner.id,now);
+    shareConnectorScene(store,stand,source,owner.id,now,'DeepSeek '+scene.id);
   }
   // Another person may use the same private account name without sharing its identity.
   const other=[...stand.people.values()][1];

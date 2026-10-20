@@ -146,7 +146,7 @@ test('balance-only currency heartbeats preserve native facts and the same exclus
 test('money indexes reserve their own memory before preparation and reuse the same ownership',async t=>{
   const h=await fixture(t),id=h.source();h.record(id,now-5*M);h.record(id,now-M);
   const query={unit:'USD',currency:'USD',meters:JSON.stringify([[id,'balance']])};
-  const tape=periodTape(h.store,h.board,h.store.shown(h.board,[]),h.user.id,'budget',query,{from:now-H,to:now},'test',now-H,()=>{});
+  const tape=periodTape(h.store,h.board,h.store.authorizedSources(h.board),h.user.id,'budget',query,{from:now-H,to:now},'test',now-H,()=>{});
   let admitted=0;const index=drain(PeriodAccounting.prepare(tape,null,undefined,undefined,undefined,bytes=>{admitted=bytes;}));
   assert.ok(admitted>0);assert.equal(index.bytes,admitted);assert.equal(index.quotaBytes,0);
   const expected=index.moneySummary(id,'balance','USD',{from:now-H,to:now});

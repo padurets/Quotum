@@ -71,7 +71,7 @@ test('unknown and unheld work is admitted by device while ownership protects sou
   assert.equal(readHistory(h.store,h.otherBoard,at,60_000,{to:at+60_000}).activity.agentMs,0);
   h.store.hold(foreign, h.owner.id, at+60_000);
   assert.equal(h.ingest.live.board(h.store.workAccess(h.board,at+60_000),at+60_000).unattributedSessions.length, 1);
-  const shown = h.store.shown(h.board, [`source:${foreign}`]);
+  const shown = h.store.authorizedSources(h.board);
   assert.equal(readHistory(h.store, h.board, at, 60_000, {to: at+60_000, shown}).activity.agentMs,120_000,'hiding preserves every device-admitted context');
   h.ingest.sessions(h.credential, {...packet, clients: undefined, clientSessions: [], sentAt: iso(at+60_000)}, at+60_000);
   assert.equal(h.directory.deviceClients(device).length, 1, 'older agents preserve inventory');
@@ -83,7 +83,7 @@ test('source-free work events coalesce across subscribers and closed history til
   const events = new Events({store: h.store, directory: h.directory, ingest: h.ingest, resets: new ResetFeed(undefined, () => {})}, undefined, clock);
   events.attach(); const tiles = new HistoryTiles(h.store); events.onClientHistory = (user, since) => tiles.touchClient(user, since);
   t.after(() => {events.close(); h.store.close();});
-  const read = () => tiles.read(h.board, 60_000, at, at+60*60_000, at+3*60*60_000, h.store.shown(h.board, []));
+  const read = () => tiles.read(h.board, 60_000, at, at+60*60_000, at+3*60*60_000, h.store.authorizedSources(h.board));
   read(); h.ingest.sessions(h.credential, {...report, sessions: []}, at);
   h.ingest.sessions(h.credential, {...report, sessions: [], sentAt: iso(at+60_000)}, at+60_000);
   assert.equal(JSON.parse(read()[0]).activity.sessions.length, 1, 'private late credit invalidates cached closed tiles with no watchers');
@@ -113,7 +113,7 @@ test('a new private project keeps closed tiles warm and board rechecks increment
   h.directory.createSession('incremental-reader', h.owner.id, at, 4*hour);
   events.open({user: h.owner.id, secret: 'incremental-reader', board: h.board, kind: 'stream', send: batch => frames.push(...batch), end: () => {}});
   events.flush(); frames.splice(0);
-  const shown = h.store.shown(h.board, []), before = h.store.workKey(h.board, shown);
+  const shown = h.store.authorizedSources(h.board), before = h.store.workKey(h.board, shown);
   let reads = 0; const cells = h.store.cells.bind(h.store);
   h.store.cells = (...args) => {reads++; return cells(...args);};
   const read = () => tiles.read(h.board, 60_000, at, at+hour, clock.now(), shown);
@@ -131,10 +131,10 @@ test('a new private project keeps closed tiles warm and board rechecks increment
   h.store.nameProjects(h.owner.id, ['New private project'], 'Renamed project');
   events.flush();
   assert.notEqual(h.store.workKey(h.board, shown), before);
-  assert.deepEqual(frames.map(f=>f.type),['snapshot']);assert.equal(JSON.parse(frames[0].data).workAuthority,h.store.workKey(h.board));
+  assert.deepEqual(frames.map(f=>f.type),['snapshot','filters']);assert.equal(JSON.parse(frames[0].data).workAuthority,h.store.workKey(h.board));
   frames.splice(0);
   h.directory.renameDevice(h.owner.id, device, 'Renamed laptop'); events.flush();
-  assert.deepEqual(frames.map(f=>f.type),['snapshot']);assert.equal(JSON.parse(frames[0].data).workAuthority,h.store.workKey(h.board));
+  assert.deepEqual(frames.map(f=>f.type),['snapshot','filters']);assert.equal(JSON.parse(frames[0].data).workAuthority,h.store.workKey(h.board));
   assert.equal(JSON.parse(read()[0]).activity.devices[device], 'Renamed laptop');
 });
 
@@ -159,7 +159,7 @@ test('admitted unheld work keeps funding private and refreshes names under its s
   t.after(()=>{events.close();h.store.close();});
   const frames:Frame[]=[];h.directory.createSession('private-dependency-reader',h.other.id,at,4*hour);
   events.open({user:h.other.id,secret:'private-dependency-reader',board:h.shared,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});frames.splice(0);
-  const shown=h.store.shown(h.shared,[]),key=h.store.workKey(h.shared,shown);let reads=0;const cells=h.store.cells.bind(h.store);
+  const shown=h.store.authorizedSources(h.shared),key=h.store.workKey(h.shared,shown);let reads=0;const cells=h.store.cells.bind(h.store);
   h.store.cells=(...args)=>{reads++;return cells(...args);};
   const read=()=>tiles.read(h.shared,60_000,at,at+hour,now,shown),before=read();assert.equal(reads,1);
   const privateSession={...session,clientId:'codex',source:{provider:'codex',account:'f'.repeat(24)},project:'Private project',startedAt:iso(at+2*hour)};
@@ -170,10 +170,10 @@ test('admitted unheld work keeps funding private and refreshes names under its s
   events.touchBoards([h.shared]);events.flush();assert.ok(frames.some(frame=>frame.type==='history'));frames.length=0;
   h.store.nameProjects(h.owner.id,['Private project'],'Private rename');events.touchBoards([h.shared]);events.flush();
   assert.notEqual(h.store.workKey(h.shared,shown),key);assert.deepEqual(read(),before);assert.equal(reads,2);
-  assert.deepEqual(frames.map(f=>f.type),['snapshot']);assert.equal(readHistory(h.store,h.shared,at,60_000,{to:now}).activity.agentMs,15_000);frames.length=0;
+  assert.deepEqual(frames.map(f=>f.type),['snapshot','filters']);assert.equal(readHistory(h.store,h.shared,at,60_000,{to:now}).activity.agentMs,15_000);frames.length=0;
   h.store.hold(foreign,h.owner.id,now);events.touchBoards([h.shared]);events.flush();
-  assert.notEqual(h.store.workKey(h.shared,h.store.shown(h.shared,[])),key,'a real holding makes the names visible');
-  assert.deepEqual(frames.map(f=>f.type),['snapshot']);
+  assert.notEqual(h.store.workKey(h.shared,h.store.authorizedSources(h.shared)),key,'a real holding makes the names visible');
+  assert.deepEqual(frames.map(f=>f.type),['snapshot','filters']);
   assert.equal(readHistory(h.store,h.shared,at,60_000,{to:now}).activity.agentMs,15_000);
 });
 

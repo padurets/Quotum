@@ -1,3 +1,6 @@
+import * as filterModelBindings from '../../server/domain/dataFilters';
+import * as filterRuntimeBindings from '../lib/filterSelection';
+import * as filterCurveBindings from '../../server/domain/periodCurves';
 import {chartSeriesMuted} from '../lib/prefs';
 import * as retention from '../../server/domain/periodRetention';
 import assert from 'node:assert/strict';
@@ -39,6 +42,7 @@ import {reduce,INITIAL,type HubEvent} from '../lib/board';
 import {PageClock} from '../lib/clock';
 import {Pan} from '../lib/pan';
 import {Live} from '../lib/live';
+import {timeRangeKey} from '../lib/timeRange';
 
 import {Pairing} from '../../server/pairing';
 import {Setup} from '../../server/setup';
@@ -47,7 +51,8 @@ export const NOW=1_800_000_000_000,H=3_600_000,M=60_000;
 export const flush=async()=>{for(let i=0;i<300;i++)await Promise.resolve();};
 
 /** Actual producer, wire JSON boundary, page reducer, transport and bounded server reader. */
-export async function fixture({personal=false,ownerDevice=false,transportLive=false,privateWork=false,unknown=false,current=false,stable=true,fixed=false,tableOnly=false,periodName="1h",creditFrom=NOW-3*M,creditTo=NOW-2*M,clocked=false,sessionMs=24*H}={}) {
+export async function fixture({personal=false,ownerDevice=false,transportLive=false,privateWork=false,unknown=false,current=false,stable=true,fixed=false,tableOnly=false,periodName="1h",creditFrom=NOW-3*M,creditTo=NOW-2*M,clocked=false,sessionMs=24*H,initialFilters=null as filterModelBindings.DataFilters|null}={}) {
+  let selectedRange=fixed?{from:NOW-H,to:NOW}:null;
   const start=NOW-Math.max(3*H,periodOf(periodName).ms+H);
   const store=new Store(':memory:',start),directory=new Directory(store.db);
   const alice=directory.createUser('a@example.com','Alice','unused',start),bob=directory.createUser('b@example.com','Bob','unused',start);
@@ -83,7 +88,6 @@ export async function fixture({personal=false,ownerDevice=false,transportLive=fa
   const initial=events.open({user:alice.id,secret,board,kind:'stream',send:feed,end:()=>{}});
   if(!initial||initial==='limit')throw new Error('stream did not open');let opened=initial;feed(opened.frames);
   if(connection)await flush();
-  let selectedRange=fixed?{from:NOW-H,to:NOW}:null;
   const settings={range:periodName,kind:'session',money:DEFAULT_MONEY,funds:DEFAULT_MONEY};
   const code=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
   let wait:Promise<void>|null=null,preparer:Preparations|null=null;
@@ -94,12 +98,14 @@ export async function fixture({personal=false,ownerDevice=false,transportLive=fa
     periodTextChangesAt,page,pan,preparations:()=>preparer,prepareAsync:(owner:object,work:Parameters<typeof drain>[0],valid:()=>boolean)=>prepareAsync(owner,work,valid,preparer),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,
     packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,
     timeRange:()=>selectedRange,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
-  runInNewContext(ts.transpileModule(code.slice(code.indexOf('class BoardPeriod'),code.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  runInNewContext(ts.transpileModule(code.slice(code.indexOf('class BoardPeriod'),code.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  if(initialFilters)filterRuntimeBindings.publishDataFilters(initialFilters);
   const period=new context.exports.BoardPeriod();pan.onPhase(()=>period.refreshWorkClock());page.listen((event,state)=>period.changed(event,state));period.activate(true);await flush();
-  assert.equal(period.get().error,null);assert.equal(period.get().rows.length,1);const initialRequests=requests.slice();requests.length=0;frames.length=0;
+  const limited=!!initialFilters&&!filterModelBindings.executableWorkFilters(initialFilters);
+  assert.equal(period.get().error,limited?'filters_limit':null);assert.equal(period.get().rows.length,limited?0:1);const initialRequests=requests.slice();requests.length=0;frames.length=0;
   const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=Math.max(now,next[1].at);timers.delete(next[0]);next[1].run();events.flush();}now=Math.max(now,at);if(!clocked)period.tick();};
   const jump=(at:number)=>{now=at;for(const [token,timer] of [...timers])if(timer.at<=at){timers.delete(token);timer.run();}events.flush();if(clocked)pageClock.wakeDue();else period.tick();};
-  return {elapse:(ms:number)=>{now+=ms;},selectRange:(range:{from:number;to:number}|null)=>{selectedRange=range;period.changed();},hub,device,owner,advance,jump,pan,clock:pageClock,initialRequests,prepareWith:(value:Preparations|null)=>{preparer=value;},settings,pool,reader,store,directory,board,alice,bob,source,credit,events,period,page,frames,requests,
+  return {elapse:(ms:number)=>{now+=ms;},hub,device,owner,advance,jump,pan,selectedRange:()=>selectedRange,selectRange:(range:typeof selectedRange)=>{selectedRange=range;period.changed();},clock:pageClock,initialRequests,prepareWith:(value:Preparations|null)=>{preparer=value;},settings,pool,reader,store,directory,board,alice,bob,source,credit,events,period,page,frames,requests,
     report:(working=false,at=NOW)=>{now=at;hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(at).toISOString(),sessions:[{provider:'codex',...(funding?{account:(privateWork?'b':'a').repeat(24)}:{}),sessionId:stable?'c'.repeat(32):null,origin:'terminal',project:'Work project',folder:'Private folder',startedAt:new Date(start).toISOString(),lastWorkedAt:new Date(NOW-2*M).toISOString(),working}]},at);events.flush();},
     endIdle:()=>{hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(NOW).toISOString(),sessions:[]},NOW);events.flush();},
     event:(event:HubEvent)=>page.dispatch({type:'hub',event}),
@@ -133,17 +139,17 @@ export function consumer(h: any) {
   const prefs={range:'1h',activityBy:'project',muted:{}};
   const context={chartSeriesMuted,ACTIVITY,
     exports:{} as any,React,...parent,memo:(f:any)=>f,useMemo:(f:any,deps:any[])=>{const slot=parent.useRef(null) as any;if(!slot.current||deps.some((v,i)=>!Object.is(v,slot.current.deps[i])))slot.current={deps,value:f()};return slot.current.value;},
-    useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useHistory:()=>h.render(),useHistoryPlot:()=>h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
+    useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useHistory:()=>h.render(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
     useLineup:()=>h.page.get().board!.lineup,usePersonalBoard:()=>false,useTitles:()=>titles,
-    useChartMuted:()=>prefs.muted,usePref:(key:keyof typeof prefs)=>prefs[key],useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=>h.board,
+    useChartMuted:()=>prefs.muted,usePref:(key:keyof typeof prefs)=>prefs[key],useLocale:()=> 'en',useTimeRange:()=>h.selectedRange(),useBoardId:()=>h.board,
     axisNavigation:()=>({context:'b',range:'1h'}),useClock:()=>NOW,usePanning:()=>panning,
     pan:{get:()=>null,active:()=>null,subscribe:()=>()=>{}},useHistoryBegins:()=>0,frameOf:()=>({from:NOW-H,to:NOW,live:true}),measuredTo:()=>NOW,
     activityEmpty,groupColors,groupRegistry,mutedKey,plotGroupsPrepared,StackPaths,stacksHeight:()=>160,activityScale,niceTicks,cellStart,MINUTE:60_000,EMPTY_ACTIVITY,groupName:(g:any)=>g.name??g.key,cardId,isHidden,t:(s:any)=>s,
     quotaHistory:{retry:()=>{}},AnalyticsPanel:()=>null,ActivitySettings:()=>null,Totals:()=>null,LegendItem:()=>null,
-    setTimeRange:()=>{},navigationKey,useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),
+    setTimeRange:()=>{},timeRangeKey,navigationKey,useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),
     PlotLayer:()=>null,PlotOverlay:()=>null,Tooltip:()=>null,clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',
     CSS:{escape:(id:any)=>id},Stacks:null as any,StackArtwork:null as any};
-  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;globalThis.StackArtwork=StackArtwork;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,context);
+  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;globalThis.StackArtwork=StackArtwork;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   function find(node:any,type:any):any{if(Array.isArray(node))return node.map(n=>find(n,type)).find(Boolean);if(!React.isValidElement(node))return null;if(node.type===type)return node;return find((node.props as any).children,type);}
   const pathsOf=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(pathsOf);if(!React.isValidElement(node))return [];const p=node.props as any;if(node.type===context.StackArtwork)return pathsOf(context.StackArtwork(p));return p.className==='activity-stack'&&p.d!==undefined?[p.d]:pathsOf(p.children);};
   let latestParent:any;const renderParent=()=>{Object.assign(context,parent);parent.begin();latestParent=context.exports.Activity({arrange:{view:h.page.get().board!.view}});return find(latestParent,context.Stacks).props;};
@@ -159,19 +165,25 @@ export function consumer(h: any) {
 import {HistoryStore,follow} from '../lib/history';
 import {expandHistory} from '../../server/domain/history';
 
-export async function drawings(h:any){
+export async function drawings(h:any,activity=true,scope:'quota'|'budget'='quota'){
  const scheduled=new Map<object,{run:()=>void;ms:number}>();
- const loader=new HistoryStore({sharedTransport:true,now:()=>NOW,preparations:null,read:(_board,cell,from,to,signal,_meters,meta,owner)=>h.period.transport.read('quota',{cell:String(cell),from:String(from),to:String(to),meta:meta?.meta??''},signal,owner).then((reply:import('../../server/domain/history').HistoryReply)=>expandHistory(reply,meta)),setTimeout:(run,ms)=>{const token={};scheduled.set(token,{run,ms});return token;},clearTimeout:token=>{scheduled.delete(token as object);},dropTimeRange:()=>{}},undefined,'quota',h.pool);
- const stop=follow(loader,h.page);loader.choose(h.settings.range,null);loader.open(h.board);loader.hello(h.events.epoch);
+ const source=readFileSync(new URL('../lib/history.ts',import.meta.url),'utf8');
+ const read=source.split('\n').find(line=>line.trimStart().startsWith('read:')),retry=source.split('\n').find(line=>line.trimStart().startsWith('retry:'));assert.ok(read);assert.ok(retry);
+ const adapter=source.slice(source.indexOf('const selectedMeters ='),source.indexOf('function activeReaders('));
+ const readerContext={read:null as any,retry:null as any,selected:null as any,boardPeriod:h.period,scope,family:'budget',pan:h.pan,expandHistory,prefs:()=>h.settings,subscriptionSelection,moneyReadSelection};
+ runInNewContext(ts.transpileModule(adapter+'\nglobalThis.read=({'+read+'}).read;globalThis.retry=({'+retry+'}).retry;globalThis.selected=selectedMeters;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,readerContext);
+ const loader=new HistoryStore({sharedTransport:true,workInPresentation:scope!=='budget',now:()=>NOW,preparations:null,read:readerContext.read,retry:readerContext.retry,setTimeout:(run,ms)=>{const token={};scheduled.set(token,{run,ms});return token;},clearTimeout:token=>{scheduled.delete(token as object);},dropTimeRange:()=>{}},undefined,scope,h.pool);
+ const stop=follow(loader,h.page);loader.setActivityActive(activity);loader.choose(h.settings.range,h.selectedRange());loader.open(h.board);loader.setWorkFilter(JSON.stringify(filterRuntimeBindings.effectiveFilters()?filterModelBindings.workFilter(filterRuntimeBindings.effectiveFilters()!):null),filterRuntimeBindings.effectiveFilters()??undefined);loader.hello(h.events.epoch);
+ loader.setMeters(readerContext.selected(h.page.get(),scope));
  const board=h.page.get().board;loader.snapshot(board.lineup,Object.values(board.cards).flatMap((c:any)=>c.windows.map((w:any)=>`${c.id} ${w.id}`)),board.historyStart,board.workAuthority);await flush();
- const slots:any[]=[];let cursor=0;
+ const selectedSlots:any[]=[],financialSlots:any[]=[];let slots=selectedSlots,cursor=0;
  const useRef=(current:any)=>slots[cursor++]??(slots[cursor-1]={current});
  const useMemo=(read:any,deps:any[])=>{const box=useRef(null);if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;};
- const context={useRef,useMemo,useSyncExternalStore:(_s:any,read:any)=>read(),pan:{active:()=>null,onPhase:()=>()=>{}},hubNow:()=>NOW,planEventsAt,planEventsDeadline,shallowEqual,useClock:()=>NOW,fundsHistory:{},page:h.page,timeRange:()=>null,prefs:()=>h.settings,boardPeriod:h.period,read:null as any};
- const source=readFileSync(new URL('../lib/history.ts',import.meta.url),'utf8');
- runInNewContext(ts.transpileModule(source.slice(source.indexOf('function usePeriodHistory('),source.indexOf('export function useHistory('))+'\nglobalThis.read=usePeriodHistory;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
- const render=()=>{cursor=0;return context.read(loader,true);};
- return {loader,render,runScheduled:()=>{const timers=[...scheduled];for(const [token,timer] of timers){scheduled.delete(token);timer.run();}return timers.map(([,timer])=>timer.ms);},close:()=>{stop();loader.close();}};
+ const context={useRef,useMemo,useSyncExternalStore:(_s:any,read:any)=>read(),pan:{active:()=>null,onPhase:()=>()=>{}},hubNow:()=>NOW,planEventsAt,planEventsDeadline,shallowEqual,useClock:()=>NOW,fundsHistory:{},page:h.page,timeRange:h.selectedRange,timeRangeKey,prefs:()=>h.settings,boardPeriod:h.period,read:null as any};
+ runInNewContext(ts.transpileModule(source.slice(source.indexOf('function usePeriodHistory('),source.indexOf('export function useHistory('))+'\nglobalThis.read=usePeriodHistory;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+ const render=()=>{slots=selectedSlots;cursor=0;return context.read(loader,true);};
+ const renderFinancial=()=>{slots=financialSlots;cursor=0;return context.read(loader,false,true);};
+ return {loader,render,renderFinancial,runScheduled:()=>{const timers=[...scheduled];for(const [token,timer] of timers){scheduled.delete(token);timer.run();}return timers.map(([,timer])=>timer.ms);},close:()=>{stop();loader.close();}};
 }
 import {subscriptionLinesOf} from '../lib/subscription';
 import {lineWork,workText} from '../lib/work';

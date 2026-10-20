@@ -26,6 +26,9 @@ test('members page safe keys but cannot refresh, while cursors bind source and i
   const get=(after?:string)=>app.inject({method:'GET',url:base+'/keys?limit=50'+(after?'&after='+encodeURIComponent(after):''),headers:{cookie:cookies.get(bob.id)}});
   const first=(await get()).json();assert.equal(first.keys.length,50);assert.equal(first.total,57);assert.ok(first.next);
   const second=(await get(first.next)).json();assert.equal(second.keys.length,7);assert.equal(second.next,null);assert.equal(JSON.stringify(second).includes('credentialIds'),false);
+  const view=directory.view(board.id);directory.saveView(board.id,{...view,hidden:[...view.hidden,'source:'+source]},alice.id,now);
+  assert.equal((await get()).statusCode,200,'hidden layout does not revoke key inventory');
+  assert.deepEqual((await get(first.next)).json(),second,'the same inventory cursor remains valid after hiding its card');
   const select=(ids:unknown,extra='')=>app.inject({method:'GET',url:base+'/keys?ids='+encodeURIComponent(JSON.stringify(ids))+extra,headers:{cookie:cookies.get(bob.id)}});
   const selected=await select([keys[56].id,keys[0].id,keys[56].id]);assert.equal(selected.statusCode,200);
   assert.deepEqual(selected.json().keys.map((k:KeyPart)=>k.id),[keys[0].id,keys[56].id]);

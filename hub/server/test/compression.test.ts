@@ -41,7 +41,7 @@ test('serialized history and long-poll JSON compress while SSE remains immediate
   const poll = await raw(h.base + '/api/events?mode=poll', headers);
   assert.equal(poll.status, 200);
   assert.equal(poll.headers['content-encoding'], 'br');
-  assert.deepEqual(JSON.parse(poll.decoded.toString()).events.map((e: {type: string}) => e.type), ['hello', 'snapshot']);
+  assert.deepEqual(JSON.parse(poll.decoded.toString()).events.map((e: {type: string}) => e.type), ['hello','snapshot','filters']);
   await new Promise<void>((resolve, reject) => {
     const req = request(h.base + '/api/events', {headers}, res => {
       assert.equal(res.headers['content-encoding'], undefined);

@@ -26,6 +26,7 @@ import type {HubSources} from './hubSources.js';
 import {currencyRoutes} from './routes/currencies.js';
 import {linkRoutes} from './routes/links.js';
 import {sourceKeyRoutes} from './routes/sourceKeys.js';
+import {dataFilterRoutes} from './routes/dataFilters.js';
 import {BoardAdditions} from './additions.js';
 import {additionRoutes} from './routes/additions.js';
 import {DeviceOnboarding} from './deviceOnboarding.js';
@@ -48,7 +49,7 @@ export type ExtendHub = (app: FastifyInstance, hub: Hub, guards: Guards) => void
 
 /** Errors of the framework itself (malformed JSON, a body too large…) in the hub's `{error}` shape. */
 function errorCode(status: number, path: string): string {
-  if (status === 413) return 'too_large';
+  if (status === 413) return /\/filters(?:\?|$)/.test(path) ? 'filters_limit' : /\/period\/sessions(?:\?|$)/.test(path) ? 'history_limit' : 'too_large';
   if (status >= 500) return 'internal_error';
   return path.startsWith('/v1/ingest') ? 'invalid_batch' : path.startsWith('/v1/activity') ? 'invalid_activity' : 'invalid_request';
 }
@@ -197,6 +198,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
   eventRoutes(app, directory, events, guards, !!hub.local);
   periodRoutes(app,guards,periods);
   accountRoutes(app, hub, guards);
+  dataFilterRoutes(app,hub,guards);
   sourceKeyRoutes(app,hub,guards);
   currencyRoutes(app,hub,guards);
   linkRoutes(app,hub,guards);

@@ -49,7 +49,7 @@ export async function seedMoney(store:Store,directory:Directory,stand:Stand) {
     const view=directory.view(personal.id);
     view.names[source]='OpenRouter '+scene.id;
     directory.saveView(personal.id,view,owner.id,now);
-    shareConnectorScene(store,stand,source,owner.id,now);
+    shareConnectorScene(store,stand,source,owner.id,now,'OpenRouter '+scene.id);
   }
   if(stand.set.id==='money') {
     const personal=directory.boards(owner.id).find(board=>board.personal)!;

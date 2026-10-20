@@ -24,6 +24,7 @@ import {expandPeriod,type PeriodWireReply} from '../domain/periodWire.js';
 import {periodValueAt,type PeriodValues} from '../domain/periodValues.js';
 import * as meters from '../domain/meters.js';
 import * as resources from '../domain/resources.js';
+import * as filterModel from '../domain/dataFilters.js';
 import * as currency from '../domain/currency.js';
 
 const M=60_000,H=60*M,now=1_800_000_000_000,secret=Buffer.from('sk-or-v1-'+'a'.repeat(64));
@@ -37,6 +38,10 @@ async function renderer() {
   let clock=now;
   const trigger=({trigger}:{trigger:React.ReactNode})=>React.createElement('span',{},trigger);
   const fixture={exports:{} as {MoneyValues:React.ComponentType<Record<string,unknown>>},require:(name:string)=>{
+    if(name==='../lib/dataFilters')return {useDataFilters:()=>({current:null})};
+    if(name==='../../server/domain/dataFilters')return filterModel;
+    if(name==='../lib/prefs')return {usePref:()=>({unit:'USD'})};
+    if(name==='../components/DataFilters')return {openDataFilters:()=>{}};
     if(name==='react')return React;if(name==='react/jsx-runtime')return jsx;
     if(name==='../../server/domain/meters')return meters;if(name==='../../server/domain/resources')return resources;if(name==='../../server/domain/currency')return currency;
     if(name==='../lib/money')return money;if(name==='../lib/format')return format;if(name==='../i18n')return i18n;

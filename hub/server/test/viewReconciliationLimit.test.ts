@@ -18,12 +18,13 @@ const bytes=(value:unknown)=>Buffer.byteLength(JSON.stringify(value));
 
 /** Fill the encoded UTF-8 allowance with valid owner fields, without padding the HTTP body. */
 function encodedMaximum(base:View):View {
-  let view={...base,names:Object.fromEntries(Array.from({length:200},(_,i)=>['s'+i,'я'.repeat(60)])),windows:Array.from({length:200},(_,i)=>'я'.repeat(57)+String(i).padStart(3,'0'))};
-  for(let n=200;viewBytes(view)<VIEW_BODY_LIMIT;n++) {
+  let view={...base,names:Object.fromEntries(Array.from({length:200},(_,i)=>['s'+i,'я'.repeat(60)]))};
+  for(let n=0;viewBytes(view)<VIEW_BODY_LIMIT;n++) {
     const left=VIEW_BODY_LIMIT-viewBytes(view);
-    assert.ok(left>=6);
-    const length=Math.min(120,left-3),id=('w'+String(n).padStart(3,'0')).padEnd(length,'x');
-    view={...view,windows:[...view.windows,id]};
+    assert.ok(left>=11);
+    const length=left>127&&left-127<11?left-18:Math.min(120,left-7);
+    const id=('p'+String(n).padStart(3,'0')).padEnd(length,'x');
+    view={...view,layout:{...view.layout,places:{...view.layout.places,[id]:{x:0,w:6,y:n+10}}}};
   }
   assert.equal(viewBytes(view),VIEW_BODY_LIMIT);
   assert.ok(decodeView(encodeView(view)));
@@ -81,7 +82,7 @@ for(const bound of ['encoded','decoded'] as const)test(`automatic defaults prese
     assert.equal(widgetVisible(reply.json().view,'subscription-funds',2),false,'derived analytics stay pending');
     assert.deepEqual(h.persisted(),before);assert.deepEqual(h.touches,[]);
   }
-  const overflow=bound==='encoded'?{...saved,windows:[...saved.windows,'overflow']}:{...saved,layout:{...saved.layout,places:{...saved.layout.places,overflow:{x:0,w:3,y:5000}}}};
+  const overflow=bound==='encoded'?{...saved,layout:{...saved.layout,places:{...saved.layout.places,overflow:{x:0,w:6,y:90000}}}}:{...saved,layout:{...saved.layout,places:{...saved.layout.places,overflow:{x:0,w:3,y:5000}}}};
   reply=await h.save(overflow,revision);assert.equal(reply.statusCode,bound==='encoded'?413:400);
   assert.throws(()=>h.directory.saveView(h.board,overflow,h.user,h.now+2),/view_limit/);
   assert.deepEqual(h.persisted(),before);assert.deepEqual(h.touches,[]);
@@ -89,7 +90,7 @@ for(const bound of ['encoded','decoded'] as const)test(`automatic defaults prese
   reply=await h.save(saved,revision);assert.equal(reply.statusCode,200);assert.equal(reply.json().revision,revision);
   assert.deepEqual(h.persisted(),before);assert.deepEqual(h.touches,[]);
 
-  const smaller=bound==='encoded'?{...saved,windows:saved.windows.slice(1)}:{...saved,layout:{...saved.layout,places:Object.fromEntries(Object.entries(saved.layout.places).filter(([id])=>!['p0','p1','p2'].includes(id)))}};
+  const smaller=bound==='encoded'?{...saved,layout:{...saved.layout,places:Object.fromEntries(Object.entries(saved.layout.places).filter(([id])=>id!==Object.keys(saved.layout.places).at(-1)))}}:{...saved,layout:{...saved.layout,places:Object.fromEntries(Object.entries(saved.layout.places).filter(([id])=>!['p0','p1','p2'].includes(id)))}};
   if(bound==='encoded') {
     reply=await h.save(smaller,revision);assert.equal(reply.statusCode,200,reply.body);
     assert.equal(reply.json().revision,revision+2,'the response includes both the owner save and retried defaults');

@@ -11,6 +11,10 @@ import * as forecast from '../lib/forecastSort';
 import * as table from '../lib/moneyTable';
 import * as selection from '../lib/moneySelection';
 import type {Card} from '../lib/types';
+import {DataFilterState} from '../lib/filterState';
+import {seedDataFilters} from '../lib/filterSeed';
+import {publishDataFilters} from '../lib/filterSelection';
+import {defaultFilters,type FilterEnvelope} from '../../server/domain/dataFilters';
 
 const card=(id:string,provider='codex'):Card=>({id,provider,plan:'',windows:[],successAt:1,stale:false,error:null,resets:null,owners:[],staleAfterMs:1000,measureIntervalMs:null,
   meters:[{id:provider==='codex'?'balance:credits':'balance',kind:'balance',unit:provider==='codex'?'credits:codex':'USD',amount:'1000000',limit:null,at:1,staleAfterMs:1000,stale:false,scope:null,label:null,resetAt:null,minutes:null}]});
@@ -39,6 +43,22 @@ test('bounded funds admission uses immutable priority and retains explicit data 
   const explicit={...settings,selected:{USD:[['31','balance:credits']] as [string,string][]}};
   for(const cohort of [cards,cards.slice(0,32)])assert.deepEqual(selection.moneySelection(cohort,[],explicit,undefined,'funds').selection!.ids,[['31','balance:credits']]);
   assert.deepEqual(settings.legacySelected!.USD,[['32','balance:credits']]);
+});
+
+test('funds migration priority belongs to the filter codec after reset, Restore and adoption',()=>{
+  const cards=Array.from({length:33},(_,i)=>card(String(i))),legacy=selection.readMoney({selected:{USD:[['32','balance:credits']]}},'funds'),clean=selection.readMoney({},'funds'),original=structuredClone(legacy);
+  const envelope=(revision:number):FilterEnvelope=>({filters:defaultFilters(),revision,authority:'funds-priority-test',unavailable:{sources:0,windows:0,wallet:0,funds:0,projects:0,devices:0,clients:0}});
+  const open=(revision:number)=>{const state=new DataFilterState({seed:filters=>seedDataFilters(filters,cards,selection.DEFAULT_MONEY,legacy),save:async()=>envelope(1)});state.open('u','b');state.accept(envelope(revision));return state;};
+  const cohort=(settings=legacy)=>selection.moneySelection(cards,[],settings,undefined,'funds').selection!.ids;
+  const check=(state:DataFilterState,preferred:boolean)=>{publishDataFilters(state.get().current);assert.deepEqual(cohort(),cohort(clean),'old browser preferences cannot replace the active filter contract');assert.equal(cohort().some(([id])=>id==='32'),preferred);};
+  try{
+    const first=open(0);assert.deepEqual(first.get().current!.legacy?.fundsPreferredByUnit?.USD,['32']);check(first,true);
+    first.reset('funds','all');assert.equal(first.get().current!.legacy?.fundsPreferredByUnit,undefined);check(first,false);
+    first.restore();check(first,false);check(open(1),false);
+    publishDataFilters(null,false);assert.equal(cohort().some(([id])=>id==='32'),true,'the compatibility reader keeps its old priority before filter activation');
+    assert.equal(selection.fundsLegacyMuted(legacy,'31','balance:credits'),true,'the old legend intent remains independent');
+    assert.deepEqual(legacy,original);
+  }finally{publishDataFilters(null,false);}
 });
 
 test('budget selection retires usage without replacing an explicit empty choice with defaults',()=>{

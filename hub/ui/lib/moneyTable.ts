@@ -1,3 +1,4 @@
+import {effectiveFilters} from './filterSelection';
 import {moneyWorkRate,type MoneyWork} from '../../server/domain/moneyWork';
 import {convertDerivedBy} from '../../server/domain/currency';
 import {currencySymbol, type CurrencyContext} from '../../server/domain/currency';
@@ -54,7 +55,8 @@ export function moneyWorkValues(series:MeterHistory,work?:MoneyWork):Record<'act
   const original=series.end===null?null:series.unit===work.unit?series.end:conversion?.original.unit===work.unit?conversion.original.amount:null;
   const estimate=moneyWorkRate(work,original,series.end===null);
   const rate=estimate.rate===null?null:series.unit===work.unit?estimate.rate:conversion?.original.unit===work.unit?convertDerivedBy(BigInt(estimate.rate),conversion.steps??[conversion.rate]):null;
-  return {active:String(work.activeMs),rate,remaining:estimate.remainingMs};
+  const active=work.selectedWork?work.selectedWork.activeMs:effectiveFilters()?null:work.activeMs;
+  return {active:active===null?null:String(active),rate,remaining:estimate.remainingMs};
 }
 
 export function moneyComparator(sort: NonNullable<MoneySort>, locale: string) {

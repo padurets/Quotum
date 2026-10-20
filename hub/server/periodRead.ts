@@ -6,18 +6,22 @@ import {compactJSON, HistoryLimit, type HistoryTiles} from './history.js';
 import {periodDictionary} from './domain/periodWire.js';
 import {fail,readHistory,ReadError} from './historyRead.js';
 import {evaluatedRange,parsePeriod,type PeriodBasis,type PeriodSection} from './domain/period.js';
-import {PERIOD_SCOPES,type PeriodReply,type PeriodRequest} from './domain/periodRead.js';
+import {PERIOD_BODY_BYTES,PERIOD_SCOPES,type PeriodReply,type PeriodRequest} from './domain/periodRead.js';
 import type {HistoryScope,HistoryReply} from './domain/history.js';
 import {periodValues,prepareNearbyPeriodValues} from './periodValues.js';
-import {sharedWork,periodWork,preparePeriodWork} from './periodWork.js';
+import {sharedWork,selectedWork,periodWork,preparePeriodWork} from './periodWork.js';
 import {config} from './config.js';
 import {periodTape} from './periodTape.js';
-import {workedSessions} from './domain/periodWork.js';
+import {workPreparationBytes as importWorkBytes,workedSessions} from './domain/periodWork.js';
 import {prepareFixedTape,prepareFixedWork} from './periodFixed.js';
 import {drain,type Preparation} from './domain/prepare.js';
 import {PeriodPreparation} from './periodPrepare.js';
 import {selectionOf} from './domain/meterHistory.js';
-import {cellOf} from './domain/history.js';
+import {parseWorkFilter,type WorkFilter} from './domain/dataFilters.js';
+import {cellOf,cellStart,CLOCK_TOLERANCE_MS} from './domain/history.js';
+import {PeriodCurves,sourceWorkTape,type SourceWorkCurves} from './domain/periodCurves.js';
+import {sourceWorkFrom} from './domain/workAccess.js';
+import {retainedWorkChoices} from './dataFilters.js';
 
 class PeriodChanged extends Error {}
 
@@ -25,6 +29,21 @@ type Cursor = {identity:string;revision:number;from:number;cut:number};
 type Change = {revision:number;source:string;since:number;owner?:string;device?:string};
 const object=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const number=(v:unknown):v is number=>Number.isSafeInteger(v)&&(v as number)>=0;
+
+/** Retain the parsed body and its canonical copy under the shared ceiling while queued. */
+export function periodInputBytes(raw:unknown) {
+  let bytes=1024;const pending=[raw];
+  while(pending.length){
+    const value=pending.pop();
+    if(typeof value==='string')bytes+=64+value.length*2;
+    else if(value&&typeof value==='object'){
+      bytes+=128;
+      if(Array.isArray(value)){bytes+=value.length*16;for(const part of value)pending.push(part);}
+      else for(const [key,part] of Object.entries(value)){bytes+=64+key.length*2;pending.push(part);}
+    }else bytes+=16;
+  }
+  return bytes*2;
+}
 
 /** A short journal proves delta frontiers. Falling behind it requires a bounded baseline. */
 export class PeriodReader {
@@ -59,23 +78,24 @@ export class PeriodReader {
       return JSON.parse(Buffer.from(body,'base64url').toString()) as Cursor;
     }catch{return null;}
   }
-  private identity(board:string,user:string,access?:import('./domain/workAccess.js').WorkAccess,reservation?:{add(bytes:number):void;remove(bytes:number):void},authority?:string) {
+  private identity(board:string,user:string,access?:import('./domain/workAccess.js').WorkAccess,reservation?:{add(bytes:number):void;remove(bytes:number):void},authority?:string,filter?:WorkFilter) {
     const {store}=this.hub;
-    return createHash('sha256').update(JSON.stringify([board,user,authority??store.workKey(board,undefined,access,reservation?bytes=>reservation.add(bytes):undefined,reservation?bytes=>reservation.remove(bytes):undefined)])).digest('base64url');
+    return createHash('sha256').update(JSON.stringify([board,user,authority??store.workKey(board,undefined,access,reservation?bytes=>reservation.add(bytes):undefined,reservation?bytes=>reservation.remove(bytes):undefined),filter])).digest('base64url');
   }
   private detailRequest(board:string,user:string,raw:unknown) {
-    if(!object(raw)||raw.version!==1||!number(raw.evaluatedAt)||typeof raw.cursor!=='string'||!Array.isArray(raw.refs)||raw.refs.length>100||raw.refs.some(ref=>typeof ref!=='string'||!/^[-_A-Za-z0-9]{8}$/.test(ref))||Object.keys(raw).some(k=>!['version','selection','evaluatedAt','cursor','refs'].includes(k)))fail(400,'invalid_request');
+    if(!object(raw)||raw.version!==1||!number(raw.evaluatedAt)||typeof raw.cursor!=='string'||!Array.isArray(raw.refs)||raw.refs.length>100||raw.refs.some(ref=>typeof ref!=='string'||!/^[-_A-Za-z0-9]{8}$/.test(ref))||Object.keys(raw).some(k=>!['version','selection','evaluatedAt','cursor','refs','workFilter'].includes(k)))fail(400,'invalid_request');
+    const filter=raw.workFilter===undefined?undefined:parseWorkFilter(raw.workFilter);if(filter===null)fail(400,'invalid_request');
     const selection=parsePeriod(raw.selection),cursor=this.decode(raw.cursor);
     if(!selection||!cursor)fail(400,'history_range_invalid');
     const {store}=this.hub;
     const reservation=this.history.reservation();
     try{
     const access=store.workAccess(board,Date.now(),bytes=>reservation.add(bytes));
-    const identity=this.identity(board,user,access,reservation);
+    const identity=this.identity(board,user,access,reservation,undefined,filter);
     const range=evaluatedRange(selection,raw.evaluatedAt);
     const changed=this.workChanges.some(c=>c.revision>cursor.revision&&c.since<cursor.cut&&(c.owner?c.device?access?.devices.get(c.device)?.owner===c.owner:[...(access?.devices.values()??[])].some(d=>d.owner===c.owner):access.sources.has(c.source)));
     if(cursor.identity!==identity||cursor.revision<this.workFloor||cursor.revision>this.revision||changed||cursor.from>range.from||cursor.cut<Math.min(range.to,raw.evaluatedAt))fail(400,'history_range_invalid');
-    return {request:{version:1 as const,selection,evaluatedAt:raw.evaluatedAt,sessions:{}},refs:new Set(raw.refs as string[])};
+    return {request:{version:1 as const,selection,evaluatedAt:raw.evaluatedAt,sessions:{},...(filter?{workFilter:filter}:{})},refs:new Set(raw.refs as string[])};
     }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit');throw error;}finally{reservation.close();}
   }
   details(board:string,user:string,raw:unknown):string {
@@ -83,10 +103,17 @@ export class PeriodReader {
     return this.detailRows(this.read(board,user,request),refs);
   }
   async detailsAsync(board:string,user:string,raw:unknown,signal?:AbortSignal):Promise<string> {
+    const input=this.history.reservation();
+    try{
+    // The original body survives the queued read for final cursor revalidation.
+    // Charge it before deduplication, including repeated refs and predicate values.
+    input.add(periodInputBytes(raw));
     const {request,refs}=this.detailRequest(board,user,raw);
     const json=await this.readAsync(board,user,request,signal);
     this.detailRequest(board,user,raw);
     return this.detailRows(json,refs);
+    }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit');throw error;}
+    finally{input.close();}
   }
   private detailRows(json:string,refs:Set<string>) {
     const reservation=this.history.reservation();
@@ -102,35 +129,43 @@ export class PeriodReader {
   }
   read(board:string,user:string,raw:unknown):string {return drain(this.prepareRead(board,user,raw));}
   async readAsync(board:string,user:string,raw:unknown,signal?:AbortSignal):Promise<string> {
+    const input=this.history.reservation();
+    try{input.add(periodInputBytes(raw));
     for(let attempt=0;;attempt++){
       let check=()=>{};
       try{return await this.preparation.run(()=>this.prepareRead(board,user,raw,guard=>{check=guard;}),signal,()=>check());}
       catch(error){if(!(error instanceof PeriodChanged))throw error;if(attempt===1)fail(503,'unavailable');}
     }
+    }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit');throw error;}
+    finally{input.close();}
   }
   private *prepareRead(board:string,user:string,raw:unknown,guard?:(check:()=>void)=>void):Preparation<string> {
     const self=this;
-    if(!object(raw)||raw.version!==1||!number(raw.evaluatedAt)||Object.keys(raw).some(k=>!['version','selection','evaluatedAt','quota','budget','funds','values','sessions'].includes(k)))fail(400,'invalid_request');
+    if(!object(raw)||raw.version!==1||!number(raw.evaluatedAt)||Object.keys(raw).some(k=>!['version','selection','evaluatedAt','quota','budget','funds','values','sessions','workFilter','facets','sourceWork'].includes(k)))fail(400,'invalid_request');
     const selection=parsePeriod(raw.selection);if(!selection)fail(400,'invalid_request');
-    for(const name of PERIOD_SCOPES)if(raw[name]!==undefined&&(!object(raw[name])||Object.values(raw[name]).some(v=>typeof v!=='string')||Object.keys(raw[name]).some(k=>!['cell','from','to','meters','unit','currency','meta','evidence','cells','work'].includes(k))))fail(400,'invalid_request');
+    for(const name of PERIOD_SCOPES)if(raw[name]!==undefined&&(!object(raw[name])||Object.values(raw[name]).some(v=>typeof v!=='string')||Object.keys(raw[name]).some(k=>!['cell','from','to','meters','unit','currency','meta','evidence','cells','work','sources'].includes(k))))fail(400,'invalid_request');
     for(const name of PERIOD_SCOPES)if(object(raw[name])&&raw[name].cells!==undefined&&raw[name].cells!=='skip')fail(400,'invalid_request');
     for(const name of PERIOD_SCOPES)if(object(raw[name])&&raw[name].work!==undefined&&(name!=='budget'||raw[name].work!=='1'))fail(400,'invalid_request');
     if(raw.values!==undefined&&(!Array.isArray(raw.values)||raw.values.length>2000||raw.values.some(v=>typeof v!=='string'||v.length>256)))fail(400,'invalid_request');
     if(raw.sessions!==undefined&&(!object(raw.sessions)||Object.keys(raw.sessions).some(k=>k!=='cursor')||raw.sessions.cursor!==undefined&&(typeof raw.sessions.cursor!=='string'||raw.sessions.cursor.length>2048)))fail(400,'invalid_request');
-    const request=raw as PeriodRequest,{store,directory}=self.hub,now=Date.now();
+    if(raw.sourceWork!==undefined&&(!object(raw.sourceWork)||Object.keys(raw.sourceWork).some(k=>k!=='cursor')||raw.sourceWork.cursor!==undefined&&(typeof raw.sourceWork.cursor!=='string'||raw.sourceWork.cursor.length>2048)||!raw.quota&&(!object(raw.budget)||raw.budget.work!=='1')))fail(400,'invalid_request');
+    const filter=raw.workFilter===undefined?undefined:parseWorkFilter(raw.workFilter);if(filter===null||raw.facets!==undefined&&raw.facets!==true)fail(400,'invalid_request');
+    const request={...raw,...(filter?{workFilter:filter}:{})} as PeriodRequest,{store,directory}=self.hub,now=Date.now();
     if(request.quota||request.sessions||request.budget?.work==='1')self.hub.ingest.live.sweep(now);
     const revision=self.revision;
     const evaluatedAt=Math.min(request.evaluatedAt,now),range=evaluatedRange(selection,evaluatedAt);
     if(range.from<now-config.retention.sampleDays*86_400_000||range.from>=now)fail(400,'history_range_invalid');
-    const cut=Math.min(range.to,now),shown=store.shown(board,directory.view(board).hidden),owner=store.privateOwner(board);
+    const cut=Math.min(range.to,now),shown=store.authorizedSources(board),owner=store.privateOwner(board);
     const reservation=self.history.reservation();
     try{
     let workRange:import('./domain/period.js').PeriodRange|null=null;
-    const work:import('./store/store.js').WorkRead=request.sessions||request.quota||request.budget?.work==='1'?sharedWork(self.hub,shown,()=>workRange,bytes=>reservation.add(bytes),bytes=>reservation.remove(bytes),owner,now,board):()=>[],access=work.access;
+    const work:import('./store/store.js').WorkRead=request.sessions||request.facets||request.quota||request.budget?.work==='1'?sharedWork(self.hub,shown,()=>workRange,bytes=>reservation.add(bytes),bytes=>reservation.remove(bytes),owner,now,board):()=>[],access=work.access;
     if(request.values?.some(id=>!shown.has(id)))fail(404,'not_found');
-    const workRequested=!!(request.sessions||request.quota||request.budget?.work==='1');
-    const identity=workRequested&&access?self.identity(board,user,access,reservation,work.authority):'';
-    const resourceKey=()=>JSON.stringify([[...store.shown(board,directory.view(board).hidden)].map(([id,s])=>[id,s.since]),request.budget||request.funds||request.values?store.sources(board).map(s=>[s.id,s.budget]):null]);
+    const views={sourceWide:work,selected:filter?selectedWork(work,filter):work};
+    const workRequested=!!(request.sessions||request.facets||request.quota||request.budget?.work==='1');
+    const identity=workRequested&&access?self.identity(board,user,access,reservation,work.authority,filter):'';
+    const sourceIdentity=workRequested&&access?self.identity(board,user,access,reservation,work.authority):'';
+    const resourceKey=()=>JSON.stringify([[...store.authorizedSources(board)].map(([id,s])=>[id,s.since]),request.budget||request.funds||request.values?store.sources(board).map(s=>[s.id,s.budget]):null]);
     const capturedResources=resourceKey();
     const previous=self.decode(request.sessions?.cursor);
     const delta=selection.mode==='live'&&!!previous&&previous.identity===identity&&previous.revision>=self.workFloor&&previous.revision<=revision&&range.from>=previous.from;
@@ -148,6 +183,37 @@ export class PeriodReader {
     const reserve=(bytes:number)=>{reservation.add(bytes);replyBytes+=bytes;};
     const release=(bytes:number)=>{reservation.remove(bytes);replyBytes-=bytes;};
     const cell=cellOf(range.to-range.from),fixedRange={from:Math.max(0,Math.floor(range.from/cell)*cell-cell),to:Math.min(Math.ceil(range.to/cell)*cell+cell,now)};
+    const sourcePlan=request.sourceWork&&selection.mode==='live'?(()=>{
+      try{
+      // Resource families keep one source cursor, independently of selected sessions.
+      const sources=shown;
+      let scratch=256;for(const id of sources.keys())scratch+=128+id.length*4;
+      reserve(scratch);let key:string;
+      try{key=createHash('sha256').update(JSON.stringify([sourceIdentity,[...sources.keys()].sort()])).digest('base64url');}
+      finally{release(scratch);}
+      const previous=self.decode(request.sourceWork.cursor);
+      const delta=previous?.identity===key&&previous.revision>=self.workFloor&&previous.revision<=revision&&range.from>=previous.from;
+      const patch=frontier(delta?previous:null,self.workChanges,true),cursor=self.encode({identity:key,revision,from:patch.coveredFrom,cut:patch.coveredTo});
+      return {sources,delta,patch,cursor};
+      }catch(error){
+        if(!(error instanceof HistoryLimit))throw error;
+        response.sourceWork={state:'error',error:'history_limit'};return null;
+      }
+    })():null;
+    // Plan every consumer before the first extraction, including independently advanced cursors.
+    const workRanges:import('./domain/period.js').PeriodRange[]=[];
+    const includeWork=(from:number,to:number)=>{
+      if(Number.isFinite(from)&&Number.isFinite(to)&&from<to)workRanges.push({from,to});
+    };
+    if(selection.mode==='range'&&(request.sessions||request.quota&&request.quota.evidence!=='skip'||request.budget?.work==='1'))includeWork(fixedRange.from,fixedRange.to);
+    if(selection.mode==='live'&&request.sessions)includeWork(replaceFrom,workFrontier.to);
+    if(request.facets)includeWork(range.from,cut);
+    if(sourcePlan)includeWork(sourcePlan.patch.from,sourcePlan.patch.to);
+    if(request.quota&&request.quota.cells!=='skip'){
+      const query=request.quota,cell=Number(query.cell);
+      includeWork(Number(query.from),Math.min(Math.ceil(Number(query.to)/cell)*cell,cellStart(now+CLOCK_TOLERANCE_MS,cell)+cell,now));
+    }
+    workRange=workRanges.reduce<import('./domain/period.js').PeriodRange|null>((kept,part)=>({from:Math.min(part.from,kept?.from??part.from),to:Math.max(part.to,kept?.to??part.to)}),null);
     if(guard){
       const sources=new Map<string,Set<HistoryScope>>();
       const include=(id:string,scope:HistoryScope)=>{let scopes=sources.get(id);if(!scopes)sources.set(id,scopes=new Set());scopes.add(scope);};
@@ -162,7 +228,7 @@ export class PeriodReader {
         }
       }
       for(const id of request.values??[]){include(id,'quota');include(id,'budget');}
-      const workUpper=request.quota||request.sessions||request.budget?.work==='1'?Math.max(upper,selection.mode==='range'?fixedRange.to:workFrontier.to):0;
+      const workUpper=workRange?.to??0;
       const currency=()=>JSON.stringify([store.currencies.registryRevision(user),store.currencies.pathRevision(user),store.db.prepare("SELECT value FROM meta WHERE key='currencyRatesRevision::public'").get()?.value??0]);
       const currencyKey=currency();
       if(!directory.boards(user).some(part=>part.id===board))fail(404,'board_not_found');
@@ -178,7 +244,7 @@ export class PeriodReader {
             let bytes=0;
             try{
               const current=store.workAccess(board,now,size=>{reservation.add(size);bytes+=size;});
-              if(self.identity(board,user,current,reservation)!==identity)throw new PeriodChanged();
+              if(self.identity(board,user,current,reservation,undefined,filter)!==identity)throw new PeriodChanged();
             }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit');throw error;}
             finally{reservation.remove(bytes);}
           }
@@ -192,7 +258,6 @@ export class PeriodReader {
         }
       });
     }
-    workRange=selection.mode==='range'&&(request.sessions||request.quota&&request.quota.evidence!=='skip'||request.budget?.work==='1')?fixedRange:request.sessions?{from:replaceFrom,to:workFrontier.to}:null;
     function* section<T>(read:Preparation<T>):Preparation<PeriodSection<T>> {
       const before=replyBytes;
       try {return {state:'complete',basis,value:yield*read};}
@@ -205,15 +270,28 @@ export class PeriodReader {
       }
     };
     let completeWork:ReturnType<typeof periodWork>|undefined;
+    let sourceCurves:SourceWorkCurves|undefined;
     let presence=self.hub.ingest.live.presence.bind(self.hub.ingest.live),presenceLimited=false;
     function* retainedWork():Preparation<ReturnType<typeof periodWork>> {
       if(presenceLimited)throw new HistoryLimit();
       if(completeWork)return completeWork;
       let bytes=0,complete=false;
       try{
-        completeWork=yield*preparePeriodWork(self.hub,self.history,board,shown,fixedRange,work,now,size=>{reservation.add(size);bytes+=size;},size=>{reservation.remove(size);bytes-=size;},presence);
+        completeWork=yield*preparePeriodWork(self.hub,self.history,board,shown,fixedRange,views.selected,now,size=>{reservation.add(size);bytes+=size;},size=>{reservation.remove(size);bytes-=size;},presence);
         complete=true;return completeWork;
       }finally{if(!complete)reservation.remove(bytes);}
+    }
+    function* fullSourceCurves(range:import('./domain/period.js').PeriodRange):Preparation<SourceWorkCurves> {
+      if(sourceCurves)return sourceCurves;
+      let bytes=0,retained=0;
+      const charge=(size:number)=>{reservation.add(size);bytes+=size;};
+      try{
+        const trace=yield*preparePeriodWork(self.hub,self.history,board,shown,range,views.sourceWide,now,charge,size=>{reservation.remove(size);bytes-=size;},()=>undefined);
+        charge(importWorkBytes(trace));
+        const curves=yield*PeriodCurves.prepare(trace);
+        charge(curves.bytes);retained=curves.bytes;
+        return sourceCurves={groups:{source:curves.groups.source},knownFrom:trace.knownFrom,available:trace.available};
+      }finally{reservation.remove(bytes-retained);}
     }
     function* temporary<T>(read:()=>Preparation<T>):Preparation<T>{const before=replyBytes;try{return yield*read();}finally{reservation.remove(replyBytes-before);replyBytes=before;}}
     try {
@@ -226,20 +304,22 @@ export class PeriodReader {
       for(const scope of PERIOD_SCOPES)if(request[scope])response[scope]=yield*section((function*(){
         const historyScope=scope==='funds'?'budget':scope;
         // Work estimates use the common tape and curves, without a second copy in drawing cells.
-        const query=request[scope]!,json=readHistory(self.hub,self.history,self.events,board,user,{...query,scope:historyScope},work,query.cells!=='skip',now,false);
+        const query=request[scope]!,json=readHistory(self.hub,self.history,self.events,board,user,{...query,scope:historyScope},views,query.cells!=='skip',now,false);
         reserve(Buffer.byteLength(json)*2);const value=JSON.parse(json) as HistoryReply;
         if(query.evidence==='skip')return value;
-        const tapeIdentity=createHash('sha256').update(JSON.stringify([board,user,scope,scope==='quota'||query.work==='1'?identity:null,[...shown].map(([id,s])=>[id,s.since]),scope==='quota'?null:store.financialKey(board),query.meters,query.unit,query.currency,query.work,store.currencies.registryRevision(user)])).digest('base64url');
+        const tapeIdentity=createHash('sha256').update(JSON.stringify([board,user,scope,scope==='quota'||query.work==='1'?sourceIdentity:null,[...shown].map(([id,s])=>[id,s.since]),scope==='quota'?null:store.financialKey(board),query.meters,query.unit,query.currency,query.work,query.sources,store.currencies.registryRevision(user)])).digest('base64url');
         const previous=self.decode(query.evidence);
         const delta=selection.mode==='live'&&previous&&previous.identity===tapeIdentity&&previous.revision>=Math.max(self.measurementFloor,scope==='quota'||query.work==='1'?self.workFloor:0)&&previous.revision<=revision&&range.from>=previous.from;
         const changes=delta?self.measurements.filter(c=>c.revision>previous.revision&&c.revision<=revision&&shown.has(c.source)&&(!c.scopes||c.scopes.includes(historyScope))):[];
         const patch=frontier(delta?previous:null,changes);
         const changed=new Set(changes.map(c=>c.source));
-        const tapeShown=delta?new Map([...shown].filter(([id])=>changed.has(id))):shown;
+        const admitted=query.sources?new Set<string>(JSON.parse(query.sources)):null;
+        const tapeShown=new Map([...shown].filter(([id])=>(!delta||changed.has(id))&&(!admitted||admitted.has(id))));
         const cursor=self.encode({identity:tapeIdentity,revision,from:patch.coveredFrom,cut:patch.coveredTo});
         if(selection.mode==='range'){
           const trace=scope==='quota'||query.work==='1'?yield*retainedWork():null;
-          const tape=yield*temporary(()=>prepareFixedTape(periodTape(store,board,tapeShown,user,historyScope,query,fixedRange,cursor,fixedRange.from,reserve,fixedRange.to,release,true,now,work),trace,range,Number(query.cell),reserve,release));
+          const full=filter&&(scope==='quota'||query.work==='1')?yield*fullSourceCurves(fixedRange):undefined;
+          const tape=yield*temporary(()=>prepareFixedTape(periodTape(store,board,tapeShown,user,historyScope,query,fixedRange,cursor,fixedRange.from,reserve,fixedRange.to,release,true,now,work),trace,range,Number(query.cell),reserve,release,full));
           reserve(Buffer.byteLength(JSON.stringify(tape))*3);return {...value,tape};
         }
         const tape=periodTape(store,board,tapeShown,user,historyScope,query,{from:patch.coveredFrom,to:patch.to},cursor,patch.from,reserve,cut,bytes=>{reservation.remove(bytes);replyBytes-=bytes;},false,now,work);
@@ -254,15 +334,44 @@ export class PeriodReader {
         const cursor=self.encode({identity,revision,from:covered.from,cut:covered.to});
         const part=yield*section((function*(){
           if(presenceLimited)throw new HistoryLimit();
-          const value=selection.mode==='range'?yield*temporary(function*(){return yield*prepareFixedWork(yield*retainedWork(),range,cellOf(range.to-range.from),now,reserve,release);}):yield*preparePeriodWork(self.hub,self.history,board,shown,{from:replaceFrom,to:workFrontier.to},work,now,reserve,release,presence);
+          const value=selection.mode==='range'?yield*temporary(function*(){return yield*prepareFixedWork(yield*retainedWork(),range,cellOf(range.to-range.from),now,reserve,release);}):yield*preparePeriodWork(self.hub,self.history,board,shown,{from:replaceFrom,to:workFrontier.to},views.selected,now,reserve,release,presence);
           if(selection.mode==='range')reserve(Buffer.byteLength(JSON.stringify(value))*3);
           return {...value,cut:covered.to,cursor};
         })());
         response.sessions=delta&&part.state==='complete'?{state:'delta',basis,value:{...part.value,replaceFrom,replaceTo:workFrontier.to}}:part;
       }
+      if(request.facets)response.facets=yield*section((function*(){
+        const projects=new Set<string|null>(),devices=new Map<string,string>(),clients=new Set<string|null>(),funding=new Set<'unknown'|'notProvided'>();
+        const add=(project:string|null,device:string,name:string,client:string|null,source:string|null,status?:'notProvided')=>{
+          if(source===null)funding.add(status??'unknown');
+          client=client==='unknown'?null:client;
+          if(!projects.has(project)){reserve(128+(project?.length??0)*2);projects.add(project);}
+          if(!devices.has(device)){reserve(256+name.length*2);devices.set(device,name);}
+          if(!clients.has(client)){reserve(128+(client?.length??0)*2);clients.add(client);}
+        };
+        for(const row of work(range.from,cut)){add(row.project,row.device,row.rawContext?.deviceName??row.device,row.rawContext?.client??null,row.source,row.sourceStatus);yield;}
+        if(access&&selection.mode==='live'){const live=self.hub.ingest.live.board(access,now);for(const row of live.unattributedSessions){add(row.project,row.device.id,row.device.name,row.clientId??null,null,row.sourceStatus);yield;}for(const [source,rows] of live.sessions)for(const row of rows){add(row.project,row.device.id,row.device.name,row.clientId??null,source);yield;}}
+        const value={projects:[...projects].sort(),devices:[...devices].map(([id,name])=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id)),clients:[...clients].sort(),funding:[...funding].sort()};
+        const retained=retainedWorkChoices(store,work.ensureAccess!(),self.hub.ingest,filter,value,now,reserve,release);
+        return {...value,...(retained?{retained}:{})};
+      })());
+      if(sourcePlan){
+        const {sources,delta,patch,cursor}=sourcePlan;
+        const part=yield*section((function*(){
+          const curves=yield*fullSourceCurves({from:patch.from,to:patch.to}),access=work.ensureAccess!();
+          const scratch=256+access.devices.size*128+sources.size*512;reserve(scratch);
+          try{
+            const known=sourceWorkFrom(access),directory=new Map<string,number|null>();
+            for(const id of sources.keys())directory.set(id,known[id]??null);
+            const value=sourceWorkTape(curves,patch.coveredFrom,patch.coveredTo,directory,reserve,release);
+            return {...value,...(delta?{sources:value.sources.filter(source=>source.blocks.length)}:{}),cursor,replaceFrom:patch.from,replaceTo:patch.to};
+          }finally{release(scratch);}
+        })());
+        response.sourceWork=delta&&part.state==='complete'?{state:'delta',basis,value:part.value}:part;
+      }
       const before=replyBytes;
       try {
-        const dictionary=periodDictionary(response,reserve);
+        const dictionary=periodDictionary(response,reserve,!!filter);
         return compactJSON({...response,...(dictionary.moneySemantics.length?{moneySemantics:dictionary.moneySemantics}:{}),...(dictionary.rateLegs.length?{rateLegs:dictionary.rateLegs}:{})},dictionary.replacer);
       } catch(error){
         if(!(error instanceof HistoryLimit))throw error;
@@ -276,8 +385,8 @@ export class PeriodReader {
 
 export function periodRoutes(app:FastifyInstance,guards:Guards,reader:PeriodReader) {
   for(const [path,limit,read] of [
-    ['/api/boards/:board/period/sessions',8192,reader.detailsAsync.bind(reader)],
-    ['/api/boards/:board/period',76*1024,reader.readAsync.bind(reader)],
+    ['/api/boards/:board/period/sessions',80*1024,reader.detailsAsync.bind(reader)],
+    ['/api/boards/:board/period',PERIOD_BODY_BYTES,reader.readAsync.bind(reader)],
   ] as const)app.post<{Params:{board:string}}>(path,{bodyLimit:limit},async(request,reply)=>{
     const access=guards.board(request,reply,request.params.board);if(!access)return reply;
     const controller=new AbortController(),abort=()=>controller.abort();

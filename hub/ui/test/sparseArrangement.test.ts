@@ -26,7 +26,7 @@ test('sparse normalization matches exhaustive pruning across mixed arrangements 
     const ids=Array.from({length:2+pick(15)},(_,i)=>'source:'+i).concat(['agents','quota-history'].slice(0,pick(3)));
     const places:Record<string,Place>={'source:hidden':{x:3,y:2,w:3,h:13},'source:absent':{x:0,y:100,w:4,h:7}};
     for(const id of ids)if(pick(3)===0){const w=widths(6)[pick(4)],xs=starts(6,w);places[id]={x:xs[pick(xs.length)],w,y:pick(12),...(pick(2)?{h:1+pick(20)}:{})};}
-    const view:View={...EMPTY_VIEW,layout:{columns:6,places},hidden:['source:hidden'],names:{absent:'Saved name'},windows:['absent/weekly']};
+    const view:View={...EMPTY_VIEW,layout:{columns:6,places},hidden:['source:hidden'],names:{absent:'Saved name'},windows:[]};
     const before=structuredClone(view),origin=settle(ordered(view.layout,ids).map(item=>({...item,h:view.layout.places[item.id]?.h??1+pick(10)})),6);
     const target=origin[pick(origin.length)],kind=pick(4),height:Height|undefined=kind===0?{id:target.id,rows:pick(3)?1+pick(20):null}:undefined;
     const reordered=[...origin];

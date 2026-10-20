@@ -1,3 +1,4 @@
+import * as filterModelBindings from '../../server/domain/dataFilters';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createElement,type ReactNode} from 'react';
@@ -35,6 +36,10 @@ const dual=()=>card('deepseek',[
 // Exercise the production card with a closed disclosure and no network or page clock.
 let shownCurrency=defaultCurrencyContext;
 const fixture={exports:{} as {MoneyCard:(props:{source:Card;board:string;compact?:boolean;tray?:boolean})=>ReturnType<typeof createElement>;BalanceMark:(props:{source:Card})=>ReturnType<typeof createElement>|null},require:(name:string)=>{
+  if(name==='../lib/dataFilters')return {useDataFilters:()=>({current:null})};
+  if(name==='../lib/prefs')return {usePref:()=>({unit:'USD'})};
+  if(name==='../../server/domain/dataFilters')return filterModelBindings;
+  if(name==='./DataFilters')return {openDataFilters:()=>{}};
   if(name==='react/jsx-runtime')return jsx;
   if(name==='../../server/domain/currency')return currency;
   if(name==='../../server/domain/meters')return meterDomain;

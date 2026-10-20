@@ -1,3 +1,6 @@
+import {followDataFilters} from './lib/filterSession';
+import {retireDataFilters,useDataFilters} from './lib/dataFilters';
+import {matchesSource} from '../server/domain/dataFilters';
 import {useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import '@fontsource-variable/geist';
@@ -94,6 +97,8 @@ function Dashboard({
   const boards = useBoards() ?? NO_BOARDS;
   const [board, selectBoard] = useBoard();
   const boardId = board?.id ?? '';
+  useLayoutEffect(()=>boardId?followDataFilters(user.id,boardId):undefined,[user.id,boardId]);
+  const filterState=useDataFilters();
   useLayoutEffect(() => {
     history.setActive(active);
     return () => history.setActive(false);
@@ -131,7 +136,7 @@ function Dashboard({
 
   // Every widget of the board: a card per source, the list of agents, and the analytics (agent activity, the chart and the table).
   const cards = new Map<string, Widget>(
-    lineup.map(id => [
+    lineup.filter(id=>!!filterState.current&&matchesSource(filterState.current,id)).map(id => [
       cardId(id),
       {
         id: cardId(id),
@@ -205,7 +210,7 @@ function Dashboard({
         onAccount={openSettings}
         onSignedOut={onSignedOut}
         local={local}
-        filters={active && hasWidgets ? {
+        filters={active && (hasWidgets||lineup.length>0||!!filterState.current) ? {
           expanded: prefs.filtersVisible,
           onToggle: () => setPrefs(prefs => ({filtersVisible: !prefs.filtersVisible})),
         } : undefined}
@@ -238,7 +243,7 @@ function Dashboard({
           />
         )}
       />
-      {active && hasWidgets && <AnalyticsHead widgets={shownWidgets.map(widget => widget.id)} visible={prefs.filtersVisible} />}
+      {active && (hasWidgets||lineup.length>0||!!filterState.current) && <AnalyticsHead widgets={shownWidgets.map(widget => widget.id)} visible={prefs.filtersVisible} />}
       </div>
       {arrange.saveFailures?.map(failure => <aside key={failure.board} className="view-save-notice" role="alert"><b>{t('layout.saveFailed', {board: boards.find(board => board.id === failure.board) ? boardTitle(boards.find(board => board.id === failure.board)!) : t('layout.unavailableBoard')})}</b><ErrorLine error={failure.error} />
         <div className="button-row is-start">{failure.retryable && <button className="button" onClick={() => {void arrange.retrySave?.(failure.board).catch(() => {});}}>{t('layout.retrySave')}</button>}<button className="link-button" onClick={() => arrange.dismissSave?.(failure.board)}>{t('common.close')}</button></div>
@@ -300,6 +305,7 @@ function App() {
   // Everything below reads the language while rendering: a change re-renders the page.
   useLocale();
   const {session, failed, refresh, setSession} = useSession();
+  useLayoutEffect(()=>{if(session&&!session.user)retireDataFilters();},[session?.user?.id]);
   const path = usePath();
 
   if (!session) {
@@ -319,10 +325,10 @@ function App() {
 
   if (session.local) {
     if (!session.user) return <OpenInApp compact={path === '/compact'} />;
-    if (path === '/compact') return <Compact live={live} />;
+    if (path === '/compact') return <Compact live={live} user={session.user.id} />;
     return <Dashboard key={session.user.id} user={session.user} trustedKeys={session.trustedKeys} local refresh={refresh} onSignedOut={() => void refresh()} />;
   }
-  if (path === '/compact' && session.user) return <Compact live={live} />;
+  if (path === '/compact' && session.user) return <Compact live={live} user={session.user.id} />;
   if (path === '/device') return <DevicePage session={session} onSession={signedIn} />;
   const invite = path.match(/^\/invite\/([\w-]+)$/);
   if (invite) return <InvitePage secret={invite[1]} session={session} onSession={signedIn} onJoined={id => (rememberBoard(id), void refresh())} />;

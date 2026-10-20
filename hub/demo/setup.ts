@@ -1,8 +1,10 @@
 import {migrateUnified} from '../server/domain/unifiedView.js';
+import {defaultFilters} from '../server/domain/dataFilters.js';
 import {migrateFixed} from '../server/domain/fixedView.js';
 import type {View} from '../server/domain/view.js';
 import {COLUMNS, defaultWidth, starts, type Layout} from '../ui/lib/grid.js';
 import type {Store, WorkKey} from '../server/store/store.js';
+import {Directory} from '../server/store/directory.js';
 import {parseSessions} from '../server/domain/ingest.js';
 import {Agent, Person} from './client.js';
 import {
@@ -38,9 +40,12 @@ import {emailOf, PASSWORD} from './access.js';
 export {emailOf, PASSWORD} from './access.js';
 
 /** Connector scenes belong to the mixed team board; other boards keep their catalogue state. */
-export function shareConnectorScene(store: Store, stand: Stand, source: string, owner: string, at: number) {
+export function shareConnectorScene(store: Store, stand: Stand, source: string, owner: string, at: number, name?: string) {
   const team = stand.boards.get('team');
-  if (team) store.share(team, source, owner, at);
+  if (team) {
+    store.share(team, source, owner, at);
+    if(stand.set.id==='filters'&&name){const directory=new Directory(store.db),view=directory.view(team);view.names[source]=name;directory.saveView(team,view,owner,at);}
+  }
 }
 
 /** A set brought up on a hub: who is who there, by the catalogue's names. */
@@ -139,7 +144,13 @@ export async function setUp(base: string, set: DemoSet, start: number, setupCode
       await stand.people.get(sharer)!.share(stand.boards.get(board)!, stand.sources.get(card.id)!);
     }
   }
-  for (const [key, board] of stand.boards) await ownerOf(stand, key).saveView(board, viewOf(stand, key));
+  for (const [key, board] of stand.boards) {
+    const owner=ownerOf(stand,key),filters=defaultFilters();
+    const entry=boards(set).find(board=>board.id===key);
+    if(entry?.filterProjects)filters.projects=entry.filterProjects;
+    filters.windows.values=cards(set).flatMap(card=>(card.on?.[key]?.windows??[]).map(window=>[stand.sources.get(card.id)!,window] as [string,string]));
+    await owner.saveView(board,viewOf(stand,key));await owner.saveFilters(board,filters);
+  }
   return stand;
 }
 
@@ -206,7 +217,7 @@ export function viewOf(stand: Stand, key: string) {
   const shown = cards(set).filter(card => (personal ? holdersOf(set, card).includes(key) : !!card.on?.[key]));
   const board = boards(set).find(b => b.id === key) ?? people(set).find(p => p.id === key);
   const view: View = {
-    version: 4 as const,
+    version: 5 as const,
     layout: {columns: COLUMNS, places: {}} as Layout,
     names: {} as Record<string, string>,
     hidden: [] as string[],
@@ -233,7 +244,6 @@ export function viewOf(stand: Stand, key: string) {
     if (looks.name) view.names[source] = looks.name;
     if (looks.color) view.colors[source] = looks.color;
     if (looks.hidden) view.hidden.push(`source:${source}`);
-    for (const window of looks.windows ?? []) view.windows.push(`${source}/${window}`);
     if (looks.plan === 'off') view.unplanned.push(source);
     else if (looks.plan) view.plans[source] = looks.plan;
   }
@@ -244,7 +254,7 @@ export function viewOf(stand: Stand, key: string) {
     view.layout.places[id] = board?.places?.[id] ?? auto;
   }
   const resources=shown.map(card=>({id:stand.sources.get(card.id)!,provider:card.provider}));
-  return migrateFixed(migrateUnified({...view,version:2},resources),resources);
+  return {...migrateFixed(migrateUnified({...view,version:2},resources),resources),version:5 as const,windows:[]};
 }
 
 /**

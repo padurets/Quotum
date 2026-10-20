@@ -135,8 +135,8 @@ notifications also stay live, independently of the board's historical range.
 - **Separate subscription limit and budget charts and metrics**, each movable, resizable and
   hideable on the same grid as cards and agent sessions. They share the board's time
   range. Five-hour limits, weekly limits, budget balances each
-  have their own chart and table; cards keep their own window visibility settings.
-  Both budget widgets share **Accounts and keys** in their settings for data selection. Each chart's
+  have their own chart and table. The common **Resources** filter selects windows,
+  balances and key caps across cards, charts and tables. Each chart's
   legend controls its visibility independently of table columns.
 - **Charts of weekly and 5-hour windows** over the last hour up to the last 30
   days. Ahead of now they show forecasts and the next resets, as far as you choose.
@@ -184,8 +184,10 @@ notifications also stay live, independently of the board's historical range.
   sessions by project, machine or resource, with work within the selected period,
   the date and time of their last recorded work in it and current working counts when
   known. Individual agents with their machines and subscriptions are a click away.
-  The header's filter button reveals the common period, quota window and forecast
-  horizon; hiding the controls keeps those choices. A dot marks a historical range.
+  The header's filter button reveals the common period, forecast horizon and filters
+  for resources, projects, devices and clients. Readers explore their own selection;
+  the owner can explicitly save the board's opening defaults. Hiding the controls
+  keeps those choices. A dot marks a historical range.
   The owner places them on a six-column grid by dragging their heads, and resizes them
   to a third, a half, two thirds or the whole width. Each fills only the rows its content
   needs, so cards stack beside a tall list, unless the owner drags its bottom edge (or
@@ -392,8 +394,8 @@ rate cache contains no credentials or account information. Historical estimates 
 their original rate. Without a usable rate, CNY is retained and USD stays unknown or stale.
 All original balances, estimates, rate provenance, funds status and safe provider
 context are retained within the history retention period. Budget history and its table
-share the board's grid and time range. **Accounts and keys** in either wallet widget’s settings
-selects the account's total for both wallet widgets. Balance components remain
+share the board's grid and time range. The common **Resources** filter
+selects the account's total across its card and both wallet widgets. Balance components remain
 in the card's disclosure. Reported USD and converted CNY
 are never summed. Spending and top-up events
 are **unavailable** because the endpoint has no spending counter; a balance change
@@ -429,15 +431,15 @@ The original plan label stays beside the title; a small second line identifies t
 resource as **Subscription** or **Budget**. The budget card shows its balance and enabled
 key-limit scales with their reset times, using the board's time range. A historical
 range uses retained measurements before its end; the compact panel keeps current
-values. The card's settings switch individual scales, including keys beyond the
-initial five-key preview. Scales use the
+values. The common **Resources** filter switches individual scales, including keys
+beyond the initial five-key preview. Scales use the
 same segmented meters as subscriptions; keys without a spending limit have no scale.
-Settings show at most ten keys per page. Access turns amber seven days before expiry;
+The inline key list appends batches of ten. Access turns amber seven days before expiry;
 expired, revoked or forbidden access is red. Working keys without expiry have no expiry
 mark. Temporary read failures are amber.
 Five-hour and weekly subscription limits each have their own chart and table.
 Budget balances have their own chart and table.
-Both budget widgets share **Accounts and keys** in their settings: an account selects its total,
+The common **Resources** filter selects the data for budget cards, charts and tables: an account selects its total,
 and a key selects its reported remaining limit. Table columns and each
 chart's legend visibility remain independent display settings.
 Account balances are selected by default; at most 32 metrics are selected, with

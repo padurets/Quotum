@@ -133,6 +133,8 @@ export const SESSION_ACTIVITY_SCENES=[
  *
  * In-flight frequency changes and fixed handover are held by server/test/frequency.test.ts;
  * permission loss and late replies are checked on the live menu.
+ * An in-flight filter save is held by ui/test/filterState.test.ts; the saving indicator
+ * and disabled actions are checked on the live menu with a delayed response.
  * Continuous panning, partial loading and future folding are short-lived transitions:
  * ui/test/pan.test.ts, history.test.ts and historyPlot.test.ts hold their input,
  * cancellation, coverage and whole-cell accounting; bench/panning.ts exercises native
@@ -1668,6 +1670,22 @@ const activity: DemoSet = {
 };
 
 const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter and DeepSeek wallets, partial readings and private access failures'};
+export const FILTER_SCENES=['mixed-resources','populated-work','selected-empty','unfiltered-facets','resources-continue','member-current','save-restore'] as const;
+const dataFilters:DemoSet={...SESSION_ANALYTICS,id:'filters',about:'Populated mixed-resource filter playground, with a separate saved-empty board',entries:[
+  ...SESSION_ANALYTICS.entries.filter(entry=>entry.kind!=='board').map(entry=>entry.kind==='card'?{...entry,
+    windows:[rolling({offset:-HOUR,use:steady(0,120)}),...entry.windows],
+    on:{ana:entry.on!.ana,team:entry.on!.ana},
+  }:entry),
+  {kind:'board',id:'team',name:'Filter playground',owner:'ana',members:['boris','ben'],agents:true,agentsColumns:['client','subscription','active','concurrency'],agentsPlace:{x:0,y:0,w:6,h:12},
+    expect:[{state:'widgets'}],look:['Opens with all projects, devices and clients selected, four native subscriptions, wallets, key caps and subscription funds. Search among more than fifty projects; compare client, device and resource combinations across sessions and analytics.',
+      'Each filter shows only its name, a minus-count tag for excluded values and a cross to show all again. There are no All/Clear actions or include/exclude mode fields. Save and Restore stay at the right end of the complete row, after the period controls; Horizon uses the same dropdown style.',
+      'Resources have small provider logos and inline disclosures. Expandable and plain rows align their names; child guides have space at both ends and before the hover surface. Menus anchor to their labels without reserving badge space. Search uses a short placeholder. Turning a resource off hides its child choices and turning it back on preserves them. Wallet keys expand in place; Load more appends rows without a nested screen, Back action or page replacement. Test EN/RU at 320/390/1440 px.']},
+  ...activity.entries.filter(entry=>entry.kind!=='person').map(entry=>entry.kind==='board'?{...entry,name:'Empty project selection',members:['ben'],filterProjects:{mode:'include' as const,values:[]},expect:[{state:'widgets' as const}],look:[
+    'The saved Projects selection is empty. Agent sessions and activity are empty; subscription measurements and estimates remain available.',
+    'At 320/390/1440 px in EN/RU, use the Projects cross to show all; Restore returns to the empty defaults. Search narrows the available switches and the minus-count describes the exclusions without moving the menu. Every filter switch stays on the right, including unknown resources and keys. Restore precedes Save at the right end of the row; the date arrows stay there as their caption changes. Ben can explore the same filters and cannot save opening defaults.',
+  ]}:entry.kind==='card'?{...entry,on:{compact:entry.on!.compact}}:entry),
+  {kind:'person',id:'ben',name:'Ben',expect:[{state:'onboarding'}]},
+]};
 const analytics:DemoSet={...all,id:'analytics',about:'Quota and wallet analytics with a separate subscription-funds chart, native quotas, z.ai, OpenRouter and DeepSeek'};
 const quotas:DemoSet={...all,id:'quotas',about:'Personal z.ai subscription quotas in credits, unknown resets and partial readings'};
 export const CLIENT_SCENES = [
@@ -1695,4 +1713,4 @@ const measurementDevices:DemoSet={id:'devices',about:'Measurement participation,
   {kind:'machine',id:'local-only',expect:[{name:'local-only'}]},
   {kind:'card',id:'codex-managed',provider:'codex',plan:'Plus',machines:['laptop','desktop','backup'],history:6*HOUR,windows:[weekly({since:-DAY,use:steady(0,5)})],on:{ana:{name:'Measurement selection'}},expect:[{title:'Measurement selection'}],look:['The existing status and settings open My connections without changing card height']},
 ]};
-export const SETS: DemoSet[] = [all, showcase, activity,SESSION_ANALYTICS,money,quotas,analytics, machineClients,linkedClients,measurementDevices, ONBOARDING];
+export const SETS: DemoSet[] = [all, showcase, activity,dataFilters,SESSION_ANALYTICS,money,quotas,analytics, machineClients,linkedClients,measurementDevices, ONBOARDING];

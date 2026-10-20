@@ -1,6 +1,7 @@
 import type {AttemptContext,MeasurementPolicy} from '../server/domain/measurementPolicy.js';
 import type {ClientProvider} from '../server/domain/providers.js';
 import {encodeView, VIEW_VERSION, VIEW_VERSION_HEADER, type View} from '../server/domain/view.js';
+import type {DataFilters,FilterEnvelope} from '../server/domain/dataFilters.js';
 /**
  * The hub's public requests, as people and agents make them: people sign in and keep a
  * session cookie (held here by hand, as a browser would), agents send a bearer token.
@@ -18,7 +19,7 @@ export class Refused extends Error {
   }
 }
 
-type Method = 'GET' | 'POST' | 'DELETE';
+type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
 /**
  * Stops every request of the demo, those under way too. Each request also closes its
@@ -102,6 +103,11 @@ export class Person {
   async saveView(board: string, view: View) {
     const snapshot=await this.get<{viewRevision:number}>(`/api/overview?board=${encodeURIComponent(board)}`);
     await call(this.base,'POST',`/api/boards/${encodeURIComponent(board)}/view`,{body:encodeView(view),cookie:this.cookie,headers:{[VIEW_VERSION_HEADER]:String(VIEW_VERSION),'If-Match':'"'+snapshot.viewRevision+'"'}});
+  }
+
+  async saveFilters(board:string,filters:DataFilters) {
+    const saved=await this.get<FilterEnvelope>(`/api/boards/${encodeURIComponent(board)}/filters`);
+    await call(this.base,'PUT',`/api/boards/${encodeURIComponent(board)}/filters`,{body:{filters,authority:saved.authority,replace:['sources','windows','wallet','funds','projects','devices','clients']},cookie:this.cookie,headers:{'If-Match':'"'+saved.revision+'"'}});
   }
 
   async approve(code: string) {

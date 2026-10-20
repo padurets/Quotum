@@ -6,10 +6,12 @@ import {selectionOf, type MeterGroup, type MeterSelection} from './domain/meterH
 import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, READ_CELLS, cellStart, tileOf, tileStart, type Chunk} from './domain/history.js';
 import type {Events} from './events.js';
 import {displayHistory} from './currencies/history.js';
-import type {WorkRead} from './store/store.js';
+import type {WorkRead,WorkViews} from './store/store.js';
 import {conversionOrigin} from './domain/currency.js';
 import {readingBefore,spanBefore,valuationAt} from './domain/periodMoney.js';
 import {sharedWork} from './periodWork.js';
+import {cellsOf} from './domain/cells.js';
+import {compactJSON} from './history.js';
 
 import type {HistoryQuery} from './domain/periodRead.js';
 export type {HistoryQuery} from './domain/periodRead.js';
@@ -19,8 +21,10 @@ export class ReadError extends Error {
 export function fail(status:number, code:string):never {throw new ReadError(status,code);}
 
 /** Both transports enforce the same tile, authority and currency contract. */
-export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:string, user:string, query:HistoryQuery, work?:WorkRead, cells=true, capturedAt?:number, workCells=true):string {
-  const {store,directory}=hub;
+export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:string, user:string, query:HistoryQuery, input?:WorkRead|WorkViews, cells=true, capturedAt?:number, workCells=true):string {
+  const {store}=hub;
+  let work=input&&typeof input==='object'?input.sourceWide:input;
+  const selected=input&&typeof input==='object'?input.selected:undefined;
     const scope = query.scope;
     if(scope!==undefined&&scope!=='quota'&&scope!=='budget')fail(400, 'invalid_request');
     const now = capturedAt??Date.now();
@@ -36,11 +40,18 @@ export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:
     const to = Math.min(Math.ceil(askedTo / cell) * cell, cellStart(now + CLOCK_TOLERANCE_MS, cell) + cell);
     const oldest = tileStart(tileOf(now - config.retention.sampleDays * 86_400_000, cell), cell);
     if (to % cell || tileOf(to - 1, cell) - tileOf(from, cell) + 1 > MAX_READ_TILES) fail(400, 'invalid_request');
-    const shown = store.shown(board, directory.view(board).hidden);
+    let shown = store.authorizedSources(board);
+    if(query.sources!==undefined){
+      if(scope==='budget')fail(400,'invalid_request');
+      let ids:unknown;try{ids=JSON.parse(query.sources);}catch{fail(400,'invalid_request');}
+      if(!Array.isArray(ids)||ids.length>2000||ids.some(id=>typeof id!=='string'||!id||id.length>120))fail(400,'invalid_request');
+      if(ids.some(id=>!shown.has(id)))fail(404,'not_found');
+      const included=new Set(ids);shown=new Map([...shown].filter(([id])=>included.has(id)));
+    }
     let meters: MeterSelection | undefined;
     if (query.meters !== undefined || query.unit !== undefined) {
       try {meters=selectionOf(JSON.parse(query.meters??''),query.unit);} catch {fail(400, 'invalid_request');}
-      // A shared hidden source is not a history capability, even when its id is known.
+      // A requested source still needs its own board grant.
       if (meters.ids.some(([source])=>!shown.has(source))) fail(404, 'not_found');
       const financial=new Map(store.sources(board).map(s=>[s.id,s]));
       if(meters.ids.some(([source,id])=>{const s=financial.get(source);return s?.budget?.enabled===false&&budgetMeter(providerOf(s.provider),id);}))fail(404,'not_found');
@@ -59,7 +70,20 @@ export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:
     if(reservation)work=sharedWork(hub,shown,{from,to},reservation.add,reservation.remove,null,now,board);
     const access=scope==='budget'&&!sourceWork?undefined:work!.ensureAccess!();
     let chunks: string[];
-    try {chunks=cells?history.read(board, cell, from, to, now, shown, meters, scope, work,sourceWork&&workCells):[];}
+    try {
+      chunks=cells?history.read(board, cell, from, to, now, shown, meters, scope, work,sourceWork&&workCells):[];
+      if(cells&&selected&&scope!=='budget'){
+        // Resource tiles keep their source-wide identity. Only selected activity is
+        // rebuilt over the borrowed raw ledger; a filter never rereads native samples.
+        const rows=selected(from,Math.min(to,now)),devices=Object.fromEntries(rows.map(row=>[row.device,row.rawContext?.deviceName??row.device]));
+        selected.reserve?.(1024+rows.length*256+chunks.reduce((sum,json)=>sum+Buffer.byteLength(json)*3,0));
+        const projected=cellsOf([],rows,devices,cell,from,to,store.historyKnown(shown,access?.owner??null,access),selected.reserve);
+        chunks=chunks.map((json,index)=>{
+          const activity=projected[index].activity;
+          return compactJSON({...JSON.parse(json),activity:{...activity,sessions:activity.sessions.map(([id,source,project,device,status])=>[history.fragmentRef(board,id,source,status),source,project,device,status,history.ref(board,id)])}});
+        });
+      }
+    }
     catch(error){if(error instanceof HistoryLimit)fail(413, 'history_limit');throw error;}
     if(query.currency!==undefined){
       if(!meters)fail(400, 'invalid_request');

@@ -46,6 +46,14 @@ export class WorkTimeline {
   next(at:number){const i=upper(this.hours,at)-1;return Math.min(i<0?Infinity:this.hours[i]+this.curves[i].next(at-this.hours[i]),this.hours[i+1]===undefined?Infinity:this.hours[i+1]+this.curves[i+1].times[0]);}
   last(at:number){let i=upper(this.hours,at)-1;if(i<0)return 0;let value=this.curves[i].last(Math.min(WORK_BLOCK_MS,at-this.hours[i]));if(value===null&&i>0){i--;value=this.curves[i].last(WORK_BLOCK_MS);}return value===null?0:this.hours[i]+value;}
   get bytes(){return this.hours.length*32+16;}
+  /** Export the same exact sweep used by the integrals, without contextual refs. */
+  *sourceBlocks(pattern:(values:number[])=>number,reserve:(bytes:number)=>void=()=>{}):Generator<[number,number]> {
+    for(let i=0;i<this.hours.length;i++){
+      reserve(64);const curve=this.curves[i],values:number[]=[];let count=0;
+      for(const at of curve.times){const next=curve.slope(at);if(next!==count){reserve(32);values.push(at,next-count);}count=next;}
+      const id=pattern(values);reserve(32);yield [this.hours[i]/WORK_BLOCK_MS,id];
+    }
+  }
   /** Whole expired hours leave owned buffers; surviving hour patterns stay shared. */
   retain(from:number,reserve:(bytes:number)=>void) {
     let start=Math.max(0,upper(this.hours,from)-1);
@@ -59,6 +67,132 @@ export class WorkTimeline {
     for(const curve of this.curves){if(!curves.has(curve)){reserve(64);curves.add(curve);bytes+=curve.bytes;}yield;}
     return bytes;
   }
+}
+
+export type SourceWorkTape={version:1;from:number;cut:number;patterns:number[][];sources:{id:string;knownFrom:number|null;blocks:number[]}[];replaceFrom?:number;replaceTo?:number};
+export type SourceWorkCurves={groups:{source:ReadonlyMap<string,WorkTimeline>};knownFrom:number;available?:boolean;bytes?:number};
+/** Scratch is admitted before growth and released on failure or ownership transfer. */
+function sourceMemory(reserve:(bytes:number)=>void,release?:((bytes:number)=>void)) {
+  let bytes=0;
+  const add=(size:number)=>{reserve(size);bytes+=size;};
+  const drop=(size:number)=>{if(release&&size){release(size);bytes-=size;}};
+  return {add,drop,get bytes(){return bytes;},retain:(size:number)=>drop(Math.max(0,bytes-size)),clear:()=>drop(bytes)};
+}
+const sourceTapeBytes=(tape:SourceWorkTape)=>128+tape.patterns.reduce((bytes,pattern)=>bytes+96+pattern.length*16,0)+tape.sources.reduce((bytes,row)=>bytes+256+row.id.length*2+row.blocks.length*16,0);
+
+export function sourceWorkTape(curves:{groups:{source:ReadonlyMap<string,WorkTimeline>}},from:number,cut:number,sources:ReadonlyMap<string,number|null>,reserve:(bytes:number)=>void,release?:(bytes:number)=>void):SourceWorkTape {
+  const memory=sourceMemory(reserve,release);let complete=false;
+  try{
+    memory.add(128);const patterns:number[][]=[],ids=new Map<string,number>();
+    const pattern=(values:number[])=>{
+      const valueBytes=64+values.length*16,keyBytes=64+values.length*64;memory.add(keyBytes);
+      const key=values.join(',');let id=ids.get(key);
+      if(id===undefined){memory.add(128);id=patterns.length;ids.set(key,id);patterns.push(values);memory.drop(keyBytes-(64+key.length*2));}
+      else memory.drop(keyBytes+valueBytes);
+      return id;
+    };
+    const rows:SourceWorkTape['sources']=[];
+    for(const [id,knownFrom] of sources){
+      memory.add(256+id.length*2);const blocks:number[]=[];
+      for(const [hour,p] of curves.groups.source.get(id)?.sourceBlocks(pattern,memory.add)??[])blocks.push(hour,p);
+      rows.push({id,knownFrom,blocks});
+    }
+    const tape:SourceWorkTape={version:1,from,cut,patterns,sources:rows};ids.clear();memory.retain(sourceTapeBytes(tape));complete=true;return tape;
+  }finally{if(!complete)memory.clear();}
+}
+
+/** Strict source-only decoding shares Curve and WorkTimeline's millisecond arithmetic. */
+export function sourceWorkCurves(tape:SourceWorkTape,reserve:(bytes:number)=>void=()=>{},retained?:{tape:SourceWorkTape;curves:SourceWorkCurves},release?:(bytes:number)=>void):SourceWorkCurves {
+  if(tape.version!==1||!Number.isSafeInteger(tape.from)||!Number.isSafeInteger(tape.cut)||tape.cut<tape.from||!Array.isArray(tape.patterns)||!Array.isArray(tape.sources))throw new Error('invalid_source_work');
+  const memory=sourceMemory(reserve,release);let complete=false;
+  try{
+    memory.add(128+tape.patterns.length*16);let bytes=0;const owned=new Set<Curve>();
+    const patterns=tape.patterns.map(pattern=>{
+      if(!Array.isArray(pattern)||pattern.length%2)throw new Error('invalid_source_work');
+      memory.add(160+pattern.length*32);const changes:[number,number][]=[];let count=0,previous=-1;
+      for(let i=0;i<pattern.length;i+=2){const at=pattern[i],delta=pattern[i+1];count+=delta;
+        if(!Number.isSafeInteger(at)||at<0||at>WORK_BLOCK_MS||at<=previous||!Number.isSafeInteger(delta)||!Number.isSafeInteger(count)||count<0)throw new Error('invalid_source_work');
+        changes.push([at,delta]);previous=at;
+      }
+      if(count!==0)throw new Error('invalid_source_work');const curve=new Curve(changes);memory.drop(changes.length*32);return curve;
+    });
+    const source=new Map<string,WorkTimeline>();let knownFrom=Infinity;
+    for(const row of tape.sources){
+      if(typeof row.id!=='string'||!row.id||source.has(row.id)||row.knownFrom!==null&&!Number.isSafeInteger(row.knownFrom)||!Array.isArray(row.blocks)||row.blocks.length%2)throw new Error('invalid_source_work');
+      memory.add(288+row.id.length*2+row.blocks.length*32);const blocks:[number,Curve][]=[];let previous=-Infinity;
+      for(let i=0;i<row.blocks.length;i+=2){const hour=row.blocks[i],index=row.blocks[i+1];if(!Number.isSafeInteger(hour)||hour<=previous||!Number.isSafeInteger(index)||!patterns[index])throw new Error('invalid_source_work');blocks.push([hour,patterns[index]]);previous=hour;}
+      // Accounting indexes may still own an unchanged timeline. Share its buffers.
+      const prior=retained?.curves.groups.source.get(row.id),timeline=prior&&sameSourceWork(retained!.tape,tape,row.id)?prior:new WorkTimeline(blocks);
+      source.set(row.id,timeline);bytes+=256+row.id.length*2+drain(timeline.measure(owned,memory.add));memory.drop(blocks.length*32);
+      if(row.knownFrom!==null)knownFrom=Math.min(knownFrom,row.knownFrom);
+    }
+    const result={groups:{source},knownFrom,available:Number.isFinite(knownFrom),bytes:bytes+owned.size*160};
+    memory.retain(result.bytes);complete=true;return result;
+  }finally{if(!complete)memory.clear();}
+}
+
+/** Replace the exact interval, including an empty tail and cuts inside an hour. */
+export function mergeSourceWorkTape(before:SourceWorkTape,patch:SourceWorkTape,reserve:(bytes:number)=>void=()=>{},release?:(bytes:number)=>void):SourceWorkTape {
+  const memory=sourceMemory(reserve,release);let complete=false;
+  try{
+    sourceWorkCurves(patch,memory.add,undefined,memory.drop);memory.drop(memory.bytes);
+    const from=patch.from,cut=patch.cut,replaceFrom=patch.replaceFrom??from,replaceTo=patch.replaceTo??cut;
+    memory.add(256);const patterns:number[][]=[],dictionary=new Map<string,number>(),sources:SourceWorkTape['sources']=[],references=new Map<readonly number[],number>();
+    const pattern=(values:number[],shared:boolean)=>{
+      let id=shared?references.get(values):undefined;if(id!==undefined)return id;
+      const keyBytes=64+values.length*64;memory.add(keyBytes);const key=values.join(',');id=dictionary.get(key);
+      if(id===undefined){memory.add(160+values.length*32);id=patterns.length;dictionary.set(key,id);patterns.push(values);memory.drop(keyBytes-(64+key.length*2));}
+      else memory.drop(keyBytes);
+      if(shared){memory.add(64);references.set(values,id);}return id;
+    };
+    const incoming=new Map<string,SourceWorkTape['sources'][number]>();
+    for(const row of patch.sources){memory.add(64);incoming.set(row.id,row);}
+    const rows=function*(){yield*patch.sources;for(const row of before.sources)if(!incoming.has(row.id))yield row;};
+    for(const row of rows()){
+      memory.add(256+row.id.length*2);const prior=before.sources.find(source=>source.id===row.id),old=prior?.blocks??[],next=incoming.get(row.id)?.blocks??[],blocks:number[]=[];let i=0,j=0;
+      // Whole hours keep their shared pattern; only partial hours need a new sweep.
+      while(i<old.length||j<next.length){
+        const hour=Math.min(old[i]??Infinity,next[j]??Infinity),base=hour*WORK_BLOCK_MS,end=base+WORK_BLOCK_MS;
+        const a=old[i]===hour?before.patterns[old[i+1]]:undefined,b=next[j]===hour?patch.patterns[next[j+1]]:undefined;
+        if(old[i]===hour)i+=2;if(next[j]===hour)j+=2;
+        if(end<=from||base>=cut)continue;
+        let values:number[]|undefined,scratch=0;
+        if(base>=from&&end<=cut&&(end<=replaceFrom||base>=replaceTo))values=a;
+        else if(base>=from&&end<=cut&&base>=replaceFrom&&end<=replaceTo)values=b;
+        else {
+          memory.add(128);scratch+=128;const changes=new Map<number,number>();
+          const add=(values:number[]|undefined,ranges:readonly [number,number][])=>{
+            let count=0;
+            for(let k=0;k<(values?.length??0);k+=2){count+=values![k+1];if(!count)continue;const end=values![k+2]??WORK_BLOCK_MS;
+              for(const [lo,hi] of ranges){const a=Math.max(values![k],from-base,lo-base),b=Math.min(end,cut-base,hi-base);if(a>=b)continue;
+                memory.add(64);scratch+=64;changes.set(a,(changes.get(a)??0)+count);changes.set(b,(changes.get(b)??0)-count);
+              }
+            }
+          };
+          add(a,[[from,replaceFrom],[replaceTo,cut]]);add(b,[[replaceFrom,replaceTo]]);
+          const arrays=128+changes.size*128;memory.add(arrays);scratch+=arrays;
+          values=[...changes].filter(([,delta])=>delta!==0).sort(([a],[b])=>a-b).flat();
+        }
+        if(values?.length){const id=pattern(values,!scratch);memory.add(32);blocks.push(hour,id);}
+        memory.drop(scratch);
+      }
+      sources.push({id:row.id,knownFrom:row.knownFrom,blocks});
+    }
+    const tape:SourceWorkTape={version:1,from,cut,patterns,sources};dictionary.clear();references.clear();incoming.clear();memory.retain(sourceTapeBytes(tape));complete=true;return tape;
+  }finally{if(!complete)memory.clear();}
+}
+
+/** Dictionary indices are local to each tape; compare the actual source curves. */
+export function sameSourceWork(before:SourceWorkTape|null,after:SourceWorkTape|null,source:string):boolean {
+  const a=before?.sources.find(row=>row.id===source),b=after?.sources.find(row=>row.id===source);
+  if(!a||!b)return a===b;
+  if(a.knownFrom!==b.knownFrom||a.blocks.length!==b.blocks.length)return false;
+  for(let i=0;i<a.blocks.length;i+=2){
+    if(a.blocks[i]!==b.blocks[i])return false;
+    const x=before!.patterns[a.blocks[i+1]],y=after!.patterns[b.blocks[i+1]];
+    if(x.length!==y.length||x.some((value,index)=>value!==y[index]))return false;
+  }
+  return true;
 }
 
 export class PeriodCurves {

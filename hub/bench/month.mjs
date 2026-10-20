@@ -19,6 +19,8 @@ const {Directory}=await read('server/store/directory.ts');
 const {HistoryTiles}=await read('server/history.ts');
 const {cellOf}=await read('server/domain/history.ts');
 const store=new Store(':memory:',from),dir=new Directory(store.db);
+// Archived controls retain the earlier API, with no hidden sources in this fixture.
+const authorized=board=>typeof store.authorizedSources==='function'?store.authorizedSources(board):store.shown(board,[]);
 const users=Array.from({length:10},(_,i)=>dir.createUser('fixture-'+i+'@example.com','Fixture '+i,'synthetic',from));
 const devices=users.flatMap((u,i)=>Array.from({length:2},(_,j)=>({user:u.id,device:dir.saveDevice({userId:u.id,machine:{id:'fixture-device-'+i+'-'+j,name:'Fixture '+i+' '+j,os:'linux',arch:'x86_64'},agent:'quotum/0.7.0',tokenId:null},from).id,index:i*2+j})));
 const sources=['claude','claude','codex','codex','antigravity','openrouter'].map((p,i)=>store.source(p,'fixture-source-'+i,from));
@@ -45,7 +47,7 @@ assert.equal(id,2400);assert.equal(digest.length,86400);
 const sha256=createHash('sha256').update(JSON.stringify(digest)).digest('hex');
 assert.equal(sha256,'2392a75bc41467b073c58bcf2bcb0af01b3a796786d5a5edbf4a75b63ec8a2f4');
 assert.equal(store.db.prepare('SELECT count(*) AS n FROM samples').get().n,7200);
-const personal=dir.boards(users[0].id).find(b=>b.personal).id,shown=store.shown(board,[]),cell=cellOf(to-from),cache=new HistoryTiles(store);
+const personal=dir.boards(users[0].id).find(b=>b.personal).id,shown=authorized(board),cell=cellOf(to-from),cache=new HistoryTiles(store);
 const wallet=sources[5],meter=(id,at,amount)=>({id,at,amount,kind:'counter',unit:'USD',limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:7200000,stale:false});
 for(let n=0;n<720;n++)store.record(wallet,{type:'meters',observedAt:from+n*3600000,staleAfterMs:7200000,meters:[meter('credits',from+n*3600000,'1000000000'),meter('usage',from+n*3600000,String(n*1000000))],keys:[],inventoryComplete:true,inventoryError:null});
 const selection={ids:[[wallet,'balance']],unit:'USD'};
@@ -61,7 +63,7 @@ const paths=[
  ['personal agentWork',()=>store.agentWork(from,to,[...shown.keys()],users[0].id)],
  ['shared cold quota JSON',()=>new HistoryTiles(store).read(board,cell,from,to,to+day,shown,undefined,'quota')],
  ['shared warm quota JSON',()=>cache.read(board,cell,from,to,to+day,shown,undefined,'quota')],
- ['personal cold quota JSON',()=>new HistoryTiles(store).read(personal,cell,from,to,to+day,store.shown(personal,[]),undefined,'quota')],
+ ['personal cold quota JSON',()=>new HistoryTiles(store).read(personal,cell,from,to,to+day,authorized(personal),undefined,'quota')],
  ['authenticated cold quota HTTP',http,()=>{for(const source of sources)events.onHistory(source,from,['quota']);}],
  ['authenticated warm quota HTTP',http],
  ['cold pure financial JSON',()=>new HistoryTiles(store).read(board,cell,from,to,to+day,shown,selection,'budget')],

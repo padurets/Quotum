@@ -231,7 +231,7 @@ const Totals = memo(function Totals({history,by,muted,since}: {history:History|n
  */
 export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const {history,drawing,loading,error,presentation:authority} = useHistory(true);
-  const strip = useHistoryPlot();
+  const strip = useHistoryPlot(true);
   const registry = useRef<{authority: number; token: number; by: ActivityDimension; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
   if (registry.current?.authority !== authority) registry.current = null;
   const panel = useRef<HTMLElement>(null);

@@ -17,9 +17,46 @@ import {Setup} from '../setup.js';
 import {ResetFeed} from '../resets.js';
 import {Events} from '../events.js';
 import {PeriodAccounting} from '../domain/periodAccounting.js';
+import {defaultFilters,workFilter} from '../domain/dataFilters.js';
 import type {PeriodReply} from '../domain/periodRead.js';
 
 const M=60_000,H=60*M,NOW=1_800_000_000_000;
+
+test('queued detail input charges the original duplicate-rich body and releases it on cancellation',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=fixture();t.after(h.close);
+  const filter=workFilter(defaultFilters());filter.projects={mode:'include',values:['A']};
+  const initial=JSON.parse(h.reader.read(h.board,h.user.id,{...h.request,sessions:{},workFilter:filter})) as PeriodReply;
+  if(initial.sessions?.state!=='complete')throw new Error('sessions');
+  const queue=(h.reader as unknown as {preparation:PeriodPreparation}).preparation,block=new AbortController();
+  const busy=queue.run(function*(){for(;;)yield;},block.signal),busyRejected=assert.rejects(busy);
+  const charges:number[]=[];const original=h.reader.detailsAsync.bind(h.reader);
+  // Observe the actual shared reservation, rather than estimating the JSON alone.
+  const history=(h.reader as unknown as {history:HistoryTiles}).history;
+  for(const count of [1,16000]){
+    const abort=new AbortController();
+    const details=original(h.board,h.user.id,{version:1,selection:h.request.selection,evaluatedAt:NOW,cursor:initial.sessions.value.cursor,refs:[],workFilter:{...filter,projects:{mode:'include',values:Array(count).fill('A')}}},abort.signal);
+    const rejected=assert.rejects(details);charges.push((history as unknown as {reserved:number}).reserved);
+    abort.abort();await rejected;assert.equal((history as unknown as {reserved:number}).reserved,0);
+  }
+  block.abort();await busyRejected;h.released();
+  assert.ok(charges[1]>charges[0]+500000,JSON.stringify(charges));
+  assert.equal((JSON.parse(await h.read()) as PeriodReply).quota?.state,'complete');h.released();
+});
+
+test('waiting period bodies share the finite preparation budget and return capacity after cancellation',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=fixture();t.after(h.close);
+  const queue=(h.reader as unknown as {preparation:PeriodPreparation}).preparation,history=(h.reader as unknown as {history:HistoryTiles}).history,block=new AbortController();
+  const busy=queue.run(function*(){for(;;)yield;},block.signal),busyRejected=assert.rejects(busy);
+  const filters=workFilter(defaultFilters());filters.projects={mode:'include',values:Array.from({length:876},(_,i)=>`${i}`.padStart(83,'p'))};
+  const held:{abort:AbortController;done:Promise<void>}[]=[];
+  const add=()=>{const abort=new AbortController(),read=h.reader.readAsync(h.board,h.user.id,{...h.request,sessions:{},workFilter:structuredClone(filters)},abort.signal);held.push({abort,done:assert.rejects(read)});};
+  add();const size=(history as unknown as {reserved:number}).reserved,capacity=Math.floor(32*1024*1024/size);assert.ok(capacity>1&&capacity<100);
+  for(let i=1;i<capacity;i++)add();assert.equal((history as unknown as {reserved:number}).reserved,capacity*size);
+  await assert.rejects(h.reader.readAsync(h.board,h.user.id,{...h.request,sessions:{},workFilter:filters}),error=>error instanceof ReadError&&error.statusCode===413);
+  held[0].abort.abort();await held[0].done;add();assert.equal((history as unknown as {reserved:number}).reserved,capacity*size);
+  for(const item of held)item.abort.abort();await Promise.all(held.map(item=>item.done));assert.equal((history as unknown as {reserved:number}).reserved,0);
+  block.abort();await busyRejected;assert.equal((JSON.parse(await h.read()) as PeriodReply).quota?.state,'complete');h.released();
+});
 
 function fixture(){
   const store=new Store(':memory:',NOW-3*H),directory=new Directory(store.db);
@@ -106,7 +143,7 @@ test('a financial grant revoked between sections discards the captured preparati
   assert.equal(attempts,2);h.released();
 });
 
-for(const change of ['relevant','unrelated','after-cut','other-scope','currency','authority','churn','floor','cancel'] as const)test(`cooperative period preparation handles ${change} between slices`,async t=>{
+for(const change of ['relevant','unrelated','after-cut','other-scope','currency','layout','churn','floor','cancel'] as const)test(`cooperative period preparation handles ${change} between slices`,async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=fixture();t.after(h.close);
   let attempts=0;const abort=new AbortController(),original=PeriodAccounting.prepare;
   t.mock.method(PeriodAccounting,'prepare',function*(...args:Parameters<typeof original>){
@@ -117,7 +154,7 @@ for(const change of ['relevant','unrelated','after-cut','other-scope','currency'
       if(change==='after-cut'){h.record(40,NOW-M);h.reader.touch(h.source,NOW-M,['quota']);}
       if(change==='other-scope')h.reader.touch(h.source,NOW-90*M,['budget']);
       if(change==='currency')h.store.currencies.select(h.user.id,'EUR');
-      if(change==='authority'){const view=h.directory.view(h.board);h.directory.saveView(h.board,{...view,hidden:['source:'+h.source]},h.user.id,NOW);}
+      if(change==='layout'){const view=h.directory.view(h.board);h.directory.saveView(h.board,{...view,hidden:['source:'+h.source]},h.user.id,NOW);}
       if(change==='churn')h.reader.touch(h.source,NOW-90*M,['quota']);
       if(change==='floor')for(let i=0;i<2049;i++)h.reader.touch('other-source',0,['quota']);
       if(change==='cancel')abort.abort();
@@ -131,11 +168,10 @@ for(const change of ['relevant','unrelated','after-cut','other-scope','currency'
   else{
     const reply=JSON.parse(await h.read()) as PeriodReply,part=reply.quota;
     assert.equal(part?.state,'complete');if(part?.state!=='complete')throw new Error('quota');
-    if(change==='authority')assert.deepEqual(part.value.tape!.fixed!.quota,[]);
-    else assert.equal(part.value.tape!.fixed!.quota[0].remainingAtEnd,change==='relevant'?60:90);
+    assert.equal(part.value.tape!.fixed!.quota[0].remainingAtEnd,change==='relevant'?60:90);
     assert.equal(reply.basis.revision,change==='relevant'?'1':change==='floor'?'2049':'0','a snapshot never acknowledges later irrelevant facts');
   }
-  assert.equal(attempts,['relevant','currency','authority','churn','floor'].includes(change)?2:1);
+  assert.equal(attempts,['relevant','currency','churn','floor'].includes(change)?2:1);
   h.released();
   if(change==='cancel')assert.equal(getEventListeners(abort.signal,'abort').length,0);
 });

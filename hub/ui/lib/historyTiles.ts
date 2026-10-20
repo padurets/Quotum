@@ -9,12 +9,18 @@ const HEAD = 248; // 61 uint32 offsets, padded to a float64 boundary.
 type PackedSeries = {source: string; window: string; values: Float64Array; ends?: Float64Array};
 type Session = Chunk['activity']['sessions'][number];
 type Group = ['s' | 'p' | 'd', string];
+type Plane = 'all'|'native'|'activity';
 
 /** A tile owns one buffer per series and one for sparse activity, without cell objects. */
 export class HistoryTile {
   readFrom: number;
   validTo: number;
   readTo: number;
+  /** Native coverage survives a selected activity replacement. */
+  nativeFrom: number;
+  nativeTo: number;
+  nativeValidTo: number;
+  nativeSeq = 0;
   writeSeq = 0;
   shownAt = 0;
   private readonly series = new Map<string, PackedSeries>();
@@ -37,6 +43,7 @@ export class HistoryTile {
 
   constructor(readonly from: number, readonly cell: number) {
     this.readFrom = this.validTo = this.readTo = from;
+    this.nativeFrom = this.nativeValidTo = this.nativeTo = from;
     this.meters=new MeterTile(from,cell);
   }
 
@@ -46,6 +53,13 @@ export class HistoryTile {
     return this.activity.byteLength + this.meters.bytes + this.moneyBytes + this.seriesBytes + this.sessions.length * 320 + this.groups.length * 192 + (this.resets.length + this.grants.length) * 192 + this.planBytes + this.sourceWork.length*192 + 1024;
   }
   get planDeadline(){return this.plansUntil;}
+  /** A new work predicate cannot borrow any selected cells from the old one. */
+  retireActivity():HistoryTile {
+    return Object.assign(Object.create(HistoryTile.prototype),this,{
+      readFrom:this.from,readTo:this.from,validTo:this.from,
+      sessions:[],groups:[],devices:{},activity:new ArrayBuffer(HEAD),
+    }) as HistoryTile;
+  }
   /** Expiry changes only this tile's new facts, preserving published generations. */
   retirePlans(now:number):HistoryTile|null {
     if(now<this.planDeadline)return null;
@@ -55,16 +69,18 @@ export class HistoryTile {
 
   /** A private COW tile keeps every published buffer untouched until response commit. */
   staged(chunk: Chunk, known: HistoryMeta['known']): Preparation<HistoryTile>;
-  staged(chunk: Chunk, known: HistoryMeta['known'], admit: (bytes: number) => boolean,now?:number): Preparation<HistoryTile | null>;
-  *staged(chunk: Chunk, known: HistoryMeta['known'], admit?: (bytes: number) => boolean,now=0): Preparation<HistoryTile | null> {
+  staged(chunk: Chunk, known: HistoryMeta['known'], admit: (bytes: number) => boolean,now?:number,plane?:Plane): Preparation<HistoryTile | null>;
+  *staged(chunk: Chunk, known: HistoryMeta['known'], admit?: (bytes: number) => boolean,now=0,plane:Plane='all'): Preparation<HistoryTile | null> {
+    const native=plane!=='activity';
     const copy = new HistoryTile(this.from, this.cell);
     copy.readFrom = this.readFrom; copy.readTo = this.readTo; copy.validTo = this.validTo;
     copy.writeSeq = this.writeSeq; copy.shownAt = this.shownAt;
+    copy.nativeFrom=this.nativeFrom;copy.nativeTo=this.nativeTo;copy.nativeValidTo=this.nativeValidTo;copy.nativeSeq=this.nativeSeq;
     for (const [key, series] of this.series) {copy.series.set(key, series); copy.seriesBytes += series.values.byteLength + (series.ends?.byteLength ?? 0) + 256; yield;}
     for (const session of this.sessions) {copy.sessions.push(session); yield;}
     for (const group of this.groups) {copy.groups.push(group); yield;}
     for (const key in this.devices) {copy.devices[key] = this.devices[key]; yield;}
-    copy.hasMeters = this.hasMeters; copy.meters = yield* this.meters.clonePrepared();
+    copy.hasMeters = this.hasMeters; copy.meters = native ? yield* this.meters.clonePrepared() : this.meters;
     copy.hasMoneyWork=this.hasMoneyWork;copy.moneyBytes=this.moneyBytes;
     for(const [key,group] of this.moneyWork){copy.moneyWork.set(key,group);yield;}
     copy.activity = this.activity; copy.resets = this.resets; copy.grants = this.grants;copy.plans=this.plans;copy.planBytes=this.planBytes;copy.plansUntil=this.plansUntil;copy.sourceWork=this.sourceWork;
@@ -77,7 +93,7 @@ export class HistoryTile {
       if (!admit(bytes)) return false;
       reserved = bytes; return true;
     };
-    for (const step of copy.mergePrepared(chunk, known,now)) {
+    for (const step of copy.mergePrepared(chunk, known,now,plane)) {
       if (!fits()) return null;
       yield step;
     }
@@ -87,106 +103,113 @@ export class HistoryTile {
 
   merge(chunk: Chunk, known: HistoryMeta['known']) {drain(this.mergePrepared(chunk, known));}
 
-  private *mergePrepared(chunk: Chunk, known: HistoryMeta['known'],now=0): Preparation<void> {
-    this.hasMeters ||= chunk.meterSeries!==undefined;
-    yield* this.meters.mergePrepared(chunk.from,chunk.to,chunk.meterSeries??[]);
-    if(chunk.moneyWork!==undefined) {
-      this.hasMoneyWork=true;
-      const incoming=new Map(chunk.moneyWork.map(group=>[JSON.stringify([group.source,group.unit]),group]));
-      for(const key of new Set([...this.moneyWork.keys(),...incoming.keys()])) {
-        const old=this.moneyWork.get(key),group=incoming.get(key)??old!;
-        const cells=[...(old?.cells??[]).filter(row=>this.from+row[0]*this.cell<chunk.from||this.from+row[0]*this.cell>=chunk.to),...(incoming.get(key)?.cells??[]).map(row=>[row[0]+(chunk.from-this.from)/this.cell,...row.slice(1)] as typeof row)].sort((a,b)=>a[0]-b[0]);
-        const edges=[...(old?.edges??[]).filter(edge=>edge[1]<chunk.from||edge[1]>=chunk.to),...(incoming.get(key)?.edges??[])].sort((a,b)=>a[1]-b[1]);
-        const next={...group,cells,edges};this.moneyBytes-=old?JSON.stringify(old).length*2:0;this.moneyBytes+=JSON.stringify(next).length*2;this.moneyWork.set(key,next);yield;
-      }
-    }
+  private *mergePrepared(chunk: Chunk, known: HistoryMeta['known'],now=0,plane:Plane='all'): Preparation<void> {
+    const native=plane!=='activity';
     const first = (chunk.from - this.from) / this.cell;
-    this.sourceWork=this.sourceWork.filter(([,i])=>this.from+i*this.cell<chunk.from||this.from+i*this.cell>=chunk.to);
-    for(const [source,index,active,agent] of chunk.activity.sourceWork??[]){this.sourceWork.push([source,first+index,active,agent]);yield;}
     const last = (chunk.to - this.from) / this.cell;
-    for (const [key, s] of this.series) {
-      const values = new Float64Array(s.values.length);
-      const ends = s.ends?.slice();
-      for (let i = 0; i < values.length; i += FIELDS) {values.set(s.values.subarray(i, i + FIELDS), i); yield;}
-      for (let i = first; i < last; i++) {values.fill(NaN, i * FIELDS, (i + 1) * FIELDS); if (ends) ends[i] = NaN; yield;}
-      this.series.set(key, {...s, values, ends});
-    }
-    for (const s of chunk.series) {
-      const key = `${s.source} ${s.window}`;
-      let packed = this.series.get(key);
-      if (!packed) {
-        const values = new Float64Array(TILE_CELLS * FIELDS);
-        values.fill(NaN);
-        this.series.set(key, (packed = {source: s.source, window: s.window, values}));
-        this.seriesBytes += values.byteLength + 256;
-      }
-      const since = Math.max(known.work, known.sourceWork?.[s.source]??(known.sourceWork?Infinity:known.sources[s.source]??Infinity));
-      for (const v of yield* decodeCellsPrepared(s, chunk.from, this.cell, since)) {
-        yield;
-        const i = (v.at - this.from) / this.cell * FIELDS;
-        packed.values.set([v.low, v.first, v.last, v.open ?? NaN, +v.gap, v.hold, v.spent, v.covered, ...v.work], i);
-        if (v.validUntil !== undefined) {
-          if (!packed.ends) {packed.ends = new Float64Array(TILE_CELLS).fill(NaN); this.seriesBytes += packed.ends.byteLength;}
-          packed.ends[i / FIELDS] = v.validUntil;
+    if(native){
+      this.hasMeters ||= chunk.meterSeries!==undefined;
+      yield* this.meters.mergePrepared(chunk.from,chunk.to,chunk.meterSeries??[]);
+      if(chunk.moneyWork!==undefined) {
+        this.hasMoneyWork=true;
+        const incoming=new Map(chunk.moneyWork.map(group=>[JSON.stringify([group.source,group.unit]),group]));
+        for(const key of new Set([...this.moneyWork.keys(),...incoming.keys()])) {
+          const old=this.moneyWork.get(key),group=incoming.get(key)??old!;
+          const cells=[...(old?.cells??[]).filter(row=>this.from+row[0]*this.cell<chunk.from||this.from+row[0]*this.cell>=chunk.to),...(incoming.get(key)?.cells??[]).map(row=>[row[0]+(chunk.from-this.from)/this.cell,...row.slice(1)] as typeof row)].sort((a,b)=>a[0]-b[0]);
+          const edges=[...(old?.edges??[]).filter(edge=>edge[1]<chunk.from||edge[1]>=chunk.to),...(incoming.get(key)?.edges??[])].sort((a,b)=>a[1]-b[1]);
+          const next={...group,cells,edges};this.moneyBytes-=old?JSON.stringify(old).length*2:0;this.moneyBytes+=JSON.stringify(next).length*2;this.moneyWork.set(key,next);yield;
         }
       }
-    }
-    for (const [key, s] of this.series) {
-      let kept = false;
-      for (let i = 0; i < s.values.length; i += FIELDS) {yield; if (!Number.isNaN(s.values[i])) {kept = true; break;}}
-      if (!kept) {this.series.delete(key); this.seriesBytes -= s.values.byteLength + (s.ends?.byteLength ?? 0) + 256;}
-    }
-    const rows = yield* this.activityRowsPrepared();
-    const translated: number[] = [];
-    const sessionIndexes = new Map<string, number>();
-    for (let i = 0; i < this.sessions.length; i++) {sessionIndexes.set(this.sessions[i][0], i); yield;}
-    for (const session of chunk.activity.sessions) {
-      let index = sessionIndexes.get(session[0]);
-      const snapshot: Session = [...session];
-      if (index === undefined) {index = this.sessions.push(snapshot) - 1; sessionIndexes.set(session[0], index);}
-      else this.sessions[index] = snapshot;
-      translated.push(index); yield;
-    }
-    for (const key in chunk.activity.devices) {this.devices[key] = chunk.activity.devices[key]; yield;}
-    const groupIndexes = new Map<string, number>();
-    for (let i = 0; i < this.groups.length; i++) {groupIndexes.set(JSON.stringify(this.groups[i]), i); yield;}
-    for (let i = first; i < last; i++) rows[i] = [];
-    for (const [i, active, members, groups] of chunk.activity.cells) {
-      const row = [active, members.length];
-      for (const member of members) {
-        yield;
-        const [index, ms] = typeof member === 'number' ? [member, active] : member;
-        row.push(translated[index], ms);
+      this.sourceWork=this.sourceWork.filter(([,i])=>this.from+i*this.cell<chunk.from||this.from+i*this.cell>=chunk.to);
+      for(const [source,index,active,agent] of chunk.activity.sourceWork??[]){this.sourceWork.push([source,first+index,active,agent]);yield;}
+      for (const [key, s] of this.series) {
+        const values = new Float64Array(s.values.length);
+        const ends = s.ends?.slice();
+        for (let i = 0; i < values.length; i += FIELDS) {values.set(s.values.subarray(i, i + FIELDS), i); yield;}
+        for (let i = first; i < last; i++) {values.fill(NaN, i * FIELDS, (i + 1) * FIELDS); if (ends) ends[i] = NaN; yield;}
+        this.series.set(key, {...s, values, ends});
       }
-      row.push(groups.length);
-      for (const [dim, key, ms] of groups) {
-        yield;
-        const id = JSON.stringify([dim, key]);
-        let index = groupIndexes.get(id);
-        if (index === undefined) {index = this.groups.push([dim, key]) - 1; groupIndexes.set(id, index);}
-        row.push(index, ms);
+      for (const s of chunk.series) {
+        const key = `${s.source} ${s.window}`;
+        let packed = this.series.get(key);
+        if (!packed) {
+          const values = new Float64Array(TILE_CELLS * FIELDS);
+          values.fill(NaN);
+          this.series.set(key, (packed = {source: s.source, window: s.window, values}));
+          this.seriesBytes += values.byteLength + 256;
+        }
+        const since = Math.max(known.work, known.sourceWork?.[s.source]??(known.sourceWork?Infinity:known.sources[s.source]??Infinity));
+        for (const v of yield* decodeCellsPrepared(s, chunk.from, this.cell, since)) {
+          yield;
+          const i = (v.at - this.from) / this.cell * FIELDS;
+          packed.values.set([v.low, v.first, v.last, v.open ?? NaN, +v.gap, v.hold, v.spent, v.covered, ...v.work], i);
+          if (v.validUntil !== undefined) {
+            if (!packed.ends) {packed.ends = new Float64Array(TILE_CELLS).fill(NaN); this.seriesBytes += packed.ends.byteLength;}
+            packed.ends[i / FIELDS] = v.validUntil;
+          }
+        }
       }
-      rows[first + i] = row;
+      for (const [key, s] of this.series) {
+        let kept = false;
+        for (let i = 0; i < s.values.length; i += FIELDS) {yield; if (!Number.isNaN(s.values[i])) {kept = true; break;}}
+        if (!kept) {this.series.delete(key); this.seriesBytes -= s.values.byteLength + (s.ends?.byteLength ?? 0) + 256;}
+      }
     }
-    yield* this.compact(rows);
-    let size = 0;
-    for (const row of rows) {size += row.length; yield;}
-    this.activity = new ArrayBuffer(HEAD + size * 8);
-    const offsets = new Uint32Array(this.activity, 0, 61);
-    const values = new Float64Array(this.activity, HEAD);
-    let at = 0;
-    for (let i = 0; i < rows.length; i++) {offsets[i] = at; for (const value of rows[i]) {values[at++] = value; yield;}}
-    offsets[60] = at;
-    const resets: Chunk['resets'] = [], grants: Chunk['grants'] = [];
-    for (const row of this.resets) {if (row[2] < chunk.from || row[2] >= chunk.to) resets.push(row); yield;}
-    for (const row of chunk.resets) {resets.push([...row]); yield;}
-    for (const row of this.grants) {if (row[1] < chunk.from || row[1] >= chunk.to) grants.push(row); yield;}
-    for (const row of chunk.grants) {grants.push([...row]); yield;}
-    this.resets = resets; this.grants = grants;
-    const plans:PlanRow[]=[];
-    for(const raw of this.plans){const row=planRowAt(raw,now);if(row&&(row[1]<chunk.from||row[1]>=chunk.to))plans.push(row);yield;}
-    for(const raw of chunk.plans??[]){const row=planRowAt(raw,now);if(row)plans.push([row[0],row[1],row[2],row[3]?{...row[3]}:null,row[4]]);yield;}
-    this.plans=plans;this.planBytes=plans.reduce((n,row)=>n+planRowBytes(row),0);this.plansUntil=plans.reduce((n,row)=>Math.min(n,planRowDeadline(row)),Infinity);
+    if(plane!=='native'){
+      const rows = yield* this.activityRowsPrepared();
+      const translated: number[] = [];
+      const sessionIndexes = new Map<string, number>();
+      for (let i = 0; i < this.sessions.length; i++) {sessionIndexes.set(this.sessions[i][0], i); yield;}
+      for (const session of chunk.activity.sessions) {
+        let index = sessionIndexes.get(session[0]);
+        const snapshot: Session = [...session];
+        if (index === undefined) {index = this.sessions.push(snapshot) - 1; sessionIndexes.set(session[0], index);}
+        else this.sessions[index] = snapshot;
+        translated.push(index); yield;
+      }
+      for (const key in chunk.activity.devices) {this.devices[key] = chunk.activity.devices[key]; yield;}
+      const groupIndexes = new Map<string, number>();
+      for (let i = 0; i < this.groups.length; i++) {groupIndexes.set(JSON.stringify(this.groups[i]), i); yield;}
+      for (let i = first; i < last; i++) rows[i] = [];
+      for (const [i, active, members, groups] of chunk.activity.cells) {
+        const row = [active, members.length];
+        for (const member of members) {
+          yield;
+          const [index, ms] = typeof member === 'number' ? [member, active] : member;
+          row.push(translated[index], ms);
+        }
+        row.push(groups.length);
+        for (const [dim, key, ms] of groups) {
+          yield;
+          const id = JSON.stringify([dim, key]);
+          let index = groupIndexes.get(id);
+          if (index === undefined) {index = this.groups.push([dim, key]) - 1; groupIndexes.set(id, index);}
+          row.push(index, ms);
+        }
+        rows[first + i] = row;
+      }
+      yield* this.compact(rows);
+      let size = 0;
+      for (const row of rows) {size += row.length; yield;}
+      this.activity = new ArrayBuffer(HEAD + size * 8);
+      const offsets = new Uint32Array(this.activity, 0, 61);
+      const values = new Float64Array(this.activity, HEAD);
+      let at = 0;
+      for (let i = 0; i < rows.length; i++) {offsets[i] = at; for (const value of rows[i]) {values[at++] = value; yield;}}
+      offsets[60] = at;
+    }
+    if(native){
+      const resets: Chunk['resets'] = [], grants: Chunk['grants'] = [];
+      for (const row of this.resets) {if (row[2] < chunk.from || row[2] >= chunk.to) resets.push(row); yield;}
+      for (const row of chunk.resets) {resets.push([...row]); yield;}
+      for (const row of this.grants) {if (row[1] < chunk.from || row[1] >= chunk.to) grants.push(row); yield;}
+      for (const row of chunk.grants) {grants.push([...row]); yield;}
+      this.resets = resets; this.grants = grants;
+      const plans:PlanRow[]=[];
+      for(const raw of this.plans){const row=planRowAt(raw,now);if(row&&(row[1]<chunk.from||row[1]>=chunk.to))plans.push(row);yield;}
+      for(const raw of chunk.plans??[]){const row=planRowAt(raw,now);if(row)plans.push([row[0],row[1],row[2],row[3]?{...row[3]}:null,row[4]]);yield;}
+      this.plans=plans;this.planBytes=plans.reduce((n,row)=>n+planRowBytes(row),0);this.plansUntil=plans.reduce((n,row)=>Math.min(n,planRowDeadline(row)),Infinity);
+    }
   }
 
   /** References in all retained rows survive, including a suffix not yet read in this epoch. */
@@ -235,45 +258,49 @@ export class HistoryTile {
   /** Only the read interval is materialized; old epoch data stays held until replaced. */
   chunk(known: HistoryMeta['known'], plot = false,now=Date.now()): Chunk {return drain(this.chunkPrepared(known, plot,now));}
 
-  *chunkPrepared(known: HistoryMeta['known'], plot = false,now=Date.now()): Preparation<Chunk> {
-    const first = (this.readFrom - this.from) / this.cell;
-    const chunk: Chunk = {from: this.readFrom, to: this.readTo, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []};
-    for(const [source,index,active,agent] of this.sourceWork){if(index>=first&&this.from+index*this.cell<this.readTo)(chunk.activity.sourceWork??=[]).push([source,index-first,active,agent]);yield;}
-    for (const session of this.sessions) {chunk.activity.sessions.push([...session]); yield;}
-    for (const key in this.devices) {chunk.activity.devices[key] = this.devices[key]; yield;}
-    for (const row of this.resets) {if (row[2] >= this.readFrom && row[2] < this.readTo) chunk.resets.push([...row]); yield;}
-    for (const row of this.grants) {if (row[1] >= this.readFrom && row[1] < this.readTo) chunk.grants.push([...row]); yield;}
-    for(const raw of this.plans){const row=planRowAt(raw,now);if(row&&row[1]>=this.readFrom&&row[1]<this.readTo)(chunk.plans??=[]).push([row[0],row[1],row[2],row[3]?{...row[3]}:null,row[4]]);yield;}
-    if(this.hasMeters)chunk.meterSeries=yield* this.meters.chunkPrepared(this.readFrom,this.readTo);
-    if(this.hasMoneyWork&&!plot)chunk.moneyWork=[...this.moneyWork.values()].map(group=>({...group,cells:group.cells.filter(row=>this.from+row[0]*this.cell>=this.readFrom&&this.from+row[0]*this.cell<this.readTo).map(row=>[row[0]-(this.readFrom-this.from)/this.cell,...row.slice(1)] as typeof row),edges:group.edges.filter(edge=>edge[1]>=this.readFrom&&edge[1]<this.readTo)}));
-    for (const s of this.series.values()) {
-      if (plot) {
-        const cells: Chunk['series'][number]['cells'] = [];
-        for (let i = first; this.from + i * this.cell < this.readTo; i++) {
-          yield;
+  *chunkPrepared(known: HistoryMeta['known'], plot = false,now=Date.now(),plane:Plane='all'): Preparation<Chunk> {
+    const readFrom=plane==='native'?this.nativeFrom:this.readFrom,readTo=plane==='native'?this.nativeTo:this.readTo;
+    const first = (readFrom - this.from) / this.cell;
+    const chunk: Chunk = {from: readFrom, to: readTo, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []};
+    if(plane!=='activity')for(const [source,index,active,agent] of this.sourceWork){if(index>=first&&this.from+index*this.cell<readTo)(chunk.activity.sourceWork??=[]).push([source,index-first,active,agent]);yield;}
+    if(plane!=='native')for (const session of this.sessions) {chunk.activity.sessions.push([...session]); yield;}
+    if(plane!=='native')for (const key in this.devices) {chunk.activity.devices[key] = this.devices[key]; yield;}
+    if(plane!=='activity'){
+      for (const row of this.resets) {if (row[2] >= readFrom && row[2] < readTo) chunk.resets.push([...row]); yield;}
+      for (const row of this.grants) {if (row[1] >= readFrom && row[1] < readTo) chunk.grants.push([...row]); yield;}
+      for(const raw of this.plans){const row=planRowAt(raw,now);if(row&&row[1]>=readFrom&&row[1]<readTo)(chunk.plans??=[]).push([row[0],row[1],row[2],row[3]?{...row[3]}:null,row[4]]);yield;}
+      if(this.hasMeters)chunk.meterSeries=yield* this.meters.chunkPrepared(readFrom,readTo);
+      if(this.hasMoneyWork&&!plot)chunk.moneyWork=[...this.moneyWork.values()].map(group=>({...group,cells:group.cells.filter(row=>this.from+row[0]*this.cell>=readFrom&&this.from+row[0]*this.cell<readTo).map(row=>[row[0]-(readFrom-this.from)/this.cell,...row.slice(1)] as typeof row),edges:group.edges.filter(edge=>edge[1]>=readFrom&&edge[1]<readTo)}));
+      for (const s of this.series.values()) {
+        if (plot) {
+          const cells: Chunk['series'][number]['cells'] = [];
+          for (let i = first; this.from + i * this.cell < readTo; i++) {
+            yield;
+            const at = i * FIELDS;
+            if (Number.isNaN(s.values[at])) continue;
+            const end = s.ends?.[i];
+            cells.push([i - first, s.values[at], 0, 0, {g: s.values[at + 4] ? 1 : undefined, h: s.values[at + 5], ...(end !== undefined && !Number.isNaN(end) ? {u:end} : {})}]);
+          }
+          if (cells.length) chunk.series.push({source: s.source, window: s.window, hold: 0, open: null, cells});
+          continue;
+        }
+        const cells: DecodedCell[] = [];
+        for (let i = first; this.from + i * this.cell < readTo; i++) {
+            yield;
           const at = i * FIELDS;
           if (Number.isNaN(s.values[at])) continue;
+          const v = s.values.subarray(at, at + FIELDS);
           const end = s.ends?.[i];
-          cells.push([i - first, s.values[at], 0, 0, {g: s.values[at + 4] ? 1 : undefined, h: s.values[at + 5], ...(end !== undefined && !Number.isNaN(end) ? {u:end} : {})}]);
+          cells.push({at: this.from + i * this.cell, low: v[0], first: v[1], last: v[2], open: Number.isNaN(v[3]) ? null : v[3], gap: !!v[4], hold: v[5], spent: v[6], covered: v[7], work: [v[8], v[9], v[10]], ...(end !== undefined && !Number.isNaN(end) ? {validUntil:end} : {})});
         }
-        if (cells.length) chunk.series.push({source: s.source, window: s.window, hold: 0, open: null, cells});
-        continue;
+        if (cells.length) chunk.series.push(yield* encodeCellsPrepared(s.source, s.window, readFrom, this.cell, Math.max(known.work, known.sourceWork?.[s.source]??(known.sourceWork?Infinity:known.sources[s.source]??Infinity)), cells));
       }
-      const cells: DecodedCell[] = [];
-      for (let i = first; this.from + i * this.cell < this.readTo; i++) {
-          yield;
-        const at = i * FIELDS;
-        if (Number.isNaN(s.values[at])) continue;
-        const v = s.values.subarray(at, at + FIELDS);
-        const end = s.ends?.[i];
-        cells.push({at: this.from + i * this.cell, low: v[0], first: v[1], last: v[2], open: Number.isNaN(v[3]) ? null : v[3], gap: !!v[4], hold: v[5], spent: v[6], covered: v[7], work: [v[8], v[9], v[10]], ...(end !== undefined && !Number.isNaN(end) ? {validUntil:end} : {})});
-      }
-      if (cells.length) chunk.series.push(yield* encodeCellsPrepared(s.source, s.window, this.readFrom, this.cell, Math.max(known.work, known.sourceWork?.[s.source]??(known.sourceWork?Infinity:known.sources[s.source]??Infinity)), cells));
     }
+    if(plane==='native')return chunk;
     const rows = yield* this.activityRowsPrepared();
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      if (!row.length || i < first || this.from + i * this.cell >= this.readTo) continue;
+      if (!row.length || i < first || this.from + i * this.cell >= readTo) continue;
       const [active, count] = row;
       const members: Chunk['activity']['cells'][number][2] = [];
       let at = 2;

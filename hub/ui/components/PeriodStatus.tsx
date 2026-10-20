@@ -8,7 +8,7 @@ export function PeriodStatus({basis,loading,error}:{basis:PeriodBasis|null;loadi
   if(!loading&&!error)return null;
   return <div className="period-status" role="status">
     {basis&&<span>{timeRangeLabel(basis.range)}</span>}
-    <span>{t(error==='history_limit'?'period.limit':error?'period.failed':'period.loading')}</span>
-    {error&&<button type="button" className="link-button" onClick={boardPeriod.retry}>{t('period.retry')}</button>}
+    <span>{t(error==='filters_limit'?'api.filters_limit':error==='history_limit'?'period.limit':error?'period.failed':'period.loading')}</span>
+    {error&&error!=='filters_limit'&&<button type="button" className="link-button" onClick={boardPeriod.retry}>{t('period.retry')}</button>}
   </div>;
 }

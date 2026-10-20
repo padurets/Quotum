@@ -222,7 +222,7 @@ test('quota hard boundaries survive restart, retention and cached history invali
     const full=mapped([five,week],time),missing=mapped([week],time+120000);
     store.quotaObservation(source,full.quotaObservation!,full.measurement);
     const tile=time-time%3600000,to=tile+3600000;
-    const read=()=>JSON.parse(cache.read(board.id,60000,tile,to,to+60000,store.shown(board.id,[]),selection)[0]);
+    const read=()=>JSON.parse(cache.read(board.id,60000,tile,to,to+60000,store.authorizedSources(board.id),selection)[0]);
     const before=read();store.quotaObservation(source,missing.quotaObservation!,missing.measurement);const after=read();
     assert.ok(after.meterSeries[0].cells.length<before.meterSeries[0].cells.length);
     const repeated=mapped([],time+150000);store.quotaObservation(source,repeated.quotaObservation!);

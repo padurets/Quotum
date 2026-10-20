@@ -12,8 +12,21 @@ import {QUOTA_IDS,type Meter} from '../../server/domain/meters';
 import type {Card,History,HistorySeries,Win} from '../lib/types';
 import {targetOf,type Chunk} from '../../server/domain/history';
 import {setLocale} from '../i18n';
+import {defaultFilters} from '../../server/domain/dataFilters';
+import {publishDataFilters} from '../lib/filterSelection';
 
 const M=60_000;
+
+test('canonical all source selection stays open to future grants while explicit include remains bounded',()=>{
+  const filters=defaultFilters();
+  try{
+    publishDataFilters(filters);assert.equal(subscriptionSelection([native],EMPTY_VIEW),undefined);
+    filters.sources={mode:'include',values:[{source:native.id}]};publishDataFilters({...filters});
+    assert.deepEqual(subscriptionSelection([native,{...native,id:'future'}],EMPTY_VIEW)?.sources,[native.id]);
+    filters.sources={mode:'include',values:[]};publishDataFilters({...filters});
+    assert.deepEqual(subscriptionSelection([native],EMPTY_VIEW)?.sources,[]);
+  }finally{publishDataFilters(null,false);}
+});
 const meter=(id:string,limit='2000000000',amount='800000000'):Meter=>({id,kind:'cap',unit:'credits:zai',amount,limit,at:0,resetAt:3*M,scope:'five_hour',minutes:300,label:null,stale:false,staleAfterMs:10*M});
 const five=meter(QUOTA_IDS[0]),week={...meter(QUOTA_IDS[1],'10000000000','2000000000'),scope:'week' as const,minutes:10080};
 const zai:Card&{title:string}={id:'zai:fixture',title:'Personal',provider:'zai',plan:'lite',windows:[],meters:[five,week],resets:null,owners:[],error:null,successAt:0,stale:false,staleAfterMs:10*M,measureIntervalMs:null};
@@ -80,13 +93,13 @@ test('common period visibility selects both quotas by default and uses no money 
   assert.equal(subscriptionSelection([zai],{...EMPTY_VIEW,windows:QUOTA_IDS.map(id=>`${zai.id}/${id}`)}),undefined,'hiding all cap periods preserves ordinary native history');
   assert.equal(subscriptionLinesOf(history,[zai],view,'weekly').length,1);
   const hidden={...EMPTY_VIEW,hidden:[`source:${zai.id}`]};
-  assert.equal(subscriptionSelection([zai],hidden),undefined);assert.deepEqual(subscriptionLinesOf(history,[zai],hidden,'weekly'),[]);
+  assert.deepEqual(subscriptionSelection([zai],hidden),subscriptionSelection([zai],EMPTY_VIEW));assert.equal(subscriptionLinesOf(history,[zai],hidden,'weekly').length,1);
   const saved=readMoney({unit:'credits:zai',selected:{'credits:zai':[[zai.id,five.id]],USD:[['wallet','balance']]}});
   assert.equal(saved.unit,'USD');assert.deepEqual(saved.selected,{USD:[['wallet','balance']]});
   assert.deepEqual(moneySelection([zai],[],{...saved,unit:'USD'}).selection?.ids,[]);
   const many=Array.from({length:17},(_,i)=>({...zai,id:`zai:${i}`}));
   assert.equal(subscriptionSelection(many,EMPTY_VIEW)?.ids.length,32);assert.equal(subscriptionOverflow(many,EMPTY_VIEW),2);
-  assert.equal(subscriptionOverflow(many,{...EMPTY_VIEW,hidden:['source:zai:0']}),0);
+  assert.equal(subscriptionOverflow(many,{...EMPTY_VIEW,hidden:['source:zai:0']}),2);
 });
 
 test('the progressive subscription plot projects raw cap tiles through the same percentage model',()=>{

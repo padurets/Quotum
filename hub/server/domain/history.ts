@@ -118,6 +118,7 @@ export type HistorySeries = {
   staleAfterMs: number;
   points: [cellStart: number, remaining: number, segment: number, validUntil?:number][];
   work: SeriesWork | null;
+  selectedWork?:{from:number;ms:number|null;agentMs:number};
 };
 export type History = {
   exact?:true;

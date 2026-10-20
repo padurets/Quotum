@@ -19,7 +19,7 @@ import type {Line} from '../lib/lines';
 import {t,useLocale} from '../i18n';
 import {Chart} from './Chart';
 import {usePlot} from './sizing';
-import {MoneyChartSettings,MoneySettings} from './MoneySettings';
+import {MoneyChartSettings} from './MoneySettings';
 import {axisNavigation} from '../lib/axisNavigation';
 import {usePrepared} from './prepared';
 import {usePanning} from '../lib/pan';
@@ -33,7 +33,7 @@ function SelectionNotice({family='budget'}:{family?:MoneyFamily}) {
   const sources=useNamed(undefined,family),view=useServerView(),settings=usePref(family==='funds'?'funds':'money'),context=useCurrencyContext();
   const result=moneySelection(sources,view?.hidden??[],settings,context,family);
   const removed=result.removed||(settings.removed??0);
-  return <>{result.omitted>0&&<AnalyticsNote>{t('money.limit',{count:result.omitted})}</AnalyticsNote>}{removed>0&&<AnalyticsNote>{t('money.removed',{count:removed})}</AnalyticsNote>}</>;
+  return <>{result.limited?<AnalyticsNote>{t('api.filters_limit')}</AnalyticsNote>:result.omitted>0&&<AnalyticsNote>{t('money.limit',{count:result.omitted})}</AnalyticsNote>}{removed>0&&<AnalyticsNote>{t('money.removed',{count:removed})}</AnalyticsNote>}</>;
 }
 const MONEY_COLUMNS = [
   {id: 'value', label: 'money.value', width: 140},
@@ -101,7 +101,7 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
   const original=useMemo(()=>history?.meterSeries?.filter(s=>s.unit===unit&&moneyBalanceSeries(s))??[],[history?.meterSeries,unit]);
   const selection=moneySelection(sources,arrange.view.hidden,settings,context,family).selection;
   const noSelection=!(selection?.ids.length);
-  const noResources=!sources.some(source=>supportsBudget(providerOf(source.provider))&&!arrange.view.hidden.includes('source:'+source.id));
+  const noResources=!sources.some(source=>supportsBudget(providerOf(source.provider)));
   const modelContext=JSON.stringify([authority,family,board,history?.board,unit,selection?.ids]);
   const prepared=usePrepared(function* () {
     const entries:MeterHistory[]=[],visible:MeterHistory[]=[];
@@ -158,7 +158,7 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
   const unit=settings.unit===DEFAULT_CURRENCY?context.target.id:settings.unit??DEFAULT_CURRENCY;
   const entries=history?.meterSeries?.filter(s=>s.unit===unit&&moneyBalanceSeries(s))??[];
   const selection=moneySelection(sources,arrange.view.hidden,settings,context).selection;
-  const empty=!sources.some(source=>supportsBudget(providerOf(source.provider))&&!arrange.view.hidden.includes('source:'+source.id))?'analytics.noBudget':!selection?.ids.length?'analytics.noSelection':'money.unknown';
+  const empty=!sources.some(source=>supportsBudget(providerOf(source.provider)))?'analytics.noBudget':!selection?.ids.length?'analytics.noSelection':'money.unknown';
   const definitions = MONEY_COLUMNS.map(({id, label, width}) => ({id, title: t(label), width, align: 'right' as const}));
   const columns = definitions.filter(column => columnShown(arrange.view, widget, column.id));
   const panel=useRef<HTMLElement>(null);
@@ -168,10 +168,14 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
     const work=boardPeriod.moneyWorkAt(s.sourceId,now,history?.range);
     const values=moneyTableValues(s,range?.from??history!.since,range?.to??history!.to,work);
     if(id==='active'||id==='rate'||id==='remaining') {
+      if(s.kind!=='balance'||s.role&&s.role!=='total')return {content:'—',title:t('money.sourceWorkOnly')};
       const eligible=moneyWorkValues(s,work);
-      const proof=work?[t('money.workEstimate'),t('money.workBasis',{active:activeHours(String(work.eligibleActiveMs))}),work.partial?t('money.partial'):null].filter(Boolean).join('\n'):t('money.noWorkRate');
-      if(eligible.active===null)return {content:'—',title:proof};
-      if(id==='active')return {content:activeHours(eligible.active),title:proof,activeMs:work!.activeMs};
+      if(id==='active'){
+        const from=work?.selectedWork?.from??work?.knownFrom;
+        const title=eligible.active===null?t('agents.activityUnknown'):from!==undefined&&from!==null&&from>(range?.from??history!.since)?t('work.since',{time:stamp(from)}):undefined;
+        return {content:activeHours(eligible.active),title,activeMs:work?.selectedWork?.activeMs??undefined};
+      }
+      const proof=work?[t('money.workEstimate'),t('filters.sourceWide'),t('money.workBasis',{active:activeHours(String(work.eligibleActiveMs))}),work.partial?t('money.partial'):null].filter(Boolean).join('\n'):t('money.noWorkRate');
       if(id==='remaining')return {content:activeHours(eligible.remaining),title:proof};
       return {content:money(eligible.rate,s.unit,false,context),title:eligible.rate===null?t('money.workInsufficient')+'\n'+proof:proof};
     }
@@ -196,7 +200,7 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
         cells:{value:cellOf(series,'value'),topup:cellOf(series,'topup'),active:cellOf(series,'active'),rate:cellOf(series,'rate'),remaining:cellOf(series,'remaining')}};
     }),[history,unit,sources,context,arrange.view,locale]);
   return <SortedMoney rows={rows} entries={entries} columns={columns} panel={panel} unit={unit} className="budget-table" title={t('widgets.budgetTable')} history={history} loading={loading} error={error} retry={budgetHistory.retry}
-    settings={<TableSettings arrange={arrange} widget={widget} columns={definitions} visible={columns.map(column=>column.id)}><MoneySettings sources={sources} hidden={arrange.view.hidden} series={history?.meterSeries??[]}/></TableSettings>}
+    settings={<TableSettings arrange={arrange} widget={widget} columns={definitions} visible={columns.map(column=>column.id)}></TableSettings>}
   >
     <SelectionNotice/>
     {!history&&!error?<p className="panel-loading">{t('history.loading')}</p>:!entries.length&&!error?<p className="panel-empty">{t(empty)}</p>:null}

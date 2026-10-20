@@ -1,3 +1,6 @@
+import * as filterModelBindings from '../../server/domain/dataFilters';
+import * as filterRuntimeBindings from '../lib/filterSelection';
+import * as filterCurveBindings from '../../server/domain/periodCurves';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -7,7 +10,7 @@ import {PageClock} from '../lib/clock';
 import {workHours} from '../lib/format';
 import {periodTextChangesAt} from '../lib/periodClock';
 import {lineWork,workText,workLeftChangesAt,WORK_COLUMNS,type WorkColumn} from '../lib/work';
-import {formatLocale,setLocale} from '../i18n';
+import {formatLocale,setLocale,t} from '../i18n';
 import {PeriodAccounting} from '../lib/periodAccounting';
 import {PeriodIndex} from '../lib/periodIndex';
 import {PeriodActivity} from '../lib/periodActivity';
@@ -27,7 +30,7 @@ const region=(body:string,from:string,to:string)=>body.slice(body.indexOf(from),
 const cellSource=region(code('../components/Forecast.tsx'),'    const lineAt=','    const workCells:');
 const hookSource=code('../lib/clock.ts').slice(code('../lib/clock.ts').indexOf('export function useClock('));
 const timedSource=region(code('../components/TableCell.tsx'),'function Timed(','\nexport const tableCell=');
-const cellContext={exports:{} as {make:(period:any,line:Line,history:{range:string;since:number},column:WorkColumn,resetAt:number|null)=>TimedCell},lineWork,workText,workLeftChangesAt,formatLocale,WeakRef};
+const cellContext={exports:{} as {make:(period:any,line:Line,history:{range:string;since:number},column:WorkColumn,resetAt:number|null)=>TimedCell},lineWork,workText,workLeftChangesAt,formatLocale,t,WeakRef};
 runInNewContext(compile(`export function make(boardPeriod:any,line:Line,history:any,column:WorkColumn,resetAt:number|null){const range=false;${cellSource}return timed(column);}`),cellContext);
 const make=cellContext.exports.make;
 const plain=(value:Cell):Cell=>JSON.parse(JSON.stringify(value));
@@ -114,7 +117,7 @@ async function reservedOwner() {
     PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},pan:{get:()=>null},preparations:()=>null,prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
     evaluatedRange,periodKey,PeriodAccounting:Accounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,periodTextChangesAt,
     empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson:(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b),prefs:()=>({range:'24h'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{}};
-  runInNewContext(compile(region(code('../lib/period.ts'),'class BoardPeriod','export const boardPeriod').replace('class BoardPeriod','export class BoardPeriod')),context);
+  runInNewContext(compile(region(code('../lib/period.ts'),'class BoardPeriod','export const boardPeriod').replace('class BoardPeriod','export class BoardPeriod')),Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   const period=new context.exports.BoardPeriod();period.selection=selection;
   const cell=cellOf(periodMs),basis={run:'r',revision:'1',evaluatedAt:now,evidenceCut:now,range:{from:1,to:now}},intent={board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:now,quota:{cell:String(cell),from:'0',to:String(Math.ceil(now/cell)*cell),cells:'skip'},sessions:{}}};
   const work={anchor:0,cut:now,knownFrom:0,refs:[{ref:'a',source:'s',device:{id:'d',name:'Device'},origin:'terminal',project:'Project',folder:null,startedAt:0}],spans:[[0,10_000,1_000_000]],cursor:'work'};

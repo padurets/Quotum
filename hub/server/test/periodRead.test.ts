@@ -16,7 +16,9 @@ import {mergeWork,workedSessions} from '../domain/periodWork.js';
 import {deepSeekMeasurement} from '../connectors/deepseek.js';
 import {periodValues,nearbyPeriodValues} from '../periodValues.js';
 import {periodValueAt,hasPeriodValue,withValueStates} from '../domain/periodValues.js';
-import {HistoryLimit} from '../history.js';
+import {HistoryLimit,HistoryTiles} from '../history.js';
+import {PeriodReader,periodInputBytes} from '../periodRead.js';
+import {Events} from '../events.js';
 import {sharedWork} from '../periodWork.js';
 import {expandPeriod,type PeriodWireReply} from '../domain/periodWire.js';
 import {HISTORY_BYTES_PER_MEASUREMENT} from '../../bench/budget.js';
@@ -24,8 +26,47 @@ import {PeriodAccounting} from '../domain/periodAccounting.js';
 import {shifted,canShift} from '../domain/periodShift.js';
 import {expandHistory,type HistoryBasis} from '../domain/history.js';
 import {transaction} from '../touches.js';
+import {defaultFilters,workFilter} from '../domain/dataFilters.js';
+import {PeriodCurves,sourceWorkCurves} from '../domain/periodCurves.js';
 
 const M=60_000,H=60*M,now=1_800_000_000_000;
+
+test('project selection precedes live and fixed union, facets and cursor-bound details',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const start=now-2*H;
+  for(const [project,from,to] of [['A',0,60],['B',30,90],['C',75,120]] as const)h.store.creditWork(h.device,start+from*M,start+to*M,[{source:h.source,client:'opencode',origin:'terminal',startedAt:start,project,folder:'',identity:{kind:'stable',sessionId:project}}]);
+  const filters=defaultFilters();filters.projects={mode:'include',values:['A','B']};
+  const predicate=workFilter(filters),selection={mode:'live' as const,periodMs:2*H};
+  const quota={cell:String(M),from:String(start),to:String(now),cells:'skip'};
+  let reads=0;const original=h.store.agentWork.bind(h.store);t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{reads++;return original(...args);});
+  const result=await h.read({version:1,selection,evaluatedAt:now,sessions:{},workFilter:predicate,facets:true,quota,sourceWork:{}});
+  assert.equal(result.statusCode,200,result.body);const live=result.json<PeriodReply>();
+  if(live.sessions?.state!=='complete'||live.facets?.state!=='complete'||live.sourceWork?.state!=='complete')throw new Error('incomplete selected period');
+  assert.equal(reads,1,'selected work, source estimates and facets share one raw extraction');
+  const rows=workedSessions(live.sessions.value,live.basis.range,now);assert.deepEqual(rows.map(row=>row.project),['A','B']);
+  assert.equal(rows.reduce((sum,row)=>sum+row.workedMs,0),120*M);
+  assert.equal(new PeriodCurves(live.sessions.value).all.read(live.basis.range,true),90*M);
+  assert.deepEqual(live.facets.value.projects,['A','B','C'],'facets do not consume the selected cohort');
+  assert.deepEqual(live.facets.value.funding,[],'a board with only disclosed work has no neutral funding choices');
+  const source=sourceWorkCurves(live.sourceWork.value).groups.source.get(h.source)!;
+  assert.equal(source.read(live.basis.range,true),120*M);assert.equal(source.read(live.basis.range),165*M);
+  assert.equal(JSON.stringify(live.sourceWork.value).includes('"project"'),false);
+  const fixed=(await h.read({version:1,selection:{mode:'range',from:start,to:now},evaluatedAt:now,sessions:{},workFilter:predicate})).json<PeriodReply>();
+  if(fixed.sessions?.state!=='complete')throw new Error('incomplete fixed period');
+  assert.equal(fixed.sessions.value.spans.length,0);assert.equal(fixed.sessions.value.packed,undefined);
+  assert.equal(fixed.sessions.value.fixed?.activity.activeMs,90*M);assert.equal(fixed.sessions.value.fixed?.activity.agentMs,120*M);
+  const detail={version:1,selection,evaluatedAt:now,cursor:live.sessions.value.cursor,refs:rows.map(row=>row.ref),workFilter:predicate};
+  const matching=await h.details(detail);assert.equal(matching.statusCode,200,matching.body);assert.equal(matching.json().sessions.value.length,2);
+  filters.projects={mode:'include',values:['C']};
+  assert.equal((await h.details({...detail,workFilter:workFilter(filters)})).statusCode,400);
+  const other=(await h.read({version:1,selection,evaluatedAt:now,sessions:{cursor:live.sessions.value.cursor},workFilter:workFilter(filters)})).json<PeriodReply>();
+  assert.equal(other.sessions?.state,'complete','a changed predicate never produces a delta for an old cohort');
+  filters.projects={mode:'include',values:[]};
+  const empty=(await h.read({version:1,selection,evaluatedAt:now,sessions:{},workFilter:workFilter(filters),quota,sourceWork:{}})).json<PeriodReply>();
+  if(empty.sessions?.state!=='complete'||empty.sourceWork?.state!=='complete')throw new Error('incomplete empty period');
+  assert.equal(empty.sessions.value.refs.length,0);assert.notEqual(empty.sessions.value.available,false);
+  assert.equal(sourceWorkCurves(empty.sourceWork.value).groups.source.get(h.source)!.read(empty.basis.range,true),120*M);
+});
 async function fixture() {
   const store=new Store(':memory:',now-3*H),directory=new Directory(store.db);
   const user=directory.createUser('a@example.com','A','unused',now-3*H),board=directory.boards(user.id)[0].id;
@@ -74,6 +115,81 @@ test('period cells and baseline tapes borrow only matching captured metadata',as
   const reorderedReply=(await h.read(reorderedRequest)).json().quota.value;
   assert.equal('known' in reorderedReply,false,'the reversed metadata token really matched');
   assert.equal(reorderedReply.chunks[0].series[0].source,h.source,'captured key order preserves literal source IDs');
+});
+
+test('independent source and session delta frontiers share their complete raw range',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,quota:{cell:String(M),from:String(now-H),to:String(now),cells:'skip',evidence:'skip'},sessions:{},sourceWork:{},workFilter:workFilter(defaultFilters())};
+  const baseline=(await h.read(body)).json<PeriodReply>();
+  if(baseline.sessions?.state!=='complete'||baseline.sourceWork?.state!=='complete')throw new Error('baseline');
+  h.credit(now-30*M,now-25*M,'old');
+  const sessions=(await h.read({...body,sessions:{cursor:baseline.sessions.value.cursor},sourceWork:undefined})).json<PeriodReply>();
+  if(sessions.sessions?.state!=='delta')throw new Error('sessions');
+  h.credit(now-2*M,now-M,'new');
+  const ranges:[number,number][]=[];const original=h.store.agentWork.bind(h.store);
+  t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{ranges.push([args[0],args[1]]);return original(...args);});
+  const reply=await h.read({...body,sessions:{cursor:sessions.sessions.value.cursor},sourceWork:{cursor:baseline.sourceWork.value.cursor}});
+  assert.equal(reply.statusCode,200,reply.body);const delta=reply.json<PeriodReply>();
+  if(delta.sessions?.state!=='delta'||delta.sourceWork?.state!=='delta')throw new Error('independent deltas');
+  assert.deepEqual(ranges,[[now-30*M,now]],'the older source cursor must widen the first extraction');
+  assert.equal(delta.sessions.value.replaceFrom,now-2*M);assert.equal(delta.sourceWork.value.replaceFrom,now-30*M);
+  const rows=workedSessions(mergeWork(mergeWork(baseline.sessions.value,sessions.sessions.value),delta.sessions.value),delta.basis.range,now);
+  assert.deepEqual(rows.map(row=>row.workedMs).sort((a,b)=>a-b),[M,5*M]);
+  assert.equal(sourceWorkCurves(delta.sourceWork.value).groups.source.get(h.source)!.read(delta.basis.range,true),6*M);
+  ranges.length=0;
+  const reverse=(await h.read({...body,sessions:{cursor:baseline.sessions.value.cursor},sourceWork:{cursor:delta.sourceWork.value.cursor}})).json<PeriodReply>();
+  if(reverse.sessions?.state!=='delta'||reverse.sourceWork?.state!=='delta')throw new Error('reverse deltas');
+  assert.deepEqual(ranges,[[now-30*M,now]],'an older sessions cursor remains independent of a current source cursor');
+  assert.equal(reverse.sessions.value.replaceFrom,now-30*M);assert.equal(reverse.sourceWork.value.replaceFrom,now);
+  assert.equal(workedSessions(mergeWork(baseline.sessions.value,reverse.sessions.value),reverse.basis.range,now).reduce((sum,row)=>sum+row.workedMs,0),6*M);
+});
+
+test('funding facets describe authorized work before selection and exclude absent categories',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const board=h.directory.createBoard('Work only',h.user.id,now-3*H).id;
+  h.store.creditWork(h.device,now-H,now,[{source:h.source,client:'codex',origin:'terminal',project:'Private funding',folder:'',startedAt:now-H,identity:{kind:'stable',sessionId:'known'}}]);
+  const filters=defaultFilters();filters.projects={mode:'include',values:[]};
+  const request={version:1 as const,selection:{mode:'live' as const,periodMs:2*H},evaluatedAt:now,workFilter:workFilter(filters),facets:true as const};
+  const read=async()=>{const reply=(await h.read(request,board)).json<PeriodReply>();if(reply.facets?.state!=='complete')throw new Error('incomplete facets');return reply.facets.value;};
+  assert.deepEqual((await read()).funding,['notProvided']);
+  h.store.creditWork(h.device,now-H,now,[{source:null,client:'opencode',origin:'terminal',project:'Unknown funding',folder:'',startedAt:now-H,identity:{kind:'stable',sessionId:'unknown'}}]);
+  const both=await read();assert.deepEqual(both.funding,['notProvided','unknown']);
+  assert.deepEqual(both.projects,['Private funding','Unknown funding'],'empty selection does not erase available values');
+});
+
+test('fixed facets exclude current-only roster values outside their historical range',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  h.credit(now-90*M,now-80*M);
+  h.hub.ingest.live.report(h.device,h.user.id,[{clientId:'codex',source:h.source,sessionId:'current-only',device:{id:h.device,name:'Laptop'},origin:'terminal',project:'Current only',folder:null,startedAt:now-M,sentStartedAt:now-M,lastWorkedAt:now,working:true}],now);
+  const request={version:1 as const,evaluatedAt:now,facets:true as const};
+  const fixed=(await h.read({...request,selection:{mode:'range',from:now-2*H,to:now-H}})).json<PeriodReply>();
+  const live=(await h.read({...request,selection:{mode:'live',periodMs:2*H}})).json<PeriodReply>();
+  if(fixed.facets?.state!=='complete'||live.facets?.state!=='complete')throw new Error('facets');
+  assert.deepEqual(fixed.facets.value.projects,['Project']);assert.ok(live.facets.value.projects.includes('Current only'));
+  const filters=defaultFilters();filters.projects={mode:'exclude',values:['Current only']};
+  const chosen=(await h.read({...request,selection:{mode:'range',from:now-2*H,to:now-H},workFilter:workFilter(filters)})).json<PeriodReply>();
+  if(chosen.facets?.state!=='complete')throw new Error('explicit choices');
+  assert.deepEqual(chosen.facets.value.projects,['Project']);assert.deepEqual(chosen.facets.value.retained?.projects,['Current only'],'authorized current-only choices remain removable outside a fixed range');
+});
+
+test('fixed facets keep authorized explicit choices removable without enlarging the period universe',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  for(const [project,from,to] of [['A',150,140],['B',135,130],['C',30,20]] as const)h.store.creditWork(h.device,now-from*M,now-to*M,[{source:h.source,client:'codex',origin:'terminal',project,folder:'',startedAt:now-from*M,identity:{kind:'stable',sessionId:project}}]);
+  const idle=h.directory.saveDevice({userId:h.user.id,machine:{id:'idle-0123456789',name:'Idle laptop',os:'linux',arch:'x86_64'},agent:'quotum/0.6.0',tokenId:null},now-3*H).id;
+  const filters=defaultFilters();filters.projects={mode:'exclude',values:['A','B']};filters.devices={mode:'exclude',values:[idle]};filters.clients={mode:'exclude',values:['offline-client']};filters.sources={mode:'exclude',values:[{status:'unknown'}]};
+  const body:PeriodRequest={version:1,selection:{mode:'range',from:now-H,to:now},evaluatedAt:now,facets:true,workFilter:workFilter(filters),sessions:{}};
+  let reads=0;const original=h.store.agentWork.bind(h.store);t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{reads++;return original(...args);});
+  const response=await h.read(body);assert.equal(response.statusCode,200,response.body);const result=response.json<PeriodReply>();
+  if(result.facets?.state!=='complete')throw new Error('facets');
+  assert.equal(reads,1,'choice authorization does not extract a second raw ledger');assert.deepEqual(result.facets.value.projects,['C']);
+  assert.deepEqual(result.facets.value.retained,{projects:['A','B'],devices:[{id:idle,name:'Idle laptop'}],clients:['offline-client'],funding:['unknown']});
+  const board=h.directory.createBoard('Shared work',h.user.id,now-3*H).id;
+  const allowed=(await h.read(body,board)).json<PeriodReply>();if(allowed.facets?.state!=='complete')throw new Error('shared facets');
+  assert.deepEqual(allowed.facets.value.retained?.projects,['A','B']);
+  for(const device of h.store.sessionDevices(board,h.user.id))h.store.setDeviceSessions(board,device.id,h.user.id,false,device.revision,now);
+  const revoked=(await h.read(body,board)).json<PeriodReply>();if(revoked.facets?.state!=='complete')throw new Error('revoked facets');
+  assert.deepEqual(revoked.facets.value.projects,[]);assert.deepEqual(revoked.facets.value.retained?.projects,[]);assert.deepEqual(revoked.facets.value.retained?.devices,[]);
+  for(const value of ['"A"','"B"','Idle laptop',idle])assert.equal(JSON.stringify(revoked.facets).includes(value),false);
 });
 
 test('a period response rechecks authentication after cooperative preparation',async t=>{
@@ -307,7 +423,7 @@ test('a chart-only past tile reads only its work, and extraction replacement rel
   let used=0,peak=0,accessBytes=0;
   const capture=h.store.workAccess.bind(h.store);
   t.mock.method(h.store,'workAccess',(...args:Parameters<Store['workAccess']>)=>capture(args[0],args[1],bytes=>{accessBytes+=bytes;args[2]?.(bytes);}));
-  const read=sharedWork(h.hub,h.store.shown(h.board,[]),null,bytes=>{used+=bytes;peak=Math.max(peak,used);},bytes=>{used-=bytes;assert.ok(used>=0);},null,now,h.board);
+  const read=sharedWork(h.hub,h.store.authorizedSources(h.board),null,bytes=>{used+=bytes;peak=Math.max(peak,used);},bytes=>{used-=bytes;assert.ok(used>=0);},null,now,h.board);
   const metadata=used;assert.ok(metadata>0,'the common captured access is charged before extraction');
   assert.equal(metadata,accessBytes,'only the captured access remains charged after authority hashing');
   assert.ok(peak>metadata,'temporary authority hashing is released before extraction starts');peak=used;
@@ -384,6 +500,113 @@ test('fixed work follows device admission independently of later subscription sh
   assert.equal(reply.sessions.value.fixed?.activity.since,now-3*H);
   assert.deepEqual(reply.sessions.value.fixed?.activity.known,{from:selection.from,to:selection.to});
   assert.deepEqual(workedSessions(reply.sessions.value,selection,now).map(r=>r.workedMs),[30*M]);
+});
+
+test('shared fixed quota hours stay unknown before admission and become zero only in a known empty suffix',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const shared=h.directory.createBoard('Boundary',h.user.id,now-3*H).id,known=now-H;
+  h.store.share(shared,h.source,h.user.id,now-3*H);
+  let policy=h.store.sessionDevices(shared,h.user.id)[0];h.store.setDeviceSessions(shared,h.device,h.user.id,false,policy.revision,now-2*H);
+  policy=h.store.sessionDevices(shared,h.user.id)[0];h.store.setDeviceSessions(shared,h.device,h.user.id,true,policy.revision,known);
+  for(const at of [now-3*H,now-2*H,known,now-1])h.store.record(h.source,{observedAt:at,plan:'',resets:null,staleAfterMs:4*H,windows:[{id:'weekly',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:now+H}]});
+  const summary=async(from:number,to:number,filters=defaultFilters())=>{
+    const response=await h.read({version:1,selection:{mode:'range',from,to},evaluatedAt:now,sessions:{},workFilter:workFilter(filters),quota:{cell:String(M),from:String(from),to:String(to),cells:'skip'},sourceWork:{}},shared);
+    assert.equal(response.statusCode,200,response.body);const reply=expandPeriod(response.json<PeriodWireReply>());
+    if(reply.quota?.state!=='complete')throw new Error('incomplete shared quota');
+    const row=reply.quota.value.tape?.fixed?.quota.find(row=>row.windowId==='weekly');assert.ok(row);return row;
+  };
+  for(const to of [known-M,known,known+M]){
+    const row=await summary(now-2*H,to),expected=to>known?0:null;
+    assert.equal(row.selectedWork?.ms,expected);assert.equal(row.selectedWork?.from,known);
+  }
+  h.credit(known+15*M,known+30*M);
+  const full=await summary(known,now),filters=defaultFilters();filters.projects={mode:'include',values:[]};
+  const empty=await summary(known,now,filters);
+  assert.equal(full.work?.ms,15*M);assert.equal(empty.selectedWork?.ms,0);assert.equal(empty.selectedWork?.agentMs,0);
+  assert.deepEqual(empty.work,full.work,'a known empty selection preserves the supplier estimate cohort');
+});
+
+for(const selected of [false,true])test(`matcher pressure preserves native budget with ${selected?'selected sessions':'an unused predicate'}`,async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const tiles=new HistoryTiles(h.store),events=new Events(h.hub,undefined,{now:()=>now,after:()=>()=>{}},null),reader=new PeriodReader(h.hub,tiles,events);t.after(()=>events.close());
+  const wallet=h.store.source('openrouter','matcher-wallet',now-3*H);h.store.hold(wallet,h.user.id,now-3*H);
+  const meter=(id:string,amount:string)=>({id,at:now-M,amount,kind:'counter' as const,unit:'USD',stale:false,staleAfterMs:4*H,limit:null,resetAt:null,minutes:null,scope:null,label:null});
+  h.store.record(wallet,{type:'meters',observedAt:now-M,staleAfterMs:4*H,meters:[meter('usage','0'),meter('credits','15000000')],keys:[],inventoryComplete:true,inventoryError:null});
+  const filters=defaultFilters();filters.projects={mode:'include',values:Array.from({length:1000},(_,i)=>String(i).padStart(4,'0')+'x'.repeat(60))};
+  const request:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,workFilter:workFilter(filters),...(selected?{sessions:{}}:{}),budget:{cell:String(M),from:String(now-H),to:String(now),cells:'skip',unit:'USD',meters:JSON.stringify([[wallet,'balance']])}};
+  let used=0;const reservation=tiles.reservation.bind(tiles);
+  t.mock.method(tiles,'reservation',()=>{const own=reservation();let bytes=0;return {add:(size:number)=>{own.add(size);bytes+=size;used+=size;},remove:(size:number)=>{own.remove(size);bytes-=size;used-=size;},close:()=>{own.close();used-=bytes;bytes=0;}};});
+  const pin=tiles.reservation(),pinned=32*1024*1024-periodInputBytes(request)-100_000;pin.add(pinned);t.after(()=>pin.close());
+  const native={...request,workFilter:undefined,sessions:undefined},padding=periodInputBytes(request)-periodInputBytes(native);pin.add(padding);
+  const read=async(body:PeriodRequest)=>expandPeriod(JSON.parse(await reader.readAsync(h.board,h.user.id,body)) as PeriodWireReply);
+  const control=await read(native);assert.equal(control.budget?.state,'complete');pin.remove(padding);
+  const reply=await read(request);assert.equal(reply.budget?.state,'complete');
+  if(reply.budget?.state!=='complete')throw new Error('native sibling failed');
+  assert.equal(reply.budget.value.tape!.money[0].paired!.readings[0].amount,'15000000');
+  if(selected)assert.deepEqual(reply.sessions,{state:'error',error:'history_limit'});else assert.equal(reply.sessions,undefined);
+  assert.equal(used,pinned,'all failed preparation and input charges are released');
+  pin.close();assert.equal(used,0);
+  const recovered=await read(request);assert.equal(recovered.budget?.state,'complete');if(selected)assert.equal(recovered.sessions?.state,'complete');assert.equal(used,0);
+});
+
+test('source cursor planning pressure cannot discard an independent native budget and recovers without a new planner',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const tiles=new HistoryTiles(h.store),events=new Events(h.hub,undefined,{now:()=>now,after:()=>()=>{}},null),reader=new PeriodReader(h.hub,tiles,events);t.after(()=>events.close());
+  const wallet=h.store.source('openrouter','source-plan-wallet',now-3*H);h.store.hold(wallet,h.user.id,now-3*H);
+  const meter=(id:string,amount:string)=>({id,at:now-M,amount,kind:'counter' as const,unit:'USD',stale:false,staleAfterMs:4*H,limit:null,resetAt:null,minutes:null,scope:null,label:null});
+  h.store.record(wallet,{type:'meters',observedAt:now-M,staleAfterMs:4*H,meters:[meter('usage','0'),meter('credits','15000000')],keys:[],inventoryComplete:true,inventoryError:null});
+  for(let i=0;i<1998;i++){const source=h.store.source('codex','source-plan-'+i,now-3*H);h.store.hold(source,h.user.id,now-3*H);}
+  const query={cell:String(M),from:String(now-H),to:String(now),cells:'skip'};
+  const request:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,sourceWork:{},quota:{...query,evidence:'skip',sources:'[]'},budget:{...query,unit:'USD',meters:JSON.stringify([[wallet,'balance']])}};
+  let used=0;const refused:number[]=[],reservation=tiles.reservation.bind(tiles);
+  t.mock.method(tiles,'reservation',()=>{const own=reservation();let bytes=0;return {add:(size:number)=>{try{own.add(size);}catch(error){refused.push(size);throw error;}bytes+=size;used+=size;},remove:(size:number)=>{own.remove(size);bytes-=size;used-=size;},close:()=>{own.close();used-=bytes;bytes=0;}};});
+  const pin=tiles.reservation(),pinned=32*1024*1024-periodInputBytes(request)-200_000;pin.add(pinned);t.after(()=>pin.close());
+  const native={...request,sourceWork:undefined,quota:undefined},padding=periodInputBytes(request)-periodInputBytes(native);pin.add(padding);
+  const read=async(body:PeriodRequest)=>expandPeriod(JSON.parse(await reader.readAsync(h.board,h.user.id,body)) as PeriodWireReply);
+  assert.equal((await read(native)).budget?.state,'complete','native evidence fits beside the same input charge');pin.remove(padding);
+  const reply=await read(request);assert.equal(reply.budget?.state,'complete');assert.deepEqual(reply.sourceWork,{state:'error',error:'history_limit'});
+  if(reply.budget?.state!=='complete')throw new Error('native budget failed');assert.equal(reply.budget.value.tape!.money[0].paired!.readings[0].amount,'15000000');
+  const scratch=256+[...h.store.authorizedSources(h.board).keys()].reduce((bytes,id)=>bytes+128+id.length*4,0);assert.ok(refused.includes(scratch),'the actual cursor plan reservation was refused');
+  assert.equal(used,pinned,'access, plan and response staging are released');pin.close();assert.equal(used,0);
+  const recovered=await read(request);assert.equal(recovered.sourceWork?.state,'complete');assert.equal(recovered.quota?.state,'complete');assert.equal(recovered.budget?.state,'complete');assert.equal(used,0);
+});
+
+test('a refused source-curve publication cannot escape through a sibling fixed section and recovers after capacity returns',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const start=now-H,tiles=new HistoryTiles(h.store),events=new Events(h.hub,undefined,{now:()=>now,after:()=>()=>{}},null),reader=new PeriodReader(h.hub,tiles,events);
+  t.after(()=>events.close());const ceiling=32*1024*1024;let used=0;
+  const reservation=tiles.reservation.bind(tiles);
+  t.mock.method(tiles,'reservation',()=>{
+    const own=reservation();let bytes=0;
+    return {add:(size:number)=>{own.add(size);bytes+=size;used+=size;},remove:(size:number)=>{own.remove(size);bytes-=size;used-=size;},close:()=>{own.close();used-=bytes;bytes=0;}};
+  });
+  const pin=tiles.reservation();t.after(()=>pin.close());
+  const wallet=h.store.source('openrouter','fixed-source-wallet',now-3*H);h.store.hold(wallet,h.user.id,now-3*H);
+  h.store.record(h.source,{observedAt:start,plan:'',resets:null,staleAfterMs:4*H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:now+H}]});
+  const meter=(id:string,at:number,amount:string)=>({id,at,amount,kind:'counter' as const,unit:'USD',stale:false,staleAfterMs:4*H,limit:null,resetAt:null,minutes:null,scope:null,label:null});
+  for(const [at,amount] of [[start,'0'],[now-1,'1000000']] as const)h.store.record(wallet,{type:'meters',observedAt:at,staleAfterMs:4*H,meters:[meter('usage',at,amount),meter('credits',at,'15000000')],keys:[],inventoryComplete:true,inventoryError:null});
+  for(let i=0;i<128;i++)h.store.creditWork(h.device,start+10*M+i,start+20*M+i,[{source:wallet,client:'opencode',origin:'terminal',project:'P'+i,folder:'',startedAt:start,identity:{kind:'stable',sessionId:String(i)}}]);
+  let refused:PeriodCurves['groups']['source']|undefined,reused=0;
+  const prepare=PeriodCurves.prepare;
+  t.mock.method(PeriodCurves,'prepare',function*(...args:Parameters<typeof prepare>){
+    const curves=yield*prepare(...args);
+    if(args[0].refs.length===128&&!refused){refused=curves.groups.source;pin.add(ceiling-used-curves.bytes+1);}
+    return curves;
+  });
+  const accounting=PeriodAccounting.prepare;
+  t.mock.method(PeriodAccounting,'prepare',function*(...args:Parameters<typeof accounting>){if(refused&&args[6]?.groups.source===refused)reused++;return yield*accounting(...args);});
+  const filters=defaultFilters();filters.projects={mode:'include',values:[]};
+  const query={cell:String(M),from:String(start),to:String(now),cells:'skip'};
+  const request:PeriodRequest={version:1,selection:{mode:'range',from:start,to:now},evaluatedAt:now,workFilter:workFilter(filters),quota:query,budget:{...query,unit:'USD',meters:JSON.stringify([[wallet,'balance']]),work:'1'},values:[h.source]};
+  const failed=JSON.parse(reader.read(h.board,h.user.id,request)) as PeriodReply;
+  assert.ok(refused);assert.equal(failed.quota?.state,'error');assert.equal(reused,0,'no sibling consumes a candidate whose retained charge failed');
+  assert.equal(failed.values?.state,'complete','unrelated values remain independently readable');
+  pin.close();assert.equal(used,0,'every failed producer/request reservation is released');
+  const recovered=expandPeriod(JSON.parse(reader.read(h.board,h.user.id,request)) as PeriodWireReply);
+  assert.equal(recovered.quota?.state,'complete');assert.equal(recovered.budget?.state,'complete');
+  if(recovered.budget?.state!=='complete')throw new Error('budget did not recover');
+  const value=recovered.budget.value.tape!.fixed!.moneyWork![0];
+  assert.equal(value.activeMs,10*M+127);assert.equal(value.selectedWork?.activeMs,0);assert.equal(reused,0);assert.equal(used,0);
 });
 
 

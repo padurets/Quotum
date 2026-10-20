@@ -1,3 +1,4 @@
+import {effectiveFilters} from './filterSelection';
 import {t, type Key} from '../i18n';
 import {duration, num, rateText, shareText, stamp, workAbout, workHours} from './format';
 import type {Line} from './lines';
@@ -107,14 +108,17 @@ export function workCells(work: SeriesWork, remaining: number, resetInMs: number
  * now, what is left now, and the window's reset (`resetAt`) is ahead while it is after
  * `now`: one already past, not measured since, leaves what is left unknown until it is.
  */
-export function lineWork(line: Pick<Line, 'work' | 'current' | 'remainingAtEnd' | 'minutes'>, range: boolean, resetAt: number | null, now: number): Record<WorkColumn, WorkCell> | null {
+export function lineWork(line: Pick<Line, 'work' | 'selectedWork' | 'current' | 'remainingAtEnd' | 'minutes'>, range: boolean, resetAt: number | null, now: number): Record<WorkColumn, WorkCell> | null {
   const remaining = range ? line.remainingAtEnd : line.current;
+  const selected=line.selectedWork??(!effectiveFilters()?line.work:undefined);
+  const direct=(value:number|null|undefined):WorkCell=>value===null||value===undefined?{none:'unknown'}:value?{value}:{none:'none'};
   // A line on the table has measurements, so it has an end; one without is not foreseen.
-  if (!line.work || remaining === null) return null;
+  if (!line.work || remaining === null) return line.selectedWork?{work:direct(line.selectedWork.ms),agenthours:direct(line.selectedWork.ms===null?null:line.selectedWork.agentMs),perwork:{none:'unknown'},workleft:{none:'unknown'},during:{none:'unknown'}}:null;
   const cells = workCells(line.work, remaining, range ? null : resetAt !== null && resetAt > now ? resetAt - now : null, line.minutes ? line.minutes * 60_000 : null);
   // A window used up too, as the forecast by time says it; where none of the agents worked, that is what it says.
   const reset = !range && resetAt !== null && resetAt <= now;
-  return reset && line.work.ms !== null ? {...cells, workleft: {none: line.work.ms ? 'awaiting' : 'none'}} : cells;
+  const estimates=reset && line.work.ms !== null ? {...cells, workleft: {none: line.work.ms ? 'awaiting' as const : 'none' as const}} : cells;
+  return {...estimates,work:direct(selected?.ms),agenthours:direct(selected?.ms===null?null:selected?.agentMs)};
 }
 
 /**
@@ -124,7 +128,7 @@ export function lineWork(line: Pick<Line, 'work' | 'current' | 'remainingAtEnd' 
  * waiting for a measurement.
  * Nothing else about work moves with time; null where the reset is not ahead.
  */
-export function workLeftChangesAt(line: Pick<Line, 'work' | 'current' | 'remainingAtEnd' | 'minutes'>, resetAt: number | null, now: number): number | null {
+export function workLeftChangesAt(line: Pick<Line, 'work' | 'selectedWork' | 'current' | 'remainingAtEnd' | 'minutes'>, resetAt: number | null, now: number): number | null {
   if (resetAt === null || resetAt <= now) return null;
   const left = lineWork(line, false, resetAt, now)?.workleft;
   const hours = !left ? null : 'value' in left ? left.value : 'outlasts' in left ? left.outlasts : null;
@@ -167,7 +171,18 @@ const REASONS: Record<DashText, Key> = {
  * work is known, or why there is no number. `resetAt` is the window's, which work lasting
  * beyond it names.
  */
-export function workText(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFrom: number, resetAt: number | null, perWork: number | null): {content: string; title?: string} {
+export function workText(column: WorkColumn, cell: WorkCell, work: SeriesWork|null, periodFrom: number, resetAt: number | null, perWork: number | null, selectedWork?:Pick<SeriesWork,'from'|'ms'|'agentMs'>): {content: string; title?: string} {
+  if(column==='work'||column==='agenthours'){
+    const selected=selectedWork??(!effectiveFilters()?work:null);
+    const since=selected&&selected.ms!==null&&selected.from>periodFrom?selected.from:null;
+    if('none' in cell){
+      if(cell.none==='unknown')return {content:'—',title:selected?t('work.unknown',{time:stamp(selected.from)}):undefined};
+      const dash=dashOf(cell.none,since);
+      return {content:'—',title:[t(REASONS[dash.text],{time:since===null?'':stamp(since)}),...(dash.knownFrom===null?[]:[t('work.since',{time:stamp(dash.knownFrom)})])].join('\n')};
+    }
+    if('value' in cell)return {content:workHours(cell.value),title:since===null?undefined:t('work.since',{time:stamp(since)})};
+  }
+  if(!work)return {content:'—'};
   const notes = workNotes(work, periodFrom);
   const known = (at: number | null) => (at !== null ? [t('work.since', {time: stamp(at)})] : []);
   if ('none' in cell) {

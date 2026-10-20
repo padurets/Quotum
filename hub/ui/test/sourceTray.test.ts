@@ -65,7 +65,7 @@ test('subscription balances live only in the dashboard and compact footers, with
   const creditBalance={id:'balance:credits' as const,unit:'credits:codex' as const,status:'finite' as const,at:1,staleAfterMs:1000};
   let source:Card={id:'fixture',provider:'codex',plan:'pro',successAt:1,error:null,stale:false,owners:[],staleAfterMs:1000,measureIntervalMs:null,windows:[],resets:{available:2,expiring:[]},budget:budgetAccess('codex',true),creditBalance,
     usageWork:[{windowId:'weekly',from:0,to:1,growth:2,quality:'partial',expiresAt:1000}]};
-  const context={exports:{},SourceCard:null as unknown as (props:object)=>Node,Row:null as unknown as (props:object)=>Node,
+  const context={useDataFilters:()=>({current:null}),exports:{},SourceCard:null as unknown as (props:object)=>Node,Row:null as unknown as (props:object)=>Node,
     memo:(fn:unknown)=>fn,useLocale:()=>{},useCard:()=>source,useTitle:()=>'Fixture',useMine:()=>true,
     usePeriodValues:()=>({value:null}),useTimeRange:()=>null,useCurrencyContext:()=>({}),MeasurementClock:{Provider:'clock'},useSourcePeriodSessions:()=>({rows:[],basis:null,loading:false,error:null}),
     useSessions:()=>[],useResetsFor:()=>undefined,useSourceAccess:()=>null,useBoardId:()=>'board',useServerView:()=>EMPTY_VIEW,

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {ANALYTICS_SCENES} from '../catalogue.js';
+import {ANALYTICS_SCENES,SETS} from '../catalogue.js';
 import {Store} from '../../server/store/store.js';
 import {Directory} from '../../server/store/directory.js';
 import {deepSeekMeasurement} from '../../server/connectors/deepseek.js';
@@ -19,12 +19,15 @@ test('connector scenes populate the mixed demo board and leave empty and limit-o
   try {
     const owner = directory.createUser('scenes@fixture.example', 'Owner', 'x', 1);
     const team = directory.createBoard('Team', owner.id, 1), empty = directory.createBoard('Empty', owner.id, 1), limits = directory.createBoard('Limits', owner.id, 1);
-    const stand = {boards: new Map([['team', team.id], ['empty', empty.id], ['limits', limits.id]])} as Stand;
+    const stand = {set:SETS.find(set=>set.id==='all')!,boards: new Map([['team', team.id], ['empty', empty.id], ['limits', limits.id]])} as Stand;
     for (const provider of ['openrouter', 'deepseek', 'zai'] as const) {
       const source = store.source(provider, provider, 1); store.hold(source, owner.id, 1);
       shareConnectorScene(store, stand, source, owner.id, 1);
     }
     assert.equal(store.sources(team.id).length, 3);
+    const source=store.sources(team.id).find(source=>source.provider==='deepseek')!.id;
+    shareConnectorScene(store,{...stand,set:SETS.find(set=>set.id==='filters')!},source,owner.id,2,'DeepSeek review wallet');
+    assert.equal(directory.view(team.id).names[source],'DeepSeek review wallet');
     for (const board of [empty, limits]) {
       assert.equal(store.sources(board.id).length, 0);
       assert.deepEqual(directory.view(board.id).shown, []);
