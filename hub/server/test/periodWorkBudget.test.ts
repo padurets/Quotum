@@ -10,7 +10,10 @@ import {Pairing} from '../pairing.js';
 import {Setup} from '../setup.js';
 import {ResetFeed} from '../resets.js';
 import {newSecret} from '../domain/auth.js';
-import {HistoryLimit} from '../history.js';
+import {HistoryLimit,HistoryTiles} from '../history.js';
+import {selectedWork} from '../periodWork.js';
+import {defaultFilters,workFilter} from '../domain/dataFilters.js';
+import type {WorkRead} from '../store/store.js';
 import {packWork,packWorkPrepared,workedSessions,type WorkTrace} from '../domain/periodWork.js';
 import {expandPeriod,type PeriodWireReply} from '../domain/periodWire.js';
 import {prepareFixedTape,prepareFixedWork} from '../periodFixed.js';
@@ -19,6 +22,21 @@ const H=3_600_000,NOW=1_800_000_000_000,MONTH=30*24*H;
 const trace=(count:number):WorkTrace=>({anchor:NOW-MONTH,cut:NOW,knownFrom:NOW-MONTH,
   refs:Array.from({length:count},(_,id)=>({ref:String(id),source:'codex:source',clientId:'codex',device:{id:'device',name:'Laptop'},origin:'terminal',project:'Project',folder:null,startedAt:NOW-MONTH})),
   spans:Array.from({length:count},(_,id)=>[id,0,MONTH]),
+});
+
+test('selected matcher allocation is lazy, rolls back partial charges and recovers after raw-read failure',()=>{
+  const store=new Store(':memory:',NOW-H),tiles=new HistoryTiles(store),pin=tiles.reservation(),held=tiles.reservation();let bytes=0,reads=0,failRead=false;
+  const source:WorkRead=()=>{reads++;if(failRead)throw new HistoryLimit();return [];};
+  source.reserve=size=>{held.add(size);bytes+=size;};source.release=size=>{held.remove(size);bytes-=size;};
+  const filters=defaultFilters();filters.projects={mode:'include',values:['Project']};pin.add(32*1024*1024-128);
+  try{
+    const selected=selectedWork(source,workFilter(filters));assert.equal(bytes,0,'constructing independent views does not prepare the selected matcher');
+    assert.throws(()=>selected(NOW-H,NOW),HistoryLimit);assert.equal(bytes,0,'the empty-source matcher charge is rolled back when project admission fails');assert.equal(reads,0);
+    pin.close();assert.deepEqual(selected(NOW-H,NOW),[]);const retained=bytes;assert.ok(retained>0);
+    selected(NOW-H,NOW);assert.equal(bytes,retained,'successful reads reuse the admitted matcher');
+    failRead=true;assert.throws(()=>selected(NOW-H,NOW),HistoryLimit);assert.equal(bytes,0,'failed raw extraction releases its selected preparation too');
+    failRead=false;assert.deepEqual(selected(NOW-H,NOW),[]);assert.equal(bytes,retained);
+  }finally{held.close();pin.close();store.close();}
 });
 
 test('hour expansion is admitted before its first yield and cancellation releases the entire preparation',()=>{

@@ -1613,7 +1613,10 @@ An inherited oversized predicate remains exact and
 recoverable through successive decreasing local edits, without an oversized work
 request. Parsed queued input, its canonical allowance and prepared membership sets
 share the existing 32 MiB server reservation; retained and staged facets share the
-browser's 15 MiB history pool. Work authority changes retire closed-menu facets too.
+browser's 15 MiB history pool. The selected-work matcher is prepared on its first
+consuming read. A failed preparation or raw read releases its matcher charge; a
+capacity failure stays within that section while independent native sections remain
+readable. Work authority changes retire closed-menu facets too.
 Ordinary session and work changes invalidate their cached choices without a closed-menu
 read. Reopening checks that generation and the live evaluated range; an older reply
 cannot mark newer choices complete.

@@ -17,7 +17,7 @@ import {deepSeekMeasurement} from '../connectors/deepseek.js';
 import {periodValues,nearbyPeriodValues} from '../periodValues.js';
 import {periodValueAt,hasPeriodValue,withValueStates} from '../domain/periodValues.js';
 import {HistoryLimit,HistoryTiles} from '../history.js';
-import {PeriodReader} from '../periodRead.js';
+import {PeriodReader,periodInputBytes} from '../periodRead.js';
 import {Events} from '../events.js';
 import {sharedWork} from '../periodWork.js';
 import {expandPeriod,type PeriodWireReply} from '../domain/periodWire.js';
@@ -447,6 +447,29 @@ test('shared fixed quota hours stay unknown before admission and become zero onl
   const empty=await summary(known,now,filters);
   assert.equal(full.work?.ms,15*M);assert.equal(empty.selectedWork?.ms,0);assert.equal(empty.selectedWork?.agentMs,0);
   assert.deepEqual(empty.work,full.work,'a known empty selection preserves the supplier estimate cohort');
+});
+
+for(const selected of [false,true])test(`matcher pressure preserves native budget with ${selected?'selected sessions':'an unused predicate'}`,async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const tiles=new HistoryTiles(h.store),events=new Events(h.hub,undefined,{now:()=>now,after:()=>()=>{}},null),reader=new PeriodReader(h.hub,tiles,events);t.after(()=>events.close());
+  const wallet=h.store.source('openrouter','matcher-wallet',now-3*H);h.store.hold(wallet,h.user.id,now-3*H);
+  const meter=(id:string,amount:string)=>({id,at:now-M,amount,kind:'counter' as const,unit:'USD',stale:false,staleAfterMs:4*H,limit:null,resetAt:null,minutes:null,scope:null,label:null});
+  h.store.record(wallet,{type:'meters',observedAt:now-M,staleAfterMs:4*H,meters:[meter('usage','0'),meter('credits','15000000')],keys:[],inventoryComplete:true,inventoryError:null});
+  const filters=defaultFilters();filters.projects={mode:'include',values:Array.from({length:1000},(_,i)=>String(i).padStart(4,'0')+'x'.repeat(60))};
+  const request:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,workFilter:workFilter(filters),...(selected?{sessions:{}}:{}),budget:{cell:String(M),from:String(now-H),to:String(now),cells:'skip',unit:'USD',meters:JSON.stringify([[wallet,'balance']])}};
+  let used=0;const reservation=tiles.reservation.bind(tiles);
+  t.mock.method(tiles,'reservation',()=>{const own=reservation();let bytes=0;return {add:(size:number)=>{own.add(size);bytes+=size;used+=size;},remove:(size:number)=>{own.remove(size);bytes-=size;used-=size;},close:()=>{own.close();used-=bytes;bytes=0;}};});
+  const pin=tiles.reservation(),pinned=32*1024*1024-periodInputBytes(request)-100_000;pin.add(pinned);t.after(()=>pin.close());
+  const native={...request,workFilter:undefined,sessions:undefined},padding=periodInputBytes(request)-periodInputBytes(native);pin.add(padding);
+  const read=async(body:PeriodRequest)=>expandPeriod(JSON.parse(await reader.readAsync(h.board,h.user.id,body)) as PeriodWireReply);
+  const control=await read(native);assert.equal(control.budget?.state,'complete');pin.remove(padding);
+  const reply=await read(request);assert.equal(reply.budget?.state,'complete');
+  if(reply.budget?.state!=='complete')throw new Error('native sibling failed');
+  assert.equal(reply.budget.value.tape!.money[0].paired!.readings[0].amount,'15000000');
+  if(selected)assert.deepEqual(reply.sessions,{state:'error',error:'history_limit'});else assert.equal(reply.sessions,undefined);
+  assert.equal(used,pinned,'all failed preparation and input charges are released');
+  pin.close();assert.equal(used,0);
+  const recovered=await read(request);assert.equal(recovered.budget?.state,'complete');if(selected)assert.equal(recovered.sessions?.state,'complete');assert.equal(used,0);
 });
 
 test('a refused source-curve publication cannot escape through a sibling fixed section and recovers after capacity returns',async t=>{

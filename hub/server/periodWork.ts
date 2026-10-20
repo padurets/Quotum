@@ -13,8 +13,14 @@ import {prepareWorkFilter,type WorkFilter} from './domain/dataFilters.js';
 
 /** Both scopes borrow the same bounded raw ledger and immutable access snapshot. */
 export function selectedWork(sourceWide:WorkRead,filter:WorkFilter):WorkRead {
-  const match=prepareWorkFilter(filter,sourceWide.reserve);
-  const read:WorkRead=(from,to)=>sourceWide(from,to).filter(row=>match({...row,clientId:row.rawContext?.client??null}));
+  let match:ReturnType<typeof prepareWorkFilter>|undefined,bytes=0;
+  const read:WorkRead=(from,to)=>{
+    try{
+      // Only a consuming section prepares the matcher; siblings keep their capacity.
+      match??=prepareWorkFilter(filter,size=>{sourceWide.reserve?.(size);bytes+=size;});
+      return sourceWide(from,to).filter(row=>match!({...row,clientId:row.rawContext?.client??null}));
+    }catch(error){sourceWide.release?.(bytes);bytes=0;match=undefined;throw error;}
+  };
   read.access=sourceWide.access;read.authority=sourceWide.authority;read.ensureAccess=sourceWide.ensureAccess;read.reserve=sourceWide.reserve;read.release=sourceWide.release;
   read.filterKey=JSON.stringify(filter);return read;
 }
