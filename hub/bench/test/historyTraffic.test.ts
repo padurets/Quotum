@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {brotliCompressSync, constants} from 'node:zlib';
-import {HISTORY_ATTEMPT_HEADER, HISTORY_CODEC_PARAMS, historyBody, historyProxy, type BodyCount, type Transfer} from '../historyProxy';
+import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from '../historyProxy';
 import {HistoryCutChanged, bodyBounds, bodyTotals, stableHistory, trafficProblems, transferFor} from '../historyTrafficBudget';
 import {trafficReadEvidence} from '../historyTrafficBrowser';
 
@@ -85,77 +85,10 @@ test('the owned proxy measures a real fixed-codec HTTP body without changing JSO
   } finally {await proxy.close(); await new Promise<void>(resolve => upstream.close(() => resolve()));}
 });
 
-import {HistoryBodies, periodWireAlternative, hasSeededHistory, historyReadSelection, historyScroll, prepareHistoryTarget, stableHistoryReads} from '../historyTrafficBrowser';
+import {HistoryBodies, hasSeededHistory, historyReadSelection, historyScroll, prepareHistoryTarget, stableHistoryReads} from '../historyTrafficBrowser';
 import {readUnion} from '../historyTrafficBudget';
 import {compactJSON} from '../../server/history';
 import type {PeriodReply} from '../../server/domain/periodRead';
-import {expandPeriod,periodDictionary} from '../../server/domain/periodWire';
-import {periodValueAt,withValueStates,type PeriodValues} from '../../server/domain/periodValues';
-
-test('wire alternative binds exact original serialization and codec without exposing or changing values',async()=>{
-  const card=(from:number,to:number,amount:string):PeriodValues=>({id:'private-canary',provider:'codex',windows:[],keys:[],meters:[{id:'balance',kind:'balance',unit:'USD',amount,stale:false,limit:null,at:from,staleAfterMs:10_000,resetAt:null,minutes:null,scope:null,label:'private-canary'}],validFor:{from,to}});
-  const base=card(2000,5000,'900719925474099312345'),prior=card(1000,2000,'900719925474099312344');
-  const reply={basis:{run:'private-canary',revision:'1',evaluatedAt:3000,evidenceCut:3000,range:{from:1000,to:3000}},values:{state:'complete',value:[withValueStates(base,[prior,base],()=>{})]}} as unknown as PeriodReply;
-  const encode=(value:PeriodReply)=>{const dictionary=periodDictionary(value,()=>{});return compactJSON(value,dictionary.replacer);};
-  const text=encode(reply),bytes=brotliCompressSync(text,{params:HISTORY_CODEC_PARAMS}).length,before=JSON.stringify(reply);
-  const observed=await periodWireAlternative(text,bytes,'br');
-  assert.equal(observed.status,1);
-  if(observed.status!==1||!('omitted' in observed))throw new Error('missing alternative');
-  assert.equal(observed.omitted,1);assert.equal(observed.decoded,Buffer.byteLength(text));assert.equal(observed.encoded,bytes);
-  assert.equal(observed.packedValues+observed.plainValues,1);
-  assert.equal(observed.packedValues,text.includes('"pathEncoding":"prefix"')?1:0);
-  const expected=structuredClone(reply);expected.values!.state==='complete'&&expected.values!.value[0].states!.pieces.pop();
-  const alternative=encode(expected);
-  assert.equal(observed.alternativeDecoded,Buffer.byteLength(alternative));
-  assert.equal(observed.alternativeEncoded,brotliCompressSync(alternative,{params:HISTORY_CODEC_PARAMS}).length);
-  const original=expandPeriod(JSON.parse(text)),reduced=expandPeriod(JSON.parse(alternative));
-  if(original.values?.state!=='complete'||reduced.values?.state!=='complete')throw new Error('missing card values');
-  let old=original.values.value[0],next=reduced.values.value[0];
-  const fields=(value:PeriodValues|undefined)=>{if(!value)return;const {states:_,...rest}=value;return rest;};
-  for(const at of [4999,1000,2000,1001,1999,4999,5000,999]){
-    const before=periodValueAt(old,at),after=periodValueAt(next,at);
-    assert.deepEqual(fields(after),fields(before),'replay and return retain every amount, observation and exclusive boundary');
-    if(before)old=before;if(after)next=after;
-  }
-  assert.equal(JSON.stringify(reply),before);
-  assert.doesNotMatch(JSON.stringify(observed),/private-canary|9007199254740993/);
-  assert.equal((await periodWireAlternative(text+' ',bytes,'br')).status,3,'a serializer mismatch cannot become a saving');
-  assert.equal((await periodWireAlternative(text,bytes+1,'br')).status,4,'a different compressed size cannot be attributed to this codec');
-  assert.equal((await periodWireAlternative(text,bytes,'gzip')).status,4);
-  assert.equal((await periodWireAlternative('{',bytes,'br')).status,5);
-});
-
-test('wire alternative rejects the whole packet when replay retains an earlier anchor',async()=>{
-  const value=(from:number,to:number):PeriodValues=>({id:'private-canary',provider:'codex',windows:[],meters:[],keys:[],validFor:{from,to}});
-  const prior=value(1000,2000),base=value(2000,3000),saved=withValueStates(prior,[base],()=>{});
-  saved.states!.start=prior;
-  const anchored={...base,states:saved.states},fresh=withValueStates(base,[prior,base],()=>{});
-  const reply={basis:{},values:{state:'complete',value:[fresh,anchored]}} as unknown as PeriodReply;
-  const dictionary=periodDictionary(reply,()=>{}),text=compactJSON(reply,dictionary.replacer),bytes=brotliCompressSync(text,{params:HISTORY_CODEC_PARAMS}).length;
-  const original=expandPeriod(JSON.parse(text));
-  if(original.values?.state!=='complete')throw new Error('missing card values');
-  assert.ok(periodValueAt(original.values.value[1],1500),'the anchor makes earlier history available');
-  const observed=await periodWireAlternative(text,bytes,'br');
-  assert.equal(observed.status,2,'a fresh-producer model must not remove a cached anchor or report partial savings');
-  assert.equal('alternativeEncoded' in observed,false);
-  assert.ok(periodValueAt(original.values.value[1],1500));
-});
-
-test('wire alternative retains middle, crossing and future replay intervals',async()=>{
-  const value=(from:number,to:number):PeriodValues=>({id:'private-canary',provider:'codex',windows:[],meters:[],keys:[],validFor:{from,to}});
-  for(const [base,rows,omitted] of [
-    [value(2000,3000),[value(1000,2000),value(2000,3000),value(3000,4000)],0],
-    [value(2000,3000),[value(1000,2000),value(2000,3001)],0],
-    [value(2000,3000),[value(1000,2000),value(1999,3000)],0],
-    [value(2000,3000),[value(1000,2000),value(2000,3000)],1],
-  ] as const){
-    const reply={basis:{},values:{state:'complete',value:[withValueStates(base,rows,()=>{})]}} as unknown as PeriodReply;
-    const dictionary=periodDictionary(reply,()=>{}),text=compactJSON(reply,dictionary.replacer),bytes=brotliCompressSync(text,{params:HISTORY_CODEC_PARAMS}).length;
-    const observed=await periodWireAlternative(text,bytes,'br');
-    assert.equal(observed.status,1);assert.equal('omitted' in observed&&observed.omitted,omitted);
-    if(!omitted&&'alternativeEncoded' in observed){assert.equal(observed.alternativeEncoded,bytes);assert.equal(observed.alternativeDecoded,Buffer.byteLength(text));}
-  }
-});
 
 test('failed cold cohorts retain original wire sizes and section errors without changing body verdicts', async () => {
   const basis={run:'private-canary',revision:'0',evaluatedAt:3000,evidenceCut:2000,range:{from:1000,to:2000}};
@@ -167,43 +100,36 @@ test('failed cold cohorts retain original wire sizes and section errors without 
   const request={version:1,selection:{mode:'range',from:1000,to:2000},evaluatedAt:3000,values:Array(69).fill('private-canary'),sessions:{},
     ...Object.fromEntries(['quota','budget','funds'].map(scope=>[scope,{cell:'1000',from:'1000',to:'2000',cells:'skip'}]))};
   const original=compactJSON(reply);assert.notEqual(original,JSON.stringify(reply),'the server wire uses compact numbers');
-  for(const alternative of [false,true])for(const [phase,answer,post,qualifies,states] of [
-    ['browser/1d/activity/100ms/0.5/take1/cold',original,request,true,[1,1,1,1,1]],
-    ['browser/1d/activity/400ms/0.5/take1/cold',compactJSON({...reply,funds:{state:'error',error:'history_limit'}}),request,false,[1,1,2,1,1]],
-    ['browser/1d/activity/100ms/0.5/take1/cold',JSON.stringify(reply),request,false,[1,1,1,1,1]],
-    ['browser/1d/activity/100ms/0.5/take1/warm',original,request,undefined,undefined],
-    ['browser/1d/activity/0ms/0.5/take1/cold',original,request,undefined,undefined],
-    ['browser/1d/activity/100ms/0.5/take1/cold',original,{...request,values:['private-canary']},undefined,undefined],
+  for(const [phase,answer,post] of [
+    ['browser/1d/activity/100ms/0.5/take1/cold',original,request],
+    ['browser/1d/activity/400ms/0.5/take1/cold',compactJSON({...reply,funds:{state:'error',error:'history_limit'}}),request],
+    ['browser/1d/activity/100ms/0.5/take1/cold',JSON.stringify(reply),request],
+    ['browser/1d/activity/100ms/0.5/take1/warm',original,request],
+    ['browser/1d/activity/0ms/0.5/take1/cold',original,request],
+    ['browser/1d/activity/100ms/0.5/take1/cold',original,{...request,values:['private-canary']}],
   ] as const){
     const listeners=new Map<string,(event:never)=>void>();
     let sends=0;
     const cdp={on:<T>(name:string,fn:(event:T)=>void)=>listeners.set(name,fn as (event:never)=>void),send:async<T>()=>{sends++;return {body:answer,base64Encoded:false} as T;}};
-    const observer=new HistoryBodies(cdp,alternative);observer.phase=phase;
+    const observer=new HistoryBodies(cdp);observer.phase=phase;
     const emit=(name:string,event:object)=>listeners.get(name)?.(event as never);
     emit('Network.requestWillBeSent',{requestId:'baseline',request:{url:'http://localhost/api/boards/private-canary/period',postData:JSON.stringify(post)}});
     emit('Network.responseReceived',{requestId:'baseline',response:{status:200,headers:{'Content-Encoding':'br','Content-Length':'40'}}});
     emit('Network.loadingFinished',{requestId:'baseline'});await Promise.all([...observer.pending]);
     assert.deepEqual(observer.errors,[]);assert.equal(observer.reads[0].count?.complete,true);
     assert.equal(observer.reads[0].count?.decoded,Buffer.byteLength(answer));assert.equal(observer.reads[0].count?.lower,40);
-    const parts=observer.diagnostic(phase).reads[0].wireParts;
-    assert.equal(parts?.qualified,qualifies);assert.deepEqual(parts?.states,states);
-    assert.equal(observer.diagnostic(phase).reads[0].wireAlternative?.status,alternative&&qualifies===true?4:undefined);
-    assert.equal(sends,1,'the optional calculation makes no additional renderer command');
-    if(parts?.qualified){
-      assert.equal(parts.whole,Buffer.byteLength(answer));
-      assert.equal(parts.basis!+parts.dictionaries!+parts.scopes!.reduce((sum,row)=>sum+row[0],0)+parts.values![0]+parts.sessions![0]+parts.topResidual!,parts.whole);
-    }
+    assert.equal(sends,1,'body accounting makes no additional renderer command');
     assert.doesNotMatch(JSON.stringify(observer.diagnostic(phase)),/private-canary/);
   }
   assert.equal(compactJSON(reply),original,'observing the wire cannot mutate retained evidence');
   const listeners=new Map<string,(event:never)=>void>();let sends=0;
   const cdp={on:<T>(name:string,fn:(event:T)=>void)=>listeners.set(name,fn as (event:never)=>void),send:async<T>()=>{sends++;return {body:original,base64Encoded:false} as T;}};
-  const observer=new HistoryBodies(cdp,true);observer.phase='browser/1d/activity/100ms/0.5/take1/cold';
+  const observer=new HistoryBodies(cdp);observer.phase='browser/1d/activity/100ms/0.5/take1/cold';
   const emit=(name:string,event:object)=>listeners.get(name)?.(event as never);
   for(let i=0;i<65;i++)emit('Network.requestWillBeSent',{requestId:String(i),request:{url:'http://localhost/api/boards/private-canary/period',postData:JSON.stringify(request)}});
   emit('Network.responseReceived',{requestId:'64',response:{status:200,headers:{'Content-Encoding':'br','Content-Length':'40'}}});
   emit('Network.loadingFinished',{requestId:'64'});await Promise.all([...observer.pending]);
-  assert.equal(observer.reads[64].count?.complete,true);assert.equal(observer.reads[64].wireAlternative,undefined);
+  assert.equal(observer.reads[64].count?.complete,true);
   assert.equal(observer.diagnostic(observer.phase).omitted,1);assert.equal(observer.diagnostic(observer.phase).reads.length,64);assert.equal(sends,1);
 });
 

@@ -16,20 +16,12 @@ on:
         description: How many times to run the Windows UI smoke on each package
         type: number
         default: 1
-      await-held-wait-sample:
-        description: Diagnose a successful paused UI within its original deadline
-        type: boolean
-        default: false
   workflow_dispatch:
     inputs:
       ui-runs:
         description: How many times the Windows UI smoke runs, on the installed app and on the portable one each
         type: number
         default: 1
-      await-held-wait-sample:
-        description: Diagnose a successful paused UI within its original deadline
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -95,8 +87,6 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           ./desktop/smoke/test-window-probe.ps1
-          ./desktop/smoke/test-wait-observer.ps1
-          ./desktop/smoke/test-wait-sample.ps1
       - name: Commit and version
         shell: bash
         run: |
@@ -228,7 +218,6 @@ jobs:
         timeout-minutes: 40
         env:
           UI_RUNS: ${{ inputs.ui-runs || 1 }}
-          AWAIT_HELD_WAIT_SAMPLE: ${{ inputs.await-held-wait-sample || false }}
         run: |
           # windows.ps1 fails with an exit code, which alone would not end the step.
           function Smoke([string]$Mode, [string]$App) {
@@ -238,8 +227,6 @@ jobs:
           }
           $runs = [int]$env:UI_RUNS
           if ($runs -lt 1) { throw "ui-runs must be at least 1, not $env:UI_RUNS" }
-          $observation = @{}
-          if ($env:AWAIT_HELD_WAIT_SAMPLE -eq 'true') { $observation.AwaitHeldWaitSample = $true }
           $diagnostics = Join-Path $env:RUNNER_TEMP 'quotum-ui-diagnostics'
           $profiles = Join-Path $env:LOCALAPPDATA 'com.padurets.quotum'
           $failed = @()
@@ -252,7 +239,7 @@ jobs:
             $done = 0
             for ($run = 1; $run -le $runs -and -not $script:stop; $run++) {
               $done++
-              try { ./desktop/smoke/windows-ui.ps1 $App -Diagnostics "$diagnostics\$Kind-$run" -StaleDismissalControl @observation; $passed++ }
+              try { ./desktop/smoke/windows-ui.ps1 $App -Diagnostics "$diagnostics\$Kind-$run" -StaleDismissalControl; $passed++ }
               catch { $script:failed += "$Kind-$run"; Write-Host "::error::UI smoke $Kind-$run failed: $($_.Exception.Message)" }
               if (Get-ChildItem -LiteralPath $profiles -Filter 'EBWebView.quotum-ui-*' -Directory -ErrorAction SilentlyContinue) {
                 $script:stop = "$Kind-$run left the profile of WebView2 set aside"

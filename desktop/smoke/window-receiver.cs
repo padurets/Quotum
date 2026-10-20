@@ -18,28 +18,14 @@ public static class QuotumTestReceiver {
   [DllImport("user32.dll")] static extern IntPtr DispatchMessage(ref Message message);
   [DllImport("user32.dll")] static extern IntPtr DefWindowProc(IntPtr window,uint message,IntPtr w,IntPtr l);
   [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern bool SetProp(IntPtr window,string name,IntPtr value);
-  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
-  [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] static extern IntPtr CreateMutex(IntPtr attributes,bool owned,string name);
-  [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr handle,uint timeout);
-  [DllImport("kernel32.dll")] static extern bool ReleaseMutex(IntPtr handle);
   static Procedure callback;
   static void Publish(string file,string value) {
     File.WriteAllText(file+".tmp",value);File.Move(file+".tmp",file,true);
   }
   public static void Run(string mode,string ready,string delivered) {
-    // The observer must see a real dependency on a suspended owner, not a later replay.
-    IntPtr held=IntPtr.Zero;
-    if(mode=="wait-chain"){
-      held=CreateMutex(IntPtr.Zero,true,"Local\\quotum-private-wait-canary-"+Guid.NewGuid().ToString("N"));
-      if(held==IntPtr.Zero)throw new Exception("Cannot create native mutex");
-    }
     callback=(window,message,w,l)=>{
       if(mode=="tray" && message==0x8002){
         Publish(delivered,w==IntPtr.Zero && l==new IntPtr(0x10400)?"valid":"invalid");
-        return IntPtr.Zero;
-      }
-      if(message==0x8006 && held!=IntPtr.Zero){
-        if(!ReleaseMutex(held))throw new Exception("Cannot release native mutex");
         return IntPtr.Zero;
       }
       if(message==0 && mode=="unresponsive")Thread.Sleep(5000);
@@ -57,17 +43,8 @@ public static class QuotumTestReceiver {
     if(RegisterClassEx(ref cls)==0)throw new Exception("Cannot register receiver");
     var handle=CreateWindowEx(0,cls.Name,"fixture",0,0,0,1,1,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero);
     if(handle==IntPtr.Zero)throw new Exception("Cannot create receiver");
-    if(mode!="wait-chain" && !SetProp(handle,"Quotum.LoadingPhase",new IntPtr(mode=="accepted"?0x145:0x10)))throw new Exception("Cannot publish receiver phase");
+    if(!SetProp(handle,"Quotum.LoadingPhase",new IntPtr(mode=="accepted"?0x145:0x10)))throw new Exception("Cannot publish receiver phase");
     Publish(ready,handle.ToInt64().ToString());
-    if(held!=IntPtr.Zero){
-      var waiter=new Thread(()=>{
-        Publish(delivered,GetCurrentThreadId().ToString());
-        if(WaitForSingleObject(held,0xffffffff)!=0)throw new Exception("Native mutex wait failed");
-        if(!ReleaseMutex(held))throw new Exception("Cannot release native mutex");
-        Publish(delivered,"released");
-      });
-      waiter.IsBackground=true;waiter.Start();
-    }
     Message next;while(GetMessage(out next,IntPtr.Zero,0,0)>0)DispatchMessage(ref next);
   }
 }

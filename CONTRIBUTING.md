@@ -150,25 +150,7 @@ Each run starts from a fresh WebView2 profile, as the first start on a machine d
 in `%LOCALAPPDATA%\com.padurets.quotum\EBWebView` is set aside and put back afterwards.
 With `-Diagnostics <dir>` it keeps bounded stage readings, owned process identities
 and a manifest with the source and package hashes. CI uploads these on every run;
-raw application logs and command lines are excluded. A separate observer samples the
-owned UI and tray threads during a pause, with timestamps delimiting that interval.
-It starts before the pause and is stopped only after the UI resumes; startup and stop
-each wait at most two seconds. A stuck observer cannot delay ordinary smoke resume.
-The optional `-AwaitHeldWaitSample` mode requires `-Diagnostics`. Only after the
-original native assertions succeed, including Escape, it may wait for the first
-buffered worker row in the remainder of the existing three-second loader deadline.
-Failures and cancellation still resume through the original guard. It polls an
-atomic published-row count, never the capture lock, JSON or a native query. The
-`await-held-wait-sample` Desktop workflow input selects this mode and defaults to
-false. These runs are diagnostic; they do not replace the ordinary packaged gate.
-A received row still needs post-resume timestamp and dependency qualification;
-the recorded upper pause bound precedes the Resume call. Wait-chain
-artifacts exclude lock names and foreign thread identities, and retain partial samples.
-A successful WCT call with only its root thread is inconclusive: unsupported waits
-can hide their dependencies. It does not establish responsiveness or exclude a lock
-dependency; native window checks still establish responsiveness independently.
-If an observer cannot start, later artifact capture retains its original worker
-cleanup receipt, including an unconfirmed exit, after disposing the process handle.
+raw application logs and command lines are excluded.
 A manual run of the Desktop workflow takes `ui-runs`, how many times
 the UI smoke runs on the installed app and on the portable one each.
 The packaged Windows UI checks include `-StaleDismissalControl`: after the original

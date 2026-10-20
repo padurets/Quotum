@@ -78,7 +78,7 @@ public static class QuotumEvidenceWriter {
 # old inline writer and the separated writer go through the same rejecting sink.
 foreach($function in @($ast.FindAll({param($n)
   $n -is [Management.Automation.Language.FunctionDefinitionAst] -and
-  $n.Name -in @('Write-NativeJson','Enter-NativePause','Resume-NativePause','Save-Manifest','Save-Timeline','Save-Stage','Save-ObservedPause','Test-MainPanelHandoff')
+  $n.Name -in @('Write-NativeJson','Enter-NativePause','Resume-NativePause','Save-Manifest','Save-Timeline','Save-Stage','Test-MainPanelHandoff')
 },$true))){
   . ([scriptblock]::Create($function.Extent.Text.Replace('[IO.File]::WriteAllText(', '[QuotumEvidenceWriter]::WriteAllText(')))
 }
@@ -92,12 +92,6 @@ function Move-Item {
   if([QuotumWindowProbe]::Suspended){[QuotumEvidenceWriter]::Violations++;throw 'filesystem rename while paused'}
   Microsoft.PowerShell.Management\Move-Item -LiteralPath $LiteralPath -Destination $Destination -Force:$Force
 }
-function Stop-WaitObserver {
-  param($Observer)
-  if($observerFailure -eq 'throw'){throw 'private-observer-cleanup-canary'}
-  return @{status=$(if($observerFailure){'insufficient-evidence'}else{'complete'});stopped=(-not $observerFailure);samples=@()}
-}
-function Prepare-WaitObserver { return [pscustomobject]@{Process=$true} }
 $root=Join-Path ([IO.Path]::GetTempPath()) ('quotum-background-control-'+[guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($root) | Out-Null
 function Reset-EvidenceControl {
@@ -107,12 +101,10 @@ function Reset-EvidenceControl {
   $script:timeline=New-Object 'System.Collections.Generic.List[object]'
   $script:timelineClock=[Diagnostics.Stopwatch]::StartNew()
   $script:requestSnapshots=0;$script:requestStages=@()
-  $script:observerFailure=''
   [QuotumEvidenceWriter]::Writes=0;[QuotumEvidenceWriter]::Violations=0;[QuotumEvidenceWriter]::FailWrites=$false
 }
 function Get-Date { [datetime]::new(2026,1,1).AddMilliseconds([QuotumWindowProbe]::Clock) }
 function Start-Sleep { param([int]$Milliseconds) [QuotumWindowProbe]::Clock+=$Milliseconds }
-function Watch-OwnedThreads { param($Observer,$Threads) }
 $cases=@(
   @{name='already-background';foreground=0;iconic=0;race='';error=$false;pauses=1;posts=1;at=0},
   @{name='minimized-still-foreground';foreground=200;iconic=0;race='';error=$false;pauses=1;posts=1;at=200},
@@ -126,7 +118,7 @@ foreach($case in $cases){
   [QuotumWindowProbe]::Reset($case.foreground,$case.iconic,$case.race)
   Reset-EvidenceControl
   $window=[IntPtr]1;$process=[pscustomobject]@{Id=99};$cancel=$false
-  $observer=$null;$paused=$null;$pauseFrom=$null;$result=@{};$caught=$false
+  $paused=$null;$result=@{};$caught=$false
   $pauseFailure=$null
   try {. $setup;. $pause} catch {$caught=$true}
   $ok=$caught -eq $case.error -and [QuotumWindowProbe]::Pauses -eq $case.pauses -and [QuotumWindowProbe]::Posts -eq $case.posts
@@ -143,20 +135,19 @@ foreach($case in $cases){
   Write-Output "$status $($case.name): caught=$caught clock=$([QuotumWindowProbe]::Clock) pauses=$([QuotumWindowProbe]::Pauses) posts=$([QuotumWindowProbe]::Posts) resumes=$([QuotumWindowProbe]::Resumes)"
   if(-not $ok){$failed.Add($case.name)}
 }
-# The opt-in third loader case has no wait observer, even with the WCT option on.
-# Stub only its extra native batch; execute the actual outer pause and resume.
+# Stub only the extra native batch; execute its actual outer pause and resume.
 function Test-StaleLoaderDismissal($Loader,$Clock,$UiThread) {
   if(-not [QuotumWindowProbe]::Suspended){throw 'Native control ran without the outer UI pause'}
   $script:batchCalls++
 }
 [QuotumWindowProbe]::Reset(0,0,'');Reset-EvidenceControl
 $window=[IntPtr]1;$process=[pscustomobject]@{Id=99};$cancel=$false
-$observer=$null;$paused=$null;$pauseFrom=$null;$pauseFailure=$null;$result=@{}
-$isControl=$true;$AwaitHeldWaitSample=$true;$batchCalls=0;$caught=$false
-try {. $pause} catch {$caught=$true} finally {$isControl=$false;$AwaitHeldWaitSample=$false}
+$paused=$null;$pauseFailure=$null;$result=@{}
+$isControl=$true;$batchCalls=0;$caught=$false
+try {. $pause} catch {$caught=$true} finally {$isControl=$false}
 $ok=-not $caught -and $batchCalls -eq 1 -and [QuotumWindowProbe]::Pauses -eq 1 -and [QuotumWindowProbe]::Resumes -eq 1 -and -not [QuotumWindowProbe]::Suspended -and $nativePauseDepth -eq 0 -and [QuotumEvidenceWriter]::Violations -eq 0
-Write-Output "$(if($ok){'PASS'}else{'FAIL'}) opt-in-loader-with-wait-option: caught=$caught batch=$batchCalls resumes=$([QuotumWindowProbe]::Resumes)"
-if(-not $ok){$failed.Add('opt-in-loader-with-wait-option')}
+Write-Output "$(if($ok){'PASS'}else{'FAIL'}) stale-loader-control-resumes: caught=$caught batch=$batchCalls resumes=$([QuotumWindowProbe]::Resumes)"
+if(-not $ok){$failed.Add('stale-loader-control-resumes')}
 # Execute all three actual guarded pause blocks, including exceptions after the
 # pause, a failed sink after resume, and native resume failure with a first cause.
 $blocks=@(@{name='loader';body=$pause;resume='ui-resume'})
@@ -183,15 +174,14 @@ foreach($name in @('Test-QueuedPanelReopen','Test-MainPanelHandoff')){
   $blocks+=@{name=$name;body=[scriptblock]::Create($guardText);resume=$(if($name -eq 'Test-QueuedPanelReopen'){'queued-panel-resume'}else{'main-handoff-resume'})}
 }
 foreach($block in $blocks){
-  foreach($mode in @('scenario-failure','writer-failure','resume-failure','scenario-and-resume-failure','observer-failure','scenario-and-observer-failure')){
+  foreach($mode in @('scenario-failure','writer-failure','resume-failure','scenario-and-resume-failure')){
     [QuotumWindowProbe]::Reset(0,0,'')
     Reset-EvidenceControl
-    [QuotumWindowProbe]::FailScenario=$mode -in @('scenario-failure','scenario-and-resume-failure','scenario-and-observer-failure')
+    [QuotumWindowProbe]::FailScenario=$mode -in @('scenario-failure','scenario-and-resume-failure')
     [QuotumWindowProbe]::FailResume=$mode -in @('resume-failure','scenario-and-resume-failure')
     [QuotumEvidenceWriter]::FailWrites=$mode -eq 'writer-failure'
-    if($mode -in @('observer-failure','scenario-and-observer-failure')){$script:observerFailure='unconfirmed'}
     $window=[IntPtr]1;$panel=[IntPtr]1;$Main=[IntPtr]1;$process=[pscustomobject]@{Id=99};$appPath='fixture.exe'
-    $observer=$null;$paused=$null;$pauseFailure=$null;$pauseFrom=$null;$cancel=$false;$result=@{};$caught=$null
+    $paused=$null;$pauseFailure=$null;$cancel=$false;$result=@{};$caught=$null
     try {. $block.body} catch {$caught=$_}
     $resume=@($timeline | Where-Object {$_.stage -eq $block.resume})
     $ok=[QuotumWindowProbe]::Pauses -eq 1 -and [QuotumEvidenceWriter]::Violations -eq 0
@@ -207,29 +197,20 @@ foreach($block in $blocks){
     if([QuotumWindowProbe]::FailScenario){$ok=$ok -and $caught.Exception.Message.Contains('original scenario failure')}
     elseif($mode -eq 'writer-failure'){$ok=$ok -and $null -eq $caught}
     elseif($mode -eq 'resume-failure'){$ok=$ok -and $caught.Exception.Message.Contains('controlled resume failure')}
-    elseif($mode -eq 'observer-failure' -and $block.name -ne 'Test-QueuedPanelReopen'){$ok=$ok -and $caught.Exception.Message.Contains('Wait observer cleanup unconfirmed')}
-    if($observerFailure -and $block.name -ne 'Test-QueuedPanelReopen'){$ok=$ok -and $manifest.errors -contains 'wait observer cleanup unconfirmed'}
     $status=if($ok){'PASS'}else{'FAIL'}
     Write-Output "$status $($block.name)/${mode}: pauses=$([QuotumWindowProbe]::Pauses) resumes=$([QuotumWindowProbe]::Resumes) writes=$([QuotumEvidenceWriter]::Writes) violations=$([QuotumEvidenceWriter]::Violations)"
     if(-not $ok){$failed.Add($block.name+'/'+$mode)}
   }
 }
-# Execute the whole handoff function too: its outer finally must preserve a
-# setup failure even when an observer cannot finish or throws before releasing.
-foreach($failure in @('unconfirmed','throw')){
-  [QuotumWindowProbe]::Reset(0,0,'')
-  Reset-EvidenceControl
-  [QuotumWindowProbe]::FailSetup=$true
-  $script:observerFailure=$failure
-  $process=[pscustomobject]@{Id=99};$caught=$null
-  try {Test-MainPanelHandoff ([IntPtr]1)} catch {$caught=$_}
-  $ok=$null -ne $caught -and $caught.Exception.Message.Contains('original setup failure')
-  $ok=$ok -and $manifest.errors -contains 'wait observer cleanup unconfirmed'
-  $ok=$ok -and (ConvertTo-Json $manifest -Depth 5) -notmatch 'private-observer-cleanup-canary'
-  $status=if($ok){'PASS'}else{'FAIL'}
-  Write-Output "$status handoff-setup/${failure}: pauses=$([QuotumWindowProbe]::Pauses)"
-  if(-not $ok){$failed.Add('handoff-setup/'+$failure)}
-}
+# A setup failure still propagates before any UI thread is paused.
+[QuotumWindowProbe]::Reset(0,0,'')
+Reset-EvidenceControl
+[QuotumWindowProbe]::FailSetup=$true
+$process=[pscustomobject]@{Id=99};$caught=$null
+try {Test-MainPanelHandoff ([IntPtr]1)} catch {$caught=$_}
+$ok=$null -ne $caught -and $caught.Exception.Message.Contains('original setup failure') -and [QuotumWindowProbe]::Pauses -eq 0
+Write-Output "$(if($ok){'PASS'}else{'FAIL'}) handoff-setup: pauses=$([QuotumWindowProbe]::Pauses)"
+if(-not $ok){$failed.Add('handoff-setup')}
 # Buffer bounds and original timestamps belong to the actual Save-Stage too.
 [QuotumWindowProbe]::Reset(0,0,'')
 Reset-EvidenceControl
