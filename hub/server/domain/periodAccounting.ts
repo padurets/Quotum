@@ -399,8 +399,8 @@ export class PeriodAccounting {
       const leftEnd=(Math.floor(range.from/fixed.cell)+1)*fixed.cell,rightStart=Math.floor((range.to-1)/fixed.cell)*fixed.cell;
       const interior=(at:number)=>at>=leftEnd&&at<rightStart;
       return {...history,exact:true,since:range.from,to:range.to,...(fixed.moneyWork?{moneyWork:fixed.moneyWork}:{}),
-        series:fixed.quota.map(row=>({...row,...(stateAt<range.to&&values?.get(row.sourceId)?{remainingAtEnd:values.get(row.sourceId)!.windows.find(w=>w.id===row.windowId&&stateAt<w.validUntil)?.remaining??null}:{}),points:[...(history.series.find(s=>s.sourceId===row.sourceId&&s.windowId===row.windowId)?.points??[]).filter(([at])=>interior(at)),...row.points].sort((a,b)=>a[0]-b[0])})),
-        meterSeries:fixed.money.map(row=>({...row,...(stateAt<range.to&&values?.get(row.sourceId)&&values.get(row.sourceId)!.meters.some(m=>m.id===row.meterId&&stateAt>=(m.validUntil??m.at+m.staleAfterMs+1))?{end:null}:{}),points:[...moneyInterior(history.meterSeries?.find(s=>s.sourceId===row.sourceId&&s.meterId===row.meterId&&s.unit===row.unit)?.points??[],range,fixed.cell,{from:history.since,to:history.to}),...row.points].sort((a,b)=>a.at-b.at)}))};
+        series:fixed.quota.map(row=>({...row,...(values?.get(row.sourceId)?{remainingAtEnd:values.get(row.sourceId)!.windows.find(w=>w.id===row.windowId&&stateAt<w.validUntil)?.remaining??null}:{}),points:[...(history.series.find(s=>s.sourceId===row.sourceId&&s.windowId===row.windowId)?.points??[]).filter(([at])=>interior(at)),...row.points].sort((a,b)=>a[0]-b[0])})),
+        meterSeries:fixed.money.map(row=>({...row,...(values?.get(row.sourceId)&&values.get(row.sourceId)!.meters.some(m=>m.id===row.meterId&&stateAt>=(m.validUntil??m.at+m.staleAfterMs+1))?{end:null}:{}),points:[...moneyInterior(history.meterSeries?.find(s=>s.sourceId===row.sourceId&&s.meterId===row.meterId&&s.unit===row.unit)?.points??[],range,fixed.cell,{from:history.since,to:history.to}),...row.points].sort((a,b)=>a.at-b.at)}))};
     }
     const previous=new Map(history.series.map(s=>[s.sourceId+'\n'+s.windowId,s]));
     const series:HistorySeries[]=[];

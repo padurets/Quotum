@@ -65,6 +65,7 @@ export class WorkCalendar {
   evictionCandidates(){return this.cache.evictionCandidates();}
   clear(retainContext=false){if(!retainContext)this.context='';this.needed=false;this.cache.clear();this.generation++;this.state={...this.state,value:null,basis:null,loading:false,error:null};this.publish();}
   configure(visible:boolean,context:string,now:number,limited=false,selection:PeriodSelection=this.selection,reserve:(bytes:number)=>boolean=()=>true){
+    const generation=this.generation;
     const changed=this.context!==context||this.visible!==visible||periodKey(selection)!==periodKey(this.selection);
     if(this.context!==context||this.visible!==visible||limited)this.cache.clear();
     this.visible=visible;this.limited=limited;this.selection=selection;
@@ -76,7 +77,7 @@ export class WorkCalendar {
     }
     else this.tick(now,true);
     if(visible&&limited){this.needed=false;this.state={...this.state,value:null,basis:null,loading:false,error:'filters_limit'};}
-    if(changed)this.publish();return changed;
+    if(changed)this.publish();return changed||generation!==this.generation;
   }
   tick(now:number,checkZone=false){
     if(!this.visible)return false;
@@ -97,8 +98,9 @@ export class WorkCalendar {
         return {...cell,from,...(cell.validUntil!==null&&now>=cell.validUntil?{agentMs:null}:{})};
       })};
     }
-    if(partition||invalid)this.generation++;
-    this.state={...old,window,value,basis:partition||invalid?null:old.basis};this.publish();return true;
+    const renew=partition||invalid;
+    if(renew){this.generation++;this.needed=!this.limited;}
+    this.state={...old,window,value,basis:renew?null:old.basis,...(renew&&this.needed?{loading:true,error:null}:{})};this.publish();return true;
   }
   nextAt(_now:number){
     if(!this.visible)return Infinity;

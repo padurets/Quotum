@@ -336,6 +336,19 @@ test('an oversized section does not discard siblings or retain its failed reserv
   assert.equal(next.quota?.state,'complete');assert.equal(next.sessions?.state,'complete');assert.equal(next.values?.state,'complete');
 });
 
+test('a failed calendar releases its partial reply before source work is prepared',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture(now-100*24*H);t.after(async()=>{await h.app.close();h.store.close();});
+  h.credit(now-25*H,now);
+  const tiles=new HistoryTiles(h.store),events=new Events(h.hub,undefined,{now:()=>now,after:()=>()=>{}},null),reader=new PeriodReader(h.hub,tiles,events);
+  t.after(()=>events.close());
+  const pin=tiles.reservation();pin.add(32*1024*1024-40_000);t.after(()=>pin.close());
+  const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:25*H},evaluatedAt:now,sourceWork:{},quota:{cell:String(15*M),from:String(Math.floor((now-25*H)/(15*M))*15*M),to:String(Math.ceil(now/(15*M))*15*M),cells:'skip',evidence:'skip'}};
+  const read=(calendar:boolean)=>expandPeriod(JSON.parse(reader.read(h.board,h.user.id,{...body,...(calendar?{calendar:{zone:'UTC'}}:{})})));
+  const control=read(false);assert.equal(control.sourceWork?.state,'complete');assert.equal(control.quota?.state,'complete');
+  const failed=read(true);assert.deepEqual(failed.calendar,{state:'error',error:'history_limit'});
+  assert.equal(failed.sourceWork?.state,'complete','the failed optional projection must leave capacity for its sibling');assert.equal(failed.quota?.state,'complete');
+});
+
 test('a chart-only past tile reads only its work, and extraction replacement releases its reservation',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   h.credit(now-2*H,now-H);h.credit(now-30*M,now-M,'later');

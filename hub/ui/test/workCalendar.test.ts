@@ -58,6 +58,27 @@ test('authority clearing rejects an older in-flight heatmap',async t=>{
 test('financial news and shared-clock advancement never poll heatmap history',async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=await fixture({heatmap:true,clocked:true});t.after(()=>h.close());h.event({type:'history',data:{sources:[h.source],since:NOW-M,changes:[{source:h.source,scope:'budget',since:NOW-M}]}});await flush();assert.equal(h.requests.filter(r=>r.calendar).length,0);h.jump(NOW+2*M);await flush();assert.equal(h.requests.filter(r=>r.calendar).length,0);
 });
+
+test('a backwards hub clock replaces invalid calendar evidence once without polling',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({heatmap:true,clocked:true});t.after(()=>h.close());
+  assert.ok(h.period.calendar.state.value);
+  h.clock.heard(NOW-M,NOW);await flush();
+  assert.ok(h.period.calendar.state.value);assert.equal(h.period.calendar.state.error,null);assert.equal(h.period.calendar.needed,false);
+  assert.equal(h.period.calendar.state.basis.evaluatedAt,NOW-M);
+  assert.equal(h.requests.filter(r=>r.calendar).length,1);
+  h.period.wakeCalendar();await flush();assert.equal(h.requests.filter(r=>r.calendar).length,1);
+});
+
+test('a delayed calendar reply crossing midnight cannot complete the replacement generation',async t=>{
+  let now=NOW;t.mock.method(Date,'now',()=>now);const h=await fixture({heatmap:true,clocked:true});t.after(()=>h.close());
+  const midnight=h.period.calendar.nextAt(now);now=midnight-1000;h.jump(now);await flush();h.requests.length=0;
+  const held=h.hold();h.credit(now-M,now);h.events.flush();await flush();assert.equal(h.requests.filter(r=>r.calendar).length,1);
+  now=midnight+1000;h.jump(now);await flush();held.release();await flush();
+  assert.ok(h.period.calendar.state.basis,'the retired flight must not strand the pending replacement');
+  assert.equal(h.period.calendar.state.basis.evaluatedAt,now);assert.equal(h.period.calendar.needed,false);assert.equal(h.period.calendar.state.error,null);
+  assert.equal(h.requests.filter(r=>r.calendar).length,2);
+  h.period.wakeCalendar();await flush();assert.equal(h.requests.filter(r=>r.calendar).length,2);
+});
 test('a selection replacement retires the old generation and hiding removes demand',()=>{
   const calendar=new WorkCalendar();calendar.configure(true,'a',NOW,false,{mode:'live',periodMs:H});const generation=calendar.generation;calendar.configure(true,'a',NOW,false,{mode:'range',from:NOW-3*H,to:NOW-2*H});assert.ok(calendar.generation>generation);assert.equal(calendar.state.value,null);assert.deepEqual(calendar.demand(),{zone:calendar.state.window.zone});calendar.configure(false,'a',NOW);assert.equal(calendar.demand(),undefined);
 });

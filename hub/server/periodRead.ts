@@ -386,6 +386,7 @@ export class PeriodReader {
       })());
       if(response.facets?.state==='complete'&&facetRanges.length)response.facets.basis={...basis,range:{from:facetRanges[0].from,to:facetRanges.at(-1)!.to}};
       if(calendarPlan&&!calendarLimited){
+        const before=replyBytes;
         try{
           work.ensureAccess?.();
           const known=workKnownFrom(store.historyKnown(shown,access?.owner,access));
@@ -395,7 +396,7 @@ export class PeriodReader {
           const proof=calendarPlan.delta?undefined:{...yield*calendarProof(rows(),range,cut,known,retainedFrom,reserve),retentionMs:config.retention.sampleDays*86_400_000,...(selection.mode==='live'?{periodMs:selection.periodMs}:{})};
           const common={availableFrom:known,retainedFrom,cursor:calendarPlan.cursor};
           response.calendar=calendarPlan.delta?{state:'delta',basis:calendarPlan.basis,value:{...common,updates}}:{state:'complete',basis:calendarPlan.basis,value:{...common,zone:calendar!.zone,edges:calendar!.edges,cells:updates.map(([,cell])=>cell),proof}};
-        }catch(error){if(!(error instanceof HistoryLimit)&&!(error instanceof RangeError))throw error;response.calendar={state:'error',error:'history_limit'};}
+        }catch(error){if(!(error instanceof HistoryLimit)&&!(error instanceof RangeError))throw error;release(replyBytes-before);response.calendar={state:'error',error:'history_limit'};}
       }
       if(sourcePlan){
         const {sources,delta,patch,cursor}=sourcePlan;

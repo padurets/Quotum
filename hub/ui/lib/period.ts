@@ -270,10 +270,13 @@ class BoardPeriod {
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
   subscribeWorkOrder=(read:(rows:WorkedSession[])=>SessionOrder|null)=>{this.workOrders.add(read);this.scheduleClock();return()=>{this.workOrders.delete(read);this.scheduleClock();};};
   wakeCalendar=()=>{
-    const zone=this.calendar.state.window.zone;
-    if(this.calendar.tick(hubNow(),true)){if(zone!==this.calendar.state.window.zone&&this.calendar.dirty()){this.revision++;this.transport.change();}}
+    this.tickCalendar(hubNow(),true);
     this.scheduleClock();
   };
+  private tickCalendar(now:number,checkZone=false){
+    const generation=this.calendar.generation;this.calendar.tick(now,checkZone);
+    if(generation!==this.calendar.generation&&this.calendar.needed){this.revision++;this.transport.change();}
+  }
   refreshWorkClock=()=>{if(this.evaluatedAt!==hubNow())this.tick();else{this.retireExpired(hubNow());this.scheduleClock();}};
   subscribeSource=(id:string,listener:()=>void)=>{let set=this.sourceListeners.get(id);if(!set)this.sourceListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   subscribeValue=(id:string,listener:()=>void)=>{let set=this.valueListeners.get(id);if(!set)this.valueListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
@@ -705,7 +708,7 @@ class BoardPeriod {
   private tick(fromClock=true) {
     if(!this.active)return;
     const now=hubNow();
-    this.calendar.tick(now);
+    this.tickCalendar(now);
     if(now>=this.nativeDue&&this.selection.mode==='range'){
       const at=Math.min(this.selection.to,now);
       for(const [id,reading] of this.values)if(reading.value)this.setValue(id,{...reading,value:periodValueNow(reading.value,at)});

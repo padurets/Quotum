@@ -695,7 +695,7 @@ labels beside intraday segments without separate label rows. Neither view adds a
 inner scroller. The fixed single-hue scale uses `CATEGORY_COLORS[0]` and opacity
 0.20, 0.40, 0.60, 0.80, 1.00 for positive intervals below 0.5, 1, 2, 4 and above
 4 times the displayed interval duration. Zero has a neutral fill. Numeric legends
-name the unit and interval: agent-minutes for sub-hour bins, agent-hours otherwise.
+place the unit beside the scale values: agent-minutes for sub-hour bins, agent-hours otherwise.
 Filtering never recomputes thresholds from the selected sample. Partial, unavailable,
 selected and focused states have cues independent of intensity. Details retain
 integer milliseconds and show hours to nine decimal places, including tiny positives.
