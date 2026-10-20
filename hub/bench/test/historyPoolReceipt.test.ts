@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {HistoryPool} from '../../ui/lib/historyPool';
 import {PeriodTransport} from '../../ui/lib/periodTransport';
+import {ActivitySelection} from '../../ui/lib/activitySelection';
+import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
 import {safeEvidence} from '../evidence';
 import {historyPoolReceiptScript} from '../historyPoolReceipt';
+import {historyIdentityScript} from '../historyTrafficBrowser';
 
 function fixture(realTransport:boolean|((pool:HistoryPool)=>PeriodTransport)=false) {
   const reply=Promise.resolve('stand-in'),pool=new HistoryPool();let now=0;
@@ -108,6 +111,34 @@ test('HTTP receipts observe admitted readers after queue changes and pruning',as
   for(const demand of http.demands){const submitted=receipt.entries.find((e:any)=>e.kind==='read'&&e.readId===demand.readId);assert.equal(submitted.memberId,demand.memberId);assert.equal(submitted.interest[0],1);}
   assert.equal(JSON.stringify(safeEvidence(http)),JSON.stringify(http));
   h.pool.release(held[1]);await flush();assert.equal(h.pool.activeFlights,0);
+});
+
+for(const mode of ['current','unregistered','replaced-flight','generation','aborted','live'] as const)test(`direct Activity HTTP requires its current registered admission: ${mode}`,async()=>{
+  const h=fixture();h.run("for(const value of [quota,budget,funds])value.env.read('synthetic',60,0,60);");
+  h.run(historyIdentityScript());
+  let release!:(value:any)=>void;const pending=new Promise<any>(resolve=>{release=resolve;});
+  const activity=new ActivitySelection({pool:h.pool,now:()=>60_001,scheduler:()=>null,read:()=>({trace:null,ready:true,error:null}),send:async(board,body,signal)=>{
+    if(mode==='unregistered')activity.reset();
+    if(mode==='replaced-flight')h.run('activity.flight={...activity.flight};');
+    if(mode==='generation')h.run('activity.generation++;');
+    if(mode==='aborted')h.run('activity.flight.controller.abort();');
+    if(mode==='live')h.run("activity.scope.selection={mode:'live',periodMs:60000};");
+    void h.context.fetch(`/api/boards/${board}/period`,{headers:{'content-type':'application/json'},body:JSON.stringify(body),signal});
+    return pending;
+  }});
+  h.context.activity=activity;
+  activity.configure({board:'synthetic',authority:'one',by:'project',muted:['"A"'],filters:workFilter(defaultFilters()),selection:{mode:'range',from:0,to:60_000},rangeKey:'fixed',barMs:60_000});
+  for(let i=0;i<24;i++)await Promise.resolve();
+  h.run('__quotumHistoryPoolReceipt.mark(2,3);');
+  const receipt=h.read(),http=receipt.entries.find((entry:any)=>entry.kind==='http');
+  assert.match(http.attemptId,/^b\d+:\d+$/);assert.ok(http.flightId>0);
+  assert.equal(receipt.status,mode==='current'?'complete':'insufficient-evidence');
+  if(mode==='current'){
+    assert.equal(receipt.sendingUnknown,0);assert.equal(http.sender.kind,'activity');
+    assert.equal(http.sender.memberId,receipt.members.at(-1).id);assert.equal(http.demands.length,0);
+    assert.equal(JSON.stringify(safeEvidence(http)),JSON.stringify(http));
+  }else{assert.ok(receipt.sendingUnknown>0);assert.equal(http.sender,null);assert.equal(http.demands,null);}
+  activity.reset();release({});for(let i=0;i<24;i++)await Promise.resolve();assert.equal(h.pool.activeFlights,0);
 });
 
 test('HTTP without a known admission remains insufficient evidence',()=>{

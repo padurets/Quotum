@@ -9,6 +9,7 @@ import type {PeriodRequest,PeriodReply} from '../server/domain/periodRead.js';
 import {ObservedWork} from './observed.js';
 import {openTab,type Browser,type Cdp} from './cdp.js';
 import {historyPoolReceiptScript} from './historyPoolReceipt.js';
+import {historyIdentityScript} from './historyTrafficBrowser.js';
 import {probeScript,type Reading} from './probe.js';
 
 /** Compact fixed summaries include exact neighboring-position programs, even on a one-cell read.
@@ -39,7 +40,7 @@ export function activityOracle(trace:WorkTrace,from:number,to:number):Numbers {
   return {agentMs,activeMs,agents:identities.size};
 }
 
-function observationScript(period:string){return historyPoolReceiptScript()+`;(() => {
+function observationScript(period:string){return historyPoolReceiptScript()+historyIdentityScript()+`;(() => {
   localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d',activityBy:'project'}));
   const original=window.__quotumInspectHistoryPool,ids=new WeakMap();let serial=0,pool,stats;
   const reset=()=>stats={bytes:0,flights:0,subsetFlights:0,advances:0,subsetAdvances:0,preparationMs:0,failedReservations:0,preferenceWrites:0};reset();
@@ -189,8 +190,8 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       assert.ok(generations.subset.length>=2&&generations.subset.length<=3,'cancelled attempts remain counted');
       await phase('through upper bound',async()=>{await actor.through(selection.to);},1);
       await phase('outside range',async()=>{await actor.through(selection.to+100);},0);
-      const receipt=await cdp.evaluate<{status:string;members:{kind:string}[]}>(`(()=>{__quotumHistoryPoolReceipt.mark(2,3);return __quotumHistoryPoolReceipt.read();})()`);
-      assert.equal(receipt.status,'complete');assert.ok(receipt.members.some(member=>member.kind==='activity'));
+      const receipt=await cdp.evaluate<{status:string;members:{kind:string}[];[key:string]:unknown}>(`(()=>{__quotumHistoryPoolReceipt.mark(2,3);return __quotumHistoryPoolReceipt.read();})()`);
+      assert.equal(receipt.status,'complete',JSON.stringify(Object.fromEntries(['status','attached','registrationOrderQualified','omitted','errors','snapshotOmitted','summaryOmitted','nearOmitted','sendingUnknown','lastCheckpoint'].map(key=>[key,receipt[key]]))));assert.ok(receipt.members.some(member=>member.kind==='activity'));
     }finally{await tab.close();await actor.close();}
   }
   return {reports,problems:[] as string[]};

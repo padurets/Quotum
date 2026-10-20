@@ -16,7 +16,7 @@ import {deadline} from './deadline';
 const DAY = 86_400_000;
 type ResourceRead={scope?:PeriodScope;selection:string;from:number;to:number;cell:number;answer?:Pick<HistoryAnswer,'run'|'now'|'known'>;chunks?:[number,number][]};
 type RequestDiagnostic={selection?:{mode:'live';periodMs:number}|{mode:'range';from:number;to:number};evaluatedAt?:number;sections:{scope:PeriodScope;from:number;to:number;cell:number;cells:'skip'|'read';evidence:'skip'|'cursor'|'baseline'}[];values:number;sessions:boolean;calendar?:boolean};
-type Read = {httpStatus?:number;endpoint?:'history'|'period'|'period/sessions';stage?:string;diagnostic?:RequestDiagnostic;sections?:ResourceRead[];request?:Promise<void>;selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
+type Read = {requestBytes?:number;errorCode?:'history_limit'|'too_large'|'other'|'unavailable';httpStatus?:number;endpoint?:'history'|'period'|'period/sessions';stage?:string;diagnostic?:RequestDiagnostic;sections?:ResourceRead[];request?:Promise<void>;selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
 const lowerHeaders = (headers: Record<string, string>) => Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
 let pageSerial = 0;
 
@@ -41,9 +41,13 @@ export function stableHistoryReads(reads: readonly Pick<Read, 'selection' | 'ans
 
 /** Identity is attached before fetch; cancellation need not receive response headers. */
 export function historyPageScript(period: string) {
+  return `localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d',filtersVisible:true}));`+historyIdentityScript();
+}
+
+/** Tag existing fetches before their observers see them, without changing page preferences. */
+export function historyIdentityScript() {
   const prefix = `b${++pageSerial}`;
   return `(() => {
-    localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d',filtersVisible:true}));
     const original=window.fetch.bind(window),attempts=window.__quotumHistoryAttempts={};let serial=0;
     window.fetch=(resource,init={})=>{
       const uri=resource instanceof Request?resource.url:String(resource);
@@ -70,7 +74,7 @@ export class HistoryBodies {
   /** Only request shape and body counts: identities, cursors and response contents stay private. */
   diagnostic(phase:string){
     const reads=this.reads.filter(read=>read.phase===phase);
-    return {attempts:reads.length,omitted:Math.max(0,reads.length-64),reads:reads.slice(0,64).map(read=>({...read.attemptId&&/^b\d+:\d+$/.test(read.attemptId)?{attemptId:read.attemptId}:{},stage:read.stage,endpoint:read.endpoint,request:read.diagnostic,httpStatus:read.httpStatus??null,canceled:read.canceled??false,complete:read.count?.complete??false,decoded:read.count?.decoded,encodedLower:read.count?.lower,encodedUpper:read.count?.upper}))};
+    return {attempts:reads.length,omitted:Math.max(0,reads.length-64),reads:reads.slice(0,64).map(read=>({...read.attemptId&&/^b\d+:\d+$/.test(read.attemptId)?{attemptId:read.attemptId}:{},stage:read.stage,endpoint:read.endpoint,request:read.diagnostic,requestBytes:read.requestBytes??null,errorCode:read.errorCode??null,httpStatus:read.httpStatus??null,canceled:read.canceled??false,complete:read.count?.complete??false,decoded:read.count?.decoded,encodedLower:read.count?.lower,encodedUpper:read.count?.upper}))};
   }
   constructor(cdp: Pick<Cdp, 'on' | 'send'>) {
     cdp.on<{requestId: string; request: {url: string;postData?:string; headers?: Record<string, string>}}>('Network.requestWillBeSent', event => {
@@ -80,6 +84,7 @@ export class HistoryBodies {
       if(url.pathname!=='/api/history'){
         read.sections=[];
         const classify=(postData:string)=>{
+          read.requestBytes=Buffer.byteLength(postData);
           const body=JSON.parse(postData) as PeriodRequest;
           const selection=body.selection;
           read.diagnostic={...(selection?{selection:selection.mode==='live'?{mode:'live',periodMs:Number(selection.periodMs)}:{mode:'range',from:Number(selection.from),to:Number(selection.to)}}:{}),evaluatedAt:Number(body.evaluatedAt),sections:PERIOD_SCOPES.flatMap(scope=>{const query=body[scope];return query?[{scope,from:Number(query.from),to:Number(query.to),cell:Number(query.cell),cells:query.cells==='skip'?'skip' as const:'read' as const,evidence:query.evidence==='skip'?'skip' as const:query.evidence?'cursor' as const:'baseline' as const}]:[];}),values:body.values?.length??0,sessions:!!body.sessions,calendar:!!body.calendar};
@@ -117,6 +122,8 @@ export class HistoryBodies {
         await read.before;await read.request;
         // Count a complete error body without accepting it as accounting data.
         if(read.httpStatus!==200){
+          try{const error=(JSON.parse(decoded.toString()) as {error?:unknown}|null)?.error;read.errorCode=error==='history_limit'||error==='too_large'?error:'other';}
+          catch{read.errorCode='unavailable';}
           read.count = {complete: true, decoded: decoded.length, lower: read.length ?? NaN, upper: read.length, length: read.length, coding: read.coding, id: read.attemptId ?? read.transferId, responseId: read.transferId};
           this.errors.push(new Error(read.httpStatus===undefined?'accounting HTTP status unavailable':`accounting HTTP status ${read.httpStatus}`));
           return;
@@ -177,7 +184,7 @@ export async function prepareHistoryTarget(cdp: Pick<Cdp, 'send' | 'evaluate'>, 
 
 type TrafficProxy = {url: string; transfers: Transfer[]; phase(value: string, latency?: number): void; settled(value: string): Promise<void>};
 
-async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number, poolEvidence?:Pick<Evidence, 'save'>) {
+async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number, poolEvidence?:Pick<Evidence, 'save'>,evidence?:Pick<Evidence,'save'>) {
   const tab = await openTab(browser), cdp = tab.cdp, bodies = new HistoryBodies(cdp);
   const poolName=name.replace(/[^a-zA-Z0-9_-]/g,'-');
   const poolBinding=poolEvidence?new ScriptBinding(cdp,clientIdentity(),(file,value)=>poolEvidence.save('pool-'+poolName+'-'+file,value)):null;
@@ -250,6 +257,8 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
     })()`);
     return {cdp, bodies, settled, geometry, cell, seeds, close,capturePool};
   } catch (error) {
+    try{evidence?.save('traffic-seed-failure-'+poolName,{name,stage:bodies.stage,...bodies.diagnostic(`${name}/seed`)});}
+    catch{browser.owner?.failures.push('history seed evidence failed');}
     try{poolBinding?.close();}catch{browser.owner?.failures.push('history source binding cleanup failed');}
     try{await close();}catch{/* The target owner retains cleanup separately from the seed failure. */}
     throw error;
@@ -265,7 +274,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
       evidence?.save('traffic-stage', {name, stage: 'seed'});
       const poolTarget=length===DAY&&!future&&[100,400].includes(latency)&&fraction===.5&&take===1;
       const poolEvidence=process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL==='1'&&poolTarget?evidence:undefined;
-      const {cdp, bodies, settled, geometry, cell, seeds, close,capturePool} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence);
+      const {cdp, bodies, settled, geometry, cell, seeds, close,capturePool} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence,evidence);
       let observer:Awaited<ReturnType<typeof observeReversal>>|null=null, status='failed';
       try {
         observer=await observeReversal(cdp,browser,{postmortem:true,closeTarget:close});
@@ -364,7 +373,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
       const name = `browser/${length / DAY}d/${mode}/take${take}`;
       evidence?.save('traffic-stage', {name,stage:'seed'});
       console.error(`bench: ${name}: opening seed page`);
-      const {cdp, bodies, settled, geometry, cell, seeds, close} = await historyPage(browser, proxy, cookie, name, length, DAY);
+      const {cdp, bodies, settled, geometry, cell, seeds, close} = await historyPage(browser, proxy, cookie, name, length, DAY,undefined,evidence);
       let observer:Awaited<ReturnType<typeof observeReversal>>|null=null,status='failed';
       console.error(`bench: ${name}: seed page ready`);
       const phase = `${name}/gesture`, reads = () => bodies.reads.filter(r => r.phase === phase);

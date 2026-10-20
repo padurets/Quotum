@@ -59,14 +59,14 @@ test('saved cold request classifications survive while identities and cursor tex
     {scope: 'budget', from: 0, to: 300_000, cell: 300_000, cells: 'skip', evidence: 'cursor'},
     {scope: 'funds', from: 0, to: 300_000, cell: 300_000, cells: 'skip', evidence: 'baseline'},
   ];
-  evidence.save('cold', {attempts: 1, omitted: 0, reads: [{endpoint: 'period', request: {sections, values: 69, sessions: true}}],
-    unsafe: {scope: 'canary-resource', cells: 'canary-cell', evidence: 'canary-cursor', endpoint: 'canary-endpoint',
+  evidence.save('cold', {attempts: 1, omitted: 0, reads: [{endpoint: 'period', errorCode:'history_limit',requestBytes:128,request: {sections, values: 69, sessions: true}}],
+    unsafe: {scope: 'canary-resource', cells: 'canary-cell', evidence: 'canary-cursor', endpoint: 'canary-endpoint',errorCode:'canary-error',
       resource: 'canary-id', meta: 'canary-meta', body: 'canary-body'}});
   const body = readFileSync(path.join(root, 'cold.json'), 'utf8'), saved = JSON.parse(body);
-  assert.deepEqual(saved.reads[0], {endpoint: 'period', request: {sections, values: 69, sessions: true}});
+  assert.deepEqual(saved.reads[0], {endpoint: 'period',errorCode:'history_limit',requestBytes:128, request: {sections, values: 69, sessions: true}});
   assert.doesNotMatch(body, /canary/);
   assert.deepEqual(saved.unsafe, {scope: '[text omitted]', cells: '[text omitted]', evidence: '[text omitted]',
-    endpoint: '[text omitted]', resource: '[text omitted]', meta: '[text omitted]', body: '[text omitted]'});
+    endpoint: '[text omitted]',errorCode:'[text omitted]', resource: '[text omitted]', meta: '[text omitted]', body: '[text omitted]'});
 });
 
 test('an unavailable diagnostic destination cannot interrupt resource cleanup', t => {

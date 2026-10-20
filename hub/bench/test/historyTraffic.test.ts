@@ -27,6 +27,27 @@ test('history cleanup releases its owned target when the renderer cannot answer'
   await result;
 });
 
+test('seed failure saves cached request evidence and preserves the original error through cleanup',async()=>{
+  const source=readFileSync(new URL('../historyTrafficBrowser.ts',import.meta.url),'utf8');
+  const start=source.indexOf('  } catch (error) {',source.indexOf('async function historyPage'));
+  const end=source.indexOf('\n}\n',start);assert.ok(start>=0&&end>start);
+  for(const unavailable of [false,true]){
+    const original=new Error('accounting HTTP status 413'),saved:{name:string;value:unknown}[]=[];
+    let closed=0,bindings=0;
+    const receipt={reads:[{endpoint:'period',httpStatus:413,errorCode:'history_limit',requestBytes:128}]};
+    const fixture={original,name:'fixture',poolName:'fixture',bodies:{stage:'seed',diagnostic:(phase:string)=>{assert.equal(phase,'fixture/seed');return receipt;}},
+      evidence:{save:(name:string,value:unknown)=>{if(unavailable)throw Error('unavailable');saved.push({name,value});}},
+      poolBinding:{close:()=>{bindings++;}},browser:{owner:{failures:[] as string[]}},close:async()=>{closed++;},run:null as unknown as ()=>Promise<void>};
+    runInNewContext(ts.transpileModule(`globalThis.run=async()=>{try{throw original;${source.slice(start+2,end)}};`,{
+      compilerOptions:{target:ts.ScriptTarget.ES2022},
+    }).outputText,fixture);
+    await assert.rejects(fixture.run(),error=>error===original);
+    assert.equal(closed,1);assert.equal(bindings,1);
+    if(unavailable)assert.deepEqual(fixture.browser.owner.failures,['history seed evidence failed']);
+    else{assert.equal(saved[0].name,'traffic-seed-failure-fixture');assert.deepEqual(JSON.parse(JSON.stringify(saved[0].value)),{name:'fixture',stage:'seed',...receipt});}
+  }
+});
+
 test('pool diagnostics preserve an unavailable original renderer without another command', async () => {
   const source=readFileSync(new URL('../historyTrafficBrowser.ts',import.meta.url),'utf8');
   const start=source.indexOf('  const capturePool = async () =>'),end=source.indexOf('\n  // Closing this owned target',start);
@@ -201,10 +222,10 @@ test('the reference union respects fresh holes and the eight-tile API limit', ()
 });
 
 test('metadata-only accounting rejects HTTP errors while retaining complete body bytes', async () => {
-  for (const status of [500, 200, 401, 403, 409, 429, 503, undefined, 0, NaN]) {
+  for (const status of [500, 200, 401, 403, 409, 413, 429, 503, undefined, 0, NaN]) for(const errorCode of ['history_limit','too_large','internal_error']) {
     const listeners = new Map<string, (event: never) => void>();
     const body = JSON.stringify(status === 200 ? {basis: {}, values: {state: 'complete', value: []}}
-      : {error: 'internal_error', detail: 'private-canary'});
+      : {error: errorCode, detail: 'private-canary'});
     const cdp = {on: <T>(name: string, listener: (event: T) => void) => listeners.set(name, listener as (event: never) => void),
       send: async <T>() => ({body, base64Encoded: false} as T)};
     const observer = new HistoryBodies(cdp), emit = (name: string, event: object) => listeners.get(name)?.(event as never);
@@ -225,6 +246,8 @@ test('metadata-only accounting rejects HTTP errors while retaining complete body
     assert.equal(trafficReadEvidence(observer.reads)[0].httpStatus, numericStatus);
     const diagnostic = observer.diagnostic('seed');
     assert.equal(diagnostic.reads[0].httpStatus, numericStatus);
+    assert.equal(diagnostic.reads[0].errorCode,status===200?null:errorCode==='internal_error'?'other':errorCode);
+    assert.ok(diagnostic.reads[0].requestBytes!>0);
     assert.doesNotMatch(JSON.stringify(diagnostic), /private-canary|internal_error/);
   }
 });
@@ -495,9 +518,10 @@ test('warm failure diagnostics distinguish exact reads and gesture stages withou
   observer.phase='warm';observer.stage='cached return';
   emit('Network.requestWillBeSent',{requestId:'private-request',request:{url:'http://localhost/api/boards/private-board/period'}});
   observer.stage='cached repeat';
-  finish({postData:JSON.stringify({selection:{mode:'live',periodMs:30*86_400_000},evaluatedAt:900,
+  const postData=JSON.stringify({selection:{mode:'live',periodMs:30*86_400_000},evaluatedAt:900,
     quota:{cell:'1',from:'0',to:'60',cells:'skip',evidence:'private-cursor',meters:'[["private-source","private-meter"]]'},
-    funds:{cell:'1',from:'0',to:'60',evidence:'skip'},values:['private-source'],sessions:{cursor:'private-work-cursor'},calendar:{zone:'private-zone',edges:[1,2],cursor:'private-calendar-cursor'}})});
+    funds:{cell:'1',from:'0',to:'60',evidence:'skip'},values:['private-source'],sessions:{cursor:'private-work-cursor'},calendar:{zone:'private-zone',edges:[1,2],cursor:'private-calendar-cursor'}});
+  finish({postData});
   await Promise.all([...observer.pending]);
   emit('Network.dataReceived',{requestId:'private-request',encodedDataLength:123});
   emit('Network.loadingFailed',{requestId:'private-request',canceled:true});
@@ -506,7 +530,7 @@ test('warm failure diagnostics distinguish exact reads and gesture stages withou
   const diagnostic=observer.diagnostic('warm');
   assert.equal(diagnostic.attempts,2);assert.equal(diagnostic.omitted,0);
   assert.deepEqual(diagnostic.reads[0],{stage:'cached return',endpoint:'period',request:{selection:{mode:'live',periodMs:30*86_400_000},evaluatedAt:900,
-    sections:[{scope:'quota',cell:1,from:0,to:60,cells:'skip',evidence:'cursor'},{scope:'funds',cell:1,from:0,to:60,cells:'read',evidence:'skip'}],values:1,sessions:true,calendar:true},httpStatus:null,canceled:true,complete:false,decoded:undefined,encodedLower:123,encodedUpper:undefined});
+    sections:[{scope:'quota',cell:1,from:0,to:60,cells:'skip',evidence:'cursor'},{scope:'funds',cell:1,from:0,to:60,cells:'read',evidence:'skip'}],values:1,sessions:true,calendar:true},requestBytes:Buffer.byteLength(postData),errorCode:null,httpStatus:null,canceled:true,complete:false,decoded:undefined,encodedLower:123,encodedUpper:undefined});
   assert.equal(diagnostic.reads[1].stage,'cached repeat');assert.equal(diagnostic.reads[1].endpoint,'period/sessions');
   assert.deepEqual(diagnostic.reads[1].request?.selection,{mode:'range',from:10,to:20});
   assert.equal(JSON.stringify(diagnostic).includes('private'),false);

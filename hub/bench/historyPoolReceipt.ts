@@ -1,7 +1,7 @@
 /** One opt-in page observes existing pool operations; it never supplies scheduling or retention decisions. */
 export function historyPoolReceiptScript() {
   return `(() => {
-    const limit=4096,tileLimit=1024,byteLimit=262144,summaryLimit=512,entries=[],nearRows=[],members=[],ids=new WeakMap(),targets=new WeakMap(),readOwners=new WeakMap(),summaries=new Map();let nextId=0,count=0,bytes=0,nearBytes=0,nearOmitted=0,omitted=0,errors=0,snapshotOmitted=0,summaryOmitted=0,reserveSerial=0,reserve=null,attached=false,lastMark=null,chargeCalls=0,peakCharge=null,reading=null,readSerial=0,admitting=null,sendingUnknown=0;
+    const limit=4096,tileLimit=1024,byteLimit=262144,summaryLimit=512,entries=[],nearRows=[],members=[],ids=new WeakMap(),targets=new WeakMap(),readOwners=new WeakMap(),summaries=new Map();let nextId=0,count=0,bytes=0,nearBytes=0,nearOmitted=0,omitted=0,errors=0,snapshotOmitted=0,summaryOmitted=0,reserveSerial=0,reserve=null,attached=false,lastMark=null,chargeCalls=0,peakCharge=null,reading=null,readSerial=0,admitting=null,sendingUnknown=0,poolForSend=null;
     const id=value=>value&&typeof value==='object'?(ids.has(value)?ids.get(value):(ids.set(value,++nextId),nextId)):null;
     const n=value=>typeof value==='number'&&Number.isFinite(value)?value:null;
     const interest=member=>{const p=member.interest;return p?[n(p.token),n(p.length),n(p.from),n(p.to),n(p.direction)]:null;};
@@ -19,7 +19,7 @@ export function historyPoolReceiptScript() {
     };
     window.__quotumHistoryPoolReceipt={mark:(phase,step)=>observe(()=>{if(lastMark===phase+':'+step)return;lastMark=phase+':'+step;emit('checkpoint',{phase,step,members:members.map(m=>{const state=retained(m.value);return{memberId:m.id,target:targets.get(m.value)??null,interest:interest(m.value),retainedIds:state.values.map(v=>v.row[1]),retainedCount:state.total,retainedOmitted:state.omitted};})});}),read:()=>{const final=observe(()=>members.map(m=>{const state=retained(m.value);return{memberId:m.id,currentBytes:n(m.value.bytes),target:targets.get(m.value)??null,interest:interest(m.value),retained:state.values.map(v=>v.row),retainedOmitted:state.omitted};}));const order=members.length>=4&&members[0].kind==='period'&&members.slice(4).every(m=>m.kind==='activity')&&members.slice(1,4).every(m=>m.kind==='chart'&&m.transportBound===true&&!m.bindingMismatch)&&members[1].scope==='quota'&&members[2].scope==='budget'&&members[3].scope==='budget';const receipt={status:attached&&order&&lastMark==='2:3'&&!omitted&&!errors&&!snapshotOmitted&&!summaryOmitted&&!nearOmitted&&!sendingUnknown?'complete':'insufficient-evidence',attached,registrationOrderQualified:order,members:members.map((m,i)=>({id:m.id,ordinal:i+1,kind:m.kind,scope:m.scope,transportBound:m.transportBound===true,transportScope:m.transportScope??null,bindingMismatch:m.bindingMismatch===true})),count,bytes,omitted,errors,snapshotOmitted,summaryOmitted,nearBytes,nearOmitted,sendingUnknown,limit,byteLimit,tileLimit,summaryLimit,nearBudgetRatio:.95,reserveCalls:reserveSerial,chargeCalls,peakCharge,ordinaryByFlight:[...summaries.values()],nearRows,entries,final,lastCheckpoint:lastMark==='2:3'};const size=JSON.stringify(receipt).length;if(size>900000)return{status:'insufficient-evidence',reason:'receipt size',originalBytes:size,attached,count,bytes,nearBytes,omitted,nearOmitted,errors,snapshotOmitted,summaryOmitted,omittedDetailedSummaries:summaries.size,omittedFinal:true,ordinaryCountsByFlight:[...summaries.values()].map(s=>[s.flightId,s.calls,s.ordinaryAccepted,s.nearBudgetCalls]),entries,nearRows};return receipt;}};
     window.__quotumInspectHistoryPool=pool=>{
-      if(attached){errors++;return;}attached=true;
+      if(attached){errors++;return;}attached=true;poolForSend=pool;
       observe(()=>{
         if(!(pool.members instanceof Set)||pool.members.size!==0)throw Error();
         const charge=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(pool),'estimatedBytes');
@@ -63,10 +63,12 @@ export function historyPoolReceiptScript() {
       if(!attemptId)sendingUnknown++;
       const integer=value=>{const parsed=typeof value==='string'&&/^-?\\d+$/.test(value)?Number(value):value;return Number.isSafeInteger(parsed)?parsed:null;};
       // fetchPeriod calls fetch synchronously after pruning demands and marking their owners started.
-      const demands=Array.isArray(admitting?.demands)?admitting.demands.map(demand=>{const binding=readOwners.get(demand.owner),scope=['quota','budget','funds'].includes(demand.scope)?demand.scope:null,query=demand.query,cell=integer(query?.cell),from=integer(query?.from),to=integer(query?.to);if(!binding||!scope||cell===null||from===null||to===null)sendingUnknown++;return{memberId:binding?.record.id??null,readId:binding?.readId??null,scope,cell,from,to};}):null;
+      const admittedOwner=poolForSend?.active.get(admitting)?.owner,activity=members.find(m=>m.kind==='activity'&&m.value===admittedOwner&&poolForSend.members.has(m.value)&&m.value.flight===admitting&&m.value.generation===admitting.generation&&!admitting.controller.signal.aborted&&m.value.scope?.selection.mode==='range');
+      const sender=activity?{kind:'activity',memberId:activity.id}:null;
+      const demands=Array.isArray(admitting?.demands)?admitting.demands.map(demand=>{const binding=readOwners.get(demand.owner),scope=['quota','budget','funds'].includes(demand.scope)?demand.scope:null,query=demand.query,cell=integer(query?.cell),from=integer(query?.from),to=integer(query?.to);if(!binding||!scope||cell===null||from===null||to===null)sendingUnknown++;return{memberId:binding?.record.id??null,readId:binding?.readId??null,scope,cell,from,to};}):activity?[]:null;
       if(!demands)sendingUnknown++;
       const charts=members.filter(m=>m.kind==='chart').map(m=>{const state=retained(m.value);return{memberId:m.id,interest:interest(m.value),lastProductionTarget:targets.get(m.value)??null,retained:state.values.map(v=>v.row),retainedOmitted:state.omitted};});
-      emit('http',{attemptId,flightId:id(admitting),extras:typeof admitting?.extras==='boolean'?admitting.extras:null,demands,charts,sendingUnknown});
+      emit('http',{attemptId,flightId:id(admitting),extras:typeof admitting?.extras==='boolean'?admitting.extras:null,sender,demands,charts,sendingUnknown});
     });return originalFetch(resource,init);};
   })()`;
 }
