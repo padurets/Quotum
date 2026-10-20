@@ -33,6 +33,7 @@ function Details({date,zone,cell,start,end,heading=true}:{heading?:boolean;date:
 
 const Day=memo(function Day({date,dateKey,index,start,end,zone,cell,selected,tab,focus,panel,onKey}:{date:string;dateKey:string;index:number;start:number;end:number;zone:string;cell:CalendarCell|null;selected:boolean;tab:boolean;focus:(date:string)=>void;panel:RefObject<HTMLElement|null>;onKey:(event:KeyboardEvent<HTMLButtonElement>,index:number)=>void}){
   const [open,setOpen]=useState(false),[hover,setHover]=useState(false),[focused,setFocused]=useState(false);
+  const changeOpen=(next:boolean)=>{setHover(false);setOpen(next);};
   const anchor=useRef<HTMLDivElement>(null),active=!open&&(hover||focused);
   const tip=useBubble(active,anchor,panel.current);
   const available=cell?.agentMs!==undefined&&cell.agentMs!==null;
@@ -42,11 +43,11 @@ const Day=memo(function Day({date,dateKey,index,start,end,zone,cell,selected,tab
   return <div className={`calendar-date${selected?' is-selected':''}${!available?' is-unavailable':''}${partial?' is-partial':''}`} role="gridcell" aria-selected={selected} ref={anchor}
     onPointerEnter={()=>setHover(true)} onPointerLeave={()=>setHover(false)}>
     <Popover label={label} trigger={<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="3" fill={CATEGORY_COLORS[0]} fillOpacity={CALENDAR_OPACITY[level]}/></svg>} triggerClass="calendar-cell"
-      open={open} onOpenChange={setOpen} width={320} portal={panel.current}
+      open={open} onOpenChange={changeOpen} width={320} portal={panel.current}
       buttonProps={{tabIndex:tab?0:-1,'data-calendar-date':dateKey,'data-agent-ms':cell?.agentMs??undefined,'aria-label':label,title:'',onFocus:()=>{focus(dateKey);setFocused(true);},onBlur:()=>setFocused(false),onKeyDown:event=>onKey(event,index)}}>
-      <PopoverHeading onClose={()=>setOpen(false)}>{date}</PopoverHeading>
+      <PopoverHeading onClose={()=>changeOpen(false)}>{date}</PopoverHeading>
       <div className="popover-body calendar-details"><Details date={date} zone={zone} cell={cell} start={start} end={end} heading={false}/>
-        {available&&<button className="button" onClick={()=>{setTimeRange({from:start,to:end});setOpen(false);}}>{t('calendar.openDay')}</button>}
+        {available&&<button className="button" onClick={()=>{setTimeRange({from:start,to:end});changeOpen(false);}}>{t('calendar.openDay')}</button>}
       </div>
     </Popover>
     {active&&panel.current&&createPortal(<span className="tooltip glass calendar-tip" role="tooltip" ref={tip}><Details date={date} zone={zone} cell={cell} start={start} end={end}/></span>,panel.current)}

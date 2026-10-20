@@ -1290,9 +1290,10 @@ summary.filter-group-heading::-webkit-details-marker { display: none; }
 .calendar-slot { min-width:0; }
 .calendar-month { color:var(--text-2); font-size:11px; white-space:nowrap; }
 .calendar-day-label { position:sticky; left:0; z-index:1; background:var(--surface); color:var(--text-2); font-size:11px; display:flex; align-items:center; align-self:stretch; }
+.calendar-day-label::before { content:''; position:absolute; inset:-4px; z-index:-1; background:var(--surface); }
 .calendar-date, .calendar-date > .picker { width:100%; height:24px; margin-left:0; }
 .calendar-cell.text-button { display:block; width:100%; height:24px; padding:0; border:1px solid var(--text-3); border-radius:4px; background:transparent; position:relative; }
-.calendar-cell > svg { display:block; width:100%; height:100%; }
+.calendar-cell > svg { display:block; width:100%; height:100%; stroke:none; opacity:1; }
 .calendar-cell.text-button:hover { background:transparent; border-color:var(--text); }
 .calendar-date.is-selected .calendar-cell { outline:2px solid var(--accent); outline-offset:1px; }
 .calendar-cell:focus-visible { outline:2px solid var(--text); outline-offset:2px; }
