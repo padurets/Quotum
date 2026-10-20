@@ -523,7 +523,7 @@ class BoardPeriod {
           charge(scope,mergeBase);
           const merging=(bytes:number)=>{mergeScratch+=bytes;charge(scope,mergeBase+mergeScratch);};
           let tape=yield*mergeTapePrepared(previous,incoming,merging,bytes=>merging(-bytes));
-          if(retainedFrom!==null){let scratch=0;const before=tapeBytes(ownTape(tape,previous));tape=yield*retention.retainTape(tape,retainedFrom,bytes=>{scratch+=bytes;charge(scope,before+scratch);});}
+          if(retainedFrom!==null){let scratch=0;const before=tapeBytes(ownTape(tape,previous));tape=yield*retention.retainTape(tape,retainedFrom,bytes=>{scratch+=bytes;charge(scope,before+scratch);},bytes=>{scratch-=bytes;charge(scope,before+scratch);});}
           incomingTapes.set(scope,tape);if(part?.state==='complete')part.value.tape=tape;charge(scope,tapeBytes(ownTape(tape,previous)));
         }catch(error){if(error!==limited)throw error;incomingTapes.delete(scope);failScope(scope);}
       }
@@ -630,9 +630,11 @@ class BoardPeriod {
         const changedWork=new Set<string>(),tapes=new Map(previousTapes);let changedBytes=0;
         if(work!==previousWork)for(const refs of [work?.refs??[],previousWork?.refs??[]])for(const ref of refs){if(ref.source&&!changedWork.has(ref.source)&&previousIndex?.curves.groups.source.get(ref.source)!==index?.curves.groups.source.get(ref.source)){changedBytes+=64+ref.source.length*2;charge('changedWork',changedBytes);changedWork.add(ref.source);}yield;}
         for(const [scope,entry] of previousTapes){
-          let scratch=0;const tape=yield*retention.retainTape(entry.tape,from,bytes=>{scratch+=bytes;charge(scope,scratch);});
+          let scratch=0;const tape=yield*retention.retainTape(entry.tape,from,bytes=>{scratch+=bytes;charge(scope,scratch);},bytes=>{scratch-=bytes;charge(scope,scratch);});
           if(tape!==entry.tape||(scope==='quota'||entry.tape.money.some(g=>g.workCounter))&&work!==previousWork){
-            const owned={...tape,quota:tape.quota.filter(row=>!entry.tape.quota.includes(row)),money:tape.money.filter(row=>!entry.tape.money.includes(row))},base=tapeBytes(owned);
+            // Retention copies suffix containers; their immutable observations
+            // still belong to the previous ledger. Its reservations own the new storage.
+            const base=scratch;
             charge(scope,base);const accounting=yield*PeriodAccounting.prepare(tape,work,index?.curves,entry.accounting,changedWork,bytes=>charge(scope,base+bytes),sourceCurves);tapes.set(scope,{...entry,tape,accounting});
           }else sizes.delete(scope);
           yield;

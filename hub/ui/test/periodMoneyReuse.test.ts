@@ -46,28 +46,29 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
 import {expandPeriod} from '../../server/domain/periodWire';
-test('money preparation keeps cold history reusable across cached return and repeat under the shared limit',async t=>{
-  const DAY=86_400_000,NOW=Date.parse('2026-10-08T12:00:00Z'),length=30*DAY;
+for(const acrossHour of [false,true])test('money preparation keeps cold history reusable across cached return and repeat under the shared limit'+(acrossHour?' across an hour boundary':''),async t=>{
+  const DAY=86_400_000,NOW=Date.parse(acrossHour?'2026-10-20T13:00:00Z':'2026-10-08T12:00:00Z'),length=30*DAY;
   // Seeding completes before the initial exclusive read cut.
-  let clockNow=NOW+1;t.mock.method(Date,'now',()=>clockNow);
+  let clockNow=NOW+(acrossHour?-1000:1);t.mock.method(Date,'now',()=>clockNow);
+  const initialCell=Math.floor(clockNow/cellOf(length));
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
   const coordinatorCode=ts.transpileModule(source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
   const dir=mkdtempSync(join(tmpdir(),'quotum-full-memory-')),file=join(dir,'fixture.sqlite');
   let store=new Store(file,NOW-75*DAY),directory=new Directory(store.db);
   const user=directory.createUser('fixture@example.com','Fixture','fixture',NOW-75*DAY),owner={...user,personalBoard:directory.boards(user.id)[0].id};store.close();
-  seedPanningBudgets(file,{start:NOW,people:new Map([['fixture',owner]])} as any);
+  seedPanningBudgets(file,{start:NOW-(acrossHour?3*3_600_000:0),people:new Map([['fixture',owner]])} as any);
   store=new Store(file);directory=new Directory(store.db);
   store.db.exec('BEGIN');const quotas:string[]=[];
   for(let i=0;i<12;i++){
    const id=store.source('claude',`quota-fixture-${i}`,NOW-75*DAY);quotas.push(id);store.hold(id,user.id,NOW-75*DAY);
-   for(let at=NOW-75*DAY;at<=NOW;at+=3*3_600_000)store.record(id,{observedAt:at,staleAfterMs:6*3_600_000,plan:'pro',resets:null,windows:[{id:'weekly',kind:'weekly',used:20+i,remaining:80-i,minutes:10080,resetAt:NOW+7*DAY,label:null},{id:'session',kind:'session',used:20+i,remaining:80-i,minutes:300,resetAt:NOW+7*DAY,label:null}]});
+   for(let at=NOW-75*DAY;at<=NOW-(acrossHour?3*3_600_000:0);at+=3*3_600_000)store.record(id,{observedAt:at,staleAfterMs:6*3_600_000,plan:'pro',resets:null,windows:[{id:'weekly',kind:'weekly',used:20+i,remaining:80-i,minutes:10080,resetAt:NOW+7*DAY,label:null},{id:'session',kind:'session',used:20+i,remaining:80-i,minutes:300,resetAt:NOW+7*DAY,label:null}]});
   }
   store.db.exec('COMMIT');
   const device=directory.saveDevice({userId:user.id,machine:{id:'test-machine',name:'Laptop',os:'linux',arch:'x86_64'},agent:'quotum/0.7.0',tokenId:null},NOW-75*DAY).id;
   for(let at=NOW-75*DAY;at<NOW;at+=6*3_600_000)store.creditWork(device,at,at+3_600_000,[{source:quotas[0],origin:'terminal',startedAt:NOW-75*DAY,project:'Project',folder:'folder',identity:{kind:'stable',sessionId:'work'}}]);
   const hub:any={store,directory,ingest:new Ingest(store,directory,new Duty(),new Cadence()),resets:new ResetFeed(undefined,()=>{}),pairing:new Pairing(directory),setup:new Setup(false,null),local:null};
-  const events=new Events(hub,undefined,{now:()=>NOW,after:()=>()=>{}},null),server=new PeriodReader(hub,new HistoryTiles(store),events),projection=new Projection(hub);
-  const snapshot=projection.snapshot(user.id,owner.personalBoard,NOW)!;
+  const events=new Events(hub,undefined,{now:()=>clockNow,after:()=>()=>{}},null),server=new PeriodReader(hub,new HistoryTiles(store),events),projection=new Projection(hub);
+  const snapshot=projection.snapshot(user.id,owner.personalBoard,clockNow)!;
   const board={id:owner.personalBoard,meta:snapshot.board,cards:Object.fromEntries(snapshot.sources.map(c=>[c.id,c])),lineup:snapshot.sources.map(c=>c.id),view:{...snapshot.view,shown:['quota-history','budget-history','budget-table',SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS]},currencies:snapshot.currencies};
   let selected:PeriodRange|null=null,panning=false,phase='seed';
   const settings={range:'30d',kind:'weekly',money:{...DEFAULT_MONEY},funds:{...DEFAULT_MONEY}};
@@ -129,8 +130,11 @@ test('money preparation keeps cold history reusable across cached return and rep
    assert.equal(money.length,12,'the real provider fixture has twelve native usage ledgers');
    for(const group of money)assert.equal(group.workCounter.readings,group.readings,'identical financial and work observations occupy one retained array');
    assert.ok(period.get().rows.some((row:any)=>row.workedMs>0),'the retained work fixture must have positive credit inside its known period');
-   const end=NOW-(length+DAY)*.5;await gesture('cold',end,{from:end-length,to:end});
+   // Returning across the hour retires a real financial prefix while cold tiles
+   // are unpinned. Retirement must not consume their space for discarded scratch.
+   const end=NOW-(length+(acrossHour?0:DAY))*.5;await gesture('cold',end,{from:end-length,to:end});
    await gesture('warm-return',NOW,null);await gesture('warm-repeat',end,{from:end-length,to:end});
+   assert.equal(Math.floor(clockNow/cellOf(length)),initialCell,'the hour edge stays inside the original history freshness cell');
    assert.equal(attempts.filter(stage=>stage.startsWith('warm')).length,0,'warm return/repeat must not read any history section');
    assert.ok(peak<=15*1024*1024);assert.deepEqual(drops,[],'preparation cannot evict reusable history');
   }finally{period.activate(false);for(const r of readers)r.close();events.close();preparer.dispose();store.close();rmSync(dir,{recursive:true,force:true});}

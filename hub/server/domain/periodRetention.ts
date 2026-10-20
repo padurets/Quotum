@@ -1,6 +1,6 @@
 import type {Preparation} from './prepare.js';
 import {WORK_BLOCK_MS,type WorkTrace} from './periodWork.js';
-import {numberAt,numberColumn,rateAt,bindRate,sampleAt,sampleCount,type SampleRows,type PeriodTape,type MoneyTape} from './periodTape.js';
+import {numberAt,numberColumn,rateAt,bindRate,sampleAt,sampleCount,sampleBytes,type SampleRows,type PeriodTape,type MoneyTape} from './periodTape.js';
 import type {MeterSpan,Reading} from './meters.js';
 
 const lower=<T>(rows:readonly T[],at:number,time:(row:T)=>number)=>{let a=0,b=rows.length;while(a<b){const m=(a+b)>>>1;if(time(rows[m])<at)a=m+1;else b=m;}return a;};
@@ -28,14 +28,14 @@ export function* retainWork(trace:WorkTrace,from:number,reserve:(bytes:number)=>
   return {...trace,anchor:from,refs,spans};
 }
 
-function* samplesAfter(rows:SampleRows,from:number,reserve:(bytes:number)=>void):Preparation<SampleRows>{
+function* samplesAfter(rows:SampleRows,from:number,reserve:(bytes:number)=>void,release:(bytes:number)=>void):Preparation<SampleRows>{
   let a=0,b=sampleCount(rows);while(a<b){const m=(a+b)>>>1;if(sampleAt(rows,m)!.at<from)a=m+1;else b=m;}
   const start=Math.max(0,a-1),count=sampleCount(rows)-start;if(!start)return rows;
   // Column construction overlaps its compressed output, never an expanded row ledger.
-  reserve(count*40+512);
+  const bound=count*40+512;reserve(bound);
   const columns=[];
   for(let field=0;field<5;field++)columns.push(yield*numberColumn(count,i=>'columns' in rows?numberAt(rows.columns[field],i+start)!:rows[(i+start)*5+field]));
-  return {length:count*5,columns};
+  const kept={length:count*5,columns};release(bound-sampleBytes(kept));return kept;
 }
 
 function* tail<T>(rows:readonly T[],start:number,reserve:(bytes:number)=>void):Preparation<T[]> {
@@ -49,22 +49,25 @@ function* partAfter<T extends {readings:Reading[];spans:MeterSpan[]}>(part:T,fro
   const spans=yield*tail(part.spans,before(part.spans,from,s=>s.from),reserve);
   return readings===part.readings&&spans===part.spans?part:{...part,readings,spans};
 }
-function* moneyAfter(group:MoneyTape,from:number,reserve:(bytes:number)=>void):Preparation<MoneyTape>{
+function* moneyAfter(group:MoneyTape,from:number,reserve:(bytes:number)=>void,release:(bytes:number)=>void):Preparation<MoneyTape>{
   const raw=yield*partAfter(group,from,reserve),paired=group.paired?yield*partAfter(group.paired,from,reserve):undefined,workCounter=group.workCounter?yield*partAfter(group.workCounter,from,reserve,group.workCounter.readings===group.readings?raw.readings:undefined):undefined;
   const own=workCounter!==group.workCounter?{...raw,workCounter}:raw;
   if(!group.rates&&!group.rateBindings)return own===group&&paired===group.paired?group:{...own,...(paired?{paired}:{})};
   if(raw===group&&paired===group.paired){
     // With no expired financial rows, future bindings and one predecessor per
     // unit already form the complete retained dictionary. Avoid copying it.
-    const previous=new Set<string>();let reusable=true;
+    const previous=new Set<string>();let reusable=true,temporary=0;
     for(const key of rateKeys(group)){
       const split=key.lastIndexOf('\n'),unit=key.slice(0,split),at=Number(key.slice(split+1));
-      if(at<from){if(previous.has(unit)){reusable=false;break;}reserve(64+unit.length*2);previous.add(unit);}yield;
+      if(at<from){if(previous.has(unit)){reusable=false;break;}const bytes=64+unit.length*2;reserve(bytes);temporary+=bytes;previous.add(unit);}yield;
     }
+    release(temporary);
     if(reusable)return own;
   }
-  const keys=new Set<string>(),previous=new Map<string,{at:number;key:string}>();let count=0;
-  const add=(unit:string,at:number)=>{reserve(64+unit.length*2+32);keys.add(unit+'\n'+at);};
+  const keys=new Set<string>(),previous=new Map<string,{at:number;key:string}>();let count=0,temporary=0;
+  const stage=(bytes:number)=>{reserve(bytes);temporary+=bytes;};
+  const addKey=(key:string)=>{if(!keys.has(key)){stage(64+key.length*2);keys.add(key);}};
+  const add=(unit:string,at:number)=>addKey(unit+'\n'+at);
   for(const [part,original] of [[own,group],...(paired&&group.paired?[[paired,group.paired]]:[])]){
     for(const reading of part.readings){add(reading.unit,reading.at);yield;}
     for(const span of part.spans)for(const at of [span.observedFrom,span.to])if(at!==undefined){
@@ -73,35 +76,39 @@ function* moneyAfter(group:MoneyTape,from:number,reserve:(bytes:number)=>void):P
   }
   for(const key of rateKeys(group)){
     count++;const split=key.lastIndexOf('\n'),unit=key.slice(0,split),at=Number(key.slice(split+1));
-    if(at>=from){reserve(64+key.length*2);keys.add(key);}else if(at>(previous.get(unit)?.at??-Infinity)){
-      if(!previous.has(unit))reserve(128+unit.length*2);previous.set(unit,{at,key});
+    if(at>=from)addKey(key);else if(at>(previous.get(unit)?.at??-Infinity)){
+      if(!previous.has(unit))stage(128+unit.length*2);previous.set(unit,{at,key});
     }yield;
   }
-  for(const {key} of previous.values()){reserve(64+key.length*2);keys.add(key);yield;}
+  for(const {key} of previous.values()){addKey(key);yield;}
   let retained=0;for(const key of keys){if(rateAt(group,key)!==undefined)retained++;yield;}
-  if(own===group&&paired===group.paired&&workCounter===group.workCounter&&retained===count)return group;
+  if(own===group&&paired===group.paired&&workCounter===group.workCounter&&retained===count){release(temporary);return group;}
   const result:MoneyTape={...own,...(paired?{paired}:{}),rates:undefined,rateBindings:undefined};
   for(const key of keys){
     const path=rateAt(group,key);if(path===undefined)continue;
     // Reserve dictionary entries, path comparison strings and any new path before
-    // bindRate allocates them. Shared paths are charged conservatively until commit.
+    // bindRate allocates them. Only its owned entries and paths survive the yield.
     const pathBytes=128+(path??[]).reduce((n,leg)=>n+256+2*(leg.id.length+leg.source.length+leg.base.length+leg.from.length+leg.to.length),0);
-    reserve(256+key.length*2+pathBytes*2);bindRate(result,key,path);yield;
+    const bound=256+key.length*2+pathBytes*2;
+    reserve(bound);const owned=bindRate(result,key,path);release(bound-owned);yield;
   }
+  release(temporary);
   return result;
 }
 
 /** Retention is independent of capture/authority and preserves exact boundary evidence. */
-export function* retainTape(tape:PeriodTape,from:number,reserve:(bytes:number)=>void=()=>{}):Preparation<PeriodTape>{
+export function* retainTape(tape:PeriodTape,from:number,reserve:(bytes:number)=>void=()=>{},release:(bytes:number)=>void=()=>{}):Preparation<PeriodTape>{
   if(tape.fixed||from<=tape.from)return tape;
+  const containers=256+(tape.quota.length+tape.money.length*3)*128;reserve(containers);
   const quota:PeriodTape['quota']=[],money:MoneyTape[]=[];let changed=false;
   for(const series of tape.quota){
-    const samples=yield*samplesAfter(series.samples,from,reserve);
+    const samples=yield*samplesAfter(series.samples,from,reserve,release);
     const descriptors=series.descriptors?yield*tail(series.descriptors,before(series.descriptors,from,d=>d.at),reserve):undefined;
     const next=samples===series.samples&&descriptors===series.descriptors?series:{...series,samples,...(descriptors?{descriptors}:{})};quota.push(next);changed ||= next!==series;yield;
   }
-  for(const group of tape.money){const next=yield*moneyAfter(group,from,reserve);money.push(next);changed ||= next!==group;yield;}
-  return changed?{...tape,from,quota,money}:tape;
+  for(const group of tape.money){const next=yield*moneyAfter(group,from,reserve,release);money.push(next);changed ||= next!==group;yield;}
+  if(!changed){release(containers);return tape;}
+  return {...tape,from,quota,money};
 }
 
 function* rateKeys(group:MoneyTape):Generator<string>{
