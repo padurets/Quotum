@@ -69,12 +69,12 @@ export class WorkCalendar {
       this.state={...this.state,value:{...value,cells:value.cells.map(cell=>cell.validUntil!==null&&now>=cell.validUntil?{...cell,agentMs:null}:cell)}};changed=true;
     }
     const current=this.state.value,floor=now-CALENDAR_RETENTION;
-    if(current?.cells.some(cell=>cell.agentMs===0&&floor>cell.from)){
-      this.state={...this.state,value:{...current,cells:current.cells.map(cell=>cell.agentMs===0&&floor>cell.from?{...cell,from:Math.min(cell.to,floor),...(floor>=cell.to?{agentMs:null}:{})}:cell)}};changed=true;
+    if(current?.cells.some(cell=>cell.agentMs!==null&&floor>cell.from)){
+      this.state={...this.state,value:{...current,cells:current.cells.map(cell=>cell.agentMs!==null&&floor>cell.from?{...cell,from:Math.min(cell.to,floor),...(floor>=cell.to?{agentMs:null}:{})}:cell)}};changed=true;
     }
     if(changed)this.publish();return changed;
   }
-  nextAt(now:number){if(!this.visible)return Infinity;return Math.min(this.state.window.edges[90],...(this.state.value?.cells.flatMap((c,i)=>[...(c.agentMs!==null&&c.validUntil!==null&&c.validUntil>now?[c.validUntil]:[]),...(c.agentMs===0&&c.from===this.state.window.edges[i]&&c.from+CALENDAR_RETENTION+1>now?[c.from+CALENDAR_RETENTION+1]:[])])??[]));}
+  nextAt(now:number){if(!this.visible)return Infinity;return Math.min(this.state.window.edges[90],...(this.state.value?.cells.flatMap((c,i)=>[...(c.agentMs!==null&&c.validUntil!==null&&c.validUntil>now?[c.validUntil]:[]),...(c.agentMs!==null&&c.from===this.state.window.edges[i]&&c.from+CALENDAR_RETENTION+1>now?[c.from+CALENDAR_RETENTION+1]:[])])??[]));}
   dirty(){if(this.visible&&!this.limited){this.needed=true;return true;}return false;}
   demand(facets=false):CalendarDemand|undefined {return this.visible&&(this.needed||facets)?{zone:this.state.window.zone,edges:this.state.window.edges,...(this.state.value?.cursor?{cursor:this.state.value.cursor}:{})}:undefined;}
   receive(part:CalendarSection,generation:number,reserve:(bytes:number)=>boolean){

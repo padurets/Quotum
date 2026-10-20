@@ -103,3 +103,16 @@ test('zero-history boundaries advance once without a clock loop, and a clock cor
   assert.equal(calendar.state.value!.cells[0].agentMs,0);assert.equal(calendar.nextAt(entry+10*M),window.edges[90]);assert.equal(calendar.needed,false);
   calendar.tick(at-1000);assert.equal(calendar.state.value,null);assert.equal(calendar.demand(),undefined);
 });
+
+test('a positive day becomes partial before its first credited instant expires, without a read',t=>{
+  const prior=process.env.TZ;process.env.TZ='America/New_York';t.after(()=>{if(prior===undefined)delete process.env.TZ;else process.env.TZ=prior;});
+  const at=Date.parse('2026-11-02T03:50:00Z'),calendar=new WorkCalendar();calendar.configure(true,'calendar',at);
+  const window=calendar.state.window,entry=window.edges[0]+CALENDAR_RETENTION+1,expiry=entry+30*M;
+  const basis:CalendarBasis={run:'run',revision:'1',evaluatedAt:at,evidenceCut:at,range:{from:window.edges[0],to:window.edges[90]},calendarKey:'key',workAuthority:'a',filterKey:'f'};
+  const cells=window.dates.map((_,i)=>({agentMs:i===0?H:0,from:window.edges[i],to:Math.min(at,window.edges[i+1]),validUntil:i===0?expiry:null}));
+  calendar.receive({state:'complete',basis,value:{zone:window.zone,edges:window.edges,cells,availableFrom:window.edges[0],retainedFrom:at-CALENDAR_RETENTION,cursor:'cursor'}},calendar.generation,()=>true);
+  assert.equal(calendar.nextAt(at),entry);calendar.tick(entry);
+  assert.equal(calendar.state.value!.cells[0].from,window.edges[0]+1);assert.equal(calendar.state.value!.cells[0].agentMs,H);
+  assert.equal(calendar.needed,false);assert.equal(calendar.nextAt(entry),expiry);
+  calendar.tick(expiry);assert.equal(calendar.state.value!.cells[0].agentMs,null);assert.equal(calendar.needed,false);
+});
