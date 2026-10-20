@@ -58,13 +58,15 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
   const locale=useLocale();
   const reading=useSyncExternalStore(boardPeriod.calendar.subscribe,boardPeriod.calendar.get);
   const {window,value,loading,error}=reading,selection=useTimeRange();
-  const root=useRef<HTMLElement>(null),scroller=useRef<HTMLDivElement>(null),sizing=useSizing();
+  const root=useRef<HTMLElement>(null),matrix=useRef<HTMLDivElement>(null),sizing=useSizing();
   const [focused,setFocused]=useState(window.dates[89]),[settings,setSettings]=useState(false);
   const offset=(new Date(window.dates[0]+'T12:00:00Z').getUTCDay()+6)%7,weeks=Math.ceil((offset+90)/7);
-  useLayoutEffect(()=>{const node=scroller.current;if(node)node.scrollLeft=node.scrollWidth;},[window.dates[0]]);
+  const [capacity,setCapacity]=useState(weeks);
+  // Balanced week bands keep every date visible without an inner scroller.
+  const columns=Math.ceil(weeks/Math.ceil(weeks/capacity)),bands=Math.ceil(weeks/columns);
   const measure=useRef(()=>{});
-  measure.current=()=>{const node=root.current;if(node&&sizing){const height=node.getBoundingClientRect().height-fillOf(node);sizing.report({min:height,natural:height,shown:height});}};
-  useLayoutEffect(()=>measure.current(),[sizing?.manual,sizing?.allocated,sizing?.width,sizing?.report,loading,error,locale]);
+  measure.current=()=>{const node=root.current;if(matrix.current)setCapacity(Math.max(1,Math.floor((matrix.current.clientWidth-30)/26)));if(node&&sizing){const height=node.getBoundingClientRect().height-fillOf(node);sizing.report({min:height,natural:height,shown:height});}};
+  useLayoutEffect(()=>measure.current(),[sizing?.manual,sizing?.allocated,sizing?.width,sizing?.report,loading,error,locale,columns]);
   useLayoutEffect(()=>{
     const node=root.current;if(!node)return;
     const observer=new ResizeObserver(()=>measure.current());observer.observe(node);return()=>observer.disconnect();
@@ -74,8 +76,7 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
     const day=(offset+i)%7;
     const next=event.key==='ArrowUp'?i-1:event.key==='ArrowDown'?i+1:event.key==='ArrowLeft'?i-7:event.key==='ArrowRight'?i+7:event.key==='Home'?event.ctrlKey?0:i-day:event.key==='End'?event.ctrlKey?89:i+6-day:null;
     if(next===null)return;event.preventDefault();const date=window.dates[Math.max(0,Math.min(89,next))];setFocused(date);
-    const button=scroller.current?.querySelector<HTMLButtonElement>(`[data-calendar-date="${date}"]`);button?.focus({preventScroll:true});
-    if(button&&scroller.current){const bounds=scroller.current.getBoundingClientRect(),at=button.getBoundingClientRect(),left=(scroller.current.querySelector('.calendar-day-label')?.getBoundingClientRect().right??bounds.left)+4;if(at.left<left)scroller.current.scrollLeft-=left-at.left;else if(at.right>bounds.right)scroller.current.scrollLeft+=at.right-bounds.right;}
+    matrix.current?.querySelector<HTMLButtonElement>(`[data-calendar-date="${date}"]`)?.focus();
   },[window,offset]);
   const formatters=useMemo(()=>({month:new Intl.DateTimeFormat(formatLocale(),{month:'short',timeZone:'UTC'}),weekday:new Intl.DateTimeFormat(formatLocale(),{weekday:'short',timeZone:'UTC'}),date:new Intl.DateTimeFormat(formatLocale(),{day:'numeric',month:'long',year:'numeric',timeZone:'UTC'}),bound:new Intl.DateTimeFormat(formatLocale(),{day:'numeric',month:'short',timeZone:'UTC'})}),[locale]);
   const dateText=(date:string,options:Intl.DateTimeFormatOptions)=>(options.weekday?formatters.weekday:options.year?formatters.date:formatters.month).format(new Date(date+'T12:00:00Z'));
@@ -85,12 +86,12 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
     </Popover>}</div>
     <p className="analytics-note" data-time="calendar-window"><span title={t('calendar.window')}>{formatters.bound.format(new Date(window.dates[0]+'T12:00:00Z'))} — {formatters.bound.format(new Date(window.dates[89]+'T12:00:00Z'))}</span><span>{window.zone}</span></p>
     <HistoryFailure error={error==='history_limit'?'history_limit':error==='filters_limit'?'filters_limit':error?'history_failed':undefined} retry={boardPeriod.retry}/>
-    <div className="calendar-scroll" ref={scroller}>
-      <div className="calendar-grid" role="grid" aria-label={t('calendar.registered')} aria-description={t('calendar.observations')} style={{'--calendar-weeks':weeks} as CSSProperties}>
-        {Array.from({length:weeks},(_,week)=>{const date=window.dates[Math.max(0,week*7-offset)],previous=week?window.dates[Math.max(0,(week-1)*7-offset)]:undefined;return <span key={week} className="calendar-month" aria-hidden="true" style={{gridColumn:week+2,gridRow:1}}>{!previous||date.slice(0,7)!==previous.slice(0,7)?dateText(date,{month:'short'}):''}</span>;})}
+    <div className="calendar-bands" ref={matrix}>
+      <div className="calendar-grid" role="grid" aria-label={t('calendar.registered')} aria-description={t('calendar.observations')} style={{'--calendar-weeks':columns,gridTemplateRows:Array.from({length:bands},()=> '20px repeat(7,24px)').join(' 16px ')} as CSSProperties}>
+        {Array.from({length:weeks},(_,week)=>{const date=window.dates[Math.max(0,week*7-offset)],previous=week%columns?window.dates[Math.max(0,(week-1)*7-offset)]:undefined;return <span key={week} className="calendar-month" aria-hidden="true" style={{gridColumn:week%columns+2,gridRow:Math.floor(week/columns)*9+1}}>{!previous||date.slice(0,7)!==previous.slice(0,7)?dateText(date,{month:'short'}):''}</span>;})}
         {Array.from({length:7},(_,weekday)=><div role="row" className="calendar-weekday" key={weekday}>
-          <span role="rowheader" className="calendar-day-label" style={{gridRow:weekday+2,gridColumn:1}}>{dateText(new Date(Date.UTC(2026,0,5+weekday)).toISOString().slice(0,10),{weekday:'short'})}</span>
-          {window.dates.map((date,i)=>(offset+i)%7===weekday?<div className="calendar-slot" key={date} style={{gridRow:weekday+2,gridColumn:Math.floor((offset+i)/7)+2}}>
+          {Array.from({length:bands},(_,band)=><span key={band} role="rowheader" aria-hidden={band>0?true:undefined} className="calendar-day-label" style={{gridRow:band*9+weekday+2,gridColumn:1}}>{dateText(new Date(Date.UTC(2026,0,5+weekday)).toISOString().slice(0,10),{weekday:'short'})}</span>)}
+          {window.dates.map((date,i)=>(offset+i)%7===weekday?<div className="calendar-slot" key={date} style={{gridRow:Math.floor(Math.floor((offset+i)/7)/columns)*9+weekday+2,gridColumn:Math.floor((offset+i)/7)%columns+2}}>
             <Day dateKey={date} date={dateText(date,{day:'numeric',month:'long',year:'numeric'})} index={i} start={window.edges[i]} end={window.edges[i+1]} zone={window.zone} cell={value?.cells[i]??null} selected={selection?.from===window.edges[i]&&selection?.to===window.edges[i+1]} tab={date===focused||!window.dates.includes(focused)&&i===89} focus={setFocused} panel={root} onKey={key}/>
           </div>:null)}
         </div>)}

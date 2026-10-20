@@ -235,6 +235,8 @@ release peaks, work across midnight and sessions in the opening analytical perio
 Boris's No available work history board has no admitted devices. Empty project
 selection keeps the calendar visible with zero registered work. Inspect a date by
 pointer, keyboard or touch, then choose Open day to select its full date in analytics.
+Narrow widgets wrap the weeks into calendar bands, keeping every date visible without
+an internal scrollbar.
 Ana owns *Studio* and *New board*; Boris is a member of both. OpenRouter starts
 unconnected. Add widget offers synthetic keys for successful, partial and failed
 answers, a lost-reply control, and an explicit subset from a synthetic device report.
