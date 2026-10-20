@@ -14,6 +14,7 @@ import {ApiError} from '../lib/http';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
+import {effectiveFilters,publishDataFilters,onDataFilters} from '../lib/filterSelection';
 
 const deferred=()=>{let resolve!:()=>void;const promise=new Promise<void>(yes=>{resolve=yes;});return {promise,resolve};};
 
@@ -42,6 +43,30 @@ test('the mounted subset accepts ordinary history events carrying unchanged work
     h.page.dispatch({type:'hub',event:{type:'history',data:{sources:[],since:NOW-5*M,workSince:NOW-5*M,workAuthority:nextAuthority}}});
     assert.equal(reader.numbers(NOW),null,'changed authority retires numerical evidence immediately');
   }finally{cleanups.forEach(stop=>stop());await flush();await h.close();}
+});
+
+for(const fixed of [false,true])test(`the mounted ${fixed?'fixed':'live'} subset reconciles filters without a chart render`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const h=await fixture({personal:true,initialFilters:defaultFilters()}),pool=new HistoryPool(),requests:PeriodRequest[]=[],cleanups:(()=>void)[]=[];
+  h.store.creditWork(h.device,NOW-20*M,NOW-10*M,[{source:h.source,client:'codex',origin:'terminal',project:'A',folder:'',startedAt:NOW-H,identity:{kind:'stable',sessionId:'A'}}]);h.events.flush();await flush();
+  const stopPeriod=onDataFilters(()=>h.period.changed()),source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
+  const context={exports:{} as any,ActivitySelection,historyPool:pool,hubNow:()=>NOW,page:h.page,boardPeriod:h.period,
+    fetchPeriod:async(_board:string,body:PeriodRequest)=>{requests.push(body);return expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,body)));},
+    useState:(init:()=>unknown)=>[init()],useRef:(current:unknown)=>({current}),useTimeRange:()=>fixed?{from:NOW-H,to:NOW}:null,usePref:()=> '1h',
+    useLayoutEffect:(effect:()=>void)=>effect(),useEffect:(effect:()=>()=>void)=>cleanups.push(effect()),
+    activityMutedKeys:()=>['"Work project"'],effectiveFilters,workFilter,defaultFilters,timeRangeKey:()=> 'fixed',periodOf:()=>({ms:H}),onDataFilters,
+    UNAUTHORIZED:'unauthorized',window:{dispatchEvent:()=>{throw Error('unexpected access loss');}}};
+  runInNewContext(ts.transpileModule(source.slice(source.indexOf('function useActivitySubset('),source.indexOf('function useSubsetNumbers('))+'\nexports.hook=useActivitySubset;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  const reader:ActivitySelection=context.exports.hook({board:h.board,activity:{barMs:M}},'project',{},1,false,true);
+  try{
+    await flush();assert.equal(reader.numbers(NOW)?.agentMs,10*M);
+    const model=reader.get().model,work=h.period.get().value,reads=requests.length;
+    const money=structuredClone(effectiveFilters()!);money.funds.values=['another-source'];publishDataFilters(money);await flush();
+    assert.equal(h.period.get().value,work);assert.equal(reader.get().model,model,'independent money filters preserve the complete subset');assert.equal(requests.length,reads);
+    const selected=structuredClone(money);selected.projects={mode:'exclude',values:['A']};publishDataFilters(selected);
+    assert.equal(reader.numbers(NOW),null,'a changed work predicate retires the old subset immediately');await flush();
+    assert.equal(reader.numbers(NOW)?.agentMs,0,'the new work selection completes without rendering Activity');
+  }finally{cleanups.forEach(stop=>stop());stopPeriod();publishDataFilters(null,false);await flush();await h.close();}
 });
 
 for(const days of [1,30])test(`production fixed subset ${days}d replaces dirty cells with exact totals and keeps clean cells`,async t=>{
@@ -132,6 +157,23 @@ test('unmount during sliced preparation releases scratch and cannot publish its 
   assert.ok(queued.length);queued.shift()!();assert.ok(pool.estimatedBytes>0);assert.equal(reader.numbers(100),null);
   reader.reset();await flush();queued.splice(0).forEach(run=>run());await flush();
   assert.equal(reader.numbers(100),null);assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);assert.equal(scheduler.size,0);scheduler.dispose();
+});
+
+for(const error of [null,'history_failed'])test(`a live preparation cannot publish after board evidence becomes ${error?'failed':'pending'}`,async()=>{
+  const queued:(()=>void)[]=[];let time=0,ready=true;
+  const scheduler=new Preparations({now:()=>++time,post:run=>queued.push(run)}),pool=new HistoryPool();
+  const trace:WorkTrace={anchor:50,knownFrom:50,cut:100,refs:Array.from({length:20},(_,i)=>({ref:String(i),source:null,project:'p'+i,device:{id:'d',name:'D'},origin:'terminal',folder:null,startedAt:50})),spans:Array.from({length:20},(_,i)=>[i,0,50])};
+  const reader=new ActivitySelection({pool,now:()=>100,read:()=>({trace,ready,error:ready?null:error}),scheduler:()=>scheduler,send:async()=>{throw Error('unexpected request');}});
+  const drain=async()=>{for(let count=0;queued.length;count++){assert.ok(count<10000);queued.shift()!();}await flush();};
+  try{
+    reader.configure({board:'b',authority:'one',by:'project',muted:['"p0"'],filters:workFilter(defaultFilters()),selection:{mode:'live',periodMs:50},rangeKey:'live',barMs:10});await flush();
+    queued.shift()!();assert.ok(scheduler.size);assert.equal(reader.numbers(100),null);
+    ready=false;reader.refresh();await drain();
+    assert.equal(reader.numbers(100),null,'retired C cannot become a ready local summary');assert.equal(reader.get().loading,!error);assert.equal(reader.get().error,error);
+    assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);
+    ready=true;reader.refresh();await flush();await drain();
+    assert.equal(reader.numbers(100)?.agentMs,950,'the same evidence can resume after readiness returns');
+  }finally{reader.reset();await flush();scheduler.dispose();assert.equal(pool.estimatedBytes,0);}
 });
 
 test('a late forbidden reply cannot close a newer board, while current auth loss retires all local evidence',async()=>{

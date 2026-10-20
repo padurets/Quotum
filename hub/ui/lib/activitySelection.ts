@@ -62,7 +62,10 @@ export class ActivitySelection implements HistoryMember {
   refresh=()=>{
     if(!this.scope||this.scope.selection.mode!=='live')return;
     const reading=this.env.read();
-    if(!reading.ready){this.waitingForBoard=true;this.publish({model:null,loading:!reading.error,error:reading.error});return;}
+    if(!reading.ready){
+      if(!this.waitingForBoard){this.waitingForBoard=true;this.generation++;this.flight?.controller.abort();this.scheduler()?.cancel(this.owner);}
+      this.publish({model:null,loading:!reading.error,error:reading.error});return;
+    }
     if(reading.trace!==this.source||this.waitingForBoard){this.waitingForBoard=false;this.source=reading.trace;this.awaiting=null;this.news++;this.dirty=-Infinity;this.publish({model:null,loading:true,error:null});this.schedule();}
   };
   changed(since:number,workAuthority?:string){

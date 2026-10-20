@@ -110,7 +110,7 @@ const LegendItem = memo(function LegendItem({history,group,groupKey,by,name,colo
   useLocale();const id=useId(),[focused,setFocused]=useState(false);
   return <div className="activity-legend-item">
     <button type="button" className="legend-item" data-series-key={mutedKey(by,groupKey)} data-agent-ms={group?.agentMs} style={seriesFocusStyle(mutedKey(by,groupKey))}
-      aria-describedby={id} aria-pressed={!muted} onFocus={event=>setFocused(event.currentTarget.matches(':focus-visible'))} onBlur={()=>setFocused(false)}
+      aria-describedby={id} aria-pressed={!muted} onFocus={()=>setFocused(true)} onBlur={()=>setFocused(false)}
       onClick={()=>setMuted(chartMuteKey(ACTIVITY,by,groupKey),!muted)}>
       <i className="activity-swatch" style={{background:color}}/><span>{name}</span><LegendAmount history={history} by={by} groupKey={groupKey} group={group}/>
     </button>
@@ -140,7 +140,7 @@ function useActivitySubset(history:History|null,by:ActivityDimension,muted:Recor
   };
   useLayoutEffect(()=>configure.current());
   useEffect(()=>{
-    const stops=[boardPeriod.subscribe(reader.refresh),onDataFilters(()=>reader.reset()),page.listen((event,state)=>{
+    const stops=[boardPeriod.subscribe(reader.refresh),onDataFilters(()=>configure.current()),page.listen((event,state)=>{
       if(!state.board||event.type==='board-close')reader.reset();
       else if(event.type==='hub'){
         if(event.event.type==='history'&&event.event.data.workSince!==undefined){

@@ -71,10 +71,13 @@ export class SeriesFocus {
     root.addEventListener('focusin',focus);root.addEventListener('focusout',focus);root.addEventListener('pointerup',touch);
     addEventListener('pointerdown',outside);addEventListener('keydown',escape);addEventListener('click',click);
     const stop=phase.onPhase(paint);
+    // The chart finishes its fold after the shared gesture phase has ended.
+    const observer=new MutationObserver(paint);
+    observer.observe(root,{subtree:true,childList:true,attributes:true,attributeFilter:['class']});
     return()=>{
       root.removeEventListener('pointerover',pointer);root.removeEventListener('pointerout',pointer);
       root.removeEventListener('focusin',focus);root.removeEventListener('focusout',focus);root.removeEventListener('pointerup',touch);
-      disposed=true;removeEventListener('pointerdown',outside);removeEventListener('keydown',escape);removeEventListener('click',click);stop();this.reset();
+      disposed=true;removeEventListener('pointerdown',outside);removeEventListener('keydown',escape);removeEventListener('click',click);stop();observer.disconnect();this.reset();
       this.refresh=this.reset=()=>{};
     };
   }
