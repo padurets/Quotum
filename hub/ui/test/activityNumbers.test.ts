@@ -125,7 +125,7 @@ test('the actual summary uses one selected or preview cohort in EN/RU, including
     h.events.flush();await flush();
     reader.configure({board:h.board,authority:'one',by:'project',muted:['"C"','"Work project"'],filters:workFilter(defaultFilters()),selection:{mode:'live',periodMs:H},rangeKey:'1h',barMs:M});await flush();
     const history=d.render().history!,clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}});
-    const focus={get:()=>selected,subscribe:()=>()=>{}},props={history,by:'project',subset:reader,scoped:true,allOff:false,since:null,focus,groups:history.activity.by.project,titles:{}};
+    const focus={get:()=>selected,subscribe:()=>()=>{}},props={history,by:'project',subset:reader,scoped:true,allOff:false,since:null,focus,groups:history.activity.by.project};
     for(const locale of ['en','ru'] as const){
       setLocale(locale);const view=consumer('Totals',clock,h.period,props);
       try{

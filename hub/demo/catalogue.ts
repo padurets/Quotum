@@ -60,7 +60,7 @@ export const CHART_SERIES_SCENES=[
   {id:'enabled-subset',expect:['selected-summary','exact-union','distinct-sessions']},
   {id:'all-muted',expect:['no-selected-series']},
   {id:'legend-context',expect:['one-group-preview','pending-without-wider-totals'],look:[
-    'On the analytics board, point to one visible project while keyboard focus remains on another. The heading text and highlight follow the pointer; each button retains its own accessible description.',
+    'On the analytics board, point to one visible project while keyboard focus remains on another. The four metrics directly below the heading and the highlight follow the pointer, without a separate project-name row; each button retains its own accessible description.',
     'Check long names, narrow and manually sized widgets in English and Russian: previews preserve the plot and widget geometry. Monetary details appear above the plot; limit charts have no empty strip.',
   ]},
 ] as const;

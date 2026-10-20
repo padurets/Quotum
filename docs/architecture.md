@@ -735,9 +735,9 @@ chart's enabled legend series. All four metrics change together: active time is 
 interval union and recorded sessions are distinct identities across the selected work.
 Empty selection, confirmed zero, unavailable work and pending exact evidence remain
 separate states. Zero active time has no average concurrency.
-One reserved information area below the heading shows this summary. Pointing to a
-visible legend entry or focusing it with the keyboard temporarily replaces it with the
-group name and the same four metrics. Pointer takes visual priority over keyboard
+The four metrics sit directly below the heading, without a separate group-name row.
+Pointing to a visible legend entry or focusing it with the keyboard temporarily shows
+that group's metrics in the same space. Pointer takes visual priority over keyboard
 focus; each focused entry keeps its own accessible description. Escape dismisses the
 preview, and a tap toggles visibility and holds an enabled entry's preview for four
 seconds. A hidden entry supplies no preview or peer dimming. Shift and panning suppress
