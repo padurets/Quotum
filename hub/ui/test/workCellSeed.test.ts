@@ -1,3 +1,5 @@
+import {WorkCalendar} from '../lib/workCalendar';
+import {AGENT_HOURS_HEATMAP} from '../../server/domain/widgets';
 import * as filterModelBindings from '../../server/domain/dataFilters';
 import * as filterRuntimeBindings from '../lib/filterSelection';
 import * as filterCurveBindings from '../../server/domain/periodCurves';
@@ -113,7 +115,7 @@ async function reservedOwner() {
   class Accounting extends PeriodAccounting {
     static *prepare(...args:Parameters<typeof PeriodAccounting.prepare>):ReturnType<typeof PeriodAccounting.prepare>{preparing=true;try{return yield*super.prepare(...args);}finally{preparing=false;}}
   }
-  const context={exports:{} as {BoardPeriod:new()=>any},hubNow:()=>now,retention,historyPool:{register:()=>{},reserve:()=>!refuse||!preparing,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {BoardPeriod:new()=>any},hubNow:()=>now,retention,historyPool:{register:()=>{},reserve:()=>!refuse||!preparing,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},pan:{get:()=>null},preparations:()=>null,prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
     evaluatedRange,periodKey,PeriodAccounting:Accounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,periodTextChangesAt,
     empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson:(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b),prefs:()=>({range:'24h'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{}};

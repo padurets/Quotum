@@ -41,7 +41,7 @@ test('a refused quota replacement keeps its retained work clock independent of a
     }
   }
   type Coordinator={selection:PeriodRequest['selection'];receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;quotaAt(line:{sourceId:string;windowId:string},at:number,key:string):{work:{ms:number}};cellChangesAt(scope:string,at:number,read:(at:number)=>string,extra?:()=>number|null,source?:string,key?:string,window?:string):number|null;tapes:Map<string,{accounting:PeriodAccounting}>;index:PeriodIndex;workSelection:PeriodRequest['selection']};
-  const context={exports:{} as {BoardPeriod:new()=>Coordinator},
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {BoardPeriod:new()=>Coordinator},
     hubNow:()=>now,retention,historyPool:{register:()=>{},reserve:()=>!refuse||!accountingPreparing,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
