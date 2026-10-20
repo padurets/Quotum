@@ -379,7 +379,7 @@ test('unpainted final input is credited only after its geometry commits', () => 
 });
 
 test('the probe measures a delayed HTML or SVG fold and cannot credit final input while it is moving', () => {
-  for (const typed of [false,true]) for (const html of [true, false]) {
+  for (const typed of [false,true]) for (const html of [true, false]) for(const cost of [0,72]) {
     const f = fixture('quota',typed); f.wheel(0, 0);
     for (const svg of [f.historySvg, f.activitySvg, f.budgetSvg, f.fundsSvg, f.sessionSvg]) {
       delete svg.dataset.panEnd;
@@ -387,20 +387,45 @@ test('the probe measures a delayed HTML or SVG fold and cannot credit final inpu
     }
     f.context.location.search = '?from=0&to=12';
     const moving = html ? f.historyLayer : f.historyLayer.slides;
-    moving.getAnimations = () => [{playState: 'running'}];
+    const now=f.context.performance.now;let elapsed=0,delay=0;
+    f.context.performance.now=()=>now()+elapsed;
+    moving.getAnimations = () => {elapsed+=delay;return [{playState: 'running'}];};
     f.paintFold(moving,'translateX(40px) scaleX(.6)'); f.runFrame(10);
     f.runFrame(20);
     assert.equal(f.reading.updated, 0, 'an animation without actual movement creates no frames');
-    f.paintFold(moving,'translateX(30px) scaleX(.7)'); f.runFrame(30);
+    delay=cost;f.paintFold(moving,'translateX(30px) scaleX(.7)'); f.runFrame(30);
+    elapsed=0;delay=0;
     f.paintFold(moving,'translateX(10px) scaleX(.9)'); f.runFrame(110);
     assert.equal(f.reading.updated, 2);
     assert.deepEqual(Array.from(f.reading.frames), [80], 'a slow fold remains in the original moving-frame budget');
     assert.equal(f.reading.samples[0].callbacksSinceMovingFrame,1);
     assert.equal(f.reading.samples[0].maxCallbackGapMs,80);
+    assert.equal(f.reading.samples[0].samplerMs,cost,'observer work is identified without subtracting it from the failing gap');
     assert.equal(f.reading.latency.length, 0, 'final geometry alone cannot credit an unfinished animation');
     moving.getAnimations = () => []; f.paintFold(moving,'none'); f.runFrame(120);
     assert.deepEqual(Array.from(f.reading.latency), [120]);
   }
+});
+
+test('outliers sum prior sampler bodies across repeated RAF timestamps and discard closed intervals',()=>{
+  const f=fixture();
+  for(const svg of [f.historySvg,f.activitySvg,f.budgetSvg,f.fundsSvg,f.sessionSvg])delete svg.dataset.panEnd;
+  const now=f.context.performance.now;let elapsed=0,delay=0;
+  f.context.performance.now=()=>now()+elapsed;
+  const animate=()=>{elapsed+=delay;return [{playState:'running'}];};
+  f.historyLayer.getAnimations=animate;
+  const run=(at:number,pixels:number,cost=0,stamp=at)=>{
+    elapsed=0;delay=cost;f.historyLayer.style.transform=`translateX(${pixels}px)`;
+    f.frame(at).forEach(callback=>callback(stamp));
+  };
+  run(10,40);run(20,30,5);run(40,25,7,20);run(100,10,11);run(180,5);
+  assert.deepEqual(Array.from(f.reading.frames),[80,80]);
+  assert.deepEqual(Array.from(f.reading.samples,sample=>sample.samplerMs),[12,11]);
+  assert.equal(f.reading.samples[0].callbacksSinceMovingFrame,2);
+  f.historyLayer.getAnimations=()=>[];f.runFrame(200);
+  f.historyLayer.getAnimations=animate;
+  run(300,40);run(320,30);run(400,10);
+  assert.equal(f.reading.samples.at(-1)!.samplerMs,0,'a new fold starts with no earlier observer work');
 });
 
 test('fold outliers retain sample-entry gaps after a phase change, including repeated RAF timestamps',()=>{

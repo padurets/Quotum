@@ -172,11 +172,13 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         const originalRAF=window.requestAnimationFrame||requestAnimationFrame;
         const schedule=callback=>originalRAF.call(window,callback);
         let previous=charts.map(()=>'0:1'),phase='idle',lastFrame=null,paintedToken=null;
-        let sampleEntry=0,callbacksSinceMovingFrame=0,maxCallbackGapMs=0;
+        let sampleEntry=0,callbacksSinceMovingFrame=0,maxCallbackGapMs=0,samplerMs=0;
         const consume=(count,now,stamp,reachedGesture)=>{const reached=probe.pending.slice(0,count).filter(input=>input.gesture===reachedGesture);probe.pending=probe.pending.filter((input,i)=>i>=count||input.gesture!==reachedGesture);for(const input of reached){const ms=now-input.at;probe.latency.push(ms);probe.responses.push({ms,queued:input.delivered-input.at,processed:now-input.delivered,segment:input.segment,requests:probe.flights.size});}};
         const sample=(stamp,afterCallback=false)=>{
           if(!probe.running)return;
-          const now=performance.now(),demand=probe.pending.length,layers=owners(),active=!!root.dataset.panEnd;
+          const now=performance.now();
+          try {
+          const demand=probe.pending.length,layers=owners(),active=!!root.dataset.panEnd;
           // Count sample entries, including callbacks with the same RAF timestamp.
           if(probe.last){callbacksSinceMovingFrame++;maxCallbackGapMs=Math.max(maxCallbackGapMs,now-sampleEntry);}
           sampleEntry=now;
@@ -206,10 +208,10 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
               if(probe.last){
                 const ms=now-probe.last;probe.frames.push(ms);
                 const receipt={ms,segment:folding?'fold':probe.segment,pending:demand,requests:probe.flights.size};
-                if(ms>50){receipt.callbacksSinceMovingFrame=callbacksSinceMovingFrame;receipt.maxCallbackGapMs=maxCallbackGapMs;}
+                if(ms>50){receipt.callbacksSinceMovingFrame=callbacksSinceMovingFrame;receipt.maxCallbackGapMs=maxCallbackGapMs;receipt.samplerMs=samplerMs;}
                 probe.samples.push(receipt);
               }
-              probe.last=now;lastFrame=stamp;callbacksSinceMovingFrame=0;maxCallbackGapMs=0;
+              probe.last=now;lastFrame=stamp;callbacksSinceMovingFrame=0;maxCallbackGapMs=0;samplerMs=0;
             }
           }
           if(!active&&!folding&&probe.pending.length&&charts.every(svg=>svg.dataset.drawReady==='true'&&!svg.classList.contains('is-panning'))){
@@ -222,6 +224,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
           }
           if(!active&&!folding)probe.last=0;
           previous=current;probe.undimmed&&=charts.every(svg=>!svg.closest('.is-loading')&&(!svg.style.opacity||svg.style.opacity==='1'));
+          // The current body belongs to the next movement interval.
+          } finally {if(probe.last)samplerMs+=performance.now()-now;}
         };
         // An unrelated preparation RAF cannot present new input. Inspect all
         // five drawings only when the initiator's real drawing has changed.

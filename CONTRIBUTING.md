@@ -70,6 +70,9 @@ A missing, retired or different scenario probe is marked unavailable instead of
 attributing an earlier scenario's measurements to the failure.
 Moving-frame outliers retain the number of sampler entries since the previous moving
 frame and the largest gap between those entries, including repeated RAF timestamps.
+They also retain elapsed sampler-body time within that interval, excluding the current
+body. It is diagnostic only and is never subtracted from frame or input budgets. The
+extra clock read has overhead; this is not CPU time or a complete overhead correction.
 These entries do not count every RAF callback or establish CPU ownership or presentation.
 The original idle interval can be inspected with
 `QUOTUM_BENCH_DIAGNOSE_IDLE_CPU=trace` or `profile`, using `--ci` and an owned

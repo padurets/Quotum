@@ -14,7 +14,7 @@ export type PanReading = {
   wheelGapMs:number;
   segments?: Record<string, {count: number; p95: number; max: number}>;
   outliers?: {ms: number; segment: string; pending: number; requests: number;
-    callbacksSinceMovingFrame?: number; maxCallbackGapMs?: number}[];
+    callbacksSinceMovingFrame?: number; maxCallbackGapMs?: number; samplerMs?:number}[];
   responses?: {ms: number; queued: number; processed: number; segment: string; requests: number}[];
   mutationSamples?: {segment:string;surface:string;tag:string;type:string;attribute:string|null;measurement:boolean;panning:boolean}[];
 };
