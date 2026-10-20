@@ -74,9 +74,10 @@ export function moneySelection(cards:readonly Card[],_hidden:readonly string[],s
     return balance?[[card.id,balance.id] as [string,string]]:[];
   });
   const preferredSources=filters?.legacy?.fundsPreferredByUnit?.[unit];
-  if(family==='funds'&&!explicit&&ids.length>MAX_METERS&&(preferredSources||settings.legacySelected?.[unit])){
+  const legacyPriority=!filters?settings.legacySelected?.[unit]:undefined;
+  if(family==='funds'&&!explicit&&ids.length>MAX_METERS&&(preferredSources||legacyPriority)){
     const identity=([source,meter]:[string,string])=>JSON.stringify([source,conversionOrigin(meter)?.meter??meter]);
-    const preferred=new Set(preferredSources?ids.filter(([source])=>preferredSources.includes(source)).map(identity):settings.legacySelected![unit].map(identity));
+    const preferred=new Set(preferredSources?ids.filter(([source])=>preferredSources.includes(source)).map(identity):(legacyPriority??[]).map(identity));
     ids=[...ids.filter(pair=>preferred.has(identity(pair))),...ids.filter(pair=>!preferred.has(identity(pair)))];
   }
   const unique=moneyChoices(shown,ids,unit);
