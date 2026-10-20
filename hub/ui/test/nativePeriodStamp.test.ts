@@ -11,7 +11,7 @@ import {defaultCurrencyContext} from '../../server/domain/currency';
 import {providerOf} from '../../server/domain/providers';
 import {quotaPeriods} from '../lib/subscription';
 import {hasSubscriptionCaps} from '../lib/providers';
-import {budgetVisible} from '../lib/money';
+import {budgetVisible,historicalCurrencyContext} from '../lib/money';
 import {level,windowName} from '../lib/quota';
 import {num,stamp} from '../lib/format';
 import {t,setLocale} from '../i18n';
@@ -41,7 +41,7 @@ test('native historical values disclose their actual sample time while live valu
     const reading={value:read(selected.to),basis:{range:selected},loading:false,error:null};
     assert.equal(reading.value.windows[0].observedAt,at);assert.equal(reading.value.windows[0].stale,false);
     const context={useDataFilters:()=>({current:null}),exports:{} as Record<string,(props:unknown)=>Node>,draw:undefined as unknown as (props:unknown)=>Node,require:()=>runtime,
-      t,stamp,num,level,windowName,providerOf,quotaPeriods,hasSubscriptionCaps,budgetVisible,
+      t,stamp,num,level,windowName,providerOf,quotaPeriods,hasSubscriptionCaps,budgetVisible,historicalCurrencyContext,
       usePeriodValues:()=>reading,useTimeRange:()=>selected,useCurrencyContext:()=>defaultCurrencyContext,
       isWindowHidden:()=>false,planOf:()=>null,MeasurementClock:{Provider:'clock'},PercentLimit:undefined as unknown,
       ResetLine:'reset',PlanNote:'plan-note',PlanMark:'plan-mark',PeriodStatus:'period-status',QuotaCard:'quota',Limit:undefined as unknown,AllHidden:'hidden',
