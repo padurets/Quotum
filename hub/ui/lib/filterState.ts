@@ -98,9 +98,9 @@ export class DataFilterState {
     const parsed=parseDataFilters(current),fits=parsed&&executableWorkFilters(parsed);
     const before=e.current&&workFilterBytes(e.current),after=parsed&&workFilterBytes(parsed);
     const recovering=before&&after&&!executableWorkFilters(e.current!)&&after.every((bytes,i)=>bytes<=before[i])&&after.some((bytes,i)=>bytes<before[i]);
-    if(!parsed||!fits&&!recovering){e.error=new ApiError(413,'filters_limit');this.publish();return false;}
+    if(!parsed||!fits&&!recovering){e.error=new ApiError(413,'filters_limit');return false;}
     const envelope={filters:parsed,authority:e.saved?.authority??'a'.repeat(43),replace:[...FILTER_FAMILIES],...this.intents(e)};
-    if(jsonBytes(envelope)>FILTER_BODY_LIMIT){e.error=new ApiError(413,'filters_limit');this.publish();return false;}
+    if(jsonBytes(envelope)>FILTER_BODY_LIMIT){e.error=new ApiError(413,'filters_limit');return false;}
     e.current=parsed;e.generation++;e.error=fits?null:new ApiError(413,'filters_limit');this.consumeMigration(e,families);this.persist(e);this.publish();return true;
   }
   toggle(family:FilterFamily,ref:FamilyRef,included:boolean,unit?:string,automatic=false){
@@ -116,7 +116,7 @@ export class DataFilterState {
     if(family==='wallet')current.wallet=setWallet(current.wallet,ref as Parameters<typeof setWallet>[1],included,automatic);
     else current[family]=setSelection(current[family] as Parameters<typeof setSelection>[0],ref,included) as never;
     const decision={family,ref,included} as FilterDecision;e.decisions.set(family+':'+filterRefKey(ref),{value:decision,seq});
-    if(!this.update(e,current,[family])){e.resets=previous.resets;e.decisions=previous.decisions;e.materialize=previous.materialize;}
+    if(!this.update(e,current,[family])){e.resets=previous.resets;e.decisions=previous.decisions;e.materialize=previous.materialize;this.publish();}
   }
   reset(family:FilterFamily|readonly FilterFamily[],mode:'all'|'none'){
     const e=this.entry();if(!e?.current)return;
@@ -126,7 +126,7 @@ export class DataFilterState {
       e.resets[part]={value:mode,seq:++e.seq};delete e.materialize[part as 'wallet'|'funds'];for(const [key,intent] of e.decisions)if(intent.value.family===part)e.decisions.delete(key);
       current=resetFilter(current,part,mode);
     }
-    if(!this.update(e,current,typeof family==='string'?[family]:family)){e.resets=previous.resets;e.decisions=previous.decisions;e.materialize=previous.materialize;}
+    if(!this.update(e,current,typeof family==='string'?[family]:family)){e.resets=previous.resets;e.decisions=previous.decisions;e.materialize=previous.materialize;this.publish();}
   }
   restore(){const e=this.entry();if(!e?.saved)return;e.originSequence=++e.seq;e.conflicts=0;e.resets={};e.decisions.clear();e.materialize={};e.originRevision=e.saved.revision;e.originProjection=e.saved.filters;e.current=e.saved.filters;e.generation++;e.error=executableWorkFilters(e.current)?null:new ApiError(413,'filters_limit');this.consumeMigration(e,['wallet','funds']);this.persist(e);this.publish();}
   async save(){

@@ -32,6 +32,19 @@ test('legacy seed consumption belongs to its user, board and explicitly edited f
   assert.deepEqual(open('concurrent').get().current,envelope().filters,'two already open tabs cannot overwrite each other\'s family receipt');
 });
 
+for(const edit of ['toggle','reset'] as const)test(`a refused ${edit} publishes its error after restoring clean intents`,()=>{
+  const saved=envelope(1);saved.filters.projects={mode:'include',values:Array.from({length:1600},(_,i)=>String(i).padStart(4,'0')+'x'.repeat(60))};
+  if(edit==='toggle')while(!executableWorkFilters(saved.filters))saved.filters.projects.values.pop();
+  const drafts=storage(),receipts=storage(),state=new DataFilterState({storage:drafts,migrationStorage:receipts,save:async()=>saved});
+  state.open('u','b');state.accept(saved);const before=state.get().current;assert.equal(state.get().dirty,false);
+  const dirty:boolean[]=[];state.subscribe(()=>dirty.push(state.get().dirty));
+  if(edit==='toggle')state.toggle('projects','new-'+'y'.repeat(60),true);else state.reset('wallet','all');
+  assert.equal(state.get().current,before);assert.equal((state.get().error as ApiError).code,'filters_limit');
+  assert.equal(state.get().dirty,false);assert.deepEqual(dirty,[false],'subscribers never see rejected temporary intents');
+  assert.equal(drafts.getItem('quotum.filters.'+JSON.stringify(['u','b'])),null);
+  assert.equal(receipts.getItem('quotum.filters.migration.'+JSON.stringify(['u','b'])+'.wallet'),null);
+});
+
 test('a delayed conflict cannot publish an authority superseded by the stream',async()=>{
   let reject!:(error:unknown)=>void;const state=new DataFilterState({save:()=>new Promise<FilterEnvelope>((_yes,no)=>{reject=no;})});
   state.open('u','b');state.accept(envelope(1));const pending=state.save();
