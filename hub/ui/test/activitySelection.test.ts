@@ -11,8 +11,36 @@ import {fixture,flush,NOW,H,M} from './periodRuntimeFixture';
 import {packWork,type WorkTrace} from '../../server/domain/periodWork';
 import {Preparations} from '../lib/prepare';
 import {ApiError} from '../lib/http';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import ts from 'typescript';
 
 const deferred=()=>{let resolve!:()=>void;const promise=new Promise<void>(yes=>{resolve=yes;});return {promise,resolve};};
+
+test('the mounted subset accepts ordinary history events carrying unchanged work authority',async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const h=await fixture({personal:true}),pool=new HistoryPool(),requests:PeriodRequest[]=[],cleanups:(()=>void)[]=[];
+  const add=(from:number,to:number)=>{h.store.creditWork(h.device,from,to,[{source:h.source,client:'codex',origin:'terminal',project:'A',folder:'',startedAt:NOW-H,identity:{kind:'stable',sessionId:'A'}}]);h.events.flush();};
+  add(NOW-20*M,NOW-10*M);
+  const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
+  const context={exports:{} as any,ActivitySelection,historyPool:pool,hubNow:()=>NOW,page:h.page,boardPeriod:h.period,
+    fetchPeriod:async(_board:string,body:PeriodRequest)=>{requests.push(body);return expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,body)));},
+    useState:(init:()=>unknown)=>[init()],useTimeRange:()=>({from:NOW-H,to:NOW}),usePref:()=> '1h',
+    useLayoutEffect:(effect:()=>void)=>effect(),useEffect:(effect:()=>()=>void)=>cleanups.push(effect()),
+    activityMutedKeys:()=>['"Work project"'],effectiveFilters:()=>defaultFilters(),workFilter,defaultFilters,timeRangeKey:()=> 'fixed',
+    onDataFilters:()=>()=>{},UNAUTHORIZED:'unauthorized',window:{dispatchEvent:()=>{throw Error('unexpected access loss');}}};
+  runInNewContext(ts.transpileModule(source.slice(source.indexOf('function useActivitySubset('),source.indexOf('function useSubsetNumbers('))+'\nexports.hook=useActivitySubset;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  const reader:ActivitySelection=context.exports.hook({activity:{barMs:M}},'project',{},1,false,true);
+  try{
+    await flush();assert.equal(reader.numbers(NOW)!.agentMs,10*M);assert.equal(requests.length,1);
+    add(NOW-10*M,NOW-5*M);await flush();
+    assert.equal(requests.length,2,'one replacement follows a real same-authority history event');
+    assert.equal(reader.numbers(NOW)!.agentMs,15*M);
+    const nextAuthority='replacement';
+    h.page.dispatch({type:'hub',event:{type:'history',data:{sources:[],since:NOW-5*M,workSince:NOW-5*M,workAuthority:nextAuthority}}});
+    assert.equal(reader.numbers(NOW),null,'changed authority retires numerical evidence immediately');
+  }finally{cleanups.forEach(stop=>stop());await flush();await h.close();}
+});
 
 for(const days of [1,30])test(`production fixed subset ${days}d replaces dirty cells with exact totals and keeps clean cells`,async t=>{
   t.mock.method(Date,'now',()=>NOW);

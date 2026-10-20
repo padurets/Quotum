@@ -45,7 +45,7 @@ function observationScript(period:string){return historyPoolReceiptScript()+`;((
     const request=p.request;p.request=function(owner,flight,start,cancel){return request.call(this,owner,flight,()=>{stats.flights=Math.max(stats.flights,this.active.size);stats.subsetFlights=Math.max(stats.subsetFlights,[...this.active.values()].filter(f=>typeof f.owner.numbers==='function').length);start();},cancel);};
   };
   window.__quotumInspectPreparations=scheduler=>{const replace=scheduler.replace;scheduler.replace=function(owner,work,...rest){const next=work.next;work.next=function(...args){const start=performance.now();try{stats.advances++;if(reader()?.owner===owner)stats.subsetAdvances++;return next.apply(this,args);}finally{stats.preparationMs+=performance.now()-start;}};return replace.call(this,owner,work,...rest);};};
-  window.__quotumFixedActivity={reset,reader,holdDispatch:()=>{const r=reader(),schedule=r.schedule;r.schedule=()=>{};return window.__quotumFixedActivity.resumeDispatch=()=>{r.schedule=schedule;schedule.call(r);};},sample:()=>{const r=reader(),a=r?.numbers(Date.now());return a?{...stats,numbers:{agentMs:a.agentMs,activeMs:a.activeMs,agents:a.agents},activity:a,tiles:[...r.tiles].map(([key,tile])=>{if(!ids.has(tile))ids.set(tile,++serial);return[key,ids.get(tile)];})}:null;},ready:()=>{const r=reader();return !!r?.get().model&&!r.flight&&pool.activeFlights===0&&!document.querySelector('.chart>svg[data-draw-ready="false"],.activity.is-loading,.history.is-loading');}};
+  window.__quotumFixedActivity={reset,reader,status:()=>{const r=reader(),s=r?.get();return {registered:!!r,error:s?.error,loading:s?.loading,model:!!s?.model,flights:pool.activeFlights,bytes:pool.estimatedBytes};},holdDispatch:()=>{const r=reader(),schedule=r.schedule;r.schedule=()=>{};return window.__quotumFixedActivity.resumeDispatch=()=>{r.schedule=schedule;schedule.call(r);};},sample:()=>{const r=reader(),a=r?.numbers(Date.now());return a?{...stats,numbers:{agentMs:a.agentMs,activeMs:a.activeMs,agents:a.agents},activity:a,tiles:[...r.tiles].map(([key,tile])=>{if(!ids.has(tile))ids.set(tile,++serial);return[key,ids.get(tile)];})}:null;},ready:()=>{const r=reader();return !!r?.get().model&&!r.flight&&pool.activeFlights===0&&!document.querySelector('.chart>svg[data-draw-ready="false"],.activity.is-loading,.history.is-loading');}};
 })();`;}
 
 /** Physical requests are retained through cancellation and their final response-body accounting. */
@@ -81,7 +81,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       const split=owner.cookie.indexOf('=');await cdp.send('Network.setCookie',{name:owner.cookie.slice(0,split),value:owner.cookie.slice(split+1),url:owner.base,httpOnly:true,sameSite:'Lax'});
       await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:observationScript(days===1?'24h':'30d')});
       await cdp.send('Page.navigate',{url:owner.base+`/?from=${selection.from}&to=${selection.to}`});
-      const waitFor=async(test:string)=>{const deadline=Date.now()+30_000;while(!await cdp.evaluate<boolean>(test)){if(Date.now()>deadline)throw Error(`fixed Activity ${days}d did not become coherent`);await pause(30);}};
+      const waitFor=async(test:string)=>{const deadline=Date.now()+30_000;while(!await cdp.evaluate<boolean>(test)){if(Date.now()>deadline){const state=await cdp.evaluate('window.__quotumFixedActivity?.status()').catch(()=>null);throw Error(`fixed Activity ${days}d did not become coherent: ${JSON.stringify(state)}`);}await pause(30);}};
       await waitFor(`document.querySelectorAll('.activity .legend-item').length>2&&!document.querySelector('.activity.is-loading')`);
       const excluded=await cdp.evaluate<string>(`(()=>{const button=[...document.querySelectorAll('.activity .legend-item')].find(b=>!b.textContent.includes('Observed benchmark'));const key=button.dataset.seriesKey.slice('activity:project:'.length);button.click();return JSON.parse(key);})()`);
       const settled=()=>waitFor(`window.__quotumFixedActivity?.ready()===true`);
@@ -98,9 +98,14 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       assert.ok(!paint.renders.some(part=>part.widget==='activity'&&part.kind==='chart'),'hover cannot render Activity or its plot');
       await cdp.evaluate(`document.querySelector('.activity .legend-item[aria-pressed="true"]').dispatchEvent(new PointerEvent('pointerout',{bubbles:true,pointerType:'mouse'}))`);
       const subsetRequest=[...bodies.bodies].reverse().find(body=>body.subset)!.body;
+      let referenceReceipt={requests:0,requestBytes:0,decodedBytes:0,encodedBytes:0};
       const reference=async()=>{
         const request:PeriodRequest={version:1,selection:{mode:'live',periodMs:Date.now()-selection.from+60_000},evaluatedAt:Date.now(),workFilter:subsetRequest.workFilter,sessions:{}};
-        const raw=await owner.post<PeriodReply>(`/api/boards/${owner.personalBoard}/period`,request),reply=expandPeriod(raw);
+        const body=JSON.stringify(request),response=await fetch(`${owner.base}/api/boards/${owner.personalBoard}/period`,{method:'POST',headers:{cookie:owner.cookie,origin:new URL(process.env.QUOTUM_PUBLIC_URL??owner.base).origin,'content-type':'application/json','accept-encoding':'identity'},body,signal:AbortSignal.timeout(12_000)});
+        assert.equal(response.status,200,'raw interval reference');assert.ok(!response.headers.get('content-encoding'));
+        const text=await response.text(),bytes=Buffer.byteLength(text);assert.ok(bytes<=FIXED_ACTIVITY_BUDGET.body);
+        referenceReceipt.requests++;referenceReceipt.requestBytes+=Buffer.byteLength(body);referenceReceipt.decodedBytes+=bytes;referenceReceipt.encodedBytes+=bytes;
+        const reply=expandPeriod(JSON.parse(text) as PeriodReply);
         assert.equal(reply.sessions?.state,'complete');return reply.sessions!.state==='complete'?reply.sessions!.value:null!;
       };
       const check=async()=>{
@@ -114,20 +119,25 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       };
       const phase=async(name:string,run:()=>Promise<void>,expected:number|null)=>{
         const start=bodies.bodies.length;await cdp.evaluate('window.__quotumFixedActivity.reset()');const at=Date.now();
+        referenceReceipt={requests:0,requestBytes:0,decodedBytes:0,encodedBytes:0};
         const metrics=async()=>{const {metrics}=await cdp.send<{metrics:{name:string;value:number}[]}>('Performance.getMetrics');return Object.fromEntries(metrics.map(metric=>[metric.name,metric.value]));};
         const before=await metrics();
-        await run();await pause(350);await settled();while(bodies.active.size||bodies.pending.size){await Promise.allSettled([...bodies.pending]);await pause(20);}
+        await run();
+        if(expected){const deadline=Date.now()+30_000;while(bodies.bodies.slice(start).filter(row=>row.subset).length<expected){if(Date.now()>deadline)throw Error(name+' did not dispatch its subset reads');await pause(30);}}
+        await pause(350);await settled();while(bodies.active.size||bodies.pending.size){await Promise.allSettled([...bodies.pending]);await pause(20);}
+        const coherentAt=Date.now();
         const current=await check(),reads=bodies.bodies.slice(start),subset=reads.filter(row=>row.subset);
         const after=await metrics();assert.deepEqual(bodies.errors,[],'every completed response must remain accounted');
         assert.ok(Number.isFinite(after.ScriptDuration-before.ScriptDuration)&&Number.isFinite(after.TaskDuration-before.TaskDuration));
+        const decoded=reads.reduce((n,row)=>n+row.decoded,0),selectedBytes=subset.reduce((n,row)=>n+row.decoded,0);
+        const report={days,name,excluded,requests:reads.length,subset:subset.length,requestBytes:reads.reduce((n,row)=>n+row.requestBytes,0),decoded,selectedBytes,encoded:reads.reduce((n,row)=>n+row.encoded,0),cancelled:reads.filter(row=>row.cancelled).length,coherentMs:coherentAt-at,verificationMs:Date.now()-coherentAt,reference:referenceReceipt,scriptMs:(after.ScriptDuration-before.ScriptDuration)*1000,taskMs:(after.TaskDuration-before.TaskDuration)*1000,...current,numbers:current.numbers,activity:undefined,tiles:undefined};
+        reports.push(report);console.error('bench: fixed Activity '+JSON.stringify(report));
         if(expected!==null)assert.equal(subset.length,expected,name+' subset requests');
         assert.ok(current.flights<=2&&current.subsetFlights<=1&&current.bytes<=FIXED_ACTIVITY_BUDGET.pool&&!current.failedReservations);
         assert.ok(current.advances<=FIXED_ACTIVITY_BUDGET.advances);
         if(expected&&expected>0)assert.ok(current.advances>0&&current.subsetAdvances>0,'real C/S preparation must be observed');
         for(const row of reads)assert.ok(row.requestBytes<=FIXED_ACTIVITY_BUDGET.request&&row.decoded<=FIXED_ACTIVITY_BUDGET.body);
-        const decoded=reads.reduce((n,row)=>n+row.decoded,0),selectedBytes=subset.reduce((n,row)=>n+row.decoded,0);
         if(expected===1){assert.ok(selectedBytes<=(days===1?FIXED_ACTIVITY_BUDGET.subset24h:FIXED_ACTIVITY_BUDGET.subset30d));assert.ok(decoded<=(days===1?FIXED_ACTIVITY_BUDGET.combined24h:FIXED_ACTIVITY_BUDGET.combined30d));}
-        reports.push({days,name,excluded,requests:reads.length,subset:subset.length,requestBytes:reads.reduce((n,row)=>n+row.requestBytes,0),decoded,selectedBytes,encoded:reads.reduce((n,row)=>n+row.encoded,0),cancelled:reads.filter(row=>row.cancelled).length,coherentMs:Date.now()-at,scriptMs:(after.ScriptDuration-before.ScriptDuration)*1000,taskMs:(after.TaskDuration-before.TaskDuration)*1000,...current,numbers:current.numbers,activity:undefined,tiles:undefined});
         return {current,subset};
       };
       const isolated=await phase('isolated',async()=>{await actor.through(actor.floorAt+100);},1);

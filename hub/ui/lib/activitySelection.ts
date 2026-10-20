@@ -12,7 +12,7 @@ import {prepareAsync,preparations,type Preparation,type Preparations} from './pr
 import {periodTextChangesAt} from './periodClock';
 import type {ActivityDimension} from './types';
 
-export type ActivityScope = {board:string;authority:string;by:ActivityDimension;muted:readonly string[];filters:WorkFilter;selection:PeriodSelection;rangeKey:string;barMs:number};
+export type ActivityScope = {board:string;authority:string;workAuthority?:string;by:ActivityDimension;muted:readonly string[];filters:WorkFilter;selection:PeriodSelection;rangeKey:string;barMs:number};
 type Reading={trace:WorkTrace|null;ready:boolean;error:string|null};
 type Model={projector:PeriodActivity;activity:History['activity'];selection:PeriodSelection;rangeKey:string};
 export type ActivitySelectionState={model:Model|null;loading:boolean;error:string|null};
@@ -46,7 +46,7 @@ export class ActivitySelection implements HistoryMember {
     if(scope)try{
       if(!executableWorkFilters(activityScope(scope.filters,scope.by,scope.muted)))throw new Error('history_limit');
     }catch{this.reset();this.publish({model:null,loading:false,error:'history_limit'});return;}
-    const identity=scope?JSON.stringify([scope.board,scope.authority,scope.by,[...scope.muted].sort(),scope.filters,scope.selection,scope.rangeKey,scope.barMs]):'';
+    const identity=scope?JSON.stringify([scope.board,scope.authority,scope.workAuthority,scope.by,[...scope.muted].sort(),scope.filters,scope.selection,scope.rangeKey,scope.barMs]):'';
     if(identity===this.identity){this.refresh();return;}
     this.reset();this.identity=identity;this.scope=scope;
     if(scope){this.env.pool.register(this);this.dirty=-Infinity;this.publish({model:null,loading:true,error:null});this.schedule();}
@@ -65,8 +65,9 @@ export class ActivitySelection implements HistoryMember {
     if(!reading.ready){this.waitingForBoard=true;this.publish({model:null,loading:!reading.error,error:reading.error});return;}
     if(reading.trace!==this.source||this.waitingForBoard){this.waitingForBoard=false;this.source=reading.trace;this.awaiting=null;this.news++;this.dirty=-Infinity;this.publish({model:null,loading:true,error:null});this.schedule();}
   };
-  changed(since:number){
+  changed(since:number,workAuthority?:string){
     if(!this.scope)return;
+    if(workAuthority!==undefined&&workAuthority!==this.scope.workAuthority){this.reset();return;}
     if(this.scope.selection.mode==='range'&&since>=this.scope.selection.to)return;
     if(this.scope.selection.mode==='live')this.awaiting=this.env.read().trace;
     this.news++;this.dirty=Math.min(this.dirty,since);this.publish({...this.state,model:null,loading:true,error:null});this.schedule();

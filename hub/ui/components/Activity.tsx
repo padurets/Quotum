@@ -134,7 +134,7 @@ function useActivitySubset(history:History|null,by:ActivityDimension,muted:Recor
   const selected=useTimeRange(),range=usePref('range');
   useLayoutEffect(()=>{
     const off=activityMutedKeys(muted,by),board=page.get().board;
-    reader.configure(scoped&&!allOff&&off.length&&history&&board?{board:board.id,authority:JSON.stringify([authority,board.workAuthority]),by,muted:off,filters:workFilter(effectiveFilters()??defaultFilters()),
+    reader.configure(scoped&&!allOff&&off.length&&history&&board?{board:board.id,authority:JSON.stringify([authority,board.workAuthority]),workAuthority:board.workAuthority,by,muted:off,filters:workFilter(effectiveFilters()??defaultFilters()),
       selection:selected?{mode:'range',...selected}:{mode:'live',periodMs:periodOf(range).ms},rangeKey:selected?timeRangeKey(selected):range,barMs:history.activity.barMs}:null);
   });
   useEffect(()=>{
@@ -142,7 +142,7 @@ function useActivitySubset(history:History|null,by:ActivityDimension,muted:Recor
       if(!state.board||event.type==='board-close')reader.reset();
       else if(event.type==='hub'){
         if(event.event.type==='history'&&event.event.data.workSince!==undefined){
-          if(event.event.data.workAuthority)reader.reset();else reader.changed(event.event.data.workSince);
+          reader.changed(event.event.data.workSince,event.event.data.workAuthority);
         }else if(['hello','snapshot','mine','lineup'].includes(event.event.type))reader.reset();
       }
     })];
@@ -156,7 +156,8 @@ function useSubsetNumbers(reader:ActivitySelection,history:History|null,enabled:
   const at=(now:number)=>state.model?.rangeKey===history?.range?reader.numbers(now,bar):null;
   const frozen=useRef<ReturnType<typeof at>>(null);
   const now=useClock(now=>enabled&&panning===null?reader.changesAt(now,at=>{const value=reader.numbers(at,bar);return JSON.stringify([value?.available,!!value?.known,...metricsText(value??EMPTY_ACTIVITY)]);}):null);
-  if(panning===null)frozen.current=at(now);
+  if(!enabled||!state.model)frozen.current=null;
+  else if(panning===null)frozen.current=at(now);
   return {activity:enabled?(panning===null?at(now):state.model?frozen.current:null):null,state};
 }
 
