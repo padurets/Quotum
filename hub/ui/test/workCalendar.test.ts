@@ -7,6 +7,7 @@ import {drain} from '../../server/domain/prepare.js';
 import type {Stretch} from '../../server/domain/work.js';
 import {EMPTY_VIEW,encodeView,decodeView} from '../../server/domain/view.js';
 import {AGENT_HOURS_HEATMAP,showWidgets,widgetVisible} from '../../server/domain/widgets.js';
+import {expandPeriod} from '../../server/domain/periodWire.js';
 import {fixture,flush,NOW,M} from './periodRuntimeFixture.js';
 const H=3_600_000,DAY=24*H;
 const row=(from:number,to:number):Stretch=>({session:1,source:null,device:'d',user:'u',origin:'terminal',project:null,folder:null,startedAt:from,from,to});
@@ -95,4 +96,18 @@ test('an idle heatmap does not rebuild its evidence frame at every minute',()=>{
   const cells=drain(calendarCells([],window.edges,window.edges.slice(1).map((_,i)=>i),at,range.from,range.from,90*DAY,range,H)).map(([,cell])=>cell);
   c.receive({state:'complete',basis:{run:'r',revision:'1',evaluatedAt:at,evidenceCut:at,range,calendarKey:'k',filterKey:'f',workAuthority:'a'},value:{zone:window.zone,edges:window.edges,cells,availableFrom:range.from,retainedFrom:range.from,cursor:'c'}},c.generation,()=>true);
   const before=c.get();assert.equal(c.tick(at+2*M),false);assert.equal(c.get(),before);assert.ok(c.nextAt(at)>at+2*M);assert.equal(c.demand(),undefined);
+});
+
+test('cached return and sub-minute repeat reuse anonymous integrals with exact common-range cells',async t=>{
+  let now=NOW;t.mock.method(Date,'now',()=>now);const h=await fixture({heatmap:true,creditFrom:NOW-2*H+1234,creditTo:NOW-17*M+5678});t.after(()=>h.close());
+  const cold={from:NOW-2*H,to:NOW-H};h.selectRange(cold);await flush();assert.equal(h.requests.filter(r=>r.calendar).length,1);
+  now+=2517;h.jump(now);h.requests.length=0;h.selectRange(null);await flush();assert.equal(h.requests.filter(r=>r.calendar).length,0,'return to the cached live range needs no HTTP');
+  const repeat={from:cold.from+2517,to:cold.to+2517};h.selectRange(repeat);await flush();assert.equal(h.requests.filter(r=>r.calendar).length,0,'new endpoints use exact integrals, not rounded bins');
+  const fresh=expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,{version:1,selection:{mode:'range',...repeat},evaluatedAt:now,calendar:{zone:h.period.calendar.state.window.zone}})));
+  if(fresh.calendar?.state!=='complete')throw new Error('oracle');assert.deepEqual(h.period.calendar.state.value.cells,fresh.calendar.value.cells);
+  assert.deepEqual(h.period.calendar.state.basis.range,repeat);assert.equal(h.period.calendar.state.value.cursor,'');
+  const candidates=h.period.calendar.evictionCandidates();assert.ok(candidates.length>=2);for(const entry of candidates)entry.drop();
+  h.selectRange(cold);await flush();assert.equal(h.requests.filter(r=>r.calendar).length,1,'eviction falls back to the bounded shared read');
+  h.credit(NOW-17*M,NOW);h.events.flush();await flush();h.requests.length=0;h.selectRange(null);await flush();
+  assert.equal(h.requests.filter(r=>r.calendar).length,1,'work news invalidates the cached integral before returning to live');
 });

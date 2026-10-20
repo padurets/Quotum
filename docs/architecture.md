@@ -1545,6 +1545,10 @@ and share one sparse extraction with other work consumers; they read neither
 financial history nor a full session ledger just for the heatmap. Browser geometry
 aggregates those fine cells into a chronological strip, day/hour matrix or compact
 calendar as the duration and width require, without new reads or inner scrolling.
+Anonymous aggregate hour patterns share the history budget and preserve exact
+within-cell changes, so cached return and nearby endpoints reuse accepted work
+without rereading it or dividing already aggregated amounts. Work or authority
+changes invalidate these patterns; eviction falls back to the common transport.
 Named local dates, repeated hours and partial bounds preserve actual elapsed time.
 Shared filter choices cover the common selected work range; closed controls request
 nothing. Shared-clock expiry retires stale contributions in individual buckets

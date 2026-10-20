@@ -654,6 +654,21 @@ When the common basis matches, the calendar basis is
 The shared decoder restores the logical objects and reserves their memory before
 allocating them. These encodings never round amounts, bounds or expiry times.
 
+A complete value may carry an anonymous `proof` using the `SourceWorkTape`
+hour-pattern encoding with the sole constant row ID `work`, plus `retentionMs`
+and, for a live selection, `periodMs`. It contains only the aggregate count
+changes within the selected admitted interval, with no producer, source, device
+or session identities. On the wire it replaces `cells`; the common decoder
+integrates its exact change points to restore the same fine cells. Deltas still
+replace only their changed cells and do not repeat this proof.
+
+The browser may retain these anonymous integrals in the shared history budget.
+Their contiguous intervals can reconstruct a previously read selection or a
+small shift of its endpoints without splitting rounded cell totals. A live
+return keeps its accepted evidence cut; it never invents work past that cut.
+Work, authority, filter and zone changes invalidate the proofs. Eviction or a
+gap falls back to a bounded common-period read.
+
 The signed frontier binds reader, board, selection, partition, zone, work authority,
 filter, run, revision, cut and retained floor. Dirty intervals include work changes,
 newly elapsed evidence, the moving left boundary and retention. Requested work

@@ -1,12 +1,14 @@
 import type {PeriodBasis,PeriodRange} from './period.js';
 import type {Stretch} from './work.js';
 import type {Preparation} from './prepare.js';
+import type {SourceWorkTape} from './periodCurves.js';
 
 const DAY=86_400_000;
 export type CalendarDemand={zone:string;cursor?:string};
 export type CalendarCell={agentMs:number|null;from:number;to:number;validUntil:number|null};
 export type CalendarBasis=PeriodBasis&{calendarKey:string;workAuthority:string;filterKey:string};
-export type CalendarValue={zone:string;edges:number[];availableFrom:number|null;retainedFrom:number;cursor:string;cells:CalendarCell[]};
+export type CalendarProof=SourceWorkTape&{retentionMs:number;periodMs?:number};
+export type CalendarValue={zone:string;edges:number[];availableFrom:number|null;retainedFrom:number;cursor:string;cells:CalendarCell[];proof?:CalendarProof};
 export type CalendarDelta=Pick<CalendarValue,'availableFrom'|'retainedFrom'|'cursor'>&{updates:[number,CalendarCell][]};
 export type CalendarSection={state:'complete';basis:CalendarBasis;value:CalendarValue}|{state:'delta';basis:CalendarBasis;value:CalendarDelta}|{state:'error';error:'history_limit'|'history_range_invalid'|'unavailable'};
 

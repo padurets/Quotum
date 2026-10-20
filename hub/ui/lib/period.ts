@@ -118,8 +118,13 @@ class BoardPeriod {
   private readonly retained=new Map<string,{bytes:number;copyBytes:number;at:number;fits:(selection:PeriodSelection)=>boolean;restore:(selection:PeriodSelection)=>void}>();
   readonly transport=new PeriodTransport(historyPool,()=>this.intent(),(reply,intent,reserve)=>this.receive(reply,intent,reserve),fetchPeriod,()=>{page.dispatch({type:'board-close'});if(typeof window!=='undefined')window.dispatchEvent(new Event(UNAUTHORIZED));});
   constructor(){historyPool.register(this);clock.subscribe(this.watch,()=>this.tick());}
+  private configureCalendar(visible:boolean,context:string,now:number,limited:boolean,selection:PeriodSelection){
+    const staging={role:'visible' as const};
+    try{return this.calendar.configure(visible,context,now,limited,selection,bytes=>historyPool.reserve(staging,bytes));}
+    finally{historyPool.release(staging);}
+  }
   get estimatedBytes(){return this.bytes+this.calendar.bytes+[...this.valueCache.values(),...this.retained.values()].reduce((sum,c)=>sum+c.bytes,0);}
-  evictionCandidates(){return [...this.valueCache].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.valueCache.delete(key);}})).concat([...this.retained].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.retained.delete(key);}})));}
+  evictionCandidates(){return [...this.valueCache].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.valueCache.delete(key);}})).concat([...this.retained].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.retained.delete(key);}})),this.calendar.evictionCandidates());}
   private retainCurrent(){
     if(!this.cacheKey)return;
     if(!this.valuesNeeded&&this.valuesProofEpoch===this.proofEpoch&&this.selection.mode==='range'&&[...this.values.values()].every(v=>v.value&&!v.loading&&!v.error)){
@@ -310,7 +315,7 @@ class BoardPeriod {
   private setValue(id:string,value:Reading<PeriodValues>){if(value.value&&value.basis&&value.basis.range.to>value.basis.evaluatedAt)value={...value,value:periodValueNow(value.value,Math.min(value.basis.range.to,hubNow()))};this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
   private publishWork() {this.workState={...this.work,rows:this.workRows,evidence:this.workEvidence,...(this.workLimit?{loading:false,error:'filters_limit'}:{})};for(const listener of this.listeners)listener();}
   private retireWork() {
-    this.calendar.clear();this.calendar.dirty();
+    this.calendar.clear(true);this.calendar.dirty();
     this.resetFacets();
     this.sourceEpoch++;
     this.sourceTape=null;this.sourceCurves=undefined;this.sourceCursor=undefined;
@@ -359,7 +364,7 @@ class BoardPeriod {
     const identity=JSON.stringify([board.id,periodKey(selection),wantsWork]);
     const authority=JSON.stringify([board.id]);
     if(authority!==this.authority){this.clear();this.authority=authority;}
-    const calendarChanged=this.calendar.configure(widgetVisible(board.view,AGENT_HOURS_HEATMAP,board.lineup.length),JSON.stringify([board.id,board.workAuthority,nextFilter,this.workLimit]),hubNow(),this.workLimit,selection);
+    const calendarChanged=this.configureCalendar(widgetVisible(board.view,AGENT_HOURS_HEATMAP,board.lineup.length),JSON.stringify([board.id,board.workAuthority,nextFilter,this.workLimit]),hubNow(),this.workLimit,selection);
     if(calendarChanged){this.resetFacets();this.revision++;if(this.identity)this.transport.change();}
     const calendarEvent=event?.type==='hub'&&(event.event.type==='hello'||event.event.type==='snapshot'||event.event.type==='mine'||event.event.type==='lineup'||event.event.type==='history'&&(event.event.data.workSince!==undefined||event.event.data.changes?.some(c=>c.workSince!==undefined)));
     if(calendarEvent&&this.calendar.dirty()){this.revision++;this.invalidateFacets();this.transport.change();}
@@ -384,7 +389,7 @@ class BoardPeriod {
       this.workEvidence++;this.retirementAt=Infinity;
       this.dirtyScopes.clear();
       for(const scope of PERIOD_SCOPES)delete this.projectionErrors[scope];
-      if(oldBoard!==board.id){this.clear();this.calendar.configure(widgetVisible(board.view,AGENT_HOURS_HEATMAP,board.lineup.length),JSON.stringify([board.id,board.workAuthority,nextFilter,this.workLimit]),hubNow(),this.workLimit,selection);}
+      if(oldBoard!==board.id){this.clear();this.configureCalendar(widgetVisible(board.view,AGENT_HOURS_HEATMAP,board.lineup.length),JSON.stringify([board.id,board.workAuthority,nextFilter,this.workLimit]),hubNow(),this.workLimit,selection);}
       this.cacheKey=cacheKey;
       let cached=this.valueCache.get(periodKey(selection));
       if(!cached&&selection.mode==='range')cached=[...this.valueCache.values()].find(c=>sources.every(id=>hasPeriodValue(c.values.get(id)?.value,Math.min(selection.to,hubNow()))));

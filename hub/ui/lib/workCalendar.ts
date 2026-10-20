@@ -1,5 +1,6 @@
 import {calendarPartition,type CalendarBasis,type CalendarDemand,type CalendarSection,type CalendarValue} from '../../server/domain/workCalendar.js';
 import {evaluatedRange,periodKey,type PeriodSelection} from '../../server/domain/period.js';
+import {CalendarCache} from './calendarCache';
 
 const DAY=86_400_000;
 export const CALENDAR_RETENTION=90*DAY;
@@ -41,19 +42,27 @@ export class WorkCalendar {
   private listeners=new Set<()=>void>();
   private accountedState:CalendarReading|null=null;
   private accountedBytes=0;
+  private cache=new CalendarCache();
   get=()=>this.state;
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
   private publish(){for(const listener of this.listeners)listener();}
   get bytes(){
     if(!this.visible||!this.context)return 0;
     if(this.accountedState!==this.state){this.accountedState=this.state;this.accountedBytes=512+JSON.stringify(this.state).length*3;}
-    return this.accountedBytes;
+    return this.accountedBytes+this.cache.bytes;
   }
-  clear(){this.context='';this.needed=false;this.generation++;this.state={...this.state,value:null,basis:null,loading:false,error:null};this.publish();}
-  configure(visible:boolean,context:string,now:number,limited=false,selection:PeriodSelection=this.selection){
+  evictionCandidates(){return this.cache.evictionCandidates();}
+  clear(retainContext=false){if(!retainContext)this.context='';this.needed=false;this.cache.clear();this.generation++;this.state={...this.state,value:null,basis:null,loading:false,error:null};this.publish();}
+  configure(visible:boolean,context:string,now:number,limited=false,selection:PeriodSelection=this.selection,reserve:(bytes:number)=>boolean=()=>true){
     const changed=this.context!==context||this.visible!==visible||periodKey(selection)!==periodKey(this.selection);
+    if(this.context!==context||this.visible!==visible||limited)this.cache.clear();
     this.visible=visible;this.limited=limited;this.selection=selection;
-    if(changed){this.clear();this.context=context;this.needed=visible;this.state={window:calendarWindow(now,calendarZone(),selection),value:null,basis:null,loading:visible,error:null};}
+    if(changed){
+      this.generation++;this.context=context;const window=calendarWindow(now,calendarZone(),selection);
+      if(window.zone!==this.state.window.zone)this.cache.clear();
+      this.state=visible&&!limited?this.cache.read(window,selection,now,reserve)??{window,value:null,basis:null,loading:true,error:null}:{window,value:null,basis:null,loading:false,error:null};
+      this.needed=visible&&!this.state.value;
+    }
     else this.tick(now,true);
     if(visible&&limited){this.needed=false;this.state={...this.state,value:null,basis:null,loading:false,error:'filters_limit'};}
     if(changed)this.publish();return changed;
@@ -65,6 +74,7 @@ export class WorkCalendar {
     const advance=this.selection.mode==='live'?Math.min(old.window.dayEdges.at(-1)!,old.window.dayEdges[1]+this.selection.periodMs):Infinity,moved=now>=advance;
     const invalid=!!old.basis&&now<old.basis.evidenceCut;
     if(!moved&&!invalid&&zone===old.window.zone)return false;
+    if(invalid||zone!==old.window.zone)this.cache.clear();
     const window=calendarWindow(now,zone,this.selection),partition=zone!==old.window.zone||window.edges[0]!==old.window.edges[0]||window.edges.at(-1)!==old.window.edges.at(-1);
     let value=invalid||zone!==old.window.zone?null:old.value;
     if(value){
@@ -85,7 +95,7 @@ export class WorkCalendar {
     const advance=this.selection.mode==='live'?Math.min(window.dayEdges.at(-1)!,window.dayEdges[1]+this.selection.periodMs):Infinity;
     return advance;
   }
-  dirty(){if(this.visible&&!this.limited){this.needed=true;return true;}return false;}
+  dirty(){this.cache.clear();if(this.visible&&!this.limited){this.needed=true;return true;}return false;}
   demand():CalendarDemand|undefined {return this.visible&&this.needed?{zone:this.state.window.zone,...(this.state.value?.cursor?{cursor:this.state.value.cursor}:{})}:undefined;}
   receive(part:CalendarSection,generation:number,reserve:(bytes:number)=>boolean){
     if(!this.visible||generation!==this.generation)return;
@@ -101,8 +111,10 @@ export class WorkCalendar {
       value={...old,availableFrom:part.value.availableFrom,retainedFrom:part.value.retainedFrom,cursor:part.value.cursor,cells};
     }else{
       if(part.value.zone!==this.state.window.zone||JSON.stringify(part.value.edges)!==JSON.stringify(this.state.window.edges)||part.value.cells.length!==this.state.window.edges.length-1)return;
-      if(!reserve(JSON.stringify(part).length*3)){this.receive({state:'error',error:'history_limit'},generation,()=>true);return;}
-      value=part.value;
+      const staging=JSON.stringify(part).length*3;
+      if(!reserve(staging)){this.receive({state:'error',error:'history_limit'},generation,()=>true);return;}
+      this.cache.add(part.basis,part.value,reserve,staging);
+      const {proof:_proof,...accepted}=part.value;value=accepted;
     }
     this.needed=false;this.state={...this.state,window:{...this.state.window,range:part.basis.range},value,basis:part.basis,loading:false,error:null};this.publish();
   }

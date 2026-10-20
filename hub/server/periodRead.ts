@@ -1,4 +1,5 @@
 import {parseCalendar,calendarPartition,calendarCells,normalizeRanges,type CalendarBasis} from './domain/workCalendar.js';
+import {calendarProof} from './domain/calendarWork.js';
 import {workKnownFrom} from './domain/history.js';
 import {createHash,createHmac,randomBytes,timingSafeEqual} from 'node:crypto';
 import type {FastifyInstance} from 'fastify';
@@ -389,10 +390,11 @@ export class PeriodReader {
           work.ensureAccess?.();
           const known=workKnownFrom(store.historyKnown(shown,access?.owner,access));
           reserve(1024+calendarPlan.indices.length*160+calendar!.edges.length*16);
-          const rows=(function*(){for(const part of normalizeRanges(calendarPlan.indices.map(i=>({from:Math.max(range.from,calendar!.edges[i],retainedFrom),to:Math.min(calendar!.edges[i+1],cut)}))))yield*views.selected(part.from,part.to);})();
-          const updates=yield*calendarCells(rows,calendar!.edges,calendarPlan.indices,evaluatedAt,known,retainedFrom,config.retention.sampleDays*86_400_000,range,selection.mode==='live'?selection.periodMs:undefined);
+          const rows=function*(){for(const part of normalizeRanges(calendarPlan.indices.map(i=>({from:Math.max(range.from,calendar!.edges[i],retainedFrom),to:Math.min(calendar!.edges[i+1],cut)}))))yield*views.selected(part.from,part.to);};
+          const updates=yield*calendarCells(rows(),calendar!.edges,calendarPlan.indices,evaluatedAt,known,retainedFrom,config.retention.sampleDays*86_400_000,range,selection.mode==='live'?selection.periodMs:undefined);
+          const proof=calendarPlan.delta?undefined:{...yield*calendarProof(rows(),range,cut,known,retainedFrom,reserve),retentionMs:config.retention.sampleDays*86_400_000,...(selection.mode==='live'?{periodMs:selection.periodMs}:{})};
           const common={availableFrom:known,retainedFrom,cursor:calendarPlan.cursor};
-          response.calendar=calendarPlan.delta?{state:'delta',basis:calendarPlan.basis,value:{...common,updates}}:{state:'complete',basis:calendarPlan.basis,value:{...common,zone:calendar!.zone,edges:calendar!.edges,cells:updates.map(([,cell])=>cell)}};
+          response.calendar=calendarPlan.delta?{state:'delta',basis:calendarPlan.basis,value:{...common,updates}}:{state:'complete',basis:calendarPlan.basis,value:{...common,zone:calendar!.zone,edges:calendar!.edges,cells:updates.map(([,cell])=>cell),proof}};
         }catch(error){if(!(error instanceof HistoryLimit)&&!(error instanceof RangeError))throw error;response.calendar={state:'error',error:'history_limit'};}
       }
       if(sourcePlan){
