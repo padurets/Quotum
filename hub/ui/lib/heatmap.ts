@@ -40,14 +40,14 @@ export function heatmapLayout(reading:CalendarReading,width:number,view:HeatmapV
   const labels:HeatLabel[]=[],cells:HeatCell[]=[],weekday=new Intl.DateTimeFormat(locale,{weekday:'short',timeZone:'UTC'});
   const kind=short?'strip':view==='calendar'?'calendar':rows?'rows':'columns';let height=0;
   if(kind==='strip'){
-    const tick=new Intl.DateTimeFormat(locale,{timeZone:window.zone,hour:'2-digit',minute:'2-digit',hourCycle:'h23',...(dates.length>1?{day:'numeric',month:'short'}:{})});
-    const n=Math.max(1,Math.min(6,Math.floor(w/(dates.length>1?125:60))));for(let i=0;i<=n;i++)labels.push({text:tick.format(range.from+(range.to-range.from)*i/n),x:w*i/n,y:12,align:i===n?'end':i===0?undefined:'middle'});height=58;
+    const tick=new Intl.DateTimeFormat(locale,{timeZone:window.zone,hour:'2-digit',minute:'2-digit',hourCycle:'h23'}),date=new Intl.DateTimeFormat(locale,{timeZone:window.zone,day:'numeric',month:'short'});
+    const n=Math.max(1,Math.min(6,Math.floor(w/(dates.length>1?125:60))));let previous='';for(let i=0;i<=n;i++){const at=range.from+(range.to-range.from)*i/n,day=date.format(at),label=(dates.length>1&&day!==previous?day+' ':'')+tick.format(at);labels.push({text:label,x:w*i/n,y:12,align:i===n?'end':i===0?undefined:'middle'});previous=day;}height=58;
   }else if(kind==='rows'){
     for(const h of [0,...(w<420?[8,16]:[4,8,12,16,20]),24])labels.push({text:time(h),x:h===24?w:left+Math.max(0,slots.findIndex(s=>s.hour>=h&&s.fold===0))/slots.length*(w-left),y:11,align:h===24?'end':undefined});
     dates.forEach((d,i)=>labels.push({text:Number(d.slice(-2))+' '+weekday.format(new Date(d+'T12:00Z')),x:left-9,y:24+i*(dates.length>8?24:30)+17,align:'end'}));height=24+dates.length*(dates.length>8?24:30);
   }else if(kind==='columns'){
     const cw=(w-left)/dates.length;dates.forEach((d,i)=>{if(w>=800||i%2===0)labels.push({text:String(Number(d.slice(-2))),x:left+(i+.5)*cw,y:11,align:'middle'});});
-    const rh=span===HOUR?12:21;slots.forEach((s,i)=>{if(s.hour%4===0||s.fold)labels.push({text:time(s.hour).slice(0,3)+(s.fold?String(list.find(g=>g.hour===s.hour&&g.fold===s.fold)?.minute??0).padStart(2,'0'):'00'),x:left-8,y:24+i*rh+4,align:'end'});});height=24+slots.length*rh+6;
+    const rh=span===HOUR?12:21;slots.forEach((s,i)=>{if(s.hour%4===0||s.fold)labels.push({text:time(s.hour).slice(0,3)+(s.fold?String(list.find(g=>g.hour===s.hour&&g.fold===s.fold)?.minute??0).padStart(2,'0'):'00'),x:left-8,y:24+i*rh+4,align:'end'});});labels.push({text:'24:00',x:left-8,y:24+slots.length*rh+4,align:'end'});height=24+slots.length*rh+6;
   }else{
     const cols=Math.min(7,dates.length),gap=w<420?5:8,cw=(w-gap*(cols-1))/cols,pad=dates.length<7?0:(new Date(dates[0]+'T12:00Z').getUTCDay()+6)%7;
     for(let i=0;i<cols;i++){const date=new Date(Date.UTC(2026,0,5+(dates.length<7?(new Date(dates[0]+'T12:00Z').getUTCDay()+6)%7:0)+i));labels.push({text:weekday.format(date),x:i*(cw+gap)+1,y:11});}
