@@ -111,3 +111,16 @@ test('cached return and sub-minute repeat reuse anonymous integrals with exact c
   h.credit(NOW-17*M,NOW);h.events.flush();await flush();h.requests.length=0;h.selectRange(null);await flush();
   assert.equal(h.requests.filter(r=>r.calendar).length,1,'work news invalidates the cached integral before returning to live');
 });
+
+test('a monthly heatmap replacement preserves other loaded history inside the shared budget',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({heatmap:true,periodName:'30d'});
+  const nativeBytes=h.pool.estimatedBytes-h.period.calendar.bytes;
+  let retained=h.pool.budget-nativeBytes-1600*1024,dropped=0;
+  h.pool.register({get estimatedBytes(){return retained;},evictionCandidates:()=>retained?[{bytes:retained,shownAt:0,drop(){retained=0;dropped++;}}]:[]});
+  try{
+    assert.ok(retained>0);h.selectRange({from:NOW-60*DAY,to:NOW-30*DAY});await flush();
+    assert.ok(h.period.calendar.state.value);assert.equal(h.period.calendar.state.error,null);h.selectRange(null);await flush();
+    assert.equal(dropped,0,'replacing and restoring the month preserves another family’s loaded history');
+    assert.ok(h.pool.estimatedBytes<=h.pool.budget);
+  }finally{retained=0;await h.close();}
+});

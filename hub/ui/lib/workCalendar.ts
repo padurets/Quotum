@@ -30,6 +30,17 @@ export function exactAgentHours(ms:number,locale:string){
 }
 export type CalendarReading={window:ReturnType<typeof calendarWindow>;value:CalendarValue|null;basis:CalendarBasis|null;loading:boolean;error:string|null};
 
+/** Numeric cells have fixed fields; JSON repeats property names they share in memory. */
+function valueBytes(value:CalendarValue){
+  const {edges,cells,proof,...metadata}=value;
+  // Each cell allowance covers its object, boxed numbers and array slot.
+  return 1024+edges.length*16+cells.length*160+JSON.stringify(metadata).length*3+(proof?JSON.stringify(proof).length*3:0);
+}
+function readingBytes(reading:CalendarReading){
+  const {window,value,...metadata}=reading,{edges,dayEdges,dates,...range}=window;
+  return 1024+(edges.length+dayEdges.length)*16+dates.length*96+JSON.stringify([metadata,range]).length*3+(value?valueBytes(value):0);
+}
+
 /** The heatmap shares the board's selection, authority and event-driven transport. */
 export class WorkCalendar {
   private context='';
@@ -48,7 +59,7 @@ export class WorkCalendar {
   private publish(){this.accountedState=null;for(const listener of this.listeners)listener();}
   get bytes(){
     if(!this.visible||!this.context)return 0;
-    if(this.accountedState!==this.state){this.accountedState=this.state;this.accountedBytes=512+JSON.stringify(this.state).length*3;}
+    if(this.accountedState!==this.state){this.accountedState=this.state;this.accountedBytes=readingBytes(this.state);}
     return this.accountedBytes+this.cache.bytes;
   }
   evictionCandidates(){return this.cache.evictionCandidates();}
@@ -111,10 +122,10 @@ export class WorkCalendar {
       value={...old,availableFrom:part.value.availableFrom,retainedFrom:part.value.retainedFrom,cursor:part.value.cursor,cells};
     }else{
       if(part.value.zone!==this.state.window.zone||JSON.stringify(part.value.edges)!==JSON.stringify(this.state.window.edges)||part.value.cells.length!==this.state.window.edges.length-1)return;
-      const staging=JSON.stringify(part).length*3;
+      const staging=valueBytes(part.value)+JSON.stringify(part.basis).length*3;
       if(!reserve(staging)){this.receive({state:'error',error:'history_limit'},generation,()=>true);return;}
       this.cache.add(part.basis,part.value,reserve,staging);
-      const {proof:_proof,...accepted}=part.value;value=accepted;
+      const {proof:_proof,...accepted}=part.value;value={...accepted,edges:this.state.window.edges};
     }
     this.needed=false;this.state={...this.state,window:{...this.state.window,range:part.basis.range},value,basis:part.basis,loading:false,error:null};this.publish();
   }
