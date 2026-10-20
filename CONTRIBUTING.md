@@ -230,7 +230,8 @@ active hour, and complete or partial work observation. Its durable codes are in
 `DEV_SET=devices DEV_STILL=true make dev` shows agent versions, disabled collectors, an epoch barrier, a preferred device and retained measurement origins in My connections.
 `DEV_SET=onboarding DEV_STILL=true make dev` exercises board and account onboarding.
 `DEV_SET=calendar DEV_STILL=true make dev` shows 90 local dates of registered agent-hours
-without subscription cards. Ana has busy and quiet dates and work across midnight;
+without subscription cards. Ana has varied weeks across the full window, quiet stretches,
+release peaks, work across midnight and sessions in the opening analytical period;
 Boris's No available work history board has no admitted devices. Empty project
 selection keeps the calendar visible with zero registered work. Inspect a date by
 pointer, keyboard or touch, then choose Open day to select its full date in analytics.

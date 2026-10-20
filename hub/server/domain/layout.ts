@@ -8,7 +8,7 @@ export type Item = {id: string; x: number; w: number; h: number};
 export type Spot = Item & {y: number};
 export const widths = (columns: number, x = 0) => [columns / 3, columns / 2, (columns * 2) / 3, columns].filter(w => x + w <= columns);
 export const starts = (columns: number, w: number) => [0, columns / 3, columns / 2, (columns * 2) / 3].filter(x => x + w <= columns);
-export const defaultWidth = (id: string, columns: number) => (id.startsWith('source:') ? columns / 2 : columns);
+export const defaultWidth = (id: string, columns: number) => (id.startsWith('source:') || id === 'agent-hours-heatmap' ? columns / 2 : columns);
 export const reading = <T extends Place>(items: T[]): T[] => [...items].sort((a, b) => a.y - b.y || a.x - b.x);
 export const nearest = (values: number[], target: number) => values.reduce((best, n) => (Math.abs(n - target) < Math.abs(best - target) ? n : best));
 

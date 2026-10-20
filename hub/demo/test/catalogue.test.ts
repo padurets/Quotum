@@ -935,6 +935,12 @@ test('the calendar scene signs up both readers and keeps populated, empty and un
   const personal=await read(owner,owner.personalBoard),shared=await read(member,stand.boards.get('team')!);
   assert.equal(personal.cells.length,90);assert.ok(personal.cells.some(cell=>cell.agentMs!==null&&cell.agentMs>64*HOUR));
   assert.ok(personal.cells.some(cell=>cell.agentMs===0));assert.deepEqual(shared.cells,personal.cells);
+  for(const from of [0,30,60])assert.ok(personal.cells.slice(from,from+30).filter(cell=>cell.agentMs!==null&&cell.agentMs>0).length>=12,'each month has enough work to show its pattern');
+  assert.ok(new Set(personal.cells.map(cell=>cell.agentMs)).size>=12,'the overview has varied daily intensities');
+  const selection={mode:'live' as const,periodMs:24*HOUR};
+  const recent=expandPeriod(await owner.post<PeriodWireReply>('/api/boards/'+owner.personalBoard+'/period',{version:1,selection,evaluatedAt:start,sessions:{}}));
+  if(recent.sessions?.state!=='complete')throw new Error('incomplete recent work');
+  assert.ok(workedSessions(recent.sessions.value,{from:start-24*HOUR,to:start},start).length>=3,'the opening analytics is populated');
   const empty=stand.boards.get('empty')!,filters=await owner.get<FilterEnvelope>('/api/boards/'+empty+'/filters');
   assert.ok((await read(owner,empty,filters.filters)).cells.every(cell=>cell.agentMs===0||cell.agentMs===null));
   assert.ok((await read(member,member.personalBoard)).cells.some(cell=>cell.agentMs===0));

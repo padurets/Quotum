@@ -27,7 +27,7 @@ function Details({date,zone,cell,start,end,heading=true}:{heading?:boolean;date:
     <p>{available?t('calendar.exact',{hours:exactAgentHours(cell!.agentMs!,formatLocale())}):t('calendar.unavailable')}</p>
     {available&&cell!.agentMs===0&&<p>{t('calendar.zero')}</p>}
     {available&&(from>start||cell!.to<end)&&<><p>{t('calendar.partial')}</p><p>{t('calendar.bounds')}</p><p data-time="calendar-bounds">{stamp(from)} — {stamp(cell!.to)}</p></>}
-    <p>{zone}</p><p>{t('calendar.observations')}</p>
+    <p>{zone}</p>
   </>;
 }
 
@@ -39,10 +39,10 @@ const Day=memo(function Day({date,dateKey,index,start,end,zone,cell,selected,tab
   const available=cell?.agentMs!==undefined&&cell.agentMs!==null;
   const level=available?calendarLevel(cell!.agentMs!):0;
   const partial=available&&(cell!.from>start||cell!.to<end);
-  const label=[date,available?t('calendar.exact',{hours:exactAgentHours(cell!.agentMs!,formatLocale())}):t('calendar.unavailable'),zone,...(partial?[t('calendar.partial'),`${stamp(cell!.from)} — ${stamp(cell!.to)}`]:[]),t('calendar.observations')].join('\n');
+  const label=[date,available?t('calendar.exact',{hours:exactAgentHours(cell!.agentMs!,formatLocale())}):t('calendar.unavailable'),zone,...(partial?[t('calendar.partial'),`${stamp(cell!.from)} — ${stamp(cell!.to)}`]:[])].join('\n');
   return <div className={`calendar-date${selected?' is-selected':''}${!available?' is-unavailable':''}${partial?' is-partial':''}`} role="gridcell" aria-selected={selected} ref={anchor}
     onPointerEnter={()=>setHover(true)} onPointerLeave={()=>setHover(false)}>
-    <Popover label={label} trigger={<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="3" fill={CATEGORY_COLORS[0]} fillOpacity={CALENDAR_OPACITY[level]}/></svg>} triggerClass="calendar-cell"
+    <Popover label={label} trigger={<svg viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="4" fill={level?CATEGORY_COLORS[0]:'var(--hair-2)'} fillOpacity={level?CALENDAR_OPACITY[level]:1}/></svg>} triggerClass="calendar-cell"
       open={open} onOpenChange={changeOpen} width={320} portal={panel.current}
       buttonProps={{tabIndex:tab?0:-1,'data-calendar-date':dateKey,'data-agent-ms':cell?.agentMs??undefined,'aria-label':label,title:'',onFocus:()=>{focus(dateKey);setFocused(true);},onBlur:()=>setFocused(false),onKeyDown:event=>onKey(event,index)}}>
       <PopoverHeading onClose={()=>changeOpen(false)}>{date}</PopoverHeading>
@@ -77,17 +77,16 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
     const button=scroller.current?.querySelector<HTMLButtonElement>(`[data-calendar-date="${date}"]`);button?.focus({preventScroll:true});
     if(button&&scroller.current){const bounds=scroller.current.getBoundingClientRect(),at=button.getBoundingClientRect(),left=(scroller.current.querySelector('.calendar-day-label')?.getBoundingClientRect().right??bounds.left)+4;if(at.left<left)scroller.current.scrollLeft-=left-at.left;else if(at.right>bounds.right)scroller.current.scrollLeft+=at.right-bounds.right;}
   },[window,offset]);
-  const formatters=useMemo(()=>({month:new Intl.DateTimeFormat(formatLocale(),{month:'short',timeZone:'UTC'}),weekday:new Intl.DateTimeFormat(formatLocale(),{weekday:'short',timeZone:'UTC'}),date:new Intl.DateTimeFormat(formatLocale(),{day:'numeric',month:'long',year:'numeric',timeZone:'UTC'})}),[locale]);
+  const formatters=useMemo(()=>({month:new Intl.DateTimeFormat(formatLocale(),{month:'short',timeZone:'UTC'}),weekday:new Intl.DateTimeFormat(formatLocale(),{weekday:'short',timeZone:'UTC'}),date:new Intl.DateTimeFormat(formatLocale(),{day:'numeric',month:'long',year:'numeric',timeZone:'UTC'}),bound:new Intl.DateTimeFormat(formatLocale(),{day:'numeric',month:'short',timeZone:'UTC'})}),[locale]);
   const dateText=(date:string,options:Intl.DateTimeFormatOptions)=>(options.weekday?formatters.weekday:options.year?formatters.date:formatters.month).format(new Date(date+'T12:00:00Z'));
   return <section ref={root} className={`panel agent-hours-heatmap${loading?' is-loading':''}`} aria-label={t('calendar.title')} aria-busy={loading} data-calendar-ready={!!value}>
-    <div className="panel-head"><h2 className="panel-heading">{t('calendar.title')}</h2><Popover label={t('calendar.settings')} icon={<SlidersIcon/>} open={settings} onOpenChange={setSettings}>
-      {arrange.owner&&<HideRow onHide={()=>arrange.update(view=>withHidden(view,AGENT_HOURS_HEATMAP,true))}>{t('widget.hide')}</HideRow>}
-      <p className="popover-note">{t('calendar.observations')}</p>
-    </Popover></div>
-    <p className="analytics-note" data-time="calendar-window">{t('calendar.window')}<span>{window.zone}</span></p>
+    <div className="panel-head"><h2 className="panel-heading">{t('calendar.title')}</h2>{arrange.owner&&<Popover label={t('calendar.settings')} icon={<SlidersIcon/>} open={settings} onOpenChange={setSettings}>
+      <HideRow onHide={()=>arrange.update(view=>withHidden(view,AGENT_HOURS_HEATMAP,true))}>{t('widget.hide')}</HideRow>
+    </Popover>}</div>
+    <p className="analytics-note" data-time="calendar-window"><span title={t('calendar.window')}>{formatters.bound.format(new Date(window.dates[0]+'T12:00:00Z'))} — {formatters.bound.format(new Date(window.dates[89]+'T12:00:00Z'))}</span><span>{window.zone}</span></p>
     <HistoryFailure error={error==='history_limit'?'history_limit':error==='filters_limit'?'filters_limit':error?'history_failed':undefined} retry={boardPeriod.retry}/>
     <div className="calendar-scroll" ref={scroller}>
-      <div className="calendar-grid" role="grid" aria-label={t('calendar.registered')} style={{'--calendar-weeks':weeks} as CSSProperties}>
+      <div className="calendar-grid" role="grid" aria-label={t('calendar.registered')} aria-description={t('calendar.observations')} style={{'--calendar-weeks':weeks} as CSSProperties}>
         {Array.from({length:weeks},(_,week)=>{const date=window.dates[Math.max(0,week*7-offset)],previous=week?window.dates[Math.max(0,(week-1)*7-offset)]:undefined;return <span key={week} className="calendar-month" aria-hidden="true" style={{gridColumn:week+2,gridRow:1}}>{!previous||date.slice(0,7)!==previous.slice(0,7)?dateText(date,{month:'short'}):''}</span>;})}
         {Array.from({length:7},(_,weekday)=><div role="row" className="calendar-weekday" key={weekday}>
           <span role="rowheader" className="calendar-day-label" style={{gridRow:weekday+2,gridColumn:1}}>{dateText(new Date(Date.UTC(2026,0,5+weekday)).toISOString().slice(0,10),{weekday:'short'})}</span>
@@ -97,7 +96,7 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
         </div>)}
       </div>
     </div>
-    <div className="calendar-legend" aria-label={t('calendar.registered')}>{['0','<1','1–4','4–16','16–64','64+'].map((label,level)=><span key={label}><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="3" fill={CATEGORY_COLORS[0]} fillOpacity={CALENDAR_OPACITY[level]}/></svg>{label} {t('calendar.hours')}</span>)}</div>
+    <div className="calendar-legend" aria-label={t('calendar.registered')}>{['0','<1','1–4','4–16','16–64','64+'].map((label,level)=><span key={label}><svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="4" fill={level?CATEGORY_COLORS[0]:'var(--hair-2)'} fillOpacity={level?CALENDAR_OPACITY[level]:1}/></svg>{label} {t('calendar.hours')}</span>)}</div>
     {value&&value.cells.some(c=>c.agentMs!==null)&&value.cells.every(c=>c.agentMs===null||c.agentMs===0)&&<p className="analytics-note">{t('calendar.empty')}</p>}
     {value&&value.cells.every(c=>c.agentMs===null)&&<p className="analytics-note">{t('calendar.unavailable')}</p>}
     {!value&&!error&&<p className="analytics-note" role="status">{t(loading?'calendar.loading':'calendar.pending')}</p>}
