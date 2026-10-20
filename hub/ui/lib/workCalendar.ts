@@ -111,9 +111,11 @@ export class WorkCalendar {
   receive(part:CalendarSection,generation:number,reserve:(bytes:number)=>boolean){
     if(!this.visible||generation!==this.generation)return;
     if(part.state==='error'){this.needed=false;this.state={...this.state,value:null,basis:null,loading:false,error:part.error};this.publish();return;}
+    const range=evaluatedRange(this.selection,part.basis.evaluatedAt);
+    if(range.from!==part.basis.range.from||range.to!==part.basis.range.to)return;
     const previous=this.state.basis,old=this.state.value;
     if(previous&&part.basis.run===previous.run&&(Number(part.basis.revision)<Number(previous.revision)||part.basis.evidenceCut<previous.evidenceCut))return;
-    let value:CalendarValue;
+    let value:CalendarValue,window=this.state.window;
     if(part.state==='delta'){
       if(!old||!previous||(['calendarKey','filterKey','workAuthority','run'] as const).some(key=>previous[key]!==part.basis[key]))return;
       if(!reserve(JSON.stringify(part).length*3+old.cells.length*16)){this.receive({state:'error',error:'history_limit'},generation,()=>true);return;}
@@ -121,12 +123,14 @@ export class WorkCalendar {
       for(const [i,cell] of part.value.updates){if(!Number.isInteger(i)||i<=prior||i>=cells.length)return;prior=i;cells[i]=cell;}
       value={...old,availableFrom:part.value.availableFrom,retainedFrom:part.value.retainedFrom,cursor:part.value.cursor,cells};
     }else{
-      if(part.value.zone!==this.state.window.zone||JSON.stringify(part.value.edges)!==JSON.stringify(this.state.window.edges)||part.value.cells.length!==this.state.window.edges.length-1)return;
+      const days=window.dayEdges,sameDays=range.from>=days[0]&&range.from<days[1]&&range.to>days.at(-2)!&&range.to<=days.at(-1)!;
+      if(!sameDays||part.value.edges[0]!==window.edges[0]||part.value.edges.at(-1)!==window.edges.at(-1))window=calendarWindow(part.basis.evaluatedAt,window.zone,this.selection);
+      if(part.value.zone!==window.zone||JSON.stringify(part.value.edges)!==JSON.stringify(window.edges)||part.value.cells.length!==window.edges.length-1)return;
       const staging=valueBytes(part.value)+JSON.stringify(part.basis).length*3;
       if(!reserve(staging)){this.receive({state:'error',error:'history_limit'},generation,()=>true);return;}
       this.cache.add(part.basis,part.value,reserve,staging);
-      const {proof:_proof,...accepted}=part.value;value={...accepted,edges:this.state.window.edges};
+      const {proof:_proof,...accepted}=part.value;value={...accepted,edges:window.edges};
     }
-    this.needed=false;this.state={...this.state,window:{...this.state.window,range:part.basis.range},value,basis:part.basis,loading:false,error:null};this.publish();
+    this.needed=false;this.state={...this.state,window:{...window,range:part.basis.range},value,basis:part.basis,loading:false,error:null};this.publish();
   }
 }

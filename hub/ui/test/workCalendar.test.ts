@@ -124,3 +124,22 @@ test('a monthly heatmap replacement preserves other loaded history inside the sh
     assert.ok(h.pool.estimatedBytes<=h.pool.budget);
   }finally{retained=0;await h.close();}
 });
+
+test('a fresh baseline adopts UTC or local date rollover before the civil clock wakes',t=>{
+  let zone='UTC';const resolved=Intl.DateTimeFormat.prototype.resolvedOptions;
+  t.mock.method(Intl.DateTimeFormat.prototype,'resolvedOptions',function(this:Intl.DateTimeFormat){return {...resolved.call(this),timeZone:zone};});
+  for(const [nextZone,before] of [['UTC',Date.UTC(2026,9,20,23,59,59)],['America/New_York',Date.UTC(2026,9,20,3,59,59)]] as const){
+    zone=nextZone;const after=before+2000,c=new WorkCalendar(),selection={mode:'live' as const,periodMs:DAY};c.configure(true,'a',before,false,selection);
+    const part=(at:number,revision:string)=>{const window=calendarWindow(at,zone,selection),range=window.range;return {state:'complete' as const,basis:{run:'r',revision,evaluatedAt:at,evidenceCut:at,range,calendarKey:revision,workAuthority:'a',filterKey:'f'},value:{zone:window.zone,edges:window.edges,availableFrom:before-2*DAY,retainedFrom:0,cursor:revision,cells:drain(calendarCells([],window.edges,window.edges.slice(1).map((_,i)=>i),at,before-2*DAY,0,90*DAY,range,DAY)).map(([,cell])=>cell)}};};
+    const initial=part(before,'1');c.receive(initial,c.generation,()=>true);c.dirty();const fresh=part(after,'2');c.receive(fresh,c.generation,()=>true);
+    if(zone!=='UTC')assert.deepEqual(initial.value.edges,fresh.value.edges,'local midnight does not require a UTC partition change');
+    assert.equal(c.needed,false);assert.deepEqual(c.state.window.edges,fresh.value.edges);assert.deepEqual(c.state.window.range,fresh.basis.range);assert.deepEqual(c.state.window.dates,calendarWindow(after,zone,selection).dates);assert.equal(c.state.value!.cursor,'2');
+  }
+});
+
+test('a baseline with the same partition cannot replace the selected period with another range',()=>{
+  const c=new WorkCalendar();c.configure(true,'a',NOW,false,{mode:'range',from:NOW-H,to:NOW});const window=c.state.window,range=window.range;
+  const part={state:'complete' as const,basis:{run:'r',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range,calendarKey:'k',workAuthority:'a',filterKey:'f'},value:{zone:window.zone,edges:window.edges,availableFrom:range.from,retainedFrom:0,cursor:'c',cells:drain(calendarCells([],window.edges,window.edges.slice(1).map((_,i)=>i),NOW,range.from,0,90*DAY,range)).map(([,cell])=>cell)}};
+  c.receive(part,c.generation,()=>true);const accepted=c.get();
+  c.receive({...part,basis:{...part.basis,revision:'2',range:{from:range.from+M,to:range.to}}},c.generation,()=>true);assert.equal(c.get(),accepted);
+});
