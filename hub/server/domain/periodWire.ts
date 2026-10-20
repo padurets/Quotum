@@ -20,11 +20,11 @@ function* slots(reply:PeriodWireReply):Generator<Slot>{
 }
 
 /** Share complete repeated semantics; their amounts, observation times and provenance stay exact. */
-export function periodDictionary(reply:PeriodReply,reserve:(bytes:number)=>void,compactBases=false){
+export function periodDictionary(reply:PeriodReply,reserve:(bytes:number)=>void,compactBases=false,calendarRelative=false){
   const sharedBases=new WeakSet<object>();
   if(compactBases)for(const scope of [...PERIOD_SCOPES,'values','sessions','facets','sourceWork'] as const){const part=reply[scope];if(part&&'basis' in part&&part.basis===reply.basis){reserve(64);sharedBases.add(part);}}
   const sequences=packPeriodSequences(reply,reserve);
-  const calendar=packCalendar(reply.calendar,reply.basis,reserve);
+  const calendar=packCalendar(reply.calendar,reply.basis,reserve,calendarRelative);
   type Entry={value:WireSemantics;count:number;index?:number};
   const entries=new Map<string,Entry>();
   const keys=new WeakMap<object,Partial<Record<'semantics'|'openSemantics',Entry>>>();

@@ -109,7 +109,7 @@ export class WorkCalendar {
     return advance;
   }
   dirty(){this.cache.clear();if(this.visible&&!this.limited){this.needed=true;return true;}return false;}
-  demand():CalendarDemand|undefined {return this.visible&&this.needed?{zone:this.state.window.zone,...(this.state.value?.cursor?{cursor:this.state.value.cursor}:{})}:undefined;}
+  demand():CalendarDemand|undefined {return this.visible&&this.needed?{zone:this.state.window.zone,relative:true,...(this.state.value?.cursor?{cursor:this.state.value.cursor}:{})}:undefined;}
   receive(part:CalendarSection,generation:number,reserve:(bytes:number)=>boolean){
     if(!this.visible||generation!==this.generation)return;
     if(part.state==='error'){this.needed=false;this.state={...this.state,value:null,basis:null,loading:false,error:part.error};this.publish();return;}

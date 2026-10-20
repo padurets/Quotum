@@ -623,7 +623,7 @@ a repeated hour has separate positions in hourly mode, while coarser intervals
 retain its full duration. A nonexistent hour is padding, not registered zero.
 
 `POST /api/boards/:board/period` accepts optional
-`calendar: {zone: string, cursor?: string}`. The zone is a valid named zone of at
+`calendar: {zone: string, cursor?: string, relative?: true}`. The zone is a valid named zone of at
 most 128 ASCII characters; a cursor has at most 2048 URL-safe ASCII characters
 (letters, digits, hyphen, underscore, dot). Reader-supplied edges are rejected.
 The server derives one stable UTC-day-aligned partition from the evaluated common
@@ -649,6 +649,14 @@ for an unavailable point at `max(edge, min(edge + step, range.to, evidenceCut))`
 `0` for an available full-cell zero, `[agentMs, validUntil]` for full bounds, or
 `[agentMs, validUntil, from, to]` for explicit bounds. Delta values use
 `patch: [index, agentMs, from, to, validUntil][]` instead of `updates`.
+Only a request with `calendar.relative: true` permits a delta value with
+`relative: true`. In that value, the three timestamp positions `from`, `to` and
+non-null `validUntil` are signed integer offsets from the calendar section's
+`basis.range.from`; `null` expiry, indices and credited amounts are unchanged.
+Offsets and restored absolute times must be exact safe integers, and absolute
+times must remain nonnegative. If this cannot be represented exactly, the server
+uses the absolute patch. Without the request capability, the server always uses
+the legacy absolute patch with no `relative` field; new decoders accept both.
 When the common basis matches, the calendar basis is
 `[calendarKey, workAuthority, filterKey]`, extending the top-level basis.
 The shared decoder restores the logical objects and reserves their memory before

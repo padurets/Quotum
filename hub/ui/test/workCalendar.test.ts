@@ -37,7 +37,8 @@ test('partial-minute selection and concurrent work precede responsive grouping',
   for(const width of [248,538,1138])for(const view of ['matrix','calendar'] as const){const layout=heatmapLayout(r,width,view,'en');assert.equal(layout.cells.reduce((n,c)=>n+(c.cell.agentMs??0),0),2*(to-from)-2*M);assert.ok(layout.cells.every(c=>c.from>=from&&c.to<=to));assert.ok(layout.cells.every(c=>!c.repeated));}
 });
 test('server-derived partition is bounded and colour thresholds name their resolution',()=>{
-  assert.ok(calendarPartition({from:NOW-31*DAY,to:NOW}).length<=3073);assert.ok(parseCalendar({zone:'UTC'}));assert.equal(parseCalendar({zone:'UTC',edges:[0,1]}),null);
+  assert.ok(calendarPartition({from:NOW-31*DAY,to:NOW}).length<=3073);assert.deepEqual(parseCalendar({zone:'UTC'}),{zone:'UTC'});assert.deepEqual(parseCalendar({zone:'UTC',relative:true}),{zone:'UTC',relative:true});assert.equal(parseCalendar({zone:'UTC',edges:[0,1]}),null);
+  for(const relative of [false,0,1,'true',null])assert.equal(parseCalendar({zone:'UTC',relative}),null);
   assert.deepEqual([0,1,H/2,H,2*H,4*H].map(n=>calendarLevel(n,H)),[0,1,2,3,4,5]);assert.equal(calendarLevel(4*H,4*H),calendarLevel(H,H));assert.equal(exactAgentHours(1,'en'),'0.000000278');
 });
 test('compact calendar fits all selected dates without separate date rows',()=>{
@@ -80,7 +81,7 @@ test('a delayed calendar reply crossing midnight cannot complete the replacement
   h.period.wakeCalendar();await flush();assert.equal(h.requests.filter(r=>r.calendar).length,2);
 });
 test('a selection replacement retires the old generation and hiding removes demand',()=>{
-  const calendar=new WorkCalendar();calendar.configure(true,'a',NOW,false,{mode:'live',periodMs:H});const generation=calendar.generation;calendar.configure(true,'a',NOW,false,{mode:'range',from:NOW-3*H,to:NOW-2*H});assert.ok(calendar.generation>generation);assert.equal(calendar.state.value,null);assert.deepEqual(calendar.demand(),{zone:calendar.state.window.zone});calendar.configure(false,'a',NOW);assert.equal(calendar.demand(),undefined);
+  const calendar=new WorkCalendar();calendar.configure(true,'a',NOW,false,{mode:'live',periodMs:H});const generation=calendar.generation;calendar.configure(true,'a',NOW,false,{mode:'range',from:NOW-3*H,to:NOW-2*H});assert.ok(calendar.generation>generation);assert.equal(calendar.state.value,null);assert.deepEqual(calendar.demand(),{zone:calendar.state.window.zone,relative:true});calendar.configure(false,'a',NOW);assert.equal(calendar.demand(),undefined);
 });
 
 

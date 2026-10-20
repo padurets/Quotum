@@ -703,7 +703,10 @@ test('heatmap-only deltas replace fine intervals, bind selection, and read no fi
   const initial=expandPeriod((await h.read(body)).json<PeriodWireReply>());if(initial.calendar?.state!=='complete')throw new Error('baseline');
   h.credit(now-20*M,now-19*M);
   const result=await h.read({...body,calendar:{...body.calendar!,cursor:initial.calendar.value.cursor}});assert.equal(result.statusCode,200,result.body);
-  const delta=expandPeriod(result.json<PeriodWireReply>());if(delta.calendar?.state!=='delta')throw new Error('delta');
+  const legacyWire=result.json();assert.equal(legacyWire.calendar.value.relative,undefined,'requests without the capability retain absolute timestamps');
+  const delta=expandPeriod(legacyWire);if(delta.calendar?.state!=='delta')throw new Error('delta');
+  const opted=await h.read({...body,calendar:{...body.calendar!,cursor:initial.calendar.value.cursor,relative:true}});assert.equal(opted.statusCode,200,opted.body);
+  const relativeWire=opted.json();assert.equal(relativeWire.calendar.value.relative,true);assert.deepEqual(expandPeriod(relativeWire).calendar,delta.calendar);
   const cells=initial.calendar.value.cells.slice();for(const [i,c] of delta.calendar.value.updates)cells[i]=c;
   assert.equal(cells.reduce((n,c)=>n+(c.agentMs??0),0),11*M);assert.ok(!result.body.includes('edges'));assert.ok(!result.body.includes('producer'));
   const retry=expandPeriod((await h.read({...body,calendar:{...body.calendar!,cursor:initial.calendar.value.cursor}})).json<PeriodWireReply>());assert.deepEqual(retry.calendar,delta.calendar);
@@ -715,7 +718,7 @@ test('heatmap-only deltas replace fine intervals, bind selection, and read no fi
 test('heatmap request derives its bounded partition and rejects independent reader edges',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,calendar:{zone:'UTC'}};
-  for(const calendar of [{zone:'invalid/zone'},{zone:'UTC',edges:[now-H,now]},{zone:'UTC',cursor:'é'},{zone:'UTC',cursor:'x'.repeat(2049)}])assert.equal((await h.read({...body,calendar})).statusCode,400);
+  for(const calendar of [{zone:'invalid/zone'},{zone:'UTC',edges:[now-H,now]},{zone:'UTC',cursor:'é'},{zone:'UTC',cursor:'x'.repeat(2049)},{zone:'UTC',relative:false},{zone:'UTC',relative:'true'}])assert.equal((await h.read({...body,calendar:calendar as never})).statusCode,400);
   assert.equal((await h.read({...body,selection:{mode:'live',periodMs:32*24*H}})).statusCode,400);
   const first=expandPeriod((await h.read(body)).json<PeriodWireReply>());if(first.calendar?.state!=='complete')throw new Error('availability');
   assert.ok(first.calendar.value.cells.length<=2880);assert.ok(first.calendar.value.cells.some(c=>c.agentMs===0));assert.ok(first.calendar.value.cells.some(c=>c.agentMs===null));
