@@ -87,7 +87,7 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     if(starts.length>1)starts=tablePages(keys,heights,fallback,room-sizes.footer,sizes.border);
   }else starts=Array.from({length:Math.max(1,Math.ceil(keys.length/TABLE_PAGE_ROWS))},(_,i)=>i*TABLE_PAGE_ROWS);
   const page=Math.min(position.key===resetKey?position.page:0,starts.length-1),from=starts[page],to=starts[page+1]??keys.length;
-  useLayoutEffect(()=>{if(position.key!==resetKey||((sizes||!sizing?.manual)&&position.page!==page))setPosition({key:resetKey,page});},[resetKey,page,position,!!sizes,sizing?.manual]);
+  useLayoutEffect(()=>{if((position.key!==resetKey&&position.page!==0)||((sizes||!sizing?.manual)&&position.page!==page))setPosition({key:resetKey,page});},[resetKey,page,position,!!sizes,sizing?.manual]);
   const update=useRef<(reuseRows?:boolean)=>void>(()=>{});
   update.current=(reuseRows=false)=>{
     const root=panel.current;if(!root)return;

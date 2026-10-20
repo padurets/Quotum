@@ -23,7 +23,7 @@ test('default session disclosure columns fit the shared wide dialog and stay com
 
 /** Commit the real hook against measured rows, without a browser or a second React runtime. */
 function widgetFixture(border=0,manual=true){
-  let cursor=0,changed=false,key='period-a',rowReads=0,layoutReads=0,shell=140,keys=Array.from({length:57},(_,i)=>'row-'+i);
+  let cursor=0,changed=false,key='period-a',updates=0,rowReads=0,layoutReads=0,shell=140,keys=Array.from({length:57},(_,i)=>'row-'+i);
   const slots:any[]=[],effects:(()=>void)[]=[],reports:{min:number;natural:number;shown:number}[]=[];
   const observers:{callback:(entries:{target:unknown}[])=>void;targets:Set<unknown>;initial:Set<unknown>}[]=[],rowHeights=new Map<string,number>();
   const sizing={manual,allocated:560,width:'wide',report:(value:any)=>{if(value)reports.push(value);}};
@@ -31,7 +31,7 @@ function widgetFixture(border=0,manual=true){
   const panel={current:root as unknown as HTMLElement};
   const sameDeps=(a:unknown[]|undefined,b:unknown[]|undefined)=>!!a&&!!b&&a.length===b.length&&a.every((x,i)=>Object.is(x,b[i]));
   const hooks={
-    useState:(initial:any)=>{const at=cursor++;if(!(at in slots))slots[at]=typeof initial==='function'?initial():initial;return [slots[at],(next:any)=>{const value=typeof next==='function'?next(slots[at]):next;if(!Object.is(value,slots[at])){slots[at]=value;changed=true;}}];},
+    useState:(initial:any)=>{const at=cursor++;if(!(at in slots))slots[at]=typeof initial==='function'?initial():initial;return [slots[at],(next:any)=>{const value=typeof next==='function'?next(slots[at]):next;if(!Object.is(value,slots[at])){updates++;slots[at]=value;changed=true;}}];},
     useRef:(current:unknown)=>{const at=cursor++;return slots[at]??(slots[at]={current});},
     useMemo:(read:()=>unknown,deps:unknown[])=>{const at=cursor++;if(!slots[at]||!sameDeps(slots[at].deps,deps))slots[at]={deps,value:read()};return slots[at].value;},
     useLayoutEffect:(effect:()=>void|(()=>void),deps?:unknown[])=>{const at=cursor++;if(!slots[at]||!sameDeps(slots[at].deps,deps)){const previous=slots[at];slots[at]={deps};effects.push(()=>{previous?.cleanup?.();slots[at].cleanup=effect();});}},
@@ -75,7 +75,7 @@ function widgetFixture(border=0,manual=true){
     throw new Error('the shared table did not settle before paint');
   };
   const original=keys;
-  return {render,reports,keys:()=>keys,shown:(widget:TableWidget)=>keys.slice(widget.from,widget.to),resize:(height:number)=>{sizing.allocated=height;},narrow:()=>{root.clientWidth=350;sizing.width='narrow';},reset:()=>{key='period-b';},clear:()=>{keys=[];},limit:(n:number)=>{keys=original.slice(0,n);},height:()=>root.height,rowReads:()=>rowReads,layoutReads:()=>layoutReads,
+  return {render,reports,keys:()=>keys,shown:(widget:TableWidget)=>keys.slice(widget.from,widget.to),resize:(height:number)=>{sizing.allocated=height;},narrow:()=>{root.clientWidth=350;sizing.width='narrow';},reset:(next='period-b')=>{key=next;},clear:()=>{keys=[];},limit:(n:number)=>{keys=original.slice(0,n);},height:()=>root.height,rowReads:()=>rowReads,layoutReads:()=>layoutReads,updates:()=>updates,
     rowHeights:(changes:Record<string,number>)=>{for(const [id,height]of Object.entries(changes))rowHeights.set(id,height);},
     chrome:(delta:number,nextBorder=border)=>{shell+=delta;border=nextBorder;root.height+=delta;for(const observer of observers)if(observer.targets.has(root))observer.callback([{target:root}]);},
     notifyRows:(ids?:string[],boxes=true)=>{let delivered=0;for(const observer of observers){const entries=[...observer.targets].filter(target=>{const id=(target as {rowId?:string}).rowId;return id!==undefined&&(!ids||ids.includes(id));}).map(target=>({target,...(boxes?{borderBoxSize:[{inlineSize:root.clientWidth-44,blockSize:height((target as {rowId:string}).rowId)}]}:{})}));if(entries.length){delivered+=entries.length;observer.callback(entries);}}return delivered;},
@@ -87,10 +87,10 @@ test('a fill-only notification does not reread candidate rows or report another 
   f.fill();assert.equal(f.rowReads(),reads);assert.equal(f.reports.length,reports);
 });
 
-test('a period reset with unchanged row geometry does not force another layout read',()=>{
-  const f=widgetFixture();f.render();const reads=f.rowReads(),reports=f.reports.length,layouts=f.layoutReads();
+test('a period reset at page zero reuses its state and measured row geometry',()=>{
+  const f=widgetFixture();f.render();const reads=f.rowReads(),reports=f.reports.length,layouts=f.layoutReads(),updates=f.updates();
   f.reset();const widget=f.render();
-  assert.equal(widget.page,0);assert.equal(f.rowReads(),reads);assert.equal(f.reports.length,reports);assert.equal(f.layoutReads(),layouts);
+  assert.equal(widget.page,0);assert.equal(f.rowReads(),reads);assert.equal(f.reports.length,reports);assert.equal(f.layoutReads(),layouts);assert.equal(f.updates(),updates);
   f.fill();f.render();assert.equal(f.rowReads(),reads);assert.equal(f.reports.length,reports);
 });
 
@@ -146,6 +146,7 @@ test('the real shared hook pages all rows once, fits height, resets and clamps b
   while(true){seen.push(...f.shown(widget));assert.equal(f.height(),560);if(widget.page+1===widget.pages)break;widget.onPage(widget.page+1);widget=f.render();}
   assert.deepEqual(seen,f.keys());
   f.reset();widget=f.render();assert.equal(widget.page,0);
+  f.reset('period-a');widget=f.render();assert.equal(widget.page,0,'returning to the old period must not resurrect its retired page');
   const larger=widget.to-widget.from;f.resize(420);widget=f.render();assert.ok(widget.to-widget.from<larger);assert.equal(f.height(),420);
   f.narrow();widget=f.render();assert.equal(widget.layout,'list');assert.equal(f.height(),420);
   widget.onPage(999);widget=f.render();assert.ok(widget.page>=0&&widget.page<widget.pages);
