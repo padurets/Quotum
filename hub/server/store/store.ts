@@ -679,9 +679,9 @@ export class Store {
     return {work:this.agentWorkSince(),sources:Object.fromEntries([...shown].map(([id,value])=>[id,value.since])),...(access?{sessions:sessionsKnownFrom(access),sourceWork:sourceWorkFrom(access)}:{})};
   }
 
-  admittedWork(access:WorkAccess,from:number,to:number,reserve?:(bytes:number)=>void):Stretch[] {
+  admittedWork(access:WorkAccess,from:number,to:number,reserve?:(bytes:number)=>void,ranges?:readonly {from:number;to:number}[]):Stretch[] {
     if(!access.devices.size)return [];
-    const rows=this.agentWork(from,to,undefined,null,reserve,[...access.devices.keys()],access.attribution);let kept=0;
+    const rows=this.agentWork(from,to,undefined,null,reserve,[...access.devices.keys()],access.attribution,ranges);let kept=0;
     // These rows belong to this read. Apply admission without retaining a second copy.
     for(const row of rows){
       const scope=admitted(access,row.device,row.user);if(!scope||row.to<=scope.from)continue;
@@ -999,7 +999,7 @@ export class Store {
   }
 
   /** Candidate owners are selected before read-time source resolution and display cuts. */
-  agentWork(from: number, to: number, sources?: string[], owner: string | null = null, reserve?:(bytes:number)=>void, devices?:readonly string[], captured?:ReturnType<LinkStore['batch']>): Stretch[] {
+  agentWork(from: number, to: number, sources?: string[], owner: string | null = null, reserve?:(bytes:number)=>void, devices?:readonly string[], captured?:ReturnType<LinkStore['batch']>,ranges?:readonly {from:number;to:number}[]): Stretch[] {
     // Account evidence and possible manual targets select candidates, never their
     // final source. Materialize this smaller context set once inside SQLite.
     const candidates = sources ? ' AND w.session_id IN (SELECT s.id FROM agent_sessions s JOIN devices d ON d.id=s.device_id WHERE (d.user_id=? OR d.user_id IN (SELECT user_id FROM holders WHERE source_id IN (SELECT value FROM json_each(?)))) AND (d.user_id=? OR s.source_id IN (SELECT value FROM json_each(?)) OR EXISTS(SELECT 1 FROM client_links l WHERE l.user_id=d.user_id AND l.client=s.client AND (l.device_id IS NULL OR l.device_id=s.device_id) AND l.source_id IN (SELECT value FROM json_each(?)) AND l.from_at<? AND (l.to_at IS NULL OR l.to_at>?))))' : '';
@@ -1008,11 +1008,12 @@ export class Store {
     const day=86_400_000,window=to-from,now=Date.now();
     const tail=window<7*day&&from>(Math.max(this.agentWorkSince(),now-config.retention.sampleDays*day)+now)/2;
     const index=window<day||tail?' INDEXED BY agent_work_by_end':'';
-    const read = this.db.prepare('SELECT w.session_id,w.from_at,w.to_at FROM agent_work w'+index+' WHERE w.to_at>? AND w.from_at<?'+(devices?' AND w.session_id IN (SELECT id FROM agent_sessions WHERE device_id IN (SELECT value FROM json_each(?)))':candidates)+' ORDER BY w.session_id,w.from_at');
+    const sparse=ranges&&ranges.length>1;
+    const read = this.db.prepare((sparse?`SELECT w.session_id,MAX(w.from_at,json_extract(r.value,'$.from')),MIN(w.to_at,json_extract(r.value,'$.to')) FROM json_each(?) r JOIN agent_work w${index} ON w.to_at>json_extract(r.value,'$.from') AND w.from_at<json_extract(r.value,'$.to')`:'SELECT w.session_id,w.from_at,w.to_at FROM agent_work w'+index)+' WHERE w.to_at>? AND w.from_at<?'+(devices?' AND w.session_id IN (SELECT id FROM agent_sessions WHERE device_id IN (SELECT value FROM json_each(?)))':candidates)+' ORDER BY w.session_id,2,3');
     read.setReturnArrays(true);
     const selected=JSON.stringify(sources);
     const rows:[number,number,number][]=[];
-    for(const row of read.iterate(from,to,...(devices?[JSON.stringify(devices)]:sources?[owner,selected,owner,selected,selected,to,from]:[]))) {reserve?.(256);rows.push(row as unknown as [number,number,number]);}
+    for(const row of read.iterate(...(sparse?[JSON.stringify(ranges)]:[]),from,to,...(devices?[JSON.stringify(devices)]:sources?[owner,selected,owner,selected,selected,to,from]:[]))) {reserve?.(256);rows.push(row as unknown as [number,number,number]);}
     const bounds=new Map<number,{from:number;to:number}>();
     let previous:number|undefined,range:{from:number;to:number}|undefined;
     for(const row of rows) {

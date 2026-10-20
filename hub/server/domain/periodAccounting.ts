@@ -25,6 +25,7 @@ function quotaInterior(series:HistorySeries|undefined,range:PeriodRange,cell:num
   const result:HistorySeries['points']=[];
   for(let i=0;i<series.points.length;i++){
     const [at,value,segment,bound]=series.points[i],next=series.points[i+1];
+    if(series.pointMode==='observation'&&bound===undefined)continue;
     // Sparse cells in the same run prove the intervening cells too. A break
     // proves only this measured cell; the terminal run uses the cell readout hold.
     const until=bound??(next?next[2]===segment?next[0]:at+cell:at+(Math.floor(Math.max(cell,series.staleAfterMs)/cell)+1)*cell);
@@ -121,14 +122,18 @@ class QuotaIndex {
     return points.sort((a,b)=>a[0]-b[0]);
   }
 
-  at(range:PeriodRange):QuotaSummary {
+  at(range:PeriodRange,stateAt=range.to):QuotaSummary {
     const lo=lower(this.times,range.from),hi=Math.max(0,lower(this.times,range.to)-1),last=sampleAt(this.series.samples,lower(this.times,range.to)-1);
     const first=sampleAt(this.series.samples,lower(this.times,range.from+1)-1);
     const valid=(sample:typeof first,at:number)=>sample&&at<Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity)?100-sample.used:null;
     const sum=(values:Numbers)=>hi>lo?numberAt(values,hi)!-numberAt(values,lo)!:0;
     const workRange={from:Math.max(range.from,this.known),to:range.to};
     const workLo=lower(this.times,workRange.from);
-    return {consumed:sum(this.spent),coveredMs:sum(this.covered),remainingAtStart:valid(first,range.from),remainingAtEnd:valid(last,range.to),work:Number.isFinite(this.known)?{from:workRange.from,ms:workRange.to>workRange.from?this.activity?.read(workRange,true)??0:null,agentMs:workRange.to>workRange.from?this.activity?.read(workRange)??0:0,consumed:hi>workLo?numberAt(this.spent,hi)!-numberAt(this.spent,workLo)!:0,coveredMs:sum(this.worked),duringWork:sum(this.during)}:null};
+    return {consumed:sum(this.spent),coveredMs:sum(this.covered),remainingAtStart:valid(first,range.from),remainingAtEnd:valid(last,stateAt),work:Number.isFinite(this.known)?{from:workRange.from,ms:workRange.to>workRange.from?this.activity?.read(workRange,true)??0:null,agentMs:workRange.to>workRange.from?this.activity?.read(workRange)??0:0,consumed:hi>workLo?numberAt(this.spent,hi)!-numberAt(this.spent,workLo)!:0,coveredMs:sum(this.worked),duringWork:sum(this.during)}:null};
+  }
+  endValidUntil(range:PeriodRange){
+    const sample=sampleAt(this.series.samples,lower(this.times,range.to)-1);
+    return sample?Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity):null;
   }
 }
 
@@ -284,6 +289,7 @@ class MoneyIndex {
   private value(observation:ReturnType<MoneyIndex['observation']>,at:number) {
     return observation&&at<observation.deadline?this.convert(observation.native,observation.reading,observation.observed):null;
   }
+  endValidUntil(range:PeriodRange){const deadline=this.observation(range.to)?.deadline;return deadline!==undefined&&Number.isFinite(deadline)?deadline:null;}
   plot(range:PeriodRange,cell:number,previous:MeterHistory['points'],quantities=range):MeterHistory['points'] {
     const leftEnd=(Math.floor(range.from/cell)+1)*cell,rightStart=Math.floor((range.to-1)/cell)*cell;
     const points=moneyInterior(previous,range,cell,quantities).map(p=>({...p,validUntil:p.validUntil??(Math.floor(p.at/cell)+1)*cell}));
@@ -300,13 +306,13 @@ class MoneyIndex {
     }
     return points.sort((a,b)=>a.at-b.at||(a.knownFrom??0)-(b.knownFrom??0));
   }
-  at(range:PeriodRange):Pick<MeterHistory,'start'|'end'|'startScale'|'endScale'|'spent'|'topup'|'unlocated'|'topupUnlocated'|'coveredMs'|'semantics'> {
+  at(range:PeriodRange,stateAt=range.to):Pick<MeterHistory,'start'|'end'|'startScale'|'endScale'|'spent'|'topup'|'unlocated'|'topupUnlocated'|'coveredMs'|'semantics'> {
     const spent=this.spent.at(range),topup=this.topup.at(range),authority=this.group.accounting;
     const last=this.observation(range.to),first=this.observation(range.from,true);
     const semantics=last?this.semantics(last.reading,last.observed,last.native):null;
     const scale=(observation:typeof last)=>observation?(this.group.displayUnit&&this.group.displayUnit!==observation.reading.unit?6:observation.reading.scale):undefined;
     const coveredMs=this.coverage.in(range);
-    return {start:this.value(first,range.from),end:this.value(last,range.to),startScale:scale(first),endScale:scale(last),semantics,spent:authority?.spending==='unavailable'||!coveredMs?null:spent.value,topup:authority?.topups==='unavailable'||!coveredMs?null:topup.value,unlocated:authority?.spending==='unavailable'?[]:spent.unlocated,topupUnlocated:authority?.topups==='unavailable'?[]:topup.unlocated,coveredMs};
+    return {start:this.value(first,range.from),end:this.value(last,stateAt),startScale:scale(first),endScale:scale(last),semantics,spent:authority?.spending==='unavailable'||!coveredMs?null:spent.value,topup:authority?.topups==='unavailable'||!coveredMs?null:topup.value,unlocated:authority?.spending==='unavailable'?[]:spent.unlocated,topupUnlocated:authority?.topups==='unavailable'?[]:topup.unlocated,coveredMs};
   }
   changesAt(now:number,period:number) {
     let next=Infinity;
@@ -401,20 +407,20 @@ export class PeriodAccounting {
   }
   moneySummary(source:string,meter:string,unit:string,range:PeriodRange){return this.money.get(source+'\n'+meter+'\n'+unit)?.at(range);}
   moneyWorkSummary(source:string,range:PeriodRange){const fixed=this.tape.fixed?.moneyWork?.find(row=>row.source===source);if(fixed)return fixed;const index=this.moneyWork.get(source);if(!index)return;const selected=this.directWork(source,range,index.counter.workFrom??Infinity);return {...index.at(range),selectedWork:{from:selected.from,activeMs:selected.ms,agentMs:selected.agentMs}};}
-  fixed(range:PeriodRange,cell:number):NonNullable<PeriodTape['fixed']> {
+  fixed(range:PeriodRange,cell:number,evaluatedAt=Infinity):NonNullable<PeriodTape['fixed']> {
     const blank:History={range:'',live:false,since:range.from,to:range.to,cellMs:cell,historyStart:0,series:[],events:[],activity:{since:range.from,known:null,barMs:cell,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
-    const quota=this.project(blank,range,undefined,true).series;
-    const money=[...this.money.values()].flatMap(index=>{const group=index.group,last=group.readings.filter(row=>row.at<range.to).at(-1);return last?[{sourceId:group.source,meterId:group.meter,kind:group.paired?'balance' as const:last.kind,unit:group.displayUnit??last.unit,accounting:group.accounting,role:group.role,pointMode:last.kind==='cap'?'cell' as const:'observation' as const,...index.at(range),points:index.plot(range,cell,[])}]:[];});
+    const quota=this.project(blank,range,undefined,true,Math.min(range.to,evaluatedAt)).series.map(row=>({...row,endValidUntil:this.quota.get(row.sourceId+'\n'+row.windowId)!.endValidUntil(range)}));
+    const money=[...this.money.values()].flatMap(index=>{const group=index.group,last=group.readings.filter(row=>row.at<range.to).at(-1);return last?[{sourceId:group.source,meterId:group.meter,kind:group.paired?'balance' as const:last.kind,unit:group.displayUnit??last.unit,accounting:group.accounting,role:group.role,pointMode:last.kind==='cap'?'cell' as const:'observation' as const,...index.at(range,Math.min(range.to,evaluatedAt)),endValidUntil:index.endValidUntil(range),points:index.plot(range,cell,[])}]:[];});
     return {range,cell,quota,money,...(this.moneyWork.size?{moneyWork:[...this.moneyWork.keys()].map(source=>this.moneyWorkSummary(source,range)!)}:{})};
   }
-  project(history:History,range:PeriodRange,values?:ReadonlyMap<string,PeriodValues>,boundaryOnly=false):History {
-    if(range.from<this.tape.from)return history;
+  project(history:History,range:PeriodRange,values?:ReadonlyMap<string,PeriodValues>,boundaryOnly=false,stateAt=range.to):History {
+    if(range.from<this.tape.from&&!this.tape.fixed&&!boundaryOnly)return history;
     const fixed=this.tape.fixed;
     if(fixed){
       if(range.from!==fixed.range.from||range.to!==fixed.range.to||history.cellMs!==fixed.cell)return history;
       return {...history,exact:true,since:range.from,to:range.to,...(fixed.moneyWork?{moneyWork:fixed.moneyWork}:{}),
-        series:fixed.quota.map(row=>({...row,points:[...quotaInterior(history.series.find(s=>s.sourceId===row.sourceId&&s.windowId===row.windowId),range,fixed.cell,history.to),...row.points].sort((a,b)=>a[0]-b[0])})),
-        meterSeries:fixed.money.map(row=>({...row,points:[...moneyInterior(history.meterSeries?.find(s=>s.sourceId===row.sourceId&&s.meterId===row.meterId&&s.unit===row.unit)?.points??[],range,fixed.cell,{from:history.since,to:history.to}),...row.points].sort((a,b)=>a.at-b.at)}))};
+        series:fixed.quota.map(({endValidUntil,...row})=>({...row,...(endValidUntil!==undefined&&(endValidUntil===null||stateAt>=endValidUntil)?{remainingAtEnd:null}:{}),points:[...quotaInterior(history.series.find(s=>s.sourceId===row.sourceId&&s.windowId===row.windowId),range,fixed.cell,history.to),...row.points].sort((a,b)=>a[0]-b[0])})),
+        meterSeries:fixed.money.map(({endValidUntil,...row})=>({...row,...(endValidUntil!==undefined&&(endValidUntil===null||stateAt>=endValidUntil)?{end:null}:{}),points:[...moneyInterior(history.meterSeries?.find(s=>s.sourceId===row.sourceId&&s.meterId===row.meterId&&s.unit===row.unit)?.points??[],range,fixed.cell,{from:history.since,to:history.to}),...row.points].sort((a,b)=>a.at-b.at)}))};
     }
     const previous=new Map(history.series.map(s=>[s.sourceId+'\n'+s.windowId,s]));
     const series:HistorySeries[]=[];
@@ -426,13 +432,17 @@ export class PeriodAccounting {
       const windowValue=membership?.windows.find(w=>w.id===row.window)??descriptor?.value;
       if(!history.live&&(membership?!membership.windows.some(w=>w.id===row.window):row.descriptors?numberAt(times,lower(times,range.to)-1)!==batches.get(row.source):row.member===false))continue;
       const old=previous.get(key);if(!old&&history.live)continue;
-      const summary=this.quotaSummary(row.source,row.window,range)!,points=!history.live?index.plot(range,history.cellMs,old,history.to,boundaryOnly):old!.points;
+      const summary={...this.quotaSummary(row.source,row.window,range)!,...index.at(range,stateAt)},points=!history.live?index.plot(range,history.cellMs,old,history.to,boundaryOnly):old!.points;
       series.push({...old,sourceId:row.source,windowId:row.window,staleAfterMs:sampleAt(row.samples,sampleCount(row.samples)-1)?.staleAfterMs??0,...summary,points,...(!history.live?{pointMode:'observation' as const,windowValue:windowValue??row.windowValue}:{})});
     }
     return {...history,exact:true,since:range.from,to:range.to,series,...(this.moneyWork.size?{moneyWork:[...this.moneyWork.keys()].map(source=>this.moneyWorkSummary(source,range)!)}:{}),meterSeries:history.meterSeries?.map(series=>{const index=this.money.get(series.sourceId+'\n'+series.meterId+'\n'+series.unit);return index?{...series,...index.at(range),...(!history.live?{points:index.plot(range,history.cellMs,series.points,{from:history.since,to:history.to}),...(series.kind!=='cap'?{pointMode:'observation' as const}:{})}:{})}:series;})};
   }
   changesAt(now:number,period:number,source?:string):number|null {
-    if(this.tape.fixed)return null;
+    if(this.tape.fixed){
+      const fixed=this.tape.fixed,rows=[...fixed.quota.filter(row=>row.remainingAtEnd!==null),...fixed.money.filter(row=>row.end!==null)];
+      const deadlines=rows.flatMap(row=>(!source||row.sourceId===source)&&row.endValidUntil!==null&&row.endValidUntil!==undefined&&row.endValidUntil>now&&row.endValidUntil<=fixed.range.to?[row.endValidUntil]:[]);
+      return deadlines.length?Math.min(...deadlines):null;
+    }
     let next=Infinity;for(const index of this.quota.values())if(!source||index.series.source===source)next=Math.min(next,index.changesAt(now,period),this.directWorkChangesAt(index.series.source,now,period,index.series.workFrom===null?Infinity:index.series.workFrom??0));
     for(const index of this.money.values())if(!source||index.group.source===source)next=Math.min(next,index.changesAt(now,period));
     for(const index of this.moneyWork.values())if(!source||index.counter.source===source)next=Math.min(next,index.changesAt(now,period)??Infinity,this.directWorkChangesAt(index.counter.source,now,period,index.counter.workFrom??Infinity));

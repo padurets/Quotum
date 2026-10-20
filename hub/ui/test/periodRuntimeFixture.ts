@@ -1,3 +1,6 @@
+import * as periodValueClockBindings from '../../server/domain/periodValues';
+import {WorkCalendar} from '../lib/workCalendar';
+import {AGENT_HOURS_HEATMAP} from '../../server/domain/widgets';
 import * as filterModelBindings from '../../server/domain/dataFilters';
 import * as filterRuntimeBindings from '../lib/filterSelection';
 import * as filterCurveBindings from '../../server/domain/periodCurves';
@@ -51,14 +54,14 @@ export const NOW=1_800_000_000_000,H=3_600_000,M=60_000;
 export const flush=async()=>{for(let i=0;i<300;i++)await Promise.resolve();};
 
 /** Actual producer, wire JSON boundary, page reducer, transport and bounded server reader. */
-export async function fixture({personal=false,ownerDevice=false,transportLive=false,privateWork=false,unknown=false,current=false,stable=true,fixed=false,tableOnly=false,periodName="1h",creditFrom=NOW-3*M,creditTo=NOW-2*M,clocked=false,sessionMs=24*H,initialFilters=null as filterModelBindings.DataFilters|null}={}) {
+export async function fixture({heatmap=false,personal=false,ownerDevice=false,transportLive=false,privateWork=false,unknown=false,current=false,stable=true,fixed=false,tableOnly=false,periodName="1h",creditFrom=NOW-3*M,creditTo=NOW-2*M,clocked=false,sessionMs=24*H,initialFilters=null as filterModelBindings.DataFilters|null}={}) {
   let selectedRange=fixed?{from:NOW-H,to:NOW}:null;
   const start=NOW-Math.max(3*H,periodOf(periodName).ms+H);
   const store=new Store(':memory:',start),directory=new Directory(store.db);
   const alice=directory.createUser('a@example.com','Alice','unused',start),bob=directory.createUser('b@example.com','Bob','unused',start);
   const board=personal?directory.boards(alice.id)[0].id:directory.createBoard('Shared',alice.id,start).id;
   if(!personal)directory.addMember(board,bob.id,start);
-  directory.saveView(board,{...EMPTY_VIEW,shown:[AGENTS,'quota-history'],hidden:[ACTIVITY]},alice.id,start);
+  directory.saveView(board,{...EMPTY_VIEW,shown:[AGENTS,'quota-history',...(heatmap?[AGENT_HOURS_HEATMAP]:[])],hidden:[ACTIVITY]},alice.id,start);
   const source=store.source('codex','a'.repeat(24),start);store.hold(source,alice.id,start);store.hold(source,bob.id,start);
   if(tableOnly)directory.saveView(board,{...EMPTY_VIEW,shown:[AGENTS],enabledWhenEmpty:[AGENTS],hidden:[ACTIVITY,'quota-history','quota-session-history','quota-table','quota-session-table','subscription-funds','budget-history','budget-table','source:'+source]},alice.id,start);
   if(!personal)store.share(board,source,alice.id,start);
@@ -97,8 +100,8 @@ export async function fixture({personal=false,ownerDevice=false,transportLive=fa
     fetchPeriod:async(_board:string,body:PeriodRequest)=>{requests.push(body);const reply=expandPeriod(JSON.parse(reader.read(board,alice.id,JSON.parse(JSON.stringify(body)))));const pending=wait;wait=null;await pending;return reply;},
     periodTextChangesAt,page,pan,preparations:()=>preparer,prepareAsync:(owner:object,work:Parameters<typeof drain>[0],valid:()=>boolean)=>prepareAsync(owner,work,valid,preparer),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,
     packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,
-    timeRange:()=>selectedRange,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
-  runInNewContext(ts.transpileModule(code.slice(code.indexOf('class BoardPeriod'),code.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+    WorkCalendar,AGENT_HOURS_HEATMAP,timeRange:()=>selectedRange,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
+  runInNewContext(ts.transpileModule(code.slice(code.indexOf('class BoardPeriod'),code.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   if(initialFilters)filterRuntimeBindings.publishDataFilters(initialFilters);
   const period=new context.exports.BoardPeriod();pan.onPhase(()=>period.refreshWorkClock());page.listen((event,state)=>period.changed(event,state));period.activate(true);await flush();
   const limited=!!initialFilters&&!filterModelBindings.executableWorkFilters(initialFilters);
@@ -149,7 +152,7 @@ export function consumer(h: any) {
     setTimeRange:()=>{},timeRangeKey,navigationKey,useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),
     PlotLayer:()=>null,PlotOverlay:()=>null,Tooltip:()=>null,clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',
     CSS:{escape:(id:any)=>id},Stacks:null as any};
-  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   function find(node:any,type:any):any{if(Array.isArray(node))return node.map(n=>find(n,type)).find(Boolean);if(!React.isValidElement(node))return null;if(node.type===type)return node;return find((node.props as any).children,type);}
   const pathsOf=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(pathsOf);if(!React.isValidElement(node))return [];const p=node.props as any;return p.className==='activity-stack'&&p.d!==undefined?[p.d]:pathsOf(p.children);};
   let latestParent:any;const renderParent=()=>{Object.assign(context,parent);parent.begin();latestParent=context.exports.Activity({arrange:{view:h.page.get().board!.view}});return find(latestParent,context.Stacks).props;};
@@ -179,7 +182,7 @@ export async function drawings(h:any,activity=true,scope:'quota'|'budget'='quota
  const useRef=(current:any)=>slots[cursor++]??(slots[cursor-1]={current});
  const useMemo=(read:any,deps:any[])=>{const box=useRef(null);if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;};
  const context={useRef,useMemo,useSyncExternalStore:(_s:any,read:any)=>read(),pan:{active:()=>null,onPhase:()=>()=>{}},hubNow:()=>NOW,planEventsAt,planEventsDeadline,shallowEqual,useClock:()=>NOW,fundsHistory:{},page:h.page,timeRange:h.selectedRange,timeRangeKey,prefs:()=>h.settings,boardPeriod:h.period,read:null as any};
- runInNewContext(ts.transpileModule(source.slice(source.indexOf('function usePeriodHistory('),source.indexOf('export function useHistory('))+'\nglobalThis.read=usePeriodHistory;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+ runInNewContext(ts.transpileModule(source.slice(source.indexOf('function usePeriodHistory('),source.indexOf('export function useHistory('))+'\nglobalThis.read=usePeriodHistory;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
  const render=()=>{slots=selectedSlots;cursor=0;return context.read(loader,true);};
  const renderFinancial=()=>{slots=financialSlots;cursor=0;return context.read(loader,false,true);};
  return {loader,render,renderFinancial,close:()=>{stop();loader.close();}};

@@ -568,15 +568,15 @@ td.muted, small.muted { color: var(--text-3); }
 .period-name svg { flex-shrink: 0; }
 
 /* Under its chart, as on either chart. */
-.legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 12px 0 0; }
-.legend-item { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; border: 0; background: none; font-size: 12.5px; color: var(--text-2); text-align: left; opacity: calc(var(--series-focus, 1) * var(--legend-opacity, 1)); transition: opacity .15s; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 12px 0 0; font-size: 12.5px; }
+.legend-item { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; border: 0; background: none; font-size: inherit; color: var(--text-2); text-align: left; opacity: calc(var(--series-focus, 1) * var(--legend-opacity, 1)); transition: opacity .15s; }
 /* A long name (a project's path) breaks anywhere rather than widening the row; its value stays whole. */
 .legend-item span { min-width: 0; overflow-wrap: anywhere; }
 .legend-item b { color: var(--text); font-weight: 500; white-space: nowrap; }
 .series-focus { opacity: var(--series-focus, 1); }
 .legend-item[aria-pressed=false] { --legend-opacity: .35; }
 .legend-item:hover { --legend-opacity: 1; color: var(--text); }
-.legend-empty { font-size: 12.5px; color: var(--text-4); padding: 4px 0; }
+.legend-empty { color: var(--text-4); padding: 4px 0; }
 
 .chart { position: relative; margin-top: 18px; }
 /* Dimmed while the next period loads. Not the chart itself: that would lay its tooltip under the next widget. */
@@ -601,9 +601,9 @@ td.muted, small.muted { color: var(--text-3); }
 .chart-info-name { height: 20px; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
 .chart-info + .chart { margin-top: 12px; }
 .activity-totals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 16px; min-height: 40px; font-variant-numeric: tabular-nums; }
-.activity-totals > span { white-space: nowrap; }
+.activity-totals > span { white-space: normal; }
 .activity-totals > span:only-child { grid-column: 1 / -1; white-space: normal; }
-.activity-totals b { color: var(--text); font-weight: 500; }
+.activity-totals b { color: var(--text); font-weight: 500; white-space: nowrap; }
 .activity-since { height: 16px; line-height: 16px; font-size: 11px; color: var(--text-2); }
 @container (min-width: 650px) { .activity-totals { grid-template-columns: repeat(4, minmax(0, 1fr)); min-height: 20px; } }
 .chart-info-detail { display: grid; white-space: pre-line; overflow-wrap: anywhere; }
@@ -1279,3 +1279,29 @@ summary.filter-group-heading::-webkit-details-marker { display: none; }
 .filter-key-details { padding: 6px 0 0 8px; }
 .filter-key-details > summary { font-size: 12px; color: var(--text-3); cursor: pointer; }
 .filter-key-details[open] > summary { margin-bottom: 6px; }
+
+/* Intensity changes only fill; selection, missing evidence and focus have their own shapes. */
+.agent-hours-heatmap { position:relative; min-width:0; }
+.heatmap-plot { position:relative; width:100%; min-width:0; margin-top:8px; }
+.heatmap-row { display:contents; }
+.heatmap-axis { position:absolute; white-space:nowrap; color:var(--text-3); font-size:10px; font-variant-numeric:tabular-nums; pointer-events:none; }
+.heatmap-bucket { position:absolute; min-width:0; }
+.calendar-date > .picker, .calendar-cell.text-button { display:block; width:100%; height:100%; margin:0; }
+.calendar-cell.text-button { padding:0; border:0; border-radius:3px; background:transparent; }
+.calendar-cell > svg { display:block; width:100%; height:100%; stroke:none; }
+.calendar-cell.text-button:hover, .calendar-cell.text-button[aria-expanded=true] { background:transparent; box-shadow:0 0 0 1px var(--text-4); }
+.calendar-date.is-selected .calendar-cell { box-shadow:0 0 0 1px var(--accent); }
+.calendar-cell:focus-visible { outline:1.5px solid var(--text); outline-offset:1px; }
+.calendar-date.is-unavailable .calendar-cell > svg { visibility:hidden; }
+.calendar-date.is-unavailable .calendar-cell::before { content:''; position:absolute; inset:0; border-radius:2px; background:repeating-linear-gradient(135deg,var(--hair),var(--hair) 3px,var(--hair-2) 3px,var(--hair-2) 4px); }
+.calendar-date.is-partial .calendar-cell::after { content:''; position:absolute; right:1px; bottom:1px; border-right:3px solid var(--text-2); border-top:3px solid transparent; }
+.calendar-legend { align-items:center; gap:5px 10px; margin-top:10px; color:var(--text-3); }
+.heatmap-unit { margin-right:4px; }
+.heatmap-key { display:flex; align-items:center; gap:4px; white-space:nowrap; }
+.calendar-legend svg { flex-shrink:0; }
+.calendar-tip { position:absolute; z-index:8; width:300px; max-width:calc(100vw - 32px); font-size:12px; }
+.calendar-tip p, .calendar-details p { margin:6px 0; }
+.heatmap-interval { color:var(--text-3); }
+
+.popover-anchor { position:absolute; margin-left:0; pointer-events:none; z-index:8; }
+.popover-anchor > .popover { pointer-events:auto; }

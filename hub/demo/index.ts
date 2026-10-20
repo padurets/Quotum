@@ -1,3 +1,4 @@
+import {seedCalendar} from './workCalendar.js';
 import {seedSessionClients} from './sessionClients.js';
 import {spawn, type ChildProcess} from 'node:child_process';
 import {existsSync, mkdtempSync, realpathSync, rmSync} from 'node:fs';
@@ -184,8 +185,8 @@ export class Demo {
       QUOTUM_ALLOWED_HOSTS: address.hosts,
       QUOTUM_SECRET_KEY:Buffer.alloc(32,31).toString('base64url'),
     });
-    if (set.id === 'clients' || set.id === 'links') {
-      // These sets begin with work before their first native measurement.
+    if (set.id === 'clients' || set.id === 'links' || set.id === 'calendar') {
+      // These sets begin with retained work before any native measurement.
       const seeded = new Store(path.join(this.dir, 'quotum.sqlite'), this.start + earliest(set));
       seeded.close();
     }
@@ -208,6 +209,7 @@ export class Demo {
     const store = new Store(path.join(this.dir, 'quotum.sqlite'));
     try {
       seedWork(store, stand);
+      if(set.id==='calendar')seedCalendar(store,new Directory(store.db),stand);
       if(set.id==='devices')await seedMeasurementDevices(store,new Directory(store.db),stand);
       if(set.id==='clients')await seedClients(store,new Directory(store.db),stand);
       if(set.id==='links')await seedLinks(store,new Directory(store.db),stand);

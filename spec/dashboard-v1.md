@@ -606,6 +606,109 @@ reset leaving the history) goes out when it does.
 | `restart` | The hub stops, or could not work out the board. | Connects again in a few seconds. |
 | `limit` | A newer reader took its place, or it fell 640 KiB behind. | Connects again, not sooner than in 30 seconds. |
 
+## Registered agent-hours heatmap
+
+The optional `agent-hours-heatmap` widget follows the board's common period
+(15 minutes to 31 days) and shared source/project/device/client filters. It is
+hidden by default, available without subscription cards, and uses the existing
+literal string widget ID in the v5 view codec. It has one instance. Presentation
+preferences choose day/hour or compact calendar; these do not change selection,
+authority, Activity legend choices or historical facts.
+
+Its metric is registered agent-hours: admitted, selected work durations add,
+including concurrent agents. No presence extrapolation, activity-time union,
+observation completeness or productivity score is inferred. Work filters apply
+before aggregation. Actual local dates and clock hours include DST transitions;
+a repeated hour has separate positions in hourly mode, while coarser intervals
+retain its full duration. A nonexistent hour is padding, not registered zero.
+
+`POST /api/boards/:board/period` accepts optional
+`calendar: {zone: string, cursor?: string}`. The zone is a valid named zone of at
+most 128 ASCII characters; a cursor has at most 2048 URL-safe ASCII characters
+(letters, digits, hyphen, underscore, dot). Reader-supplied edges are rejected.
+The server derives one stable UTC-day-aligned partition from the evaluated common
+selection: one-minute cells for periods up to 24 hours, otherwise 15-minute cells.
+There are at most 3072 cells. Work is clipped exactly to the selected range,
+evidence cut, history availability, rolling retention and device admission;
+partition padding never widens selection or the work-filter facet universe.
+
+The `calendar` reply is `complete`, `delta` or a section error
+(`history_limit`, `history_range_invalid`, `unavailable`). Its basis extends the
+common basis with opaque `calendarKey`, `workAuthority`, and `filterKey`; its range
+is the common range and its evidence cut is `min(range.to, evaluatedAt)`.
+A complete value contains `zone`, `edges`, `availableFrom: number|null`,
+`retainedFrom`, `cursor` and `edges.length - 1` cells. Each cell is
+`{agentMs: number|null, from: number, to: number, validUntil: number|null}`.
+A delta replaces sorted unique `[cellIndex, cell]` entries, alongside replacement
+`availableFrom`, `retainedFrom` and `cursor`. It never adds totals or repeats edges.
+Invalid or foreign signed cursors receive a bounded complete baseline.
+
+On the wire, a complete partition uses `grid: [start, step, count]` instead of
+`edges`, with step 60000 or 900000 and count at most 3072. Its cells use `null`
+for an unavailable point at `max(edge, min(edge + step, range.to, evidenceCut))`,
+`0` for an available full-cell zero, `[agentMs, validUntil]` for full bounds, or
+`[agentMs, validUntil, from, to]` for explicit bounds. Delta values use
+`patch: [index, agentMs, from, to, validUntil][]` instead of `updates`.
+When the common basis matches, the calendar basis is
+`[calendarKey, workAuthority, filterKey]`, extending the top-level basis.
+The shared decoder restores the logical objects and reserves their memory before
+allocating them. These encodings never round amounts, bounds or expiry times.
+
+A complete value may carry an anonymous `proof` using the `SourceWorkTape`
+hour-pattern encoding with the sole constant row ID `work`, plus `retentionMs`
+and, for a live selection, `periodMs`. It contains only the aggregate count
+changes within the selected admitted interval, with no producer, source, device
+or session identities. On the wire it replaces `cells`; the common decoder
+integrates its exact change points to restore the same fine cells. Deltas still
+replace only their changed cells and do not repeat this proof.
+
+The browser may retain these anonymous integrals in the shared history budget.
+Their contiguous intervals can reconstruct a previously read selection or a
+small shift of its endpoints without splitting rounded cell totals. A live
+return keeps its accepted evidence cut; it never invents work past that cut.
+Work, authority, filter and zone changes invalidate the proofs. Eviction or a
+gap falls back to a bounded common-period read.
+
+The signed frontier binds reader, board, selection, partition, zone, work authority,
+filter, run, revision, cut and retained floor. Dirty intervals include work changes,
+newly elapsed evidence, the moving left boundary and retention. Requested work
+sections share one normalized sparse extraction and the existing history budgets.
+Heatmap-only reads request neither native financial history nor session/presence
+details. Resizing or changing presentation groups the same fine intervals locally
+and makes no additional history request. Selection, filters or authority changes
+retire prior values immediately; an old generation cannot restore them.
+
+Null means unavailable history; an available zero means no registered work.
+Partial bounds do not prove complete observation. Positive totals expire when
+retention or a moving live boundary can reduce their included durations. The
+shared clock removes expired contributions in the affected bucket's paint and
+readout without HTTP polling or rebuilding geometry. Only buckets with expiring
+contributions subscribe to the clock and carry `data-time`; the widget itself
+does not. Fine interval frames remain at their accepted evidence until a refresh
+or civil-date change; idle minutes alone do not rebuild data.
+Work, authority and reconnect events refresh the projection; pure
+financial news does not. Hiding the widget removes its demand.
+
+Short periods use a chronological strip. Several dates use date rows and clock
+columns; wide monthly views transpose them. The compact calendar places its date
+labels beside intraday segments without separate label rows. Neither view adds an
+inner scroller. The fixed single-hue scale uses `CATEGORY_COLORS[0]` and opacity
+0.20, 0.40, 0.60, 0.80, 1.00 for positive intervals below 0.5, 1, 2, 4 and above
+4 times the displayed interval duration. Zero has a neutral fill. Numeric legends
+place the unit beside the scale values: agent-minutes for sub-hour bins, agent-hours otherwise.
+Filtering never recomputes thresholds from the selected sample. Partial, unavailable,
+selected and focused states have cues independent of intensity. Details retain
+integer milliseconds and show hours to nine decimal places, including tiny positives.
+
+Hover/focus and an explicit click/touch readout show the date, interval and value.
+A time-zone offset appears only for an ambiguous repeated hour. An Open interval
+action changes the common range and supports Back; it is omitted below the common
+15-minute minimum. A daily cell opens the full actual local date, including just
+after midnight; only elapsed retained evidence is counted. Current native states
+use `min(dayEnd, evaluationClock)` for freshness rather than the future endpoint.
+Replies expose durations and date bounds, never producer IDs, private attribution
+metadata or additional financial information.
+
 ## Reading the board period
 
 `POST /api/boards/:board/period` is a read-only, authenticated, origin-checked operation.
@@ -723,13 +826,20 @@ reader and cache. The ordinary `quota` and `money` tape arrays are empty. A summ
 applies only to its exact range and cell size; it cannot project another interval.
 The server and browser use the same accounting functions, including original scales,
 historical cap allowances, availability bounds and recorded currency provenance.
+Each fixed quota or money row retains `endValidUntil`, the absolute exclusive
+deadline of its admitted endpoint observation, or null when unavailable. It includes
+TTL, resets and availability interruptions, including both sides of a paired balance.
+The endpoint value expires through the shared clock independently of the optional
+card-values section. Nearby fixed shift snapshots and patches retain that deadline;
+plot bounds do not replace it.
 
 Values are measurement-only projections: source id/provider, retained native windows,
 meters, keys and the observed `creditBalance` status when authorized. Native windows include `observedAt`, `validUntil` and `stale`.
 Membership is the last nonempty retained batch strictly before the right edge.
-For a fixed interval, freshness is evaluated at the requested exclusive right edge,
-even when it is after the actual evidence cut. Observations are still admitted only
-before that cut. A retained value can be stale at the selected edge; the projection
+For a fixed interval, freshness is evaluated at `min(selected.to, evaluationClock)`.
+Past endpoints keep their historical state; future endpoints advance only with the
+evaluation clock. Observations are still admitted only before the evidence cut.
+A retained value can be stale at the evaluated edge; the projection
 never invents future readings or extends evidence coverage. A meter
 keeps exact decimal integer amounts, historical allowance, unit and conversion evidence.
 An explicitly removed key cap remains absent after its own observation time; later

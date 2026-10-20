@@ -1,3 +1,6 @@
+import * as periodValueClockBindings from '../../server/domain/periodValues';
+import {WorkCalendar} from '../lib/workCalendar';
+import {AGENT_HOURS_HEATMAP} from '../../server/domain/widgets';
 import * as filterModelBindings from '../../server/domain/dataFilters';
 import * as filterRuntimeBindings from '../lib/filterSelection';
 import * as filterCurveBindings from '../../server/domain/periodCurves';
@@ -33,9 +36,9 @@ test('the session panel preserves equal semantic presence and refreshes actual d
   let read:()=>unknown=()=>null;
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
   const body=source.slice(source.indexOf('const roster='),source.indexOf('export function useSourcePeriodSessions'));
-  const context={exports:{} as {usePeriodSessions:()=>unknown},boardPeriod:{get:()=>state,subscribe:()=>()=>{}},selector,sameJson,
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {usePeriodSessions:()=>unknown},boardPeriod:{get:()=>state,subscribe:()=>()=>{}},selector,sameJson,
     useRef:(current:unknown)=>({current}),useState:(make:()=>unknown)=>[make()],useLayoutEffect:()=>{},useSyncExternalStore:(_subscribe:unknown,get:()=>unknown)=>{read=get;return get();}};
-  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   const initial=context.exports.usePeriodSessions();
   const {currentPresence:_,...expired}=before;
   state={...state,rows:[{...before,currentPresence:{...before.currentPresence}}]};assert.equal(read(),initial,'equal semantic presence retains the panel snapshot');
@@ -49,7 +52,7 @@ test('the session panel preserves equal semantic presence and refreshes actual d
 test('returning from settings resumes the actual period coordinator after preferences changed while hidden',()=>{
   let reads=0;
   const board={meta:{personal:true},id:'board',lineup:[],view:{hidden:[]}},state={board};
-  const context={exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed():void}},
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed():void}},
     hubNow:()=>5_000_000,retention,historyPool:{register:()=>{},release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{change(){reads++;}reset(){}},fetchPeriod:()=>{},page:{get:()=>state},preparations:()=>null,
     evaluatedRange,periodKey,empty:()=>({value:null,basis:null,loading:false,error:null}),
@@ -59,7 +62,7 @@ test('returning from settings resumes the actual period coordinator after prefer
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
   const body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
-  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   const period=new context.exports.BoardPeriod();period.changed();assert.equal(reads,0,'compact and other shells start without period work');
   period.activate(true);assert.equal(reads,1);
   period.activate(false);period.changed();assert.equal(reads,1,'hidden preferences cannot create work');
@@ -83,7 +86,7 @@ test('a complete temporal index distinguishes equal totals, changes ranking and 
 
 test('monetary evidence refreshes only the selected resource family',()=>{
   const board={meta:{personal:true},id:'b',lineup:['wallet','credit','unselected'],view:{hidden:[]},cards:{wallet:{id:'wallet'},credit:{id:'credit'},unselected:{id:'unselected'}}},state={board};
-  const context={exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed(event:unknown):void;dirtyScopes:Set<string>;workNeeded:boolean;valuesNeeded:boolean}},
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed(event:unknown):void;dirtyScopes:Set<string>;workNeeded:boolean;valuesNeeded:boolean}},
     hubNow:()=>5_000_000,retention,historyPool:{register:()=>{},release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{change(){}reset(){}},fetchPeriod:()=>{},page:{get:()=>state},preparations:()=>null,
     evaluatedRange,periodKey,empty:()=>({value:null,basis:null,loading:false,error:null}),
@@ -92,7 +95,7 @@ test('monetary evidence refreshes only the selected resource family',()=>{
     PERIOD_SCOPES:['quota','budget','funds'],widgetVisible:()=>true,QUOTA_WIDGETS:['history'],BUDGET_WIDGETS:['budget'],SUBSCRIPTION_FUNDS:'funds',AGENTS:'agents',ACTIVITY:'activity',noSessions:[],noValue:{},
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8'),body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
-  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   const period=new context.exports.BoardPeriod();period.activate(true);
   for(const [source,scope] of [['credit','funds'],['wallet','budget'],['unselected',null]] as const){
     period.dirtyScopes.clear();
@@ -249,7 +252,7 @@ test('presence expires at the confirmation deadline even when neither accounting
 
 test('a sibling chart reply cannot cancel the coordinator preparation of historical card values',async()=>{
   const pending:(()=>void)[]=[],value={id:'s',provider:'codex',windows:[],meters:[],keys:[]};
-  const context={exports:{} as {BoardPeriod:new()=>{receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;getValue(id:string):{value:unknown}}},
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {BoardPeriod:new()=>{receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;getValue(id:string):{value:unknown}}},
     hubNow:()=>5_000_000,retention,historyPool:{register:()=>{},reserve:()=>true,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:(_owner:unknown,work:Parameters<typeof drain>[0])=>new Promise(resolve=>pending.push(()=>resolve(drain(work)))),
@@ -258,7 +261,7 @@ test('a sibling chart reply cannot cancel the coordinator preparation of histori
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
   const body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
-  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   const period=new context.exports.BoardPeriod(),selection={mode:'range' as const,from:1_400_000,to:5_000_000};
   const basis={run:'r',revision:'1',evaluatedAt:5_000_000,evidenceCut:5_000_000,range:selection};
   const intent:PeriodIntent={board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:5_000_000,values:['s'],funds:{cell:'60000',from:'1380000',to:'5040000',cells:'skip',unit:'USD',meters:'[]'}}};
@@ -274,7 +277,7 @@ test('a sibling chart reply cannot cancel the coordinator preparation of histori
 test('a dense retained month adopts its decoded reservation within the shared memory budget',async()=>{
   const pool=new HistoryPool(),flight={role:'visible' as const};
   pool.register({estimatedBytes:6*1024*1024,evictionCandidates:()=>[]});
-  const context={exports:{} as {BoardPeriod:new()=>{receive(reply:PeriodReply,intent:PeriodIntent,reserve:(bytes:number)=>boolean):Promise<void>;estimatedBytes:number}},
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {BoardPeriod:new()=>{receive(reply:PeriodReply,intent:PeriodIntent,reserve:(bytes:number)=>boolean):Promise<void>;estimatedBytes:number}},
     hubNow:()=>2_700_000_000,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
@@ -283,7 +286,7 @@ test('a dense retained month adopts its decoded reservation within the shared me
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
   const body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
-  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   const period=new context.exports.BoardPeriod(),selection={mode:'range' as const,from:0,to:2_700_000_000};
   const basis={run:'r',revision:'1',evaluatedAt:selection.to,evidenceCut:selection.to,range:selection};
   const samples=Array.from({length:9000},(_,i)=>[i?300000:0,(i%100)+.125,0,i?0:600000,0]).flat();
@@ -305,7 +308,7 @@ test('a dense retained month adopts its decoded reservation within the shared me
 });
 
 test('an empty replacement period clears the previous roster and card disclosures',async()=>{
-  const context={exports:{} as {BoardPeriod:new()=>{active:boolean;selection:PeriodRequest['selection'];receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;get():{rows:unknown[]};getSource(id:string):unknown[]}},
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {BoardPeriod:new()=>{active:boolean;selection:PeriodRequest['selection'];receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;get():{rows:unknown[]};getSource(id:string):unknown[]}},
     hubNow:()=>5_000_000,retention,historyPool:{register:()=>{},reserve:()=>true,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
@@ -314,7 +317,7 @@ test('an empty replacement period clears the previous roster and card disclosure
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
   const body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
-  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   const period=new context.exports.BoardPeriod();period.active=true;
   for(const populated of [true,false,true]){
     const selection={mode:'range' as const,from:populated?1_400_000:0,to:populated?5_000_000:1_400_000};
@@ -328,7 +331,7 @@ test('an empty replacement period clears the previous roster and card disclosure
 
 test('rolling work stays exact while clock ticks leave chart and table revisions asleep',async()=>{
   let now=5_000_000;
-  const context={exports:{} as {BoardPeriod:new()=>{active:boolean;selection:PeriodRequest['selection'];receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;tick():void;get():{rows:{workedMs:number}[]};getProjectionRevision(scope:string):number;workedAt(refs:string[],fallback:number,now:number):number}},
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {BoardPeriod:new()=>{active:boolean;selection:PeriodRequest['selection'];receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;tick():void;get():{rows:{workedMs:number}[]};getProjectionRevision(scope:string):number;workedAt(refs:string[],fallback:number,now:number):number}},
     hubNow:()=>now,retention,historyPool:{register:()=>{},reserve:()=>true,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
@@ -336,7 +339,7 @@ test('rolling work stays exact while clock ticks leave chart and table revisions
     sameJson:(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b),prefs:()=>({range:'1h'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{},
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8'),body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
-  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   const period=new context.exports.BoardPeriod();period.active=true;
   const selection={mode:'live' as const,periodMs:3_600_000},range=evaluatedRange(selection,now),basis={run:'r',revision:'1',evaluatedAt:now,evidenceCut:now,range};
   period.selection=selection;
@@ -366,7 +369,7 @@ test('complete live and fixed targets share supplier evidence in the LRU and cac
       ...(body.sessions?{sessions:{state:'complete',basis,value:{...(body.selection.mode==='live'?work:fixedWork(work,range,60_000,5_000_000,()=>{})),cursor:'w'}}}:{}),
       ...(body.values?{values:{state:'complete',basis,value:[withValueStates({id:'s',provider:'codex',windows:[],meters:[],keys:[],validFor:{from:0,to:1_400_500}},[{id:'s',provider:'codex',windows:[],meters:[],keys:[],validFor:{from:0,to:1_400_500}},{id:'s',provider:'codex',windows:[],meters:[],keys:[],currencyUnavailable:true,validFor:{from:1_400_500,to:9_000_000}}],()=>{})]}}:{})};
   };
-  const context={exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed(event?:unknown):void;get():{rows:{workedMs:number}[]};getValue(id:string):{value:{currencyUnavailable?:boolean}};estimatedBytes:number;sourceTape:unknown;sourceCursor:string|undefined}},
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed(event?:unknown):void;get():{rows:{workedMs:number}[]};getValue(id:string):{value:{currencyUnavailable?:boolean}};estimatedBytes:number;sourceTape:unknown;sourceCursor:string|undefined}},
     hubNow:()=>5_000_000,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod:send,page:{get:()=>state},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,hasPeriodValue,periodValueAt,
     shifted:(fixed:Parameters<typeof shifted>[0],range:{from:number;to:number})=>{assert.ok(pool.estimatedBytes>period.estimatedBytes,'the copy is reserved before allocation');stagedRestores++;return shifted(fixed,range);},
@@ -374,7 +377,7 @@ test('complete live and fixed targets share supplier evidence in the LRU and cac
     widgetVisible:(_view:unknown,id:string)=>id==='history',subscriptionSelection:()=>null,PERIOD_SCOPES:['quota','budget','funds'],QUOTA_WIDGETS:['history'],BUDGET_WIDGETS:['budget'],SUBSCRIPTION_FUNDS:'funds',ACTIVITY:'activity',AGENTS:'agents',noSessions:[],noValue:{},
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8'),body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
-  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   const period=new context.exports.BoardPeriod(),flush=async()=>{for(let i=0;i<8;i++)await settle();};period.activate(true);await flush();
   assert.equal(reads,1);assert.equal(period.get().rows[0].workedMs,60_000);
   const supplier=period.sourceTape;assert.ok(supplier);assert.equal(period.sourceCursor,'supplier');

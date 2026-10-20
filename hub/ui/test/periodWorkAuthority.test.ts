@@ -1,3 +1,6 @@
+import * as periodValueClockBindings from '../../server/domain/periodValues';
+import {WorkCalendar} from '../lib/workCalendar';
+import {AGENT_HOURS_HEATMAP} from '../../server/domain/widgets';
 import * as filterModelBindings from '../../server/domain/dataFilters';
 import * as filterRuntimeBindings from '../lib/filterSelection';
 import * as filterCurveBindings from '../../server/domain/periodCurves';
@@ -70,12 +73,12 @@ async function fixture(personal=false) {
   const settings={range:'1h',kind:'session',money:DEFAULT_MONEY,funds:DEFAULT_MONEY};
   const code=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
   let wait:Promise<void>|null=null;
-  const context={exports:{} as any,hubNow:()=>NOW,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as any,hubNow:()=>NOW,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,
     fetchPeriod:async(_board:string,body:PeriodRequest)=>{requests.push(body);const reply=expandPeriod(JSON.parse(reader.read(board,alice.id,JSON.parse(JSON.stringify(body)))));const pending=wait;wait=null;await pending;return reply;},
     page,pan:{get:()=>null},preparations:()=>null,prepareAsync:async(_owner:object,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,
     packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,
     timeRange:()=>null,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
-  runInNewContext(ts.transpileModule(code.slice(code.indexOf('class BoardPeriod'),code.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  runInNewContext(ts.transpileModule(code.slice(code.indexOf('class BoardPeriod'),code.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   const period=new context.exports.BoardPeriod();page.listen((event,state)=>period.changed(event,state));period.activate(true);await flush();
   assert.equal(period.get().error,null);assert.equal(period.get().rows.length,1);requests.length=0;frames.length=0;
   return {store,directory,board,alice,bob,source,credit,events,period,page,frames,requests,

@@ -65,16 +65,16 @@ test('project selection precedes live and fixed union, facets and cursor-bound d
   assert.equal(empty.sessions.value.refs.length,0);assert.notEqual(empty.sessions.value.available,false);
   assert.equal(sourceWorkCurves(empty.sourceWork.value).groups.source.get(h.source)!.read(empty.basis.range,true),120*M);
 });
-async function fixture() {
-  const store=new Store(':memory:',now-3*H),directory=new Directory(store.db);
-  const user=directory.createUser('a@example.com','A','unused',now-3*H),board=directory.boards(user.id)[0].id;
-  const token=newSecret('qt_s');directory.createSession(token,user.id,now-3*H,24*H);
-  const source=store.source('codex','a'.repeat(24),now-3*H);store.hold(source,user.id,now-3*H);
-  const device=directory.saveDevice({userId:user.id,machine:{id:'machine-0123456789',name:'Laptop',os:'linux',arch:'x86_64'},agent:'quotum/0.6.0',tokenId:null},now-3*H).id;
+async function fixture(start=now-3*H) {
+  const store=new Store(':memory:',start),directory=new Directory(store.db);
+  const user=directory.createUser('a@example.com','A','unused',start),board=directory.boards(user.id)[0].id;
+  const token=newSecret('qt_s');directory.createSession(token,user.id,Date.now(),24*H);
+  const source=store.source('codex','a'.repeat(24),start);store.hold(source,user.id,start);
+  const device=directory.saveDevice({userId:user.id,machine:{id:'machine-0123456789',name:'Laptop',os:'linux',arch:'x86_64'},agent:'quotum/0.6.0',tokenId:null},start).id;
   const hub:Hub={store,directory,ingest:new Ingest(store,directory,new Duty(),new Cadence()),resets:new ResetFeed(undefined,()=>{}),pairing:new Pairing(directory),setup:new Setup(false,null),local:null};
   const app=await buildApp(hub);
   const read=(body:PeriodRequest,asBoard=board)=>app.inject({method:'POST',url:`/api/boards/${asBoard}/period`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`},payload:body});
-  const credit=(from:number,to:number,id='stable')=>store.creditWork(device,from,to,[{source,origin:'terminal',startedAt:now-3*H,project:'Project',folder:'folder',identity:{kind:'stable',sessionId:id}}]);
+  const credit=(from:number,to:number,id='stable')=>store.creditWork(device,from,to,[{source,origin:'terminal',startedAt:start,project:'Project',folder:'folder',identity:{kind:'stable',sessionId:id}}]);
   const details=(body:unknown)=>app.inject({method:'POST',url:`/api/boards/${board}/period/sessions`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`},payload:body as object});
   return {store,directory,hub,app,user,board,source,device,read,credit,details};
 }
@@ -336,6 +336,35 @@ test('an oversized section does not discard siblings or retain its failed reserv
   assert.equal(next.quota?.state,'complete');assert.equal(next.sessions?.state,'complete');assert.equal(next.values?.state,'complete');
 });
 
+test('a failed calendar releases its partial reply before source work is prepared',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture(now-100*24*H);t.after(async()=>{await h.app.close();h.store.close();});
+  h.credit(now-25*H,now);
+  const tiles=new HistoryTiles(h.store),events=new Events(h.hub,undefined,{now:()=>now,after:()=>()=>{}},null),reader=new PeriodReader(h.hub,tiles,events);
+  t.after(()=>events.close());
+  const pin=tiles.reservation();pin.add(32*1024*1024-40_000);t.after(()=>pin.close());
+  const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:25*H},evaluatedAt:now,sourceWork:{},quota:{cell:String(15*M),from:String(Math.floor((now-25*H)/(15*M))*15*M),to:String(Math.ceil(now/(15*M))*15*M),cells:'skip',evidence:'skip'}};
+  const read=(calendar:boolean)=>expandPeriod(JSON.parse(reader.read(h.board,h.user.id,{...body,...(calendar?{calendar:{zone:'UTC'}}:{})})));
+  const control=read(false);assert.equal(control.sourceWork?.state,'complete');assert.equal(control.quota?.state,'complete');
+  const failed=read(true);assert.deepEqual(failed.calendar,{state:'error',error:'history_limit'});
+  assert.equal(failed.sourceWork?.state,'complete','the failed optional projection must leave capacity for its sibling');assert.equal(failed.quota?.state,'complete');
+});
+
+test('fixed resource sections retain endpoint deadlines when card values exceed the shared capacity',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  h.store.record(h.source,{observedAt:now-M,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:now+H}],balances:[{id:'balance:credits',unit:'credits:codex',status:'finite',amount:'123',hasCredits:true}]});
+  const wallet=h.store.source('openrouter','b'.repeat(24),now-2*H);h.store.hold(wallet,h.user.id,now-2*H);
+  h.store.record(wallet,{type:'meters',observedAt:now-M,staleAfterMs:H,meters:[],keys:Array.from({length:100},(_,i)=>({id:i.toString(16).padStart(12,'a'),name:'N'.repeat(80),disabled:false,expiresAt:null,includeByok:false,at:now-M,staleAfterMs:H,presence:'observed',missCount:0,periods:{day:null,week:null,month:null}})),inventoryComplete:true,inventoryError:null});
+  const tiles=new HistoryTiles(h.store),events=new Events(h.hub,undefined,{now:()=>now,after:()=>()=>{}},null),reader=new PeriodReader(h.hub,tiles,events);t.after(()=>events.close());
+  const pin=tiles.reservation();pin.add(32*1024*1024-100_000);t.after(()=>pin.close());
+  const range={from:now-H,to:now+2*H},query={cell:String(M),from:String(range.from),to:String(range.to),cells:'skip' as const};
+  const reply=expandPeriod(JSON.parse(reader.read(h.board,h.user.id,{version:1,selection:{mode:'range',...range},evaluatedAt:now,quota:query,funds:{...query,unit:'USD',meters:JSON.stringify([[h.source,'balance:credits']])},values:[h.source,wallet]})));
+  assert.deepEqual(reply.values,{state:'error',error:'history_limit'});
+  for(const scope of ['quota','funds'] as const){
+    const part=reply[scope];assert.equal(part?.state,'complete');if(part?.state!=='complete')throw Error(scope);
+    const fixed=part.value.tape!.fixed!,row=scope==='quota'?fixed.quota[0]:fixed.money[0];assert.equal(row.endValidUntil,now-M+H+1);
+  }
+});
+
 test('a chart-only past tile reads only its work, and extraction replacement releases its reservation',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   h.credit(now-2*H,now-H);h.credit(now-30*M,now-M,'later');
@@ -569,4 +598,70 @@ test('quota unavailability ends both historical values and exact tape coverage a
   const summary=reply.quota.value.tape!.fixed!.quota[0];assert.equal(summary.remainingAtEnd,null);assert.equal(summary.points.at(-1)![3],boundary);
   const before=periodValues(h.store,h.store.sources(h.board),h.user.id,boundary-1,()=>{})[0];
   assert.equal(before.windows[0].stale,false);assert.equal(before.validFor!.to,boundary);
+});
+
+
+test('heatmap uses the exact common range, filters and one extraction with sessions and facets',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture(now-100*24*H);t.after(async()=>{await h.app.close();h.store.close();});
+  for(let i=0;i<4;i++)h.credit(now-3*H,now-H,'parallel'+i);
+  h.credit(now-20*24*H,now-20*24*H+H,'outside');
+  const original=h.store.agentWork.bind(h.store);let reads=0;t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{reads++;return original(...args);});
+  const body:PeriodRequest={version:1,selection:{mode:'range',from:now-2*H+17,to:now-H-23},evaluatedAt:now,calendar:{zone:'UTC'},sessions:{},facets:true};
+  const result=await h.read(body);assert.equal(result.statusCode,200,result.body);const reply=expandPeriod(result.json());
+  if(reply.calendar?.state!=='complete'||reply.sessions?.state!=='complete'||reply.facets?.state!=='complete')throw new Error('heatmap baseline');
+  const total=reply.calendar.value.cells.reduce((n,c)=>n+(c.agentMs??0),0);
+  assert.equal(total,4*(H-40));assert.equal(reads,1);assert.deepEqual(reply.calendar.basis.range,reply.basis.range);
+  assert.equal(workedSessions(reply.sessions.value,reply.basis.range,now).reduce((n,r)=>n+r.workedMs,0),total);
+  assert.deepEqual(reply.facets.value.ranges,[reply.basis.range]);
+  const filters=defaultFilters();filters.projects={mode:'include',values:[]};
+  const empty=expandPeriod((await h.read({...body,workFilter:workFilter(filters)})).json());
+  if(empty.calendar?.state!=='complete')throw new Error('empty heatmap');assert.equal(empty.calendar.value.cells.reduce((n,c)=>n+(c.agentMs??0),0),0);assert.ok(empty.calendar.value.cells.some(c=>c.agentMs===0));
+});
+
+test('heatmap-only deltas replace fine intervals, bind selection, and read no financial or presence data',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture(now-100*24*H);t.after(async()=>{await h.app.close();h.store.close();});h.credit(now-30*M,now-20*M);
+  for(const method of ['financialGroups','cells'] as const)t.mock.method(h.store,method,()=>{throw new Error('unrelated history');});
+  t.mock.method(h.hub.ingest.live,'presenceSnapshot',()=>{throw new Error('no presence dependency');});
+  const body:PeriodRequest={version:1,selection:{mode:'range',from:now-H,to:now},evaluatedAt:now,calendar:{zone:'UTC'}};
+  const initial=expandPeriod((await h.read(body)).json<PeriodWireReply>());if(initial.calendar?.state!=='complete')throw new Error('baseline');
+  h.credit(now-20*M,now-19*M);
+  const result=await h.read({...body,calendar:{...body.calendar!,cursor:initial.calendar.value.cursor}});assert.equal(result.statusCode,200,result.body);
+  const delta=expandPeriod(result.json<PeriodWireReply>());if(delta.calendar?.state!=='delta')throw new Error('delta');
+  const cells=initial.calendar.value.cells.slice();for(const [i,c] of delta.calendar.value.updates)cells[i]=c;
+  assert.equal(cells.reduce((n,c)=>n+(c.agentMs??0),0),11*M);assert.ok(!result.body.includes('edges'));assert.ok(!result.body.includes('producer'));
+  const retry=expandPeriod((await h.read({...body,calendar:{...body.calendar!,cursor:initial.calendar.value.cursor}})).json<PeriodWireReply>());assert.deepEqual(retry.calendar,delta.calendar);
+  const foreign=expandPeriod((await h.read({...body,selection:{mode:'range',from:now-2*H,to:now-H},calendar:{...body.calendar!,cursor:initial.calendar.value.cursor}})).json<PeriodWireReply>());assert.equal(foreign.calendar?.state,'complete');
+  if(foreign.calendar?.state!=='complete')throw new Error('historical baseline');
+  const unchanged=expandPeriod((await h.read({...body,selection:{mode:'range',from:now-2*H,to:now-H},calendar:{zone:'UTC',cursor:foreign.calendar.value.cursor}})).json<PeriodWireReply>());if(unchanged.calendar?.state!=='delta')throw new Error('historical delta');assert.deepEqual(unchanged.calendar.value.updates,[],'time after the fixed endpoint does not dirty padding');
+});
+
+test('heatmap request derives its bounded partition and rejects independent reader edges',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,calendar:{zone:'UTC'}};
+  for(const calendar of [{zone:'invalid/zone'},{zone:'UTC',edges:[now-H,now]},{zone:'UTC',cursor:'é'},{zone:'UTC',cursor:'x'.repeat(2049)}])assert.equal((await h.read({...body,calendar})).statusCode,400);
+  assert.equal((await h.read({...body,selection:{mode:'live',periodMs:32*24*H}})).statusCode,400);
+  const first=expandPeriod((await h.read(body)).json<PeriodWireReply>());if(first.calendar?.state!=='complete')throw new Error('availability');
+  assert.ok(first.calendar.value.cells.length<=2880);assert.ok(first.calendar.value.cells.some(c=>c.agentMs===0));assert.ok(first.calendar.value.cells.some(c=>c.agentMs===null));
+});
+
+test('current-day drill evaluates native states at elapsed time and keeps the full selected date',async t=>{
+  const at=Date.UTC(2027,0,1,0,1);t.mock.method(Date,'now',()=>at);const h=await fixture(at-24*H);t.after(async()=>{await h.app.close();h.store.close();});
+  const from=at-M,to=from+24*H;
+  h.store.record(h.source,{observedAt:from,plan:'',resets:null,staleAfterMs:15*M,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:to+H}]});
+  const result=await h.read({version:1,selection:{mode:'range',from,to},evaluatedAt:at,values:[h.source],sessions:{}});assert.equal(result.statusCode,200,result.body);
+  const reply=expandPeriod(result.json());assert.deepEqual(reply.basis.range,{from,to});assert.equal(reply.basis.evidenceCut,at);
+  if(reply.values?.state!=='complete')throw new Error('values');assert.equal(reply.values.value[0].windows[0].stale,false);assert.equal(reply.values.value[0].windows[0].validUntil,from+15*M+1);
+});
+
+
+test('retention replaces only selected historical intervals while later work stays outside the range',async t=>{
+  let at=Date.UTC(2026,10,2,12);t.mock.method(Date,'now',()=>at);const h=await fixture(at-100*24*H);t.after(async()=>{await h.app.close();h.store.close();});
+  const oldest=at-90*24*H;h.credit(oldest,oldest+H,'oldest');
+  const request:PeriodRequest={version:1,selection:{mode:'range',from:oldest,to:oldest+H},evaluatedAt:at,calendar:{zone:'UTC'}};
+  const initial=expandPeriod((await h.read(request)).json<PeriodWireReply>());if(initial.calendar?.state!=='complete')throw new Error('baseline');assert.equal(initial.calendar.value.cells.reduce((n,c)=>n+(c.agentMs??0),0),H);
+  at+=10*M;h.credit(at-2*M,at-M,'outside');
+  const result=await h.read({...request,evaluatedAt:at,calendar:{zone:'UTC',cursor:initial.calendar.value.cursor}});assert.equal(result.statusCode,200,result.body);
+  const reply=expandPeriod(result.json<PeriodWireReply>());if(reply.calendar?.state!=='delta')throw new Error('delta');
+  const cells=initial.calendar.value.cells.slice();for(const [i,c] of reply.calendar.value.updates)cells[i]=c;assert.equal(cells.reduce((n,c)=>n+(c.agentMs??0),0),50*M);
+  assert.deepEqual(reply.calendar.basis.range,request.selection.mode==='range'?{from:request.selection.from,to:request.selection.to}:null);
 });

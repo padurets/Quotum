@@ -46,3 +46,16 @@ export function* prepareValueStates(base:PeriodValues,values:Iterable<PeriodValu
   }
   return states?{...base,states}:base;
 }
+
+
+/** A captured value can expire with the shared clock without admitting a future observation. */
+export function periodValueNow(value:PeriodValues,at:number):PeriodValues {
+  const known=periodValueAt(value,at)??value;
+  return {...known,windows:known.windows.map(w=>({...w,stale:at>=w.validUntil})),
+    meters:known.meters.map(m=>({...m,stale:at>=(m.validUntil??m.at+m.staleAfterMs+1)})),
+    keys:known.keys.map(k=>({...k,presence:k.presence==='missing'||at>=k.at+k.staleAfterMs+1?'missing':'observed'}))};
+}
+export function periodValueChangesAt(value:PeriodValues,now:number):number|null {
+  const next=Math.min(...[...value.windows.map(w=>w.validUntil),...value.meters.map(m=>m.validUntil??m.at+m.staleAfterMs+1),...value.keys.map(k=>k.at+k.staleAfterMs+1),...(value.states?.pieces.flatMap(([from,to])=>[from,to])??[])].filter(at=>at>now));
+  return next>now&&Number.isFinite(next)?next:null;
+}

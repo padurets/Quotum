@@ -1,3 +1,5 @@
+import {WorkCalendar} from './workCalendar';
+import {AGENT_HOURS_HEATMAP} from '../../server/domain/widgets';
 import {effectiveFilters,filtersReady,onDataFilters} from './filterSelection';
 import {executableWorkFilters,matchesSource,workFilter} from '../../server/domain/dataFilters';
 import {mergeSourceWorkTape,sameSourceWork,sourceWorkCurves,type SourceWorkTape,type SourceWorkCurves} from '../../server/domain/periodCurves';
@@ -8,7 +10,7 @@ import {PERIOD_SCOPES,type PeriodScope,type HistoryQuery,type WorkFacets} from '
 import {prepareAsync,preparations,type Preparation} from './prepare';
 import {useLayoutEffect,useRef,useState,useSyncExternalStore} from 'react';
 import {evaluatedRange,periodKey,type PeriodBasis,type PeriodSelection} from '../../server/domain/period';
-import {hasPeriodValue,periodValueAt,type PeriodValues} from '../../server/domain/periodValues';
+import {hasPeriodValue,periodValueAt,periodValueNow,periodValueChangesAt,type PeriodValues} from '../../server/domain/periodValues';
 import {mergeWorkPrepared,packWorkPrepared,workPreparationBytes,type WorkedSession as RecordedSession,type WorkTrace} from '../../server/domain/periodWork';
 import type {LiveSession} from './types';
 import type {PeriodReply} from '../../server/domain/periodRead';
@@ -43,6 +45,7 @@ const noValue=empty<PeriodValues>(),noSessions:WorkedSession[]=[];
 
 export type SessionOrder={key:unknown;worked?:readonly WorkOrder[];activity?:ActivityOrder};
 class BoardPeriod {
+  readonly calendar=new WorkCalendar();
   private readonly workOrders=new Set<(rows:WorkedSession[])=>SessionOrder|null>();
   private active=false;
   private readonly preparationOwner={};
@@ -59,6 +62,7 @@ class BoardPeriod {
   private readonly dirtyScopes=new Set<PeriodScope>();
   private scopeKeys:Partial<Record<PeriodScope,string>>={};
   private evaluatedAt=hubNow();
+  private nativeDue=Infinity;
   private identity='';
   private selection:PeriodSelection={mode:'live',periodMs:86_400_000};
   private sourceIds:string[]=[];
@@ -115,8 +119,13 @@ class BoardPeriod {
   private readonly retained=new Map<string,{bytes:number;copyBytes:number;at:number;fits:(selection:PeriodSelection)=>boolean;restore:(selection:PeriodSelection)=>void}>();
   readonly transport=new PeriodTransport(historyPool,()=>this.intent(),(reply,intent,reserve)=>this.receive(reply,intent,reserve),fetchPeriod,()=>{page.dispatch({type:'board-close'});if(typeof window!=='undefined')window.dispatchEvent(new Event(UNAUTHORIZED));});
   constructor(){historyPool.register(this);clock.subscribe(this.watch,()=>this.tick());}
-  get estimatedBytes(){return this.bytes+[...this.valueCache.values(),...this.retained.values()].reduce((sum,c)=>sum+c.bytes,0);}
-  evictionCandidates(){return [...this.valueCache].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.valueCache.delete(key);}})).concat([...this.retained].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.retained.delete(key);}})));}
+  private configureCalendar(visible:boolean,context:string,now:number,limited:boolean,selection:PeriodSelection){
+    const staging={role:'visible' as const};
+    try{return this.calendar.configure(visible,context,now,limited,selection,bytes=>historyPool.reserve(staging,bytes));}
+    finally{historyPool.release(staging);}
+  }
+  get estimatedBytes(){return this.bytes+this.calendar.bytes+[...this.valueCache.values(),...this.retained.values()].reduce((sum,c)=>sum+c.bytes,0);}
+  evictionCandidates(){return [...this.valueCache].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.valueCache.delete(key);}})).concat([...this.retained].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.retained.delete(key);}})),this.calendar.evictionCandidates());}
   private retainCurrent(){
     if(!this.cacheKey)return;
     if(!this.valuesNeeded&&this.valuesProofEpoch===this.proofEpoch&&this.selection.mode==='range'&&[...this.values.values()].every(v=>v.value&&!v.loading&&!v.error)){
@@ -134,7 +143,7 @@ class BoardPeriod {
       +[...tapes.values()].reduce((sum,{tape})=>sum+JSON.stringify({...tape,fixed:tape.fixed?{...tape.fixed,shift:undefined}:undefined}).length*6,0)
       +JSON.stringify([...values.values()]).length*3;
     this.valueCache.delete(periodKey(this.selection));
-    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,copyBytes,at:hubNow(),fits:selection=>reusable&&selection.mode==='range'&&work.value?.fixed!==undefined&&canShift(work.value.fixed,selection)&&context===JSON.stringify([this.authority,this.scopeKeys,this.filterKey,this.financialIdentity])&&[...tapes.values()].every(({tape})=>tape.fixed&&canShift(tape.fixed,selection))&&[...values.values()].every(v=>hasPeriodValue(v.value,selection.to)),restore:selection=>{
+    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,copyBytes,at:hubNow(),fits:selection=>reusable&&selection.mode==='range'&&work.value?.fixed!==undefined&&canShift(work.value.fixed,selection)&&context===JSON.stringify([this.authority,this.scopeKeys,this.filterKey,this.financialIdentity])&&[...tapes.values()].every(({tape})=>tape.fixed&&canShift(tape.fixed,selection))&&[...values.values()].every(v=>hasPeriodValue(v.value,Math.min(selection.to,hubNow()))),restore:selection=>{
       this.workEvidence++;
       this.tapes.clear();for(const [scope,tape] of tapes)this.tapes.set(scope,tape);
       this.work=work;this.index=index;this.activity=activity;this.activityRetained=null;this.workSelection=workSelection;this.workRangeKey=workRangeKey;this.cursor=cursor;this.liveEvidence=liveEvidence;this.bytes=bytes;
@@ -145,7 +154,7 @@ class BoardPeriod {
         this.work={...work,value,basis:work.basis?{...work.basis,range:selection}:null};this.index=new PeriodIndex(value);this.activity=new PeriodActivity(value,this.index.curves);
         this.workSelection=selection;this.workRangeKey=periodKey(selection);
         for(const [scope,entry] of tapes){const tape={...entry.tape,fixed:shifted(entry.tape.fixed!,selection)!};this.tapes.set(scope,{...entry,tape,accounting:new PeriodAccounting(tape,value),selection,rangeKey:periodKey(selection)});}
-        for(const [id,reading] of values)this.setValue(id,{...reading,value:periodValueAt(reading.value,selection.to)!,basis:reading.basis?{...reading.basis,range:selection}:null});
+        for(const [id,reading] of values)this.setValue(id,{...reading,value:periodValueAt(reading.value,Math.min(selection.to,hubNow()))!,basis:reading.basis?{...reading.basis,range:selection}:null});
       }
       this.measureBytes();
       this.transport.restoreEvidence(cursors);this.workNeeded=false;this.valuesNeeded=false;
@@ -158,6 +167,7 @@ class BoardPeriod {
   get=()=>this.workState;
   getFinancialProjectionRevision=(scope:PeriodScope)=>this.tapes.get(scope)?.accounting.financialAuthority??null;
   getProjectionRevision=(scope:PeriodScope)=>this.projectionRevision[scope];
+  projectionChangesAt=(scope:PeriodScope,now:number)=>this.selection.mode==='range'?this.tapes.get(scope)?.accounting.changesAt(now,0)??null:null;
   subscribeProjection=(scope:PeriodScope,listener:()=>void)=>{this.projectionListeners[scope].add(listener);return()=>{this.projectionListeners[scope].delete(listener);};};
   private publishProjection(scopes:readonly PeriodScope[]=PERIOD_SCOPES){for(const scope of scopes){this.projectionRevision[scope]++;for(const listener of this.projectionListeners[scope])listener();}}
   /** A discarded prefix cannot supply a new analytical range while replacement waits. */
@@ -174,7 +184,7 @@ class BoardPeriod {
   project(history:History,scope:PeriodScope,now=this.evaluatedAt) {
     const tape=this.tapes.get(scope);
     let result=history;
-    if(tape?.rangeKey===history.range){const range=this.tapeRange(tape,now),values=new Map<string,PeriodValues>();if(tape.selection.mode==='range')for(const [id,reading] of this.values)if(reading.value&&reading.basis?.range.to===range.to)values.set(id,reading.value);result=tape.accounting.project(history,range,values);}
+    if(tape?.rangeKey===history.range){const range=this.tapeRange(tape,now),values=new Map<string,PeriodValues>();if(tape.selection.mode==='range')for(const [id,reading] of this.values)if(reading.value&&reading.basis?.range.to===range.to)values.set(id,reading.value);result=tape.accounting.project(history,range,values,false,Math.min(range.to,now));}
     if(scope==='quota'&&this.activity&&this.workRangeKey===history.range&&this.work.basis){const range=this.workRange(now)!;result={...result,since:range.from,to:range.to,activity:this.activity.project(history.activity,range)};}
     if(scope==='quota'&&this.selectedPending())result={...result,series:result.series.map(series=>({...series,selectedWork:{from:result.to,ms:null,agentMs:0}})),activity:{...result.activity,known:null,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
     return result;
@@ -261,6 +271,14 @@ class BoardPeriod {
   getValue=(id:string)=>this.values.get(id)??noValue;
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
   subscribeWorkOrder=(read:(rows:WorkedSession[])=>SessionOrder|null)=>{this.workOrders.add(read);this.scheduleClock();return()=>{this.workOrders.delete(read);this.scheduleClock();};};
+  wakeCalendar=()=>{
+    this.tickCalendar(hubNow(),true);
+    this.scheduleClock();
+  };
+  private tickCalendar(now:number,checkZone=false){
+    const generation=this.calendar.generation;this.calendar.tick(now,checkZone);
+    if(generation!==this.calendar.generation&&this.calendar.needed){this.revision++;this.transport.change();}
+  }
   refreshWorkClock=()=>{if(this.evaluatedAt!==hubNow())this.tick();else{this.retireExpired(hubNow());this.scheduleClock();}};
   subscribeSource=(id:string,listener:()=>void)=>{let set=this.sourceListeners.get(id);if(!set)this.sourceListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   subscribeValue=(id:string,listener:()=>void)=>{let set=this.valueListeners.get(id);if(!set)this.valueListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
@@ -295,12 +313,14 @@ class BoardPeriod {
       ...(pending&&this.valuesNeeded&&this.selection.mode==='range'&&this.sourceIds.length?{values:this.sourceIds}:{}),
       ...(pending&&this.wantsWork&&this.workNeeded?{sessions:{...(this.cursor?{cursor:this.cursor}:{})}}:{}),
       ...(pending&&this.facetsDemand>0&&this.facetsNeeded?{facets:true as const}:{}),
+      ...(!this.workLimit&&this.calendar.demand()?{calendar:this.calendar.demand()}:{}),
       ...(filters&&this.selection.mode==='live'&&(queries.quota||queries.budget?.work==='1')?{sourceWork:{...(this.sourceCursor?{cursor:this.sourceCursor}:{})}}:{})};
-    return {board:board.id,generation:this.generation,resourceGeneration:this.resourceGeneration,facetGeneration:this.facetGeneration,revision:this.revision,proofEpoch:this.proofEpoch,request};
+    return {board:board.id,generation:this.generation,resourceGeneration:this.resourceGeneration,facetGeneration:this.facetGeneration,calendarGeneration:this.calendar.generation,revision:this.revision,proofEpoch:this.proofEpoch,request};
   }
-  private setValue(id:string,value:Reading<PeriodValues>){this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
+  private setValue(id:string,value:Reading<PeriodValues>){if(value.value&&value.basis&&value.basis.range.to>value.basis.evaluatedAt)value={...value,value:periodValueNow(value.value,Math.min(value.basis.range.to,hubNow()))};this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
   private publishWork() {this.workState={...this.work,rows:this.workRows,evidence:this.workEvidence,...(this.workLimit?{loading:false,error:'filters_limit'}:{})};for(const listener of this.listeners)listener();}
   private retireWork() {
+    this.calendar.clear(true);this.calendar.dirty();
     this.resetFacets();
     this.sourceEpoch++;
     this.sourceTape=null;this.sourceCurves=undefined;this.sourceCursor=undefined;
@@ -332,6 +352,7 @@ class BoardPeriod {
     this.measureBytes();this.publishProjection(['budget','funds']);
   }
   private clear() {
+    this.calendar.clear();
     this.sourceTape=null;this.sourceCurves=undefined;this.sourceCursor=undefined;this.resetFacets();
     this.workEvidence++;this.retirementAt=Infinity;
     this.proofEpoch++;this.workProofEpoch=-1;this.valuesProofEpoch=-1;this.dirtyScopes.clear();
@@ -367,6 +388,10 @@ class BoardPeriod {
     const changedFinancial=!!this.financialIdentity&&financialIdentity!==this.financialIdentity;
     this.financialIdentity=financialIdentity;
     if(changedFinancial)this.retireFinancialValues();
+    const calendarChanged=this.configureCalendar(widgetVisible(board.view,AGENT_HOURS_HEATMAP,board.lineup.length),JSON.stringify([board.id,board.workAuthority,nextFilter,this.workLimit]),hubNow(),this.workLimit,selection);
+    if(calendarChanged){this.resetFacets();this.revision++;if(this.identity)this.transport.change();}
+    const calendarEvent=event?.type==='hub'&&(event.event.type==='hello'||event.event.type==='snapshot'||event.event.type==='mine'||event.event.type==='lineup'||event.event.type==='history'&&(event.event.data.workSince!==undefined||event.event.data.changes?.some(c=>c.workSince!==undefined)));
+    if(calendarEvent&&this.calendar.dirty()){this.revision++;this.invalidateFacets();this.transport.change();}
     if(event?.type==='hub'&&['history','hello','snapshot','mine','lineup'].includes(event.event.type))this.retained.clear();
     const cacheKey=JSON.stringify([identity,scopeKeys,nextFilter,financialIdentity]);
     if(cacheKey!==this.cacheKey){this.retainCurrent();this.cacheKey=cacheKey;}
@@ -388,14 +413,14 @@ class BoardPeriod {
       this.workEvidence++;this.retirementAt=Infinity;
       this.dirtyScopes.clear();
       for(const scope of PERIOD_SCOPES)delete this.projectionErrors[scope];
-      if(oldBoard!==board.id)this.clear();
+      if(oldBoard!==board.id){this.clear();this.configureCalendar(widgetVisible(board.view,AGENT_HOURS_HEATMAP,board.lineup.length),JSON.stringify([board.id,board.workAuthority,nextFilter,this.workLimit]),hubNow(),this.workLimit,selection);}
       this.cacheKey=cacheKey;
       let cached=this.valueCache.get(periodKey(selection));
-      if(!cached&&selection.mode==='range')cached=[...this.valueCache.values()].find(c=>sources.every(id=>hasPeriodValue(c.values.get(id)?.value,selection.to)));
+      if(!cached&&selection.mode==='range')cached=[...this.valueCache.values()].find(c=>sources.every(id=>hasPeriodValue(c.values.get(id)?.value,Math.min(selection.to,hubNow()))));
       const valueStaging={role:'visible' as const};
       if(cached&&!historyPool.reserve(valueStaging,cached.bytes))cached=undefined;
       this.valuesNeeded=selection.mode==='range'&&!cached;
-      if(selection.mode==='range')for(const id of sources){const saved=cached?.values.get(id),value=periodValueAt(saved?.value,selection.to);this.setValue(id,saved?{...saved,...(value?{value}:{}),basis:saved.basis?{...saved.basis,range:{from:selection.from,to:selection.to}}:null}:{...this.getValue(id),loading:true,error:null});}
+      if(selection.mode==='range')for(const id of sources){const saved=cached?.values.get(id),value=periodValueAt(saved?.value,Math.min(selection.to,hubNow()));this.setValue(id,saved?{...saved,...(value?{value}:{}),basis:saved.basis?{...saved.basis,range:{from:selection.from,to:selection.to}}:null}:{...this.getValue(id),loading:true,error:null});}
       else {for(const id of this.values.keys())this.setValue(id,noValue);this.values.clear();}
       const range=evaluatedRange(selection,hubNow());
       if(this.tapes.size||this.work.value) {
@@ -476,6 +501,12 @@ class BoardPeriod {
     // Sibling resource replies share one retained projection. Let each commit before
     // taking the next snapshot, so a later chart cannot cancel values or sessions.
     if(this.retirementPreparing)preparations()?.cancel(this.preparationOwner);
+    if(reply.calendar&&intent.board===page.get().board?.id){
+      const staging={role:'visible' as const};
+      try{this.calendar.receive(reply.calendar,intent.calendarGeneration??-1,reserve??(bytes=>historyPool.reserve(staging,bytes)));}
+      finally{if(!reserve)historyPool.release(staging);}
+      this.scheduleClock();
+    }
     const next=this.receiving.then(()=>this.applyReply(reply,intent,reserve));
     this.receiving=next.catch(()=>{});return next;
   }
@@ -699,6 +730,12 @@ class BoardPeriod {
   private tick(fromClock=true) {
     if(!this.active)return;
     const now=hubNow();
+    this.tickCalendar(now);
+    if(now>=this.nativeDue&&this.selection.mode==='range'){
+      const at=Math.min(this.selection.to,now);
+      for(const [id,reading] of this.values)if(reading.value)this.setValue(id,{...reading,value:periodValueNow(reading.value,at)});
+      this.publishProjection();
+    }
     if(this.selection.mode==='live'){
       const range=evaluatedRange(this.selection,now),workGap=!!this.index&&range.from<this.index.trace.anchor;
       const gaps=PERIOD_SCOPES.filter(scope=>{const entry=this.tapes.get(scope);return entry?.selection.mode==='live'&&range.from<entry.tape.from;});
@@ -742,7 +779,8 @@ class BoardPeriod {
     const orders=demands.flatMap(order=>order.worked??[]);
     const due=this.workAdvances(now)?this.index?.changesAt(now,this.workSelection.mode==='live'?this.workSelection.periodMs:0,orders)??null:null;
     const activityDue=this.workAdvances(now)?this.activity?.orderChangesAt(now,this.workSelection.mode==='live'?this.workSelection.periodMs:0,demands.flatMap(order=>order.activity?[order.activity]:[])):null;
-    const next=Math.min(due??Infinity,activityDue??Infinity,this.retiring||pan.get()?Infinity:this.retirementAt);
+    this.nativeDue=this.selection.mode==='range'&&this.selection.to>now?Math.min(this.selection.to,...[...this.values.values()].flatMap(reading=>reading.value?[periodValueChangesAt(reading.value,now)??Infinity]:[]),...PERIOD_SCOPES.map(scope=>this.projectionChangesAt(scope,now)??Infinity)):Infinity;
+    const next=Math.min(this.nativeDue,this.calendar.nextAt(now),due??Infinity,activityDue??Infinity,this.retiring||pan.get()?Infinity:this.retirementAt);
     clock.due(this.watch,Number.isFinite(next)?next:null,now);
   }
   retryHistory(scope:PeriodScope){
@@ -751,7 +789,7 @@ class BoardPeriod {
     this.publishProjection([scope]);this.transport.retry();
   }
   retry=()=>{
-    let needed=false;
+    let needed=!!this.calendar.state.error&&this.calendar.dirty();
     if(this.work.error&&this.wantsWork){needed=this.workNeeded=true;this.work={...this.work,loading:true,error:null};this.publishWork();}
     if(this.selection.mode==='range'&&[...this.values.values()].some(value=>value.error)){
       needed=this.valuesNeeded=true;for(const id of this.sourceIds)this.setValue(id,{...this.getValue(id),loading:true,error:null});
@@ -767,8 +805,16 @@ const nativeBytes=(part:Pick<PeriodTape['money'][number],'readings'|'spans'>,sha
 const tapeBytes=(tape:PeriodTape,wire=false)=>JSON.stringify({...tape,quota:tape.quota.map(s=>({...s,samples:[]})),money:tape.money.map(s=>({...s,readings:[],spans:[],...(s.paired?{paired:{readings:[],spans:[]}}:{}),...(s.workCounter?{workCounter:{...s.workCounter,readings:[],spans:[]}}:{})}))}).length*2+tape.quota.reduce((n,s)=>n+(wire&&!('columns' in s.samples)?s.samples.length*8:sampleBytes(s.samples,s.samplesEncoding==='delta')),0)+tape.money.reduce((n,s)=>n+nativeBytes(s)+(s.paired?nativeBytes(s.paired):0)+(s.workCounter?nativeBytes(s.workCounter,s.readings):0),0);
 
 export const boardPeriod=new BoardPeriod();
-export function followPeriod(){const stop=page.listen((event,state)=>boardPeriod.changed(event,state));const choose=()=>boardPeriod.changed();const stops=[stop,onDataFilters(choose),onPrefs(choose),onTimeRange(choose),pan.onPhase(()=>boardPeriod.refreshWorkClock())];choose();return()=>stops.forEach(stop=>stop());}
+export function followPeriod(){
+  const stop=page.listen((event,state)=>boardPeriod.changed(event,state)),choose=()=>boardPeriod.changed(),wake=()=>boardPeriod.wakeCalendar();
+  const stops=[stop,onDataFilters(choose),onPrefs(choose),onTimeRange(choose),pan.onPhase(()=>boardPeriod.refreshWorkClock())];
+  if(typeof window!=='undefined')for(const name of ['focus','pageshow','visibilitychange']){
+    const target=name==='visibilitychange'?document:window;target.addEventListener(name,wake);stops.push(()=>target.removeEventListener(name,wake));
+  }
+  choose();return()=>stops.forEach(stop=>stop());
+}
 export function usePeriodValues(id:string){return useSyncExternalStore(listener=>boardPeriod.subscribeValue(id,listener),()=>boardPeriod.getValue(id));}
+
 const roster=(rows:readonly WorkedSession[])=>rows.map(({workedMs:_,...row})=>row);
 const panelRoster=roster;
 export function usePeriodSessions(order:(rows:WorkedSession[])=>SessionOrder|null=()=>null){

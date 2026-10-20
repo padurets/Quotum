@@ -15,13 +15,13 @@ import type {History} from './domain/history.js';
 export function fixedTape(tape:PeriodTape,work:WorkTrace|null,range:PeriodRange,cell:number,reserve:(bytes:number)=>void,release:(bytes:number)=>void=()=>{}):PeriodTape {
   return drain(prepareFixedTape(tape,work,range,cell,reserve,release));
 }
-export function* prepareFixedTape(tape:PeriodTape,work:WorkTrace|null,range:PeriodRange,cell:number,reserve:(bytes:number)=>void,release:(bytes:number)=>void=()=>{},sourceWide?:SourceWorkCurves):Preparation<PeriodTape> {
+export function* prepareFixedTape(tape:PeriodTape,work:WorkTrace|null,range:PeriodRange,cell:number,reserve:(bytes:number)=>void,release:(bytes:number)=>void=()=>{},sourceWide?:SourceWorkCurves,evaluatedAt=Infinity):Preparation<PeriodTape> {
   for(const series of tape.quota)if(series.samplesEncoding==='delta'){reserve(sampleCount(series.samples)*40);series.samples=decodeSamples(series.samples);delete series.samplesEncoding;}
   if(work)reserve(workPreparationBytes(work));
   const curves=work?yield*PeriodCurves.prepare(work):undefined;
   let scratch=0;
   const accounting=yield*PeriodAccounting.prepare(tape,work,curves,undefined,undefined,bytes=>{if(bytes>scratch)reserve(bytes-scratch);else release(scratch-bytes);scratch=bytes;},sourceWide);
-  const base=accounting.fixed(range,cell);
+  const base=accounting.fixed(range,cell,evaluatedAt);
   reserve(JSON.stringify(base).length*6);
   function* anchors(){
     for(const series of tape.quota){
@@ -37,7 +37,7 @@ export function* prepareFixedTape(tape:PeriodTape,work:WorkTrace|null,range:Peri
     if(work)yield*workAnchors(work);
     if(sourceWide)for(const timeline of sourceWide.groups.source.values()){let at=timeline.next(-Infinity);while(Number.isFinite(at)){yield at;at=timeline.next(at);}}
   }
-  const fixed=yield*reusable(base,offset=>accounting.fixed({from:range.from+offset,to:range.to+offset},cell),cell,tape.from,tape.cut,[cell],anchors(),reserve,release);
+  const fixed=yield*reusable(base,offset=>accounting.fixed({from:range.from+offset,to:range.to+offset},cell,evaluatedAt),cell,tape.from,tape.cut,[cell],anchors(),reserve,release);
   return {...tape,quota:[],money:[],fixed};
 }
 
@@ -52,9 +52,10 @@ export function* prepareFixedWork(trace:WorkTrace,range:PeriodRange,cell:number,
   const barMs=barOf(cell,range.to-range.from);
   const ids=new Map(trace.refs.map((ref,i)=>[ref.ref,i]));
   const project=(range:PeriodRange):NonNullable<WorkTrace['fixed']>=>{
-    const rows=index.advance(range,now).rows;projection.update(rows);
+    const admittedRange={from:Math.max(range.from,trace.anchor),to:range.to};
+    const rows=index.advance(admittedRange,now).rows;projection.update(rows);
     const blank:History['activity']={since:range.from,known:null,barMs,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}};
-    const activity=projection.project(blank,range);
+    const activity=projection.project(blank,admittedRange);
     for(const at of new Set([Math.floor(range.from/barMs)*barMs,Math.floor((range.to-1)/barMs)*barMs])){
       const part={from:Math.max(range.from,at),to:Math.min(range.to,at+barMs)};
       const agents=new Set(trace.refs.filter((_,i)=>index.curves.contexts[i].read(part)>0).map(ref=>ref.identityRef??ref.ref)).size;

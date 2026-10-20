@@ -1546,6 +1546,29 @@ caches and selections. The two monetary readers share the budget history protoco
 selected source IDs isolate their invalidations.
 Budget reads never query native quota or agent-work history, and money never enters
 quota forecasts. Legacy unscoped history replies retain their combined contract.
+The optional Activity heatmap shares the common selection and work filters.
+The server partitions its exact selected interval into minute or quarter-hour cells
+inside the same period transport. Compact signed demands replace changed intervals
+and share one sparse extraction with other work consumers; they read neither
+financial history nor a full session ledger just for the heatmap. Browser geometry
+aggregates those fine cells into a chronological strip, day/hour matrix or compact
+calendar as the duration and width require, without new reads or inner scrolling.
+Its cells fill a manually chosen height while labels and gaps keep their size.
+Its legend inherits the same typography as the other charts and keeps the
+agent-hours unit beside its scale.
+Anonymous aggregate hour patterns share the history budget and preserve exact
+within-cell changes, so cached return and nearby endpoints reuse accepted work
+without rereading it or dividing already aggregated amounts. Work or authority
+changes invalidate these patterns; eviction falls back to the common transport.
+Named local dates, repeated hours and partial bounds preserve actual elapsed time.
+Shared filter choices cover the common selected work range; closed controls request
+nothing. Shared-clock expiry retires stale contributions in individual buckets
+without rebuilding geometry or polling. Null history, registered zero and
+observation completeness remain distinct.
+An explicit interval/day action changes the common selection; only elapsed retained
+evidence is counted. Fixed thresholds scale with the displayed interval, use the
+first Nord Warm colour and remain independent of the filtered sample.
+
 The page makes cells from `since` stale and reads only those its frame needs,
 without a rate limit or a timer. Reconnect, a new lineup, or a change of whose work the
 board shows or its names (`Store.workKey`) makes all tiles stale. The last frame stays
@@ -1884,6 +1907,10 @@ and its complete rate path is unchanged. Explicit bindings and real rate changes
 remain, so accumulated history and a fresh read retain the same conversion provenance.
 Fixed selections carry exact totals and boundary geometry instead of a rolling
 ledger; the server and browser share the accounting implementation in `server/domain`.
+Their native endpoint values retain their own exclusive validity deadlines. A future
+endpoint uses the elapsed evaluation clock, while a past endpoint keeps its historical
+state. The shared clock expires chart and table values even if the separate card-values
+section fails; plotting bounds and cached shifts do not extend that validity.
 The interior drawing still uses cached history cells. Neighboring card states keep exact sparse changes instead of repeated measurement objects.
 When exact boundary observations and interior quota cells share a drawing, cell
 support is normalized before clipping: consecutive cells of one segment support the

@@ -455,6 +455,24 @@ test('the actual clock hook keeps a preparation intent stable through completion
   now += 250; assert.equal(render(), now + 5_000, 'ordinary clock consumers retain their render-time behavior');
 });
 
+test('a clock consumer can gain and lose a deadline without remounting or retaining an inactive subscription',()=>{
+  let now=T0,index=0,wakes=0,active=0;const slots:unknown[]=[],watches:unknown[]=[];
+  const clock=new PageClock({now:()=>now,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}}),subscribe=clock.subscribe.bind(clock);
+  clock.subscribe=(watch,listener)=>{active++;watches.push(watch);const stop=subscribe(watch,listener);return()=>{active--;stop();};};
+  let current:unknown,stop:(()=>void)|undefined;
+  const context={clock,hubNow:clock.hubNow,exports:{} as {useClock:(changes:(at:number)=>number|null,context:unknown[],enabled:boolean)=>number},
+    useState:(initial:()=>unknown)=>{const at=index++;if(!(at in slots))slots[at]=initial();return [slots[at]];},
+    useRef:(initial:unknown)=>slots[index++]??(slots[index-1]={current:initial}),
+    useSyncExternalStore:(subscribe:(listen:()=>void)=>()=>void,get:()=>number)=>{if(current!==subscribe){stop?.();current=subscribe;stop=subscribe(()=>wakes++);}return get();},
+    useLayoutEffect:(effect:()=>void)=>effect()};
+  const source=readFileSync(new URL('../lib/clock.ts',import.meta.url),'utf8');
+  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export function useClock(')),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  const render=(enabled:boolean)=>{index=0;return context.exports.useClock(()=>now+MIN,[enabled],enabled);};
+  render(false);assert.equal(active,0);render(true);assert.equal(active,1);
+  now+=MIN;clock.wakeDue();assert.equal(wakes,1);render(false);assert.equal(active,0);
+  now+=MIN;clock.wakeDue();assert.equal(wakes,1);render(true);assert.equal(active,1);assert.equal(watches[0],watches[1]);stop?.();assert.equal(active,0);
+});
+
 test('the shared timed table cell retains its deadline and value through layout renders, then refreshes on evidence and clock wakes',()=>{
   let now=T0,index=0,subscribed=false,deadlines=0,values=0,value=1;
   const slots:unknown[]=[];

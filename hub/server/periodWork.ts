@@ -1,7 +1,9 @@
+import {config} from './config.js';
+import {normalizeRanges} from './domain/workCalendar.js';
 import {resolveLink} from './domain/links.js';
 import {fundingOf} from './domain/workAccess.js';
 import type {Hub} from './api.js';
-import type {HistoryTiles} from './history.js';
+import {HistoryLimit,type HistoryTiles} from './history.js';
 import type {Shown, WorkRead} from './store/store.js';
 import type {Stretch} from './domain/work.js';
 import type {PeriodRange} from './domain/period.js';
@@ -26,19 +28,21 @@ export function selectedWork(sourceWide:WorkRead,filter:WorkFilter):WorkRead {
 }
 
 /** A composite read extracts work once for charts and the temporal index. */
-export function sharedWork(hub:Pick<Hub,'store'>,_shown:Shown,range:PeriodRange|null|(()=>PeriodRange|null),reserve:(bytes:number)=>void,release:(bytes:number)=>void,_owner:string|null=null,now=Date.now(),board:string):WorkRead {
-  let kept:{from:number;to:number;rows:Stretch[]}|null=null,bytes=0;
+export function sharedWork(hub:Pick<Hub,'store'>,_shown:Shown,range:PeriodRange|null|(()=>PeriodRange|PeriodRange[]|null),reserve:(bytes:number)=>void,release:(bytes:number)=>void,_owner:string|null=null,now=Date.now(),board:string,onLimit?:(from:number,to:number)=>boolean):WorkRead {
+  let kept:{ranges:PeriodRange[];rows:Stretch[]}|null=null,bytes=0;
   let access:import('./domain/workAccess.js').WorkAccess|undefined,authority:string|undefined,accessError:unknown,snapshotBytes=0;
   try{access=hub.store.workAccess(board,now,size=>{reserve(size);snapshotBytes+=size;});authority=hub.store.workKey(board,undefined,access,reserve,release);}
   catch(error){access=undefined;release(snapshotBytes);accessError=error;}
   const ensureAccess=()=>{if(accessError)throw accessError;return access!;};
   const read:WorkRead=(from,to)=>{
-    if(!kept||from<kept.from||to>kept.to){
+    from=Math.max(from,now-config.retention.sampleDays*86_400_000);to=Math.min(to,now);if(to<=from)return [];
+    if(!kept||!kept.ranges.some(r=>from>=r.from&&to<=r.to)){
       const requested=typeof range==='function'?range():range;
-      const start=Math.min(from,requested?.from??from,kept?.from??from),end=Math.max(to,requested?.to??to,kept?.to??to);
+      const ranges=normalizeRanges([{from,to},...(Array.isArray(requested)?requested:requested?[requested]:[]),...(kept?.ranges??[])].map(r=>({from:Math.max(r.from,now-config.retention.sampleDays*86_400_000),to:Math.min(r.to,now)})));
+      const start=ranges[0]?.from??from,end=ranges.at(-1)?.to??to;
       kept=null;release(bytes);bytes=0;
-      try{kept={from:start,to:end,rows:hub.store.admittedWork(ensureAccess(),start,end,size=>{reserve(size);bytes+=size;})};}
-      catch(error){release(bytes);bytes=0;throw error;}
+      try{kept={ranges,rows:hub.store.admittedWork(ensureAccess(),start,end,size=>{reserve(size);bytes+=size;},ranges)};}
+      catch(error){release(bytes);bytes=0;if(error instanceof HistoryLimit&&onLimit?.(from,to))return read(from,to);throw error;}
     }
     return kept.rows.flatMap(s=>s.to>from&&s.from<to?[s.from>=from&&s.to<=to?s:{...s,from:Math.max(from,s.from),to:Math.min(to,s.to)}]:[]);
   };
@@ -51,7 +55,7 @@ export function periodWork(hub:Hub,history:HistoryTiles,board:string,shown:Shown
 export function* preparePeriodWork(hub:Hub,history:HistoryTiles,board:string,shown:Shown,range:PeriodRange,work:WorkRead,now:number,reserve:(bytes:number)=>void,release?:(bytes:number)=>void,presence:Sessions['presence']=hub.ingest.live.presence.bind(hub.ingest.live)):Preparation<WorkTrace> {
   const access=work.ensureAccess?.()??work.access??hub.store.workAccess(board,now,reserve),known=hub.store.historyKnown(shown,access.owner,access),anchor=range.from;
   const from=workKnownFrom(known);
-  const trace:WorkTrace={anchor,cut:range.to,knownFrom:from??range.to,...(from===null?{available:false}:{}),refs:[],spans:[]};
+  const trace:WorkTrace={anchor,cut:range.to,knownFrom:from===null?range.to:Math.max(from,now-config.retention.sampleDays*86_400_000),...(from===null?{available:false}:{}),refs:[],spans:[]};
   const indices=new Map<string,number>();
   for(const row of work(range.from,range.to)) {
     const fragment=JSON.stringify([row.session,row.source,row.sourceStatus]);

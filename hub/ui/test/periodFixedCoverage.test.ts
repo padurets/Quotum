@@ -1,3 +1,6 @@
+import * as periodValueClockBindings from '../../server/domain/periodValues';
+import {WorkCalendar} from '../lib/workCalendar';
+import {AGENT_HOURS_HEATMAP} from '../../server/domain/widgets';
 import * as filterModelBindings from '../../server/domain/dataFilters';
 import * as filterRuntimeBindings from '../lib/filterSelection';
 import * as filterCurveBindings from '../../server/domain/periodCurves';
@@ -21,7 +24,7 @@ import {newSecret} from '../../server/domain/auth';
 import {deepSeekMeasurement} from '../../server/connectors/deepseek';
 import {expandPeriod,type PeriodWireReply} from '../../server/domain/periodWire';
 import {evaluatedRange,periodKey,type PeriodRange} from '../../server/domain/period';
-import {cellOf,type History} from '../../server/domain/history';
+import {cellOf,compose,type History} from '../../server/domain/history';
 import {PERIOD_SCOPES,type PeriodScope,type PeriodRequest,type PeriodReply} from '../../server/domain/periodRead';
 import {packWorkPrepared,workPreparationBytes,mergeWorkPrepared,type WorkTrace} from '../../server/domain/periodWork';
 import {retainSamplesPrepared,sampleBytes,mergeTapePrepared} from '../../server/domain/periodTape';
@@ -39,11 +42,13 @@ import {moneyReadSelection,DEFAULT_MONEY} from '../lib/moneySelection';
 import {subscriptionSelection} from '../lib/subscription';
 import {sameJson} from '../lib/store';
 import {draggedRange} from '../lib/timeRange';
+import {valueIn} from '../lib/lines';
+import {observationRunsPrepared} from '../lib/plotPath';
 
 const M=60_000,H=60*M,NOW=1_800_000_025_000;
 const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
 const coordinatorCode=ts.transpileModule(source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
-type Coordinator={activate(active:boolean):void;changed():void;refreshWorkClock():void;projectionState(history:Pick<History,'range'>,scope:PeriodScope):{ready:boolean};get():{value:WorkTrace|null;loading:boolean;error:string|null}};
+type Coordinator={activate(active:boolean):void;changed():void;refreshWorkClock():void;project(history:History,scope:PeriodScope,now:number):History;projectionState(history:Pick<History,'range'>,scope:PeriodScope):{ready:boolean};get():{value:WorkTrace|null;loading:boolean;error:string|null}};
 
 /** The production coordinator consumes authenticated HTTP replies from real stored observations. */
 async function harness(t:TestContext,initial:PeriodRange|null,emptyWidgets?:string[]) {
@@ -66,11 +71,11 @@ async function harness(t:TestContext,initial:PeriodRange|null,emptyWidgets?:stri
   const pool=new HistoryPool(),attempts:PeriodRequest[]=[],replies:PeriodReply[]=[];
   const settings={range:'1h',kind:'weekly',money:{...DEFAULT_MONEY},funds:{...DEFAULT_MONEY}};
   const read=(body:PeriodRequest)=>app.inject({method:'POST',url:`/api/boards/${boardId}/period`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`},payload:body});
-  const context={exports:{} as {BoardPeriod:new()=>Coordinator},hubNow:()=>now,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {BoardPeriod:new()=>Coordinator},hubNow:()=>now,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,
     fetchPeriod:async(_board:string,body:PeriodRequest)=>{attempts.push(body);await held;const response=await read(body);assert.equal(response.statusCode,200,response.body);const reply=expandPeriod(response.json<PeriodWireReply>());replies.push(reply);if(emptyWidgets)now++;return reply;},
     page:{get:()=>({board})},pan:{get:()=>null},preparations:()=>null,prepareAsync:async(_owner:object,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,
     empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>selected,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
-  runInNewContext(coordinatorCode,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));const period=new context.exports.BoardPeriod();
+  runInNewContext(coordinatorCode,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));const period=new context.exports.BoardPeriod();
   t.after(async()=>{period.activate(false);await app.close();store.close();});
   const settle=async()=>{for(let i=0;i<300;i++){await new Promise(setImmediate);if(i>20&&!pool.activeFlights)return;}assert.fail('period request did not settle');};
   const ready=(expected:boolean)=>{const range=selected?periodKey({mode:'range',...selected}):settings.range;for(const scope of PERIOD_SCOPES)assert.equal(period.projectionState({range},scope).ready,expected,scope);};
@@ -118,6 +123,21 @@ test('a rounded drag endpoint beyond now completes quota, budget and funds witho
   assert.equal(h.period.get().loading,false);assert.equal(h.period.get().value!.fixed!.activity.known!.to,NOW);
   const requests=h.attempts.length;h.period.changed();await h.settle();h.ready(true);
   assert.equal(h.attempts.length,requests,'completed fixed evidence is not reread');
+});
+
+test('authenticated historical cells retain interior geometry and hover after coordinator adoption',async t=>{
+  const range={from:NOW-H,to:NOW},h=await harness(t,range),cell=cellOf(H);
+  const response=await h.read({version:1,selection:{mode:'range',...range},evaluatedAt:NOW,quota:{cell:String(cell),from:String(Math.floor(range.from/cell)*cell),to:String(Math.ceil(range.to/cell)*cell)}});
+  assert.equal(response.statusCode,200,response.body);
+  const reply=expandPeriod(response.json<PeriodWireReply>());assert.equal(reply.quota?.state,'complete');
+  if(reply.quota?.state!=='complete'||!('known' in reply.quota.value))throw Error('quota cells');
+  const value=reply.quota.value,target={cell,k0:Math.floor(range.from/cell),k1:Math.ceil(range.to/cell)-1,length:H,live:false,key:periodKey({mode:'range',...range}),now:NOW};
+  const frame=compose(value.chunks,value,target,new Set(h.part('quota').value.tape!.fixed!.quota.map(row=>row.sourceId+' '+row.windowId)));
+  assert.ok(frame.series[0].points.some(p=>p.length===3),'the HTTP producer supplies ordinary native cells');
+  const line=h.period.project(frame,'quota',NOW).series[0],at=NOW-4*M;
+  assert.equal(valueIn(line.points,at,NOW,2*H,undefined,line.pointMode),83);
+  const drawing=drain(observationRunsPrepared(line.points,range.from,range.to,NOW));
+  assert.ok(drawing.runs.some(run=>run[0][0]<=at&&run.at(-1)![0]>=at));
 });
 
 test('complete rounded fixed summaries survive cached return and only reuse proven shifts',async t=>{

@@ -1,3 +1,6 @@
+import {parseCalendar,calendarPartition,calendarCells,normalizeRanges,type CalendarBasis} from './domain/workCalendar.js';
+import {calendarProof} from './domain/calendarWork.js';
+import {workKnownFrom} from './domain/history.js';
 import {createHash,createHmac,randomBytes,timingSafeEqual} from 'node:crypto';
 import type {FastifyInstance} from 'fastify';
 import type {Guards,Hub} from './api.js';
@@ -5,7 +8,7 @@ import type {Events} from './events.js';
 import {compactJSON, HistoryLimit, type HistoryTiles} from './history.js';
 import {periodDictionary} from './domain/periodWire.js';
 import {fail,readHistory,ReadError} from './historyRead.js';
-import {evaluatedRange,parsePeriod,type PeriodBasis,type PeriodSection} from './domain/period.js';
+import {periodKey,evaluatedRange,parsePeriod,type PeriodBasis,type PeriodSection} from './domain/period.js';
 import {PERIOD_BODY_BYTES,PERIOD_SCOPES,type PeriodReply,type PeriodRequest} from './domain/periodRead.js';
 import type {HistoryScope,HistoryReply} from './domain/history.js';
 import {periodValues,prepareNearbyPeriodValues} from './periodValues.js';
@@ -25,7 +28,7 @@ import {retainedWorkChoices} from './dataFilters.js';
 
 class PeriodChanged extends Error {}
 
-type Cursor = {identity:string;revision:number;from:number;cut:number};
+type Cursor = {identity:string;revision:number;from:number;cut:number;kind?:'calendar';retainedFrom?:number};
 type Change = {revision:number;source:string;since:number;owner?:string;device?:string};
 const object=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const number=(v:unknown):v is number=>Number.isSafeInteger(v)&&(v as number)>=0;
@@ -141,7 +144,7 @@ export class PeriodReader {
   }
   private *prepareRead(board:string,user:string,raw:unknown,guard?:(check:()=>void)=>void):Preparation<string> {
     const self=this;
-    if(!object(raw)||raw.version!==1||!number(raw.evaluatedAt)||Object.keys(raw).some(k=>!['version','selection','evaluatedAt','quota','budget','funds','values','sessions','workFilter','facets','sourceWork'].includes(k)))fail(400,'invalid_request');
+    if(!object(raw)||raw.version!==1||!number(raw.evaluatedAt)||Object.keys(raw).some(k=>!['version','selection','evaluatedAt','quota','budget','funds','values','sessions','workFilter','facets','sourceWork','calendar'].includes(k)))fail(400,'invalid_request');
     const selection=parsePeriod(raw.selection);if(!selection)fail(400,'invalid_request');
     for(const name of PERIOD_SCOPES)if(raw[name]!==undefined&&(!object(raw[name])||Object.values(raw[name]).some(v=>typeof v!=='string')||Object.keys(raw[name]).some(k=>!['cell','from','to','meters','unit','currency','meta','evidence','cells','work','sources'].includes(k))))fail(400,'invalid_request');
     for(const name of PERIOD_SCOPES)if(object(raw[name])&&raw[name].cells!==undefined&&raw[name].cells!=='skip')fail(400,'invalid_request');
@@ -150,19 +153,29 @@ export class PeriodReader {
     if(raw.sessions!==undefined&&(!object(raw.sessions)||Object.keys(raw.sessions).some(k=>k!=='cursor')||raw.sessions.cursor!==undefined&&(typeof raw.sessions.cursor!=='string'||raw.sessions.cursor.length>2048)))fail(400,'invalid_request');
     if(raw.sourceWork!==undefined&&(!object(raw.sourceWork)||Object.keys(raw.sourceWork).some(k=>k!=='cursor')||raw.sourceWork.cursor!==undefined&&(typeof raw.sourceWork.cursor!=='string'||raw.sourceWork.cursor.length>2048)||!raw.quota&&(!object(raw.budget)||raw.budget.work!=='1')))fail(400,'invalid_request');
     const filter=raw.workFilter===undefined?undefined:parseWorkFilter(raw.workFilter);if(filter===null||raw.facets!==undefined&&raw.facets!==true)fail(400,'invalid_request');
+    const calendarDemand=raw.calendar===undefined?undefined:parseCalendar(raw.calendar);if(calendarDemand===null)fail(400,'invalid_request');
     const request={...raw,...(filter?{workFilter:filter}:{})} as PeriodRequest,{store,directory}=self.hub,now=Date.now();
-    if(request.quota||request.sessions||request.budget?.work==='1')self.hub.ingest.live.sweep(now);
+    if(request.calendar||request.quota||request.sessions||request.budget?.work==='1')self.hub.ingest.live.sweep(now);
     const revision=self.revision;
     const evaluatedAt=Math.min(request.evaluatedAt,now),range=evaluatedRange(selection,evaluatedAt);
-    if(range.from<now-config.retention.sampleDays*86_400_000||range.from>=now)fail(400,'history_range_invalid');
-    const cut=Math.min(range.to,now),shown=store.authorizedSources(board),owner=store.privateOwner(board);
+    if(range.to<=now-config.retention.sampleDays*86_400_000||range.from>=now)fail(400,'history_range_invalid');
+    const calendar=calendarDemand?{...calendarDemand,edges:calendarPartition(range)}:undefined;
+    const retainedFrom=Math.max(0,now-config.retention.sampleDays*86_400_000);
+    const cut=Math.min(range.to,evaluatedAt),shown=store.authorizedSources(board),owner=store.privateOwner(board);
     const reservation=self.history.reservation();
     try{
-    let workRange:import('./domain/period.js').PeriodRange|null=null;
-    const work:import('./store/store.js').WorkRead=request.sessions||request.facets||request.quota||request.budget?.work==='1'?sharedWork(self.hub,shown,()=>workRange,bytes=>reservation.add(bytes),bytes=>reservation.remove(bytes),owner,now,board):()=>[],access=work.access;
+    let workRange:import('./domain/period.js').PeriodRange[]=[],ordinaryWork:typeof workRange=[],calendarLimited=false;
+    const workLimit=(from:number,to:number)=>{
+      if(!calendar||calendarLimited)return false;
+      calendarLimited=true;response.calendar={state:'error',error:'history_limit'};
+      if(request.facets)response.facets={state:'error',error:'history_limit'};
+      workRange=ordinaryWork;
+      return ordinaryWork.some(range=>range.from<=from&&range.to>=to);
+    };
+    const work:import('./store/store.js').WorkRead=request.calendar||request.sessions||request.facets||request.quota||request.budget?.work==='1'?sharedWork(self.hub,shown,()=>workRange,bytes=>reservation.add(bytes),bytes=>reservation.remove(bytes),owner,now,board,workLimit):()=>[],access=work.access;
     if(request.values?.some(id=>!shown.has(id)))fail(404,'not_found');
     const views={sourceWide:work,selected:filter?selectedWork(work,filter):work};
-    const workRequested=!!(request.sessions||request.facets||request.quota||request.budget?.work==='1');
+    const workRequested=!!(request.calendar||request.sessions||request.facets||request.quota||request.budget?.work==='1');
     const identity=workRequested&&access?self.identity(board,user,access,reservation,work.authority,filter):'';
     const sourceIdentity=workRequested&&access?self.identity(board,user,access,reservation,work.authority):'';
     const resourceKey=()=>JSON.stringify([[...store.authorizedSources(board)].map(([id,s])=>[id,s.since]),request.budget||request.funds||request.values?store.sources(board).map(s=>[s.id,s.budget]):null]);
@@ -182,7 +195,7 @@ export class PeriodReader {
     let replyBytes=0;
     const reserve=(bytes:number)=>{reservation.add(bytes);replyBytes+=bytes;};
     const release=(bytes:number)=>{reservation.remove(bytes);replyBytes-=bytes;};
-    const cell=cellOf(range.to-range.from),fixedRange={from:Math.max(0,Math.floor(range.from/cell)*cell-cell),to:Math.min(Math.ceil(range.to/cell)*cell+cell,now)};
+    const cell=cellOf(range.to-range.from),fixedRange={from:Math.max(retainedFrom,Math.floor(range.from/cell)*cell-cell),to:Math.min(Math.ceil(range.to/cell)*cell+cell,evaluatedAt)};
     const sourcePlan=request.sourceWork&&selection.mode==='live'?(()=>{
       try{
       // Resource families keep one source cursor, independently of selected sessions.
@@ -200,20 +213,36 @@ export class PeriodReader {
         response.sourceWork={state:'error',error:'history_limit'};return null;
       }
     })():null;
+    const calendarPlan=calendar?(()=>{
+      const calendarKey=createHash('sha256').update(JSON.stringify([periodKey(selection),calendar.zone,calendar.edges[0],calendar.edges.at(-1),calendar.edges[1]-calendar.edges[0]])).digest('base64url');
+      const filterKey=createHash('sha256').update(JSON.stringify(filter??null)).digest('base64url');
+      const key=createHash('sha256').update(JSON.stringify(['calendar',identity,calendarKey,self.events.epoch])).digest('base64url');
+      const before=self.decode(calendar.cursor);
+      const delta=before?.kind==='calendar'&&before.identity===key&&before.revision>=self.workFloor&&before.revision<=revision&&before.cut<=evaluatedAt&&before.retainedFrom!==undefined&&before.retainedFrom<=retainedFrom;
+      const indices:number[]=[];
+      const dirty=delta?self.workChanges.filter(c=>c.revision>before.revision&&c.revision<=revision&&(c.owner?c.device?access?.devices.get(c.device)?.owner===c.owner:[...(access?.devices.values()??[])].some(d=>d.owner===c.owner):access?.sources.has(c.source))):[];
+      for(let i=0;i<calendar.edges.length-1;i++)if(!delta||calendar.edges[i]<range.from&&calendar.edges[i+1]>before.from||calendar.edges[i]<cut&&calendar.edges[i+1]>before.cut||calendar.edges[i]<retainedFrom&&calendar.edges[i+1]>before.retainedFrom!||calendar.edges[i]<cut&&calendar.edges[i+1]>range.from&&dirty.some(c=>c.since<calendar.edges[i+1]))indices.push(i);
+      const cursor=self.encode({kind:'calendar',identity:key,revision,from:range.from,cut,retainedFrom});
+      const basis:CalendarBasis={run:self.events.epoch,revision:String(revision),evaluatedAt,evidenceCut:cut,range,calendarKey,workAuthority:sourceIdentity,filterKey};
+      return {delta,indices,cursor,basis};
+    })():null;
     // Plan every consumer before the first extraction, including independently advanced cursors.
     const workRanges:import('./domain/period.js').PeriodRange[]=[];
     const includeWork=(from:number,to:number)=>{
-      if(Number.isFinite(from)&&Number.isFinite(to)&&from<to)workRanges.push({from,to});
+      from=Math.max(from,retainedFrom);to=Math.min(to,evaluatedAt);if(Number.isFinite(from)&&Number.isFinite(to)&&from<to)workRanges.push({from,to});
     };
     if(selection.mode==='range'&&(request.sessions||request.quota&&request.quota.evidence!=='skip'||request.budget?.work==='1'))includeWork(fixedRange.from,fixedRange.to);
     if(selection.mode==='live'&&request.sessions)includeWork(replaceFrom,workFrontier.to);
-    if(request.facets)includeWork(range.from,cut);
+    const facetRanges=normalizeRanges([{from:Math.max(range.from,retainedFrom),to:cut}]);
     if(sourcePlan)includeWork(sourcePlan.patch.from,sourcePlan.patch.to);
     if(request.quota&&request.quota.cells!=='skip'){
       const query=request.quota,cell=Number(query.cell);
       includeWork(Number(query.from),Math.min(Math.ceil(Number(query.to)/cell)*cell,cellStart(now+CLOCK_TOLERANCE_MS,cell)+cell,now));
     }
-    workRange=workRanges.reduce<import('./domain/period.js').PeriodRange|null>((kept,part)=>({from:Math.min(part.from,kept?.from??part.from),to:Math.max(part.to,kept?.to??part.to)}),null);
+    ordinaryWork=normalizeRanges(workRanges);
+    if(request.facets)for(const part of facetRanges)includeWork(part.from,part.to);
+    if(calendarPlan)for(const i of calendarPlan.indices)includeWork(Math.max(range.from,calendar!.edges[i]),Math.min(cut,calendar!.edges[i+1]));
+    workRange=normalizeRanges(workRanges);
     if(guard){
       const sources=new Map<string,Set<HistoryScope>>();
       const include=(id:string,scope:HistoryScope)=>{let scopes=sources.get(id);if(!scopes)sources.set(id,scopes=new Set());scopes.add(scope);};
@@ -228,7 +257,7 @@ export class PeriodReader {
         }
       }
       for(const id of request.values??[]){include(id,'quota');include(id,'budget');}
-      const workUpper=workRange?.to??0;
+      const workUpper=workRange.at(-1)?.to??0;
       const currency=()=>JSON.stringify([store.currencies.registryRevision(user),store.currencies.pathRevision(user),store.db.prepare("SELECT value FROM meta WHERE key='currencyRatesRevision::public'").get()?.value??0]);
       const currencyKey=currency();
       if(!directory.boards(user).some(part=>part.id===board))fail(404,'board_not_found');
@@ -319,7 +348,7 @@ export class PeriodReader {
         if(selection.mode==='range'){
           const trace=scope==='quota'||query.work==='1'?yield*retainedWork():null;
           const full=filter&&(scope==='quota'||query.work==='1')?yield*fullSourceCurves(fixedRange):undefined;
-          const tape=yield*temporary(()=>prepareFixedTape(periodTape(store,board,tapeShown,user,historyScope,query,fixedRange,cursor,fixedRange.from,reserve,fixedRange.to,release,true,now,work),trace,range,Number(query.cell),reserve,release,full));
+          const tape=yield*temporary(()=>prepareFixedTape(periodTape(store,board,tapeShown,user,historyScope,query,fixedRange,cursor,fixedRange.from,reserve,fixedRange.to,release,true,now,work),trace,range,Number(query.cell),reserve,release,full,evaluatedAt));
           reserve(Buffer.byteLength(JSON.stringify(tape))*3);return {...value,tape};
         }
         const tape=periodTape(store,board,tapeShown,user,historyScope,query,{from:patch.coveredFrom,to:patch.to},cursor,patch.from,reserve,cut,bytes=>{reservation.remove(bytes);replyBytes-=bytes;},false,now,work);
@@ -327,7 +356,7 @@ export class PeriodReader {
       })());
       if(request.values)response.values=yield*section((function*(){
         const sources=store.sources(board).filter(s=>request.values!.includes(s.id));
-        return selection.mode==='range'?yield*prepareNearbyPeriodValues(store,sources,user,range.to,cell,reserve,release,now):periodValues(store,sources,user,cut,reserve,now);
+        return selection.mode==='range'?yield*prepareNearbyPeriodValues(store,sources,user,Math.min(range.to,evaluatedAt),cell,reserve,release,evaluatedAt):periodValues(store,sources,user,cut,reserve,now);
       })());
       if(request.sessions) {
         const covered=selection.mode==='range'?fixedRange:{from:workFrontier.coveredFrom,to:workFrontier.coveredTo};
@@ -340,7 +369,7 @@ export class PeriodReader {
         })());
         response.sessions=delta&&part.state==='complete'?{state:'delta',basis,value:{...part.value,replaceFrom,replaceTo:workFrontier.to}}:part;
       }
-      if(request.facets)response.facets=yield*section((function*(){
+      if(request.facets&&!calendarLimited)response.facets=yield*section((function*(){
         const projects=new Set<string|null>(),devices=new Map<string,string>(),clients=new Set<string|null>(),funding=new Set<'unknown'|'notProvided'>();
         const add=(project:string|null,device:string,name:string,client:string|null,source:string|null,status?:'notProvided')=>{
           if(source===null)funding.add(status??'unknown');
@@ -349,12 +378,26 @@ export class PeriodReader {
           if(!devices.has(device)){reserve(256+name.length*2);devices.set(device,name);}
           if(!clients.has(client)){reserve(128+(client?.length??0)*2);clients.add(client);}
         };
-        for(const row of work(range.from,cut)){add(row.project,row.device,row.rawContext?.deviceName??row.device,row.rawContext?.client??null,row.source,row.sourceStatus);yield;}
+        for(const part of facetRanges)for(const row of work(part.from,part.to)){add(row.project,row.device,row.rawContext?.deviceName??row.device,row.rawContext?.client??null,row.source,row.sourceStatus);yield;}
         if(access&&selection.mode==='live'){const live=self.hub.ingest.live.board(access,now);for(const row of live.unattributedSessions){add(row.project,row.device.id,row.device.name,row.clientId??null,null,row.sourceStatus);yield;}for(const [source,rows] of live.sessions)for(const row of rows){add(row.project,row.device.id,row.device.name,row.clientId??null,source);yield;}}
         const value={projects:[...projects].sort(),devices:[...devices].map(([id,name])=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id)),clients:[...clients].sort(),funding:[...funding].sort()};
         const retained=retainedWorkChoices(store,work.ensureAccess!(),self.hub.ingest,filter,value,now,reserve,release);
-        return {...value,...(retained?{retained}:{})};
+        return {...value,ranges:facetRanges,...(retained?{retained}:{})};
       })());
+      if(response.facets?.state==='complete'&&facetRanges.length)response.facets.basis={...basis,range:{from:facetRanges[0].from,to:facetRanges.at(-1)!.to}};
+      if(calendarPlan&&!calendarLimited){
+        const before=replyBytes;
+        try{
+          work.ensureAccess?.();
+          const known=workKnownFrom(store.historyKnown(shown,access?.owner,access));
+          reserve(1024+calendarPlan.indices.length*160+calendar!.edges.length*16);
+          const rows=function*(){for(const part of normalizeRanges(calendarPlan.indices.map(i=>({from:Math.max(range.from,calendar!.edges[i],retainedFrom),to:Math.min(calendar!.edges[i+1],cut)}))))yield*views.selected(part.from,part.to);};
+          const updates=yield*calendarCells(rows(),calendar!.edges,calendarPlan.indices,evaluatedAt,known,retainedFrom,config.retention.sampleDays*86_400_000,range,selection.mode==='live'?selection.periodMs:undefined);
+          const proof=calendarPlan.delta?undefined:{...yield*calendarProof(rows(),range,cut,known,retainedFrom,reserve),retentionMs:config.retention.sampleDays*86_400_000,...(selection.mode==='live'?{periodMs:selection.periodMs}:{})};
+          const common={availableFrom:known,retainedFrom,cursor:calendarPlan.cursor};
+          response.calendar=calendarPlan.delta?{state:'delta',basis:calendarPlan.basis,value:{...common,updates}}:{state:'complete',basis:calendarPlan.basis,value:{...common,zone:calendar!.zone,edges:calendar!.edges,cells:updates.map(([,cell])=>cell),proof}};
+        }catch(error){if(!(error instanceof HistoryLimit)&&!(error instanceof RangeError))throw error;release(replyBytes-before);response.calendar={state:'error',error:'history_limit'};}
+      }
       if(sourcePlan){
         const {sources,delta,patch,cursor}=sourcePlan;
         const part=yield*section((function*(){

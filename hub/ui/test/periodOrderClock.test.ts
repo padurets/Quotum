@@ -1,3 +1,6 @@
+import * as periodValueClockBindings from '../../server/domain/periodValues';
+import {WorkCalendar} from '../lib/workCalendar';
+import {AGENT_HOURS_HEATMAP} from '../../server/domain/widgets';
 import * as filterModelBindings from '../../server/domain/dataFilters';
 import * as filterRuntimeBindings from '../lib/filterSelection';
 import * as filterCurveBindings from '../../server/domain/periodCurves';
@@ -37,10 +40,10 @@ type Order=(rows:WorkedSession[])=>SessionOrder|null;
 function agentOrder({by='project',hidden=[] as string[],open=false,sort={column:'worked',descending:true} as AgentsSort,period={activitySummaryAt:()=>null} as any}={}):Order{
   let order:Order=()=>null;const done={};
   const source=readFileSync(new URL('../components/Agents.tsx',import.meta.url),'utf8');
-  const context={exports:{} as {AgentsPanel:(props:unknown)=>unknown},memo:(f:unknown)=>f,useLocale:()=>{},useLineup:()=>['s','hidden'],useTitles:()=>({s:{title:'Source',provider:'codex'},hidden:{title:'Hidden',provider:'codex'}}),
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {AgentsPanel:(props:unknown)=>unknown},memo:(f:unknown)=>f,useLocale:()=>{},useLineup:()=>['s','hidden'],useTitles:()=>({s:{title:'Source',provider:'codex'},hidden:{title:'Hidden',provider:'codex'}}),
     usePref:(key:'agentsSort'|'agentsBy'|'range')=>({agentsSort:sort,agentsBy:by as AgentsBy,range:'1h'})[key],useTimeRange:()=>null,useState:()=>[open?{group:null}:null,()=>{}],useCallback:(f:unknown)=>f,
     usePeriodSessions:(read:Order)=>{order=read;throw done;},columnsOf,columnShown,AGENTS,groupsOf,sortedGroups,visibleAgentsSort,byActivity,activityDimension,boardPeriod:period,require:()=>({})};
-  runInNewContext(compile(source.slice(source.indexOf('export const AgentsPanel'))),Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  runInNewContext(compile(source.slice(source.indexOf('export const AgentsPanel'))),Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   try{context.exports.AgentsPanel({arrange:{view:{...EMPTY_VIEW,hidden,shownColumns:{[AGENTS]:['active','concurrency']}}}});}catch(error){assert.equal(error,done);}
   return order;
 }
@@ -50,13 +53,13 @@ async function harness(trace:WorkTrace,periodName='1h',initialNow=H+1000){
   const timers=new Map<object,{at:number;run:()=>void}>(),pool=new HistoryPool();
   const clock=new PageClock({now:()=>now,visible:()=>visible,setTimeout:(run,ms)=>{const token={};timers.set(token,{at:now+ms,run});return token;},clearTimeout:token=>{timers.delete(token as object);}});
   const board={id:'b',meta:{personal:true},lineup:['s','hidden'],view:EMPTY_VIEW,cards:{s:{id:'s'},hidden:{id:'hidden'}}};
-  const context={exports:{} as any,hubNow:clock.hubNow,clock,retention,historyPool:pool,PeriodTransport,
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as any,hubNow:clock.hubNow,clock,retention,historyPool:pool,PeriodTransport,
     fetchPeriod:async(_board:string,request:PeriodRequest)=>{reads++;const basis={run:'r',revision:'1',evaluatedAt:now,evidenceCut:now,range:evaluatedRange(request.selection,now)};return {basis,sessions:{state:'complete',basis,value:trace}};},
     page:{get:()=>({board}),dispatch:()=>{}},pan:{get:()=>null},preparations:()=>null,prepareAsync:async(_owner:unknown,work:Preparation<unknown>)=>drain(work),
     evaluatedRange,periodKey,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,sampleBytes,periodTextChangesAt,
     empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>null,prefs:()=>({range:periodName}),periodOf,cellOf:()=>60_000,
     PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible:(_view:unknown,id:string)=>id===AGENTS,noSessions:[],noValue:{}};
-  runInNewContext(compile(coordinator.slice(coordinator.indexOf('class BoardPeriod'),coordinator.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod')),Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  runInNewContext(compile(coordinator.slice(coordinator.indexOf('class BoardPeriod'),coordinator.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod')),Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   const period=new context.exports.BoardPeriod();period.activate(true);
   for(let i=0;i<50;i++)await Promise.resolve();
   assert.equal(period.get().loading,false);assert.equal(period.get().error,null);assert.equal(reads,1);
@@ -75,14 +78,14 @@ function panel(period:any,initial:Order){
   let order=initial,cursor=0,dirty=false,renders=0,value:any;
   const slots:any[]=[],pending:(()=>void)[]=[];
   const slot=(make:()=>any)=>{const i=cursor++;return slots[i]??(slots[i]=make());};
-  const context={exports:{} as {usePeriodSessions:(order:Order)=>unknown},boardPeriod:period,selector,sameJson,
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {usePeriodSessions:(order:Order)=>unknown},boardPeriod:period,selector,sameJson,
     useRef:(current:unknown)=>slot(()=>({current})),useState:(make:()=>unknown)=>[slot(()=>({value:make()})).value],
     useLayoutEffect:(effect:()=>void|(()=>void),deps?:unknown[])=>{const state=slot(()=>({deps:null,stop:null,effect}));state.effect=effect;if(!deps||!state.deps||deps.some((v,i)=>!Object.is(v,state.deps[i]))){state.deps=deps;pending.push(()=>{state.stop?.();state.stop=effect();});}},
     useSyncExternalStore:(subscribe:(listener:()=>void)=>()=>void,read:()=>unknown)=>{
       const state=slot(()=>{const state={value:read(),stop:()=>{}};state.stop=subscribe(()=>{const next=read();if(next!==state.value){state.value=next;dirty=true;}});return state;});
       state.value=read();return state.value;
     }};
-  runInNewContext(compile(coordinator.slice(coordinator.indexOf('const roster='),coordinator.indexOf('export function useSourcePeriodSessions'))),Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  runInNewContext(compile(coordinator.slice(coordinator.indexOf('const roster='),coordinator.indexOf('export function useSourcePeriodSessions'))),Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   function render(){for(let i=0;;i++){assert.ok(i<5,'selector and clock effects cannot render in a loop');cursor=0;dirty=false;value=context.exports.usePeriodSessions(order);renders++;while(pending.length)pending.shift()!();if(!dirty)break;}return value;}
   render();
   return {render:()=>dirty?render():value,setOrder:(next:Order)=>{order=next;return render();},rows:()=>value.rows as WorkedSession[],renders:()=>renders,

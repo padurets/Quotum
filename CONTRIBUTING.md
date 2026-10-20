@@ -232,6 +232,16 @@ active hour, and complete or partial work observation. Its durable codes are in
 
 `DEV_SET=devices DEV_STILL=true make dev` shows agent versions, disabled collectors, an epoch barrier, a preferred device and retained measurement origins in My connections.
 `DEV_SET=onboarding DEV_STILL=true make dev` exercises board and account onboarding.
+`DEV_SET=calendar DEV_STILL=true make dev` shows 30 days of registered agent-hours
+without subscription cards. Ana has varied weeks, quiet stretches, release peaks,
+work across midnight and sessions in the opening analytical period;
+Boris's No available work history board has no admitted devices. Empty project
+selection keeps the heatmap visible with zero registered work. Both views follow the
+shared analytical period (up to 31 days) and data filters. Day × hour adapts from a
+short interval strip to date rows or, for wide monthly widgets, hourly rows. Calendar
+places dates beside intraday segments. Inspect a bucket by pointer, keyboard or touch,
+then choose Open interval or Open day when available. Both views fill the widget's
+width and manual height, keeping the selected period visible without an inner scroller.
 Ana owns *Studio* and *New board*; Boris is a member of both. OpenRouter starts
 unconnected. Add widget offers synthetic keys for successful, partial and failed
 answers, a lost-reply control, and an explicit subset from a synthetic device report.
