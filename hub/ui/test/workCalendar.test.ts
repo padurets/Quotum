@@ -116,3 +116,14 @@ test('a positive day becomes partial before its first credited instant expires, 
   assert.equal(calendar.needed,false);assert.equal(calendar.nextAt(entry),expiry);
   calendar.tick(expiry);assert.equal(calendar.state.value!.cells[0].agentMs,null);assert.equal(calendar.needed,false);
 });
+
+test('waking the coordinator after a timezone change replaces the calendar with a new local window',async t=>{
+  const prior=process.env.TZ;process.env.TZ='UTC';t.after(()=>{if(prior===undefined)delete process.env.TZ;else process.env.TZ=prior;});
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({heatmap:true});t.after(()=>h.close());
+  const before=h.period.calendar.state.window.edges;
+  process.env.TZ='Asia/Kathmandu';h.period.wakeCalendar();await flush();
+  const zone=Intl.DateTimeFormat().resolvedOptions().timeZone;
+  assert.equal(h.period.calendar.state.window.zone,zone);assert.notDeepEqual(h.period.calendar.state.window.edges,before);
+  assert.equal(h.requests.filter(r=>r.calendar).length,1);assert.equal(h.requests.find(r=>r.calendar)!.calendar!.zone,zone);
+  assert.ok(h.period.calendar.state.value);
+});

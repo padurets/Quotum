@@ -266,7 +266,7 @@ class BoardPeriod {
   subscribeWorkOrder=(read:(rows:WorkedSession[])=>SessionOrder|null)=>{this.workOrders.add(read);this.scheduleClock();return()=>{this.workOrders.delete(read);this.scheduleClock();};};
   wakeCalendar=()=>{
     const zone=this.calendar.state.window.zone;
-    if(this.calendar.tick(hubNow())){this.resetFacets();if(zone!==this.calendar.state.window.zone&&this.calendar.dirty()){this.revision++;this.transport.change();}}
+    if(this.calendar.tick(hubNow(),true)){this.resetFacets();if(zone!==this.calendar.state.window.zone&&this.calendar.dirty()){this.revision++;this.transport.change();}}
     this.scheduleClock();
   };
   refreshWorkClock=()=>{if(this.evaluatedAt!==hubNow())this.tick();else{this.retireExpired(hubNow());this.scheduleClock();}};

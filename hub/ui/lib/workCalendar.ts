@@ -29,7 +29,6 @@ export type CalendarReading={window:ReturnType<typeof calendarWindow>;value:Cale
 
 /** A calendar keeps its own frontier when the analytical period changes. */
 export class WorkCalendar {
-  private key='';
   private context='';
   visible=false;
   private limited=false;
@@ -46,22 +45,22 @@ export class WorkCalendar {
     const changed=this.context!==context||this.visible!==visible;
     this.visible=visible;this.limited=limited;
     if(changed){this.clear();this.context=context;this.needed=visible;this.state={...this.state,loading:visible};}
-    this.tick(now);
+    this.tick(now,true);
     if(visible&&limited){this.needed=false;this.state={...this.state,value:null,basis:null,loading:false,error:'filters_limit'};}
     if(changed)this.publish();return changed;
   }
-  tick(now:number){
+  tick(now:number,checkZone=false){
     if(!this.visible)return false;
-    const zone=calendarZone(),today=civil(now,civilFormatter(zone)),key=zone+today;
+    const zone=checkZone?calendarZone():this.state.window.zone;
     let changed=false;
     if(this.state.basis&&now<this.state.basis.evidenceCut){
       this.generation++;this.state={...this.state,value:null,basis:null,loading:false,error:null};changed=true;
     }
-    if(key!==this.key){
+    if(zone!==this.state.window.zone||now<this.state.window.edges[89]||now>=this.state.window.edges[90]){
       const window=calendarWindow(now,zone),old=this.state;
       const sameZone=old.window.zone===zone;
       const cells=window.dates.map((date,i)=>{const prior=sameZone?old.window.dates.indexOf(date):-1;return prior>=0&&old.value?old.value.cells[prior]:{agentMs:null,from:window.edges[i],to:window.edges[i],validUntil:null};});
-      this.generation++;this.key=key;
+      this.generation++;
       this.state={window,value:sameZone&&old.value?{...old.value,zone,edges:window.edges,cells,cursor:''}:null,basis:null,loading:old.loading,error:null};changed=true;
     }
     const value=this.state.value;
