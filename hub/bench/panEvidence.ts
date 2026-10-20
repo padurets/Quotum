@@ -28,44 +28,12 @@ export function panTransactionsScript(limit = 32): string {
 }
 
 
-/** Fault listeners outlive the motion sampler, through the same family's native postconditions. */
-export function panErrorsScript(): string {
-  return `(() => {
-    let active=true,count=0,omitted=0,invalid=0,ended=null;
-    const from=performance.now(),events=[],valid=at=>Number.isFinite(at)&&at>=from;
-    const record=(kind,event)=>{
-      if(!active)return;
-      count++;if(events.length>=16){omitted++;return;}
-      try{
-        const at=performance.now();if(!valid(at)||events.length&&at<events.at(-1).at){invalid++;return;}
-        const integer=value=>Number.isSafeInteger(value)&&value>=0?value:null;
-        let line=null,column=null,publicAsset=null;
-        if(kind==='error'){
-          line=integer(event.lineno);column=integer(event.colno);publicAsset=false;
-          const filename=event.filename;
-          if(typeof filename==='string'&&filename)try{const url=new URL(filename);publicAsset=url.origin===new URL(location.href).origin&&/^\\/assets\\/index-[\\w-]+\\.js$/.test(url.pathname);}catch{}
-        }
-        events.push({kind,at,line,column,publicAsset,trusted:typeof event?.isTrusted==='boolean'?event.isTrusted:null});
-      }catch{invalid++;}
-    };
-    const error=event=>record('error',event),rejection=event=>record('unhandledrejection',event);
-    window.addEventListener('error',error);window.addEventListener('unhandledrejection',rejection);
-    const read=()=>{const to=active?performance.now():ended,ordered=valid(to)&&to>=(events.at(-1)?.at??from);return {status:invalid||omitted||!valid(from)||!ordered?'insufficient-evidence':active?'recording':'stopped',from:Number.isFinite(from)?from:null,to:valid(to)?to:null,count,omitted,invalid,events:events.map(row=>({...row}))};};
-    return {get active(){return active;},read,stop(){
-      if(active){active=false;ended=performance.now();window.removeEventListener('error',error);window.removeEventListener('unhandledrejection',rejection);}
-      return read();
-    }};
-  })()`;
-}
-
 /** A failed scenario must retain its own probe rather than an earlier completed one. */
 export function panPartialScript(initiator?: string, period?: string): string {
   return `(() => {
     const p=window.__quotumPan;
-    if(!p||p.initiator!==${JSON.stringify(initiator??null)}||p.period!==${JSON.stringify(period??null)})return {status:'unavailable'};
-    const errors=p.errors?.active?p.errors.read():undefined;
-    if(!p.running)return errors?{status:'unavailable',errors}:{status:'unavailable'};
-    return {status:'partial',errors,inputs:p.inputs,updated:p.updated,frames:p.frames,latency:p.latency,
+    if(!p||p.initiator!==${JSON.stringify(initiator??null)}||p.period!==${JSON.stringify(period??null)}||!p.running)return {status:'unavailable'};
+    return {status:'partial',inputs:p.inputs,updated:p.updated,frames:p.frames,latency:p.latency,
       responses:p.responses,transactions:p.readTransactions(),
       pushesDuring:p.pushesDuring,forbiddenMutations:p.forbiddenMutations,
       pending:p.pending.map(input=>({inputId:input.id,stamp:input.at,delivered:input.delivered,pixels:input.pixels}))};
