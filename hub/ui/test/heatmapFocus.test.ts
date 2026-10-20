@@ -34,7 +34,7 @@ test('heatmap rows follow physical order and an explicit drill focuses the new g
   assert.deepEqual(order,[...order].sort((a,b)=>a-b),'DOM row traversal matches the visual grid and arrow navigation');
   const bucket=view.find(n=>n.props.item?.date==='2026-10-05'&&n.props.item.from===Date.UTC(2026,9,5,12))!;
   assert.ok(bucket);const range={from:bucket.props.item.from,to:bucket.props.item.to};
-  bucket.props.openRange(range);render();assert.deepEqual(focused,[],'an old frame cannot receive the requested focus');
+  bucket.props.openRange(range);render();assert.equal(focused.length,0,'an old frame cannot receive the requested focus');
   reading={...reading,window:calendarWindow(range.to,'UTC',{mode:'range',...range}),loading:true};view=render();
   const tab=view.find(n=>n.props.tab)!;assert.ok(tab);assert.equal(focused.length,1);assert.ok(focused[0].includes(tab.props.item.key));
   render();assert.equal(focused.length,1,'ordinary data renders do not steal focus');
