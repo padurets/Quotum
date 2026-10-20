@@ -45,7 +45,7 @@ export class WorkCalendar {
   private cache=new CalendarCache();
   get=()=>this.state;
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
-  private publish(){for(const listener of this.listeners)listener();}
+  private publish(){this.accountedState=null;for(const listener of this.listeners)listener();}
   get bytes(){
     if(!this.visible||!this.context)return 0;
     if(this.accountedState!==this.state){this.accountedState=this.state;this.accountedBytes=512+JSON.stringify(this.state).length*3;}
