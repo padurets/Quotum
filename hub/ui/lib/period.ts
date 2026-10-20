@@ -88,6 +88,7 @@ class BoardPeriod {
   private liveEvidence=false;
   private valuesNeeded=false;
   private authority='';
+  private financialIdentity='';
   private workAuthority:string|undefined;
   private readonly valueCache=new Map<string,{values:Map<string,Reading<PeriodValues>>;bytes:number;at:number}>();
   private readonly values=new Map<string,Reading<PeriodValues>>();
@@ -125,7 +126,7 @@ class BoardPeriod {
     if(!this.active||!page.get().board||this.workNeeded||this.work.loading||this.work.error||this.valuesNeeded||[...this.values.values()].some(value=>value.loading||value.error)||PERIOD_SCOPES.some(scope=>this.projectionErrors[scope]||this.scopeKeys[scope]&&this.needsTape(scope,this.scopeKeys[scope]!,range)))return;
     const tapes=new Map([...this.tapes].map(([scope,tape])=>[scope,{...tape}])),work=this.work,index=this.index,activity=this.activity,workSelection=this.workSelection,workRangeKey=this.workRangeKey,cursor=this.cursor,liveEvidence=this.liveEvidence,values=new Map(this.values),cursors=this.transport.evidence(),bytes=this.bytes-this.facetBytes();
     const sourceTape=this.sourceTape,sourceCurves=this.sourceCurves,sourceCursor=this.sourceCursor;
-    const context=JSON.stringify([this.authority,this.scopeKeys,this.filterKey]);
+    const context=JSON.stringify([this.authority,this.scopeKeys,this.filterKey,this.financialIdentity]);
     const workProofEpoch=this.workProofEpoch,valuesProofEpoch=this.valuesProofEpoch,reusable=workProofEpoch===this.proofEpoch&&(!values.size||valuesProofEpoch===this.proofEpoch)&&[...tapes.values()].every(t=>t.proofEpoch===this.proofEpoch);
     // Proofs and alternative states are immutable and shared by shifted summaries.
     // Summaries exclude shared shift proofs; a whole value sequence bounds its largest replay.
@@ -133,7 +134,7 @@ class BoardPeriod {
       +[...tapes.values()].reduce((sum,{tape})=>sum+JSON.stringify({...tape,fixed:tape.fixed?{...tape.fixed,shift:undefined}:undefined}).length*6,0)
       +JSON.stringify([...values.values()]).length*3;
     this.valueCache.delete(periodKey(this.selection));
-    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,copyBytes,at:hubNow(),fits:selection=>reusable&&selection.mode==='range'&&work.value?.fixed!==undefined&&canShift(work.value.fixed,selection)&&context===JSON.stringify([this.authority,this.scopeKeys,this.filterKey])&&[...tapes.values()].every(({tape})=>tape.fixed&&canShift(tape.fixed,selection))&&[...values.values()].every(v=>hasPeriodValue(v.value,selection.to)),restore:selection=>{
+    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,copyBytes,at:hubNow(),fits:selection=>reusable&&selection.mode==='range'&&work.value?.fixed!==undefined&&canShift(work.value.fixed,selection)&&context===JSON.stringify([this.authority,this.scopeKeys,this.filterKey,this.financialIdentity])&&[...tapes.values()].every(({tape})=>tape.fixed&&canShift(tape.fixed,selection))&&[...values.values()].every(v=>hasPeriodValue(v.value,selection.to)),restore:selection=>{
       this.workEvidence++;
       this.tapes.clear();for(const [scope,tape] of tapes)this.tapes.set(scope,tape);
       this.work=work;this.index=index;this.activity=activity;this.activityRetained=null;this.workSelection=workSelection;this.workRangeKey=workRangeKey;this.cursor=cursor;this.liveEvidence=liveEvidence;this.bytes=bytes;
@@ -315,6 +316,21 @@ class BoardPeriod {
     this.work={...this.work,loading:this.wantsWork};this.publishWork();this.publishProjection(['quota','budget']);
     this.measureBytes();clock.due(this.watch,null,hubNow());
   }
+  private retireFinancialValues() {
+    this.generation++;this.revision++;this.resourceGeneration++;
+    preparations()?.cancel(this.preparationOwner);
+    this.valueCache.clear();this.retained.clear();this.valuesProofEpoch=-1;
+    this.valuesNeeded=this.selection.mode==='range';
+    for(const [id,reading] of this.values){
+      const value=reading.value;
+      if(!value)continue;
+      // State replays may contain private amounts too. Native quota measurements
+      // remain usable while the financial baseline is loading or unavailable.
+      this.setValue(id,{...reading,value:{id:value.id,provider:value.provider,windows:value.windows,meters:value.meters.filter(m=>m.kind==='cap'&&m.id.startsWith('quota:')),keys:[],validFor:value.validFor},loading:this.valuesNeeded,error:null});
+    }
+    for(const scope of ['budget','funds'] as const){this.tapes.delete(scope);this.dirtyScopes.delete(scope);delete this.projectionErrors[scope];this.transport.forgetEvidence(scope);}
+    this.measureBytes();this.publishProjection(['budget','funds']);
+  }
   private clear() {
     this.sourceTape=null;this.sourceCurves=undefined;this.sourceCursor=undefined;this.resetFacets();
     this.workEvidence++;this.retirementAt=Infinity;
@@ -347,8 +363,12 @@ class BoardPeriod {
     const identity=JSON.stringify([board.id,periodKey(selection),wantsWork]);
     const authority=JSON.stringify([board.id]);
     if(authority!==this.authority){this.clear();this.authority=authority;}
+    const financialIdentity=JSON.stringify([board.id,board.currencies?.target.id,board.currencies?.revision,board.lineup.map(id=>[id,board.cards[id]?.budget])]);
+    const changedFinancial=!!this.financialIdentity&&financialIdentity!==this.financialIdentity;
+    this.financialIdentity=financialIdentity;
+    if(changedFinancial)this.retireFinancialValues();
     if(event?.type==='hub'&&['history','hello','snapshot','mine','lineup'].includes(event.event.type))this.retained.clear();
-    const cacheKey=JSON.stringify([identity,scopeKeys,nextFilter]);
+    const cacheKey=JSON.stringify([identity,scopeKeys,nextFilter,financialIdentity]);
     if(cacheKey!==this.cacheKey){this.retainCurrent();this.cacheKey=cacheKey;}
     this.filterKey=nextFilter;
     this.selection=selection;this.sourceIds=sources;this.wantsWork=wantsWork;this.scopeKeys=scopeKeys;
@@ -416,6 +436,7 @@ class BoardPeriod {
       for(const scope of changedScopes){this.tapes.delete(scope);this.dirtyScopes.delete(scope);delete this.projectionErrors[scope];this.transport.forgetEvidence(scope);}
       this.measureBytes();this.publishProjection(changedScopes);this.transport.change();
     }
+    if(changedFinancial)this.transport.change();
     if(event?.type==='connection'){this.tick();return;}
     if(event?.type==='hub') {
       const hub=event.event;

@@ -1817,6 +1817,12 @@ monetary values retain their original amounts, allowances and conversion evidenc
 Their optional exclusive `validUntil` separates availability from the recoverable
 observation timestamp: compressed heartbeats can confirm a value between stored anchors
 without inventing a newer measurement time. Live values without it use their normal TTL.
+Historical monetary readings supply their recorded conversion paths to the common
+renderer for both native and already converted amounts at the same original anchor.
+Changing the display target, monetary path revision or source financial grant retires
+their financial fields, cached states and pending replies immediately, even with money
+analytics hidden. Native quota and work evidence remain independent. Currency metadata
+edits alone do not reload history.
 Current operational status, connector failures, actions, forecasts and reset news remain
 live. Compact mode and native notifications also remain live.
 
@@ -1879,6 +1885,11 @@ remain, so accumulated history and a fresh read retain the same conversion prove
 Fixed selections carry exact totals and boundary geometry instead of a rolling
 ledger; the server and browser share the accounting implementation in `server/domain`.
 The interior drawing still uses cached history cells. Neighboring card states keep exact sparse changes instead of repeated measurement objects.
+When exact boundary observations and interior quota cells share a drawing, cell
+support is normalized before clipping: consecutive cells of one segment support the
+unmeasured cells between them, while explicit exclusive bounds and segment breaks
+remain intact. A predecessor in the first boundary cell may support the interior;
+the exact boundary geometry and accounting totals still come from the fixed summary.
 Their interval lookup allocates no replay; restored values share immutable proofs.
 The server reads each source's neighboring state boundaries once and finds native batches
 through a source/time index. Fixed summaries retain compact numeric columns while being

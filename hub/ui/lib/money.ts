@@ -15,6 +15,19 @@ export const subscriptionFundsVisible=(source:Pick<Card,'provider'|'budget'|'cre
   (!!source.meters?.some(m=>m.kind==='balance')||['finite','unlimited'].includes(source.creditBalance?.status??''));
 export const unitLabel=(unit:string)=>unit==='credits:codex'?t('money.codexCredits'):unit==='credits:zai'?t('quota.zaiCredits'):unit;
 export const amountUnitLabel=(unit:string)=>unit==='credits:codex'?t('money.codexCreditUnit'):unit==='credits:zai'?t('quota.credits'):unitLabel(unit);
+/** Historical readings carry their own paths; live bindings cannot value an old sample. */
+export function historicalCurrencyContext(context:CurrencyContext,source:string,meters:readonly Meter[]):CurrencyContext {
+  const bindings:CurrencyContext['sources'][string]=[];
+  for(const meter of meters){
+    const proof=meter.conversion;if(!proof||meter.unit!==context.target.id)continue;
+    const original=proof.original,steps=proof.steps??[proof.rate];
+    const native=meters.find(m=>!m.conversion&&m.id===original.meterId&&m.unit===original.unit&&m.at===original.at&&m.amount===original.amount&&(m.scale??6)===(original.scale??6));
+    if(!native)continue;
+    const binding={from:original.unit,at:original.at,steps};
+    bindings.push({...binding,anchor:proof.rate.id},{...binding,anchor:null});
+  }
+  return {...context,sources:{...context.sources,[source]:bindings}};
+}
 /** Keep large active-hour forecasts exact through display rounding. */
 export function activeHours(milliseconds:string|null):string {
   if(milliseconds===null)return '—';
