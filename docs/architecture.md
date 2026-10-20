@@ -1545,6 +1545,7 @@ and share one sparse extraction with other work consumers; they read neither
 financial history nor a full session ledger just for the heatmap. Browser geometry
 aggregates those fine cells into a chronological strip, day/hour matrix or compact
 calendar as the duration and width require, without new reads or inner scrolling.
+Its cells fill a manually chosen height while labels and gaps keep their size.
 Anonymous aggregate hour patterns share the history budget and preserve exact
 within-cell changes, so cached return and nearby endpoints reuse accepted work
 without rereading it or dividing already aggregated amounts. Work or authority
@@ -1555,7 +1556,7 @@ nothing. Shared-clock expiry retires stale contributions in individual buckets
 without rebuilding geometry or polling. Null history, registered zero and
 observation completeness remain distinct.
 An explicit interval/day action changes the common selection; only elapsed retained
-evidence is counted. Fixed thresholds scale with the labelled interval, use the
+evidence is counted. Fixed thresholds scale with the displayed interval, use the
 first Nord Warm colour and remain independent of the filtered sample.
 
 The page makes cells from `since` stale and reads only those its frame needs,

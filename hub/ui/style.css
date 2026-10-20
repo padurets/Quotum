@@ -1296,9 +1296,9 @@ summary.filter-group-heading::-webkit-details-marker { display: none; }
 .calendar-date.is-unavailable .calendar-cell > svg { visibility:hidden; }
 .calendar-date.is-unavailable .calendar-cell::before { content:''; position:absolute; inset:0; border-radius:2px; background:repeating-linear-gradient(135deg,var(--hair),var(--hair) 3px,var(--hair-2) 3px,var(--hair-2) 4px); }
 .calendar-date.is-partial .calendar-cell::after { content:''; position:absolute; right:1px; bottom:1px; border-right:3px solid var(--text-2); border-top:3px solid transparent; }
-.calendar-legend { display:flex; flex-wrap:wrap; justify-content:space-between; gap:5px 10px; margin-top:10px; color:var(--text-3); font-size:10.5px; }
-.heatmap-scale { display:flex; flex-wrap:wrap; gap:5px 10px; }
-.heatmap-scale > span { display:flex; align-items:center; gap:4px; white-space:nowrap; }
+.calendar-legend { display:flex; flex-wrap:wrap; align-items:center; gap:5px 10px; margin-top:10px; color:var(--text-3); font-size:10.5px; }
+.heatmap-unit { margin-right:4px; }
+.heatmap-key { display:flex; align-items:center; gap:4px; white-space:nowrap; }
 .calendar-legend svg { flex-shrink:0; }
 .calendar-tip { position:absolute; z-index:8; width:300px; max-width:calc(100vw - 32px); font-size:12px; }
 .calendar-tip p, .calendar-details p { margin:6px 0; }

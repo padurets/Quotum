@@ -9,12 +9,12 @@ import {CATEGORY_COLORS} from '../lib/providers';
 import {MIN_TIME_RANGE,setTimeRange,useTimeRange} from '../lib/timeRange';
 import {setPrefs,usePref} from '../lib/prefs';
 import {formatLocale,t,useLocale} from '../i18n';
-import {duration,num} from '../lib/format';
+import {num} from '../lib/format';
 import {HideRow,Popover,PopoverHeading,SlidersIcon} from './Popover';
 import {Segmented} from './Kit';
 import {useBubble} from './Tooltip';
 import {HistoryFailure} from './HistoryFailure';
-import {fillOf,useSizing} from './sizing';
+import {fillOf,pixels,same,useSizing} from './sizing';
 
 function Details({heading,label,interval,item}:{heading:boolean;label:string;interval:string;item:HeatCell}){
   return <>{heading&&<strong>{label}</strong>}{interval&&<p className="heatmap-interval">{interval}</p>}<p>{item.cell.agentMs===null?t('calendar.unavailable'):item.cell.agentMs===0?t('calendar.zero'):`${exactAgentHours(item.cell.agentMs,formatLocale())} ${t('calendar.hours')}`}</p>{item.partial&&<p>{t('calendar.partial')}</p>}</>;
@@ -54,11 +54,16 @@ const Bucket=memo(function Bucket({item,span,zone,tab,selected,focus,panel,onKey
 export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrange:Arrange}){
   const locale=useLocale(),view=usePref('heatmapView'),reading=useSyncExternalStore(boardPeriod.calendar.subscribe,boardPeriod.calendar.get),selection=useTimeRange();
   const {value,loading,error,window}=reading,root=useRef<HTMLElement>(null),matrix=useRef<HTMLDivElement>(null),sizing=useSizing();
-  const [focused,setFocused]=useState(''),[settings,setSettings]=useState(false),[width,setWidth]=useState(0);
-  const layout=useMemo(()=>heatmapLayout(reading,width,view,formatLocale()),[reading,width,view,locale]);
+  const [focused,setFocused]=useState(''),[settings,setSettings]=useState(false),[width,setWidth]=useState(0),[height,setHeight]=useState(0);
+  const layout=useMemo(()=>heatmapLayout(reading,width,view,formatLocale(),height),[reading,width,view,locale,height]);
   const measure=useRef(()=>{});
-  measure.current=()=>{const node=root.current;if(matrix.current)setWidth(matrix.current.clientWidth);if(node&&sizing){const height=node.getBoundingClientRect().height-fillOf(node);sizing.report({min:height,natural:height,shown:height});}};
-  useLayoutEffect(()=>measure.current(),[sizing?.manual,sizing?.allocated,sizing?.width,sizing?.report,loading,error,locale,layout.height]);
+  measure.current=()=>{
+    const node=root.current,plot=matrix.current;if(!node||!plot)return;setWidth(plot.clientWidth);
+    if(sizing){const shown=pixels(node.getBoundingClientRect().height-fillOf(node)),chrome=shown-plot.getBoundingClientRect().height,min=pixels(chrome+layout.naturalHeight);
+      sizing.report({min,natural:min,shown});const next=sizing.manual?pixels(Math.max(layout.naturalHeight,sizing.allocated-chrome)):0;setHeight(was=>same(was,next)?was:next);
+    }
+  };
+  useLayoutEffect(()=>measure.current(),[sizing?.manual,sizing?.allocated,sizing?.width,sizing?.report,loading,error,locale,layout.naturalHeight]);
   useLayoutEffect(()=>{const node=root.current;if(!node)return;const observer=new ResizeObserver(()=>measure.current());observer.observe(node);return()=>observer.disconnect();},[]);
   useLayoutEffect(()=>()=>sizing?.report(null),[sizing?.report]);
   const tab=layout.cells.find(c=>c.key===focused)??layout.cells.reduce<HeatCell|undefined>((best,c)=>!best||Math.abs(c.from-Number(focused))<Math.abs(best.from-Number(focused))?c:best,undefined);
@@ -83,7 +88,7 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
       {layout.labels.map((label,i)=><span key={i} aria-hidden="true" className="heatmap-axis" style={{left:label.x,top:label.y,transform:label.align==='end'?'translate(-100%,-100%)':label.align==='middle'?'translate(-50%,-100%)':'translateY(-100%)'}}>{label.text}</span>)}
       {[...new Set(layout.cells.map(c=>c.row))].map(row=><div role="row" className="heatmap-row" key={row}>{layout.cells.filter(c=>c.row===row).map(item=><TimedBucket key={item.key} item={item} span={layout.span} zone={window.zone} selected={selection?.from===item.from&&selection?.to===item.to} tab={item.key===tab?.key} focus={setFocused} panel={root} onKey={key}/>)}</div>)}
     </div>
-    <div className="calendar-legend"><span className="heatmap-unit">{t(unit===60_000?'calendar.scaleMinutes':'calendar.scaleHours',{step:duration(layout.span)})}</span><div className="heatmap-scale">{thresholds.map((value,level)=><span key={level}><svg width="10" height="8" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="4" fill={level?CATEGORY_COLORS[0]:'var(--hair)'} fillOpacity={level?CALENDAR_OPACITY[level]:1}/></svg>{level===1?'>0':level===5?'≥ '+num(value/unit,2):num(value/unit,2)}</span>)}</div></div>
+    <div className="calendar-legend"><span className="heatmap-unit">{t(unit===60_000?'calendar.scaleMinutes':'calendar.scaleHours')}</span>{thresholds.map((value,level)=><span className="heatmap-key" key={level}><svg width="10" height="8" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="4" fill={level?CATEGORY_COLORS[0]:'var(--hair)'} fillOpacity={level?CALENDAR_OPACITY[level]:1}/></svg>{level===1?'>0':level===5?'≥ '+num(value/unit,2):num(value/unit,2)}</span>)}</div>
     {value&&value.cells.every(c=>c.agentMs===null)&&<p className="analytics-note">{t('calendar.unavailable')}</p>}
     {!value&&!error&&<p className="analytics-note" role="status">{t(loading?'calendar.loading':'calendar.pending')}</p>}
   </section>;
