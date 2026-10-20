@@ -1846,6 +1846,8 @@ Changing the display target, monetary path revision or source financial grant re
 their financial fields, cached states and pending replies immediately, even with money
 analytics hidden. Native quota and work evidence remain independent. Currency metadata
 edits alone do not reload history.
+An archived display target can invalidate a history request before its replacement
+event arrives; that request fails locally while access to the board stays active.
 Current operational status, connector failures, actions, forecasts and reset news remain
 live. Compact mode and native notifications also remain live.
 

@@ -15,6 +15,9 @@ import {Store} from '../../server/store/store';
 import {Directory} from '../../server/store/directory';
 import {periodValues} from '../../server/periodValues';
 import {displayMeter} from '../../server/domain/currencyPresentation';
+import {Currencies} from '../../server/currencies/service';
+import {ReadError} from '../../server/historyRead';
+import {ApiError} from '../lib/http';
 
 async function historicalFunds(t:TestContext,personal=true) {
   t.mock.method(Date,'now',()=>NOW);
@@ -101,6 +104,47 @@ test('a revoked grant cannot return from a delayed response or an error before a
   h.store.record(h.source,{observedAt:NOW+2,staleAfterMs:H,plan:'pro',resets:null,windows:[{id:'w',kind:'weekly',minutes:10080,label:null,used:15,remaining:85,resetAt:NOW+H}],balances:[{id:'balance:credits',unit:'credits:codex',status:'finite',amount:'25000',hasCredits:true}]});
   t.mock.method(Date,'now',()=>NOW+3);h.jump(NOW+3);h.selectRange({from:first.from,to:NOW+3});await flush();
   assert.equal(h.shown()?.amount,'1000000000','only a new admitted observation opens the replacement grant');
+});
+
+test('archiving a display currency before its event arrives cannot close an authorized live board',async t=>{
+  let now=NOW;t.mock.method(Date,'now',()=>now);
+  const h=await fixture({personal:true}),service=new Currencies(h.store,async()=>{throw Error('synthetic rates unavailable');},()=>now);
+  service.start();let release!:()=>void;
+  t.after(async()=>{release?.();await service.stop();await h.close();});
+  const wallet=h.store.source('openrouter','d'.repeat(24),NOW-H);h.store.hold(wallet,h.alice.id,NOW-H);
+  const observe=async(at:number)=>{
+    h.store.record(wallet,{type:'meters',observedAt:at,staleAfterMs:H,meters:['credits','usage'].map(id=>({id,kind:'counter',unit:'USD',amount:id==='credits'?'90000000':'34000000',limit:null,at,staleAfterMs:H,stale:false,resetAt:null,minutes:null,scope:null,label:null})),keys:[],inventoryComplete:true,inventoryError:null});
+    await service.update(wallet);h.events.flush();await flush();
+  };
+  await observe(NOW-M);
+  h.event({type:'view',data:{revision:100,view:{...h.page.get().board!.view,shown:['agents','quota-history','budget-history']}}});await flush();
+  const c=h.store.currencies,target=c.create(h.alice.id,{name:'Points',symbol:'PT',fractionDigits:2},'JPY','2000000',now);
+  c.select(h.alice.id,target.id);c.setRate(h.alice.id,target.id,'USD','2000000',0,now);
+  await service.update(wallet);h.events.flush();await flush();
+  const shown=()=>{const board=h.page.get().board,card=board?.cards[wallet];return card?budgetView(card,[],card.meters??[],board!.currencies).remaining.values[0]?.total.amount:null;};
+  assert.equal(shown(),'112000000');
+  const transport=h.period.transport,send=transport.send.bind(transport),gate=new Promise<void>(resolve=>{release=resolve;});
+  let paused=true;const attempts:{signal:AbortSignal;error?:string;currentOnError?:boolean}[]=[];
+  // Pause the HTTP boundary before the real server reads. Its ReadError is
+  // mapped exactly as fetchPeriod maps the HTTP status and JSON error code.
+  transport.send=async(board:string,body:unknown,signal:AbortSignal,reserve:unknown)=>{
+    const attempt={signal,error:undefined as string|undefined,currentOnError:false};
+    if(paused&&(body as {budget?:{currency?:string}}).budget?.currency){attempts.push(attempt);await gate;}
+    try{return await send(board,body,signal,reserve);}catch(error){if(error instanceof ReadError){attempt.error=error.code;attempt.currentOnError=!signal.aborted;throw new ApiError(error.statusCode,error.code);}throw error;}
+  };
+  const quote=c.rates(h.alice.id,target.id).find(row=>row.base==='USD')!;
+  c.stopRate(h.alice.id,target.id,'USD',quote.id,now);h.events.flush();await flush();
+  now+=1000;h.jump(now);await observe(now);assert.equal(shown(),undefined);
+  assert.ok(attempts.some(attempt=>!attempt.signal.aborted),'the previous target still has a current HTTP request');
+  c.archive(h.alice.id,target.id,'USD',now);
+  paused=false;release();await flush();
+  assert.ok(attempts.some(attempt=>attempt.currentOnError&&attempt.error==='currency_not_found'),'the real reader rejects the archived target before SSE delivery');
+  assert.ok(h.directory.boards(h.alice.id).some(board=>board.id===h.board));
+  assert.ok(h.page.get().board,'a currency error does not revoke board access');
+  h.events.flush();await flush();
+  assert.equal(h.page.get().board!.currencies!.target.id,'USD');assert.equal(shown(),'56000000');
+  assert.equal(h.period.projectionState({range:'1h'},'budget').error,undefined);
+  assert.equal(h.pool.activeFlights,0);
 });
 
 for(const target of ['USD','EUR','personal'])test(`historical ${target} rendering preserves dated and pinned valuation anchors`,()=>{
