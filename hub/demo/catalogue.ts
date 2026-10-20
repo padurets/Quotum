@@ -1714,9 +1714,9 @@ const measurementDevices:DemoSet={id:'devices',about:'Measurement participation,
   {kind:'card',id:'codex-managed',provider:'codex',plan:'Plus',machines:['laptop','desktop','backup'],history:6*HOUR,windows:[weekly({since:-DAY,use:steady(0,5)})],on:{ana:{name:'Measurement selection'}},expect:[{title:'Measurement selection'}],look:['The existing status and settings open My connections without changing card height']},
 ]};
 /** Loading, failure, revocation and midnight expiry are held by workCalendar/periodRead tests. */
-export const CALENDAR_SCENES=[{id:'registered',expect:['ninety-local-dates','parallel-hours','midnight-split','fixed-opacity','source-free','keyboard-touch','partial-date','whole-window-pattern','current-period-work']},{id:'empty',expect:['empty-filter','registered-zero']},{id:'unavailable',expect:['unavailable-history']} ] as const;
-const calendar:DemoSet={id:'calendar',about:'Ninety calendar dates of registered agent-hours, without subscription cards',scene:'quiet',workHistoryMs:90*DAY,entries:[
-  {kind:'person',id:'ana',name:'Ana',expect:[{state:'widgets'}],look:['Agent-hours uses the first Nord Warm colour with fixed opacity thresholds. Inspect a date with pointer, keyboard or touch; Open day selects analytics and Back restores it.']},
+export const CALENDAR_SCENES=[{id:'registered',expect:['common-period','parallel-hours','midnight-split','fixed-opacity','source-free','keyboard-touch','partial-date','day-hour-matrix','minute-detail','compact-calendar','current-period-work']},{id:'empty',expect:['empty-filter','registered-zero']},{id:'unavailable',expect:['unavailable-history']} ] as const;
+const calendar:DemoSet={id:'calendar',about:'Selected-period agent-hours with day/hour and compact calendar views',scene:'quiet',workHistoryMs:90*DAY,entries:[
+  {kind:'person',id:'ana',name:'Ana',expect:[{state:'widgets'}],look:['Agent-hours follows the common period and work filters. Compare day/hour and compact calendar views at 1h, 3d and 30d; inspect or open an interval with pointer, keyboard or touch.']},
   {kind:'person',id:'boris',name:'Boris',expect:[{state:'widgets'}],look:['The personal calendar has zero registered work. No available work history is a separate shared board without admitted devices.']},
   {kind:'machine',id:'laptop',person:'ana',expect:[{name:'laptop'}]},
   {kind:'board',id:'team',name:'Registered calendar',owner:'ana',members:['boris'],expect:[{state:'widgets'}]},

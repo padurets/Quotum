@@ -1,4 +1,3 @@
-import {calendarWindow} from '../../ui/lib/workCalendar.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {Store} from '../store/store.js';
@@ -573,58 +572,47 @@ test('quota unavailability ends both historical values and exact tape coverage a
 });
 
 
-test('calendar totals use the selected admitted cohort and share extraction with sessions and facets',async t=>{
+test('heatmap uses the exact common range, filters and one extraction with sessions and facets',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture(now-100*24*H);t.after(async()=>{await h.app.close();h.store.close();});
-  const window=calendarWindow(now,'UTC'),start=window.edges[89];
-  for(let i=0;i<4;i++)h.credit(start+H,start+3*H,'parallel'+i);
-  h.credit(window.edges[69]+H,window.edges[69]+2*H,'old');
-  const original=h.store.agentWork.bind(h.store);let reads=0;
-  t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{reads++;return original(...args);});
-  const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:24*H},evaluatedAt:now,calendar:{zone:window.zone,edges:window.edges},sessions:{},facets:true};
+  for(let i=0;i<4;i++)h.credit(now-3*H,now-H,'parallel'+i);
+  h.credit(now-20*24*H,now-20*24*H+H,'outside');
+  const original=h.store.agentWork.bind(h.store);let reads=0;t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{reads++;return original(...args);});
+  const body:PeriodRequest={version:1,selection:{mode:'range',from:now-2*H+17,to:now-H-23},evaluatedAt:now,calendar:{zone:'UTC'},sessions:{},facets:true};
   const result=await h.read(body);assert.equal(result.statusCode,200,result.body);const reply=expandPeriod(result.json());
-  if(reply.calendar?.state!=='complete'||reply.sessions?.state!=='complete'||reply.facets?.state!=='complete')throw new Error('calendar baseline');
-  assert.equal(reply.calendar.value.cells[89].agentMs,8*H);assert.equal(reply.calendar.value.cells[69].agentMs,H);assert.equal(reads,1);
-  assert.equal(workedSessions(reply.sessions.value,reply.basis.range,now).reduce((n,r)=>n+r.workedMs,0),8*H);
-  assert.deepEqual(reply.facets.value.ranges,[{from:window.edges[0],to:now}]);
+  if(reply.calendar?.state!=='complete'||reply.sessions?.state!=='complete'||reply.facets?.state!=='complete')throw new Error('heatmap baseline');
+  const total=reply.calendar.value.cells.reduce((n,c)=>n+(c.agentMs??0),0);
+  assert.equal(total,4*(H-40));assert.equal(reads,1);assert.deepEqual(reply.calendar.basis.range,reply.basis.range);
+  assert.equal(workedSessions(reply.sessions.value,reply.basis.range,now).reduce((n,r)=>n+r.workedMs,0),total);
+  assert.deepEqual(reply.facets.value.ranges,[reply.basis.range]);
   const filters=defaultFilters();filters.projects={mode:'include',values:[]};
   const empty=expandPeriod((await h.read({...body,workFilter:workFilter(filters)})).json());
-  if(empty.calendar?.state!=='complete')throw new Error('empty calendar');assert.equal(empty.calendar.value.cells[89].agentMs,0);
+  if(empty.calendar?.state!=='complete')throw new Error('empty heatmap');assert.equal(empty.calendar.value.cells.reduce((n,c)=>n+(c.agentMs??0),0),0);assert.ok(empty.calendar.value.cells.some(c=>c.agentMs===0));
 });
 
-test('calendar-only deltas replace the original date and never read native history or session presence',async t=>{
-  t.mock.method(Date,'now',()=>now);const h=await fixture(now-100*24*H);t.after(async()=>{await h.app.close();h.store.close();});
-  const window=calendarWindow(now,'UTC'),start=window.edges[89];h.credit(start+H,start+2*H);
-  for(const method of ['financialGroups','cells'] as const)t.mock.method(h.store,method,()=>{throw new Error('unrelated native history');});
-  t.mock.method(h.hub.ingest.live,'presenceSnapshot',()=>{throw new Error('calendar has no presence dependency');});
-  const body:PeriodRequest={version:1,selection:{mode:'range',from:now-24*H,to:now-H},evaluatedAt:now,calendar:{zone:window.zone,edges:window.edges}};
+test('heatmap-only deltas replace fine intervals, bind selection, and read no financial or presence data',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture(now-100*24*H);t.after(async()=>{await h.app.close();h.store.close();});h.credit(now-30*M,now-20*M);
+  for(const method of ['financialGroups','cells'] as const)t.mock.method(h.store,method,()=>{throw new Error('unrelated history');});
+  t.mock.method(h.hub.ingest.live,'presenceSnapshot',()=>{throw new Error('no presence dependency');});
+  const body:PeriodRequest={version:1,selection:{mode:'range',from:now-H,to:now},evaluatedAt:now,calendar:{zone:'UTC'}};
   const initial=(await h.read(body)).json<PeriodReply>();if(initial.calendar?.state!=='complete')throw new Error('baseline');
-  h.credit(start+2*H,start+3*H);
+  h.credit(now-20*M,now-19*M);
   const result=await h.read({...body,calendar:{...body.calendar!,cursor:initial.calendar.value.cursor}});assert.equal(result.statusCode,200,result.body);
   const delta=result.json<PeriodReply>();if(delta.calendar?.state!=='delta')throw new Error('delta');
-  assert.deepEqual(delta.calendar.value.updates.map(([i,c])=>[i,c.agentMs]),[[89,2*H]]);
-  assert.ok(!result.body.includes('edges'));assert.ok(!result.body.includes('producer'));
+  const cells=initial.calendar.value.cells.slice();for(const [i,c] of delta.calendar.value.updates)cells[i]=c;
+  assert.equal(cells.reduce((n,c)=>n+(c.agentMs??0),0),11*M);assert.ok(!result.body.includes('edges'));assert.ok(!result.body.includes('producer'));
   const retry=(await h.read({...body,calendar:{...body.calendar!,cursor:initial.calendar.value.cursor}})).json<PeriodReply>();assert.deepEqual(retry.calendar,delta.calendar);
-  const foreign=(await h.read({...body,calendar:{...body.calendar!,cursor:'invalid'}})).json<PeriodReply>();assert.equal(foreign.calendar?.state,'complete');
+  const foreign=(await h.read({...body,selection:{mode:'range',from:now-2*H,to:now-H},calendar:{...body.calendar!,cursor:initial.calendar.value.cursor}})).json<PeriodReply>();assert.equal(foreign.calendar?.state,'complete');
+  if(foreign.calendar?.state!=='complete')throw new Error('historical baseline');
+  const unchanged=(await h.read({...body,selection:{mode:'range',from:now-2*H,to:now-H},calendar:{zone:'UTC',cursor:foreign.calendar.value.cursor}})).json<PeriodReply>();if(unchanged.calendar?.state!=='delta')throw new Error('historical delta');assert.deepEqual(unchanged.calendar.value.updates,[],'time after the fixed endpoint does not dirty padding');
 });
 
-test('calendar parser keeps ordinary limits and rejects invalid partitions',async t=>{
+test('heatmap request derives its bounded partition and rejects independent reader edges',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
-  const window=calendarWindow(now,'UTC'),body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,calendar:{zone:'UTC',edges:window.edges}};
-  for(const calendar of [{zone:'invalid/zone',edges:window.edges},{zone:'UTC',edges:window.edges.slice(1)},{zone:'UTC',edges:window.edges.map((n,i)=>i===4?n+.5:n)},{zone:'UTC',edges:window.edges.map(n=>n-24*H)},{zone:'UTC',edges:window.edges,cursor:'é'},{zone:'UTC',edges:window.edges,cursor:'x'.repeat(2049)}])assert.equal((await h.read({...body,calendar})).statusCode,400);
+  const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,calendar:{zone:'UTC'}};
+  for(const calendar of [{zone:'invalid/zone'},{zone:'UTC',edges:[now-H,now]},{zone:'UTC',cursor:'é'},{zone:'UTC',cursor:'x'.repeat(2049)}])assert.equal((await h.read({...body,calendar})).statusCode,400);
   assert.equal((await h.read({...body,selection:{mode:'live',periodMs:32*24*H}})).statusCode,400);
   const first=(await h.read(body)).json<PeriodReply>();if(first.calendar?.state!=='complete')throw new Error('availability');
-  assert.equal(first.calendar.value.cells[0].agentMs,null);assert.equal(first.calendar.value.cells[89].agentMs,0);
-});
-
-test('an oversized calendar cannot discard a readable ordinary work section or shrink its facet universe',async t=>{
-  t.mock.method(Date,'now',()=>now);const h=await fixture(now-100*24*H);t.after(async()=>{await h.app.close();h.store.close();});
-  h.credit(now-2*M,now-M);const window=calendarWindow(now,'UTC');
-  const original=h.store.admittedWork.bind(h.store);t.mock.method(h.store,'admittedWork',(...args:Parameters<Store['admittedWork']>)=>{if(args[1]<now-31*24*H)throw new HistoryLimit();return original(...args);});
-  const response=await h.read({version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,sessions:{},calendar:{zone:window.zone,edges:window.edges},facets:true,values:[h.source]});
-  assert.equal(response.statusCode,200,response.body);const reply=expandPeriod(response.json());
-  assert.deepEqual(reply.calendar,{state:'error',error:'history_limit'});assert.deepEqual(reply.facets,{state:'error',error:'history_limit'});
-  assert.equal(reply.values?.state,'complete');if(reply.sessions?.state!=='complete')throw new Error('ordinary work was discarded by calendar pressure');
-  assert.equal(workedSessions(reply.sessions.value,reply.basis.range,now)[0].workedMs,M);
+  assert.ok(first.calendar.value.cells.length<=2880);assert.ok(first.calendar.value.cells.some(c=>c.agentMs===0));assert.ok(first.calendar.value.cells.some(c=>c.agentMs===null));
 });
 
 test('current-day drill evaluates native states at elapsed time and keeps the full selected date',async t=>{
@@ -637,25 +625,14 @@ test('current-day drill evaluates native states at elapsed time and keeps the fu
 });
 
 
-test('retention and a current credit replace disjoint calendar dates in one sparse extraction',async t=>{
-  let at=Date.parse('2026-11-02T03:50:00Z');t.mock.method(Date,'now',()=>at);
-  const h=await fixture(at-100*24*H);t.after(async()=>{await h.app.close();h.store.close();});
-  const window=calendarWindow(at,'America/New_York'),oldest=window.edges[0];
-  h.credit(oldest,oldest+H,'oldest');
-  const request:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:at,calendar:{zone:window.zone,edges:window.edges}};
-  const initial=(await h.read(request)).json<PeriodReply>();if(initial.calendar?.state!=='complete')throw new Error('baseline');
-  assert.equal(initial.calendar.value.cells[0].agentMs,H);
-  at+=20*M;h.credit(at-2*M,at-M,'current');
-  const ranges:(readonly {from:number;to:number}[]|undefined)[]=[];const original=h.store.agentWork.bind(h.store);
-  t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{ranges.push(args[7]);return original(...args);});
-  const response=await h.read({...request,evaluatedAt:at,calendar:{...request.calendar!,cursor:initial.calendar.value.cursor}});assert.equal(response.statusCode,200,response.body);
-  const reply=response.json<PeriodReply>();if(reply.calendar?.state!=='delta')throw new Error('sparse delta');
-  assert.deepEqual(reply.calendar.value.updates.map(([i,c])=>[i,c.agentMs]),[[0,50*M],[89,M]]);
-  assert.equal(ranges.length,1);assert.equal(ranges[0]?.length,2);assert.ok(ranges[0]![0].to<ranges[0]![1].from);
-  const selection={mode:'range' as const,from:oldest,to:window.edges[1]};
-  const day=(await h.read({version:1,selection,evaluatedAt:at,sessions:{}})).json<PeriodReply>();
-  if(day.sessions?.state!=='complete')throw new Error('partial day drill');
-  assert.deepEqual(day.basis.range,{from:oldest,to:window.edges[1]});assert.equal(day.sessions.value.knownFrom,at-90*24*H);
-  assert.equal(workedSessions(day.sessions.value,day.basis.range,at).reduce((sum,row)=>sum+row.workedMs,0),50*M);
-  assert.equal((await h.read({version:1,selection:{mode:'range',from:oldest-24*H,to:oldest},evaluatedAt:at,sessions:{}})).statusCode,400,'a fully expired day stays unavailable');
+test('retention replaces only selected historical intervals while later work stays outside the range',async t=>{
+  let at=Date.UTC(2026,10,2,12);t.mock.method(Date,'now',()=>at);const h=await fixture(at-100*24*H);t.after(async()=>{await h.app.close();h.store.close();});
+  const oldest=at-90*24*H;h.credit(oldest,oldest+H,'oldest');
+  const request:PeriodRequest={version:1,selection:{mode:'range',from:oldest,to:oldest+H},evaluatedAt:at,calendar:{zone:'UTC'}};
+  const initial=(await h.read(request)).json<PeriodReply>();if(initial.calendar?.state!=='complete')throw new Error('baseline');assert.equal(initial.calendar.value.cells.reduce((n,c)=>n+(c.agentMs??0),0),H);
+  at+=10*M;h.credit(at-2*M,at-M,'outside');
+  const result=await h.read({...request,evaluatedAt:at,calendar:{zone:'UTC',cursor:initial.calendar.value.cursor}});assert.equal(result.statusCode,200,result.body);
+  const reply=result.json<PeriodReply>();if(reply.calendar?.state!=='delta')throw new Error('delta');
+  const cells=initial.calendar.value.cells.slice();for(const [i,c] of reply.calendar.value.updates)cells[i]=c;assert.equal(cells.reduce((n,c)=>n+(c.agentMs??0),0),50*M);
+  assert.deepEqual(reply.calendar.basis.range,request.selection.mode==='range'?{from:request.selection.from,to:request.selection.to}:null);
 });

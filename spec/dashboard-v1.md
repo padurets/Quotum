@@ -606,79 +606,78 @@ reset leaving the history) goes out when it does.
 | `restart` | The hub stops, or could not work out the board. | Connects again in a few seconds. |
 | `limit` | A newer reader took its place, or it fell 640 KiB behind. | Connects again, not sooner than in 30 seconds. |
 
-## Registered agent-hours calendar
+## Registered agent-hours heatmap
 
-The optional `agent-hours-heatmap` widget shows the latest 90 civil dates, including
-the current incomplete date, in the viewer's named local time zone. It is hidden by
-default on existing and new boards, including boards without subscription cards.
-Explicit Add uses `shown` and literal string layout IDs in the existing v5 codec.
-Released builtin alias positions and masks remain unchanged. It has one instance.
+The optional `agent-hours-heatmap` widget follows the board's common period
+(15 minutes to 31 days) and shared source/project/device/client filters. It is
+hidden by default, available without subscription cards, and uses the existing
+literal string widget ID in the v5 view codec. It has one instance. Presentation
+preferences choose day/hour or compact calendar; these do not change selection,
+authority, Activity legend choices or historical facts.
 
-Its sole metric is registered agent-hours: admitted, selected work durations add,
-including concurrent agents. Actual local midnights partition work; DST days are
-not normalized to 24 hours. A skipped civil date has no elapsed interval. Captured
-work is never extrapolated from presence. Shared work filters apply before daily
-aggregation, independently of card visibility and Activity legend choices.
+Its metric is registered agent-hours: admitted, selected work durations add,
+including concurrent agents. No presence extrapolation, activity-time union,
+observation completeness or productivity score is inferred. Work filters apply
+before aggregation. Actual local dates and clock hours include DST transitions;
+a repeated hour has separate positions in hourly mode, while coarser intervals
+retain its full duration. A nonexistent hour is padding, not registered zero.
 
-`POST /api/boards/:board/period` accepts an optional
-`calendar: {zone: string, edges: number[], cursor?: string}`. `zone` is a valid IANA
-zone of at most 128 ASCII characters; a supplied cursor has at most 2048 URL-safe
-ASCII characters (letters, digits, hyphen, underscore and dot). Exactly 91 nonnegative safe integer edges
-form a nondecreasing partition of positive total length at most 92 days; each
-positive step is at most 48 hours. The final interval contains the evaluated clock.
-The partition is a bounded reader selection, never proof of authority. Every read
-clips work to the server's rolling 90-day retention and device admission.
-Ordinary period selections retain their 15-minute minimum and 31-day maximum.
+`POST /api/boards/:board/period` accepts optional
+`calendar: {zone: string, cursor?: string}`. The zone is a valid named zone of at
+most 128 ASCII characters; a cursor has at most 2048 URL-safe ASCII characters
+(letters, digits, hyphen, underscore, dot). Reader-supplied edges are rejected.
+The server derives one stable UTC-day-aligned partition from the evaluated common
+selection: one-minute cells for periods up to 24 hours, otherwise 15-minute cells.
+There are at most 3072 cells. Work is clipped exactly to the selected range,
+evidence cut, history availability, rolling retention and device admission;
+partition padding never widens selection or the work-filter facet universe.
 
-The independent `calendar` reply section is `complete`, `delta`, or a section error
+The `calendar` reply is `complete`, `delta` or a section error
 (`history_limit`, `history_range_invalid`, `unavailable`). Its basis extends the
-ordinary basis with opaque `calendarKey`, `workAuthority`, and `filterKey`, and
-names its own range and evidence cut. A complete value contains `zone`, `edges`,
-`availableFrom: number|null`, `retainedFrom`, `cursor`, and 90 cells. Each cell is
+common basis with opaque `calendarKey`, `workAuthority`, and `filterKey`; its range
+is the common range and its evidence cut is `min(range.to, evaluatedAt)`.
+A complete value contains `zone`, `edges`, `availableFrom: number|null`,
+`retainedFrom`, `cursor` and `edges.length - 1` cells. Each cell is
 `{agentMs: number|null, from: number, to: number, validUntil: number|null}`.
-A delta replaces sorted unique `[dateIndex, cell]` entries in `updates`, alongside
-`availableFrom`, `retainedFrom`, and a replacement cursor. It never adds totals.
-Zone and edges are not repeated in deltas. Foreign, expired, or invalid signed
-cursors receive a bounded complete baseline. A cursor grants no additional access.
+A delta replaces sorted unique `[cellIndex, cell]` entries, alongside replacement
+`availableFrom`, `retainedFrom` and `cursor`. It never adds totals or repeats edges.
+Invalid or foreign signed cursors receive a bounded complete baseline.
 
-The signed frontier binds reader, board, authority, filter, run, partition, revision,
-cut and the actual retained floor. Dirty dates include new work, newly elapsed
-time and changes to the retained floor. Disjoint old/current replacements use one
-normalized sparse work extraction with the other requested work sections. Calendar
-reads alone request no native financial history or session/presence details.
-All raw, staging and retained representations use the existing history budgets.
+The signed frontier binds reader, board, selection, partition, zone, work authority,
+filter, run, revision, cut and retained floor. Dirty intervals include work changes,
+newly elapsed evidence, the moving left boundary and retention. Requested work
+sections share one normalized sparse extraction and the existing history budgets.
+Heatmap-only reads request neither native financial history nor session/presence
+details. Resizing or changing presentation groups the same fine intervals locally
+and makes no additional history request. Selection, filters or authority changes
+retire prior values immediately; an old generation cannot restore them.
 
-Null totals mean unavailable history. Available zero means no *registered* work;
-neither zero nor a positive total proves complete observation. Cell bounds expose
-partial retention, admission and incomplete dates. Positive evidence expires at
-the first instant retention can reduce its included duration. The shared clock
-removes expired totals and moves the date window without polling. Work, authority
-and reconnect events refresh the calendar; pure financial news does not. Hiding
-it removes demand. Filter/authority changes clear excluded totals immediately;
-stale generations cannot restore them.
+Null means unavailable history; an available zero means no registered work.
+Partial bounds do not prove complete observation. Positive totals expire when
+retention or a moving live boundary can reduce their included durations. The
+shared clock removes expired evidence and advances presentation without HTTP
+polling. Work, authority and reconnect events refresh the projection; pure
+financial news does not. Hiding the widget removes its demand.
 
-An explicitly opened shared work filter includes the normalized union of demanded
-work ranges, including the visible calendar. Facets carry these actual `ranges`;
-their basis range is the envelope, and gaps are not part of the universe. Choices
-come from authorized work before the predicate. Closed controls request no facets.
-Calendar visibility, zone/window and common-range changes invalidate this context.
+Short periods use a chronological strip. Several dates use date rows and clock
+columns; wide monthly views transpose them. The compact calendar places its date
+labels beside intraday segments without separate label rows. Neither view adds an
+inner scroller. The fixed single-hue scale uses `CATEGORY_COLORS[0]` and opacity
+0.20, 0.40, 0.60, 0.80, 1.00 for positive intervals below 0.5, 1, 2, 4 and above
+4 times the displayed interval duration. Zero has a neutral fill. Numeric legends
+name the unit and interval: agent-minutes for sub-hour bins, agent-hours otherwise.
+Filtering never recomputes thresholds from the selected sample. Partial, unavailable,
+selected and focused states have cues independent of intensity. Details retain
+integer milliseconds and show hours to nine decimal places, including tiny positives.
 
-The fixed single-hue scale uses shared Nord Warm Red, `CATEGORY_COLORS[0]`.
-Positive hour bands are `(0,1)`, `[1,4)`, `[4,16)`, `[16,64)`, and `[64,infinity)`.
-Fill opacity increases through 0.40, 0.55, 0.70, 0.85, and 1.00. Neutral zero,
-unavailable pattern, partial marker, selection and focus are independent of fill.
-The legend labels the same numeric thresholds. Details retain exact integer
-milliseconds and display hours to nine decimal places, including tiny positives.
-
-An explicit Open day action selects the full local day in ordinary analytics,
-leaving the calendar overview intact. Accounting admits only elapsed evidence,
-including immediately after midnight. A selected day intersecting retention keeps
-its full bounds but excludes expired work. A fully expired selection is rejected.
-Current-day native states evaluate freshness at `min(dayEnd, evaluationClock)`,
-independently of the observation cut; the shared clock expires their validity
-without new HTTP reads. A completed historical day remains fixed at its right edge.
-Calendar replies expose durations and public date bounds, never producer IDs,
-private attribution metadata or additional financial information.
+Hover/focus and an explicit click/touch readout show the date, interval and value.
+A time-zone offset appears only for an ambiguous repeated hour. An Open interval
+action changes the common range and supports Back; it is omitted below the common
+15-minute minimum. A daily cell opens the full actual local date, including just
+after midnight; only elapsed retained evidence is counted. Current native states
+use `min(dayEnd, evaluationClock)` for freshness rather than the future endpoint.
+Replies expose durations and date bounds, never producer IDs, private attribution
+metadata or additional financial information.
 
 ## Reading the board period
 

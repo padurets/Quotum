@@ -1538,18 +1538,20 @@ caches and selections. The two monetary readers share the budget history protoco
 selected source IDs isolate their invalidations.
 Budget reads never query native quota or agent-work history, and money never enters
 quota forecasts. Legacy unscoped history replies retain their combined contract.
-The optional Agent-hours calendar has an independent 90-local-date partition inside
-the same period transport. It sums admitted, filtered work into exact integer daily
-durations and uses signed cursors to replace changed dates, sharing one sparse raw
-extraction with other work demands. It requests neither financial history nor a
-full session ledger just for the calendar. Its range survives common-period changes.
-Opened work-filter choices cover the union of demanded ranges, including the visible
-calendar; closed filters request nothing. The shared clock advances civil dates and
-clears retention-expired evidence without polling. Null history, registered zero,
-partial bounds and observation completeness remain distinct. An explicit day action
-selects the full local date; only elapsed, retained evidence is counted, and current
-native states use the elapsed clock for validity. The fixed Nord Warm Red opacity
-scale represents agent-hours, including totals above 24 hours from parallel agents.
+The optional Agent-hours heatmap shares the common selection and work filters.
+The server partitions its exact selected interval into minute or quarter-hour cells
+inside the same period transport. Compact signed demands replace changed intervals
+and share one sparse extraction with other work consumers; they read neither
+financial history nor a full session ledger just for the heatmap. Browser geometry
+aggregates those fine cells into a chronological strip, day/hour matrix or compact
+calendar as the duration and width require, without new reads or inner scrolling.
+Named local dates, repeated hours and partial bounds preserve actual elapsed time.
+Shared filter choices cover the common selected work range; closed controls request
+nothing. Shared-clock expiry and live-boundary changes retire stale evidence without
+polling. Null history, registered zero and observation completeness remain distinct.
+An explicit interval/day action changes the common selection; only elapsed retained
+evidence is counted. Fixed thresholds scale with the labelled interval, use the
+first Nord Warm colour and remain independent of the filtered sample.
 
 The page makes cells from `since` stale and reads only those its frame needs,
 without a rate limit or a timer. Reconnect, a new lineup, or a change of whose work the

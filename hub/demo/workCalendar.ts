@@ -9,17 +9,23 @@ export function seedCalendar(store:Store,directory:Directory,stand:Stand){
   const owner=stand.people.get('ana')!;
   const device=directory.devices(owner.id)[0];
   const today=Math.floor(stand.start/DAY)*DAY;
-  const pace=[.7,1.2,2,.15,.8,1.5,3.2,2.6,.5,1.1,1.8,.9,1.4];
-  for(let d=89;d>0;d--){
-    const day=today-d*DAY,index=89-d,week=Math.floor(index/7),weekday=(new Date(day).getUTCDay()+6)%7;
-    // Quiet stretches, release weeks and light weekends make the whole window readable.
-    if((week===3&&weekday<5)||index%17===4||weekday===6&&week%3!==1)continue;
-    const base=[.25,2,5,9,14,22,12][(index*3+week)%7];
-    const hours=d===20||d===55?84:Math.round(base*pace[week]*(weekday>=5?.2:1)*4)/4;
-    const agents=Math.ceil(hours/20);
-    for(let agent=0;agent<agents;agent++){
-      const from=day+(2+agent*.5)*HOUR,to=from+hours/agents*HOUR;
-      store.creditWork(device.id,from,to,[{source:null,client:agent%2?'codex':'opencode',origin:'terminal',project:d>30?'Earlier project':week%3===0?'Docs':'Quotum',folder:'calendar',startedAt:from,identity:{kind:'stable',sessionId:`calendar-${d}-${agent}`}}]);
+  for(let d=0;d<30;d++)for(let hour=0;hour<24;hour++){
+    const day=today-(29-d)*DAY,weekday=new Date(day).getUTCDay(),working=weekday!==0&&weekday!==6,noise=((d*31+hour*17)%13)/12;
+    let main=working&&hour>=9&&hour<13?.75+noise*1.7:working&&hour>=14&&hour<18?.55+noise*1.25:0;
+    let docs=working&&hour>=13&&hour<16?.25+noise*.7:working&&hour>=8&&hour<10?.25:0;
+    let website=working&&hour>=17&&hour<20&&d%3===0?.5+noise*.6:0;
+    if(!working&&d%3===0&&hour>=11&&hour<14)main=.5+noise*.5;
+    if(d>=9&&d<=11){main*=.18;docs*=.2;website=0;}
+    if(d>=21&&working){main=hour>=15&&hour<19?1.1+noise:hour>=20&&hour<24?1.1+noise*1.3:0;docs=hour>=16&&hour<18?.5:0;}
+    if(d===16&&hour>=10&&hour<15){main+=2.25;docs+=1.25;}
+    if(d===17&&hour<3)website=1.5;
+    for(const [project,amount] of [['Quotum',main],['Docs',docs],['Website',website]] as const){
+      const hours=Math.round(amount*4)/4;
+      for(let agent=0;agent<Math.ceil(hours);agent++){
+        const from=day+hour*HOUR,to=Math.min(stand.start,from+Math.min(1,hours-agent)*HOUR);
+        if(from>=to)continue;
+        store.creditWork(device.id,from,to,[{source:null,client:agent%2?'codex':'opencode',origin:'terminal',project,folder:'calendar',startedAt:day,identity:{kind:'stable',sessionId:`calendar-${d}-${project}-${agent}`}}]);
+      }
     }
   }
   // The opening analytical period contains several real retained sessions too.
@@ -32,7 +38,7 @@ export function seedCalendar(store:Store,directory:Directory,stand:Stand){
   for(const [i,before,after] of [[0,30,30],[1,15,15]])store.creditWork(device.id,midnight-before*MIN,midnight+after*MIN,[{source:null,client:'opencode',origin:'terminal',project:'Midnight',folder:'calendar',startedAt:midnight-before*MIN,identity:{kind:'stable',sessionId:`midnight-${i}`}}]);
   const viewOf=(view:ReturnType<Directory['view']>)=>{
     const shown=showWidgets(view,[AGENT_HOURS_HEATMAP,'agents','activity']);
-    return {...shown,layout:{...shown.layout,places:{...shown.layout.places,[AGENT_HOURS_HEATMAP]:{x:0,y:0,w:3},agents:{x:3,y:0,w:3},activity:{x:0,y:1,w:6}}}};
+    return {...shown,layout:{...shown.layout,places:{...shown.layout.places,[AGENT_HOURS_HEATMAP]:{x:0,y:0,w:6},activity:{x:0,y:1,w:6},agents:{x:0,y:2,w:6}}}};
   };
   for(const user of stand.people.values()){
     const board=directory.boards(user.id).find(b=>b.personal)!;

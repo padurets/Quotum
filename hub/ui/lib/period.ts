@@ -266,7 +266,7 @@ class BoardPeriod {
   subscribeWorkOrder=(read:(rows:WorkedSession[])=>SessionOrder|null)=>{this.workOrders.add(read);this.scheduleClock();return()=>{this.workOrders.delete(read);this.scheduleClock();};};
   wakeCalendar=()=>{
     const zone=this.calendar.state.window.zone;
-    if(this.calendar.tick(hubNow(),true)){this.resetFacets();if(zone!==this.calendar.state.window.zone&&this.calendar.dirty()){this.revision++;this.transport.change();}}
+    if(this.calendar.tick(hubNow(),true)){if(zone!==this.calendar.state.window.zone&&this.calendar.dirty()){this.revision++;this.transport.change();}}
     this.scheduleClock();
   };
   refreshWorkClock=()=>{if(this.evaluatedAt!==hubNow())this.tick();else{this.retireExpired(hubNow());this.scheduleClock();}};
@@ -303,7 +303,7 @@ class BoardPeriod {
       ...(pending&&this.valuesNeeded&&this.selection.mode==='range'&&this.sourceIds.length?{values:this.sourceIds}:{}),
       ...(pending&&this.wantsWork&&this.workNeeded?{sessions:{...(this.cursor?{cursor:this.cursor}:{})}}:{}),
       ...(pending&&this.facetsDemand>0&&this.facetsNeeded?{facets:true as const}:{}),
-      ...(!this.workLimit&&this.calendar.demand(pending&&this.facetsDemand>0&&this.facetsNeeded)?{calendar:this.calendar.demand(pending&&this.facetsDemand>0&&this.facetsNeeded)}:{}),
+      ...(!this.workLimit&&this.calendar.demand()?{calendar:this.calendar.demand()}:{}),
       ...(filters&&this.selection.mode==='live'&&(queries.quota||queries.budget?.work==='1')?{sourceWork:{...(this.sourceCursor?{cursor:this.sourceCursor}:{})}}:{})};
     return {board:board.id,generation:this.generation,resourceGeneration:this.resourceGeneration,facetGeneration:this.facetGeneration,calendarGeneration:this.calendar.generation,revision:this.revision,proofEpoch:this.proofEpoch,request};
   }
@@ -359,7 +359,7 @@ class BoardPeriod {
     const identity=JSON.stringify([board.id,periodKey(selection),wantsWork]);
     const authority=JSON.stringify([board.id]);
     if(authority!==this.authority){this.clear();this.authority=authority;}
-    const calendarChanged=this.calendar.configure(widgetVisible(board.view,AGENT_HOURS_HEATMAP,board.lineup.length),JSON.stringify([board.id,board.workAuthority,nextFilter,this.workLimit]),hubNow(),this.workLimit);
+    const calendarChanged=this.calendar.configure(widgetVisible(board.view,AGENT_HOURS_HEATMAP,board.lineup.length),JSON.stringify([board.id,board.workAuthority,nextFilter,this.workLimit]),hubNow(),this.workLimit,selection);
     if(calendarChanged){this.resetFacets();this.revision++;if(this.identity)this.transport.change();}
     const calendarEvent=event?.type==='hub'&&(event.event.type==='hello'||event.event.type==='snapshot'||event.event.type==='mine'||event.event.type==='lineup'||event.event.type==='history'&&(event.event.data.workSince!==undefined||event.event.data.changes?.some(c=>c.workSince!==undefined)));
     if(calendarEvent&&this.calendar.dirty()){this.revision++;this.invalidateFacets();this.transport.change();}
@@ -384,7 +384,7 @@ class BoardPeriod {
       this.workEvidence++;this.retirementAt=Infinity;
       this.dirtyScopes.clear();
       for(const scope of PERIOD_SCOPES)delete this.projectionErrors[scope];
-      if(oldBoard!==board.id){this.clear();this.calendar.configure(widgetVisible(board.view,AGENT_HOURS_HEATMAP,board.lineup.length),JSON.stringify([board.id,board.workAuthority,nextFilter,this.workLimit]),hubNow(),this.workLimit);}
+      if(oldBoard!==board.id){this.clear();this.calendar.configure(widgetVisible(board.view,AGENT_HOURS_HEATMAP,board.lineup.length),JSON.stringify([board.id,board.workAuthority,nextFilter,this.workLimit]),hubNow(),this.workLimit,selection);}
       this.cacheKey=cacheKey;
       let cached=this.valueCache.get(periodKey(selection));
       if(!cached&&selection.mode==='range')cached=[...this.valueCache.values()].find(c=>sources.every(id=>hasPeriodValue(c.values.get(id)?.value,Math.min(selection.to,hubNow()))));
@@ -698,7 +698,7 @@ class BoardPeriod {
   private tick(fromClock=true) {
     if(!this.active)return;
     const now=hubNow();
-    if(this.calendar.tick(now))this.resetFacets();
+    this.calendar.tick(now);
     if(now>=this.nativeDue&&this.selection.mode==='range'){
       const at=Math.min(this.selection.to,now);
       for(const [id,reading] of this.values)if(reading.value)this.setValue(id,{...reading,value:periodValueNow(reading.value,at)});

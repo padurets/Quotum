@@ -1,4 +1,4 @@
-import {parseCalendar,calendarCells,normalizeRanges,type CalendarBasis} from './domain/workCalendar.js';
+import {parseCalendar,calendarPartition,calendarCells,normalizeRanges,type CalendarBasis} from './domain/workCalendar.js';
 import {workKnownFrom} from './domain/history.js';
 import {createHash,createHmac,randomBytes,timingSafeEqual} from 'node:crypto';
 import type {FastifyInstance} from 'fastify';
@@ -7,7 +7,7 @@ import type {Events} from './events.js';
 import {compactJSON, HistoryLimit, type HistoryTiles} from './history.js';
 import {periodDictionary} from './domain/periodWire.js';
 import {fail,readHistory,ReadError} from './historyRead.js';
-import {evaluatedRange,parsePeriod,type PeriodBasis,type PeriodSection} from './domain/period.js';
+import {periodKey,evaluatedRange,parsePeriod,type PeriodBasis,type PeriodSection} from './domain/period.js';
 import {PERIOD_BODY_BYTES,PERIOD_SCOPES,type PeriodReply,type PeriodRequest} from './domain/periodRead.js';
 import type {HistoryScope,HistoryReply} from './domain/history.js';
 import {periodValues,prepareNearbyPeriodValues} from './periodValues.js';
@@ -152,13 +152,13 @@ export class PeriodReader {
     if(raw.sessions!==undefined&&(!object(raw.sessions)||Object.keys(raw.sessions).some(k=>k!=='cursor')||raw.sessions.cursor!==undefined&&(typeof raw.sessions.cursor!=='string'||raw.sessions.cursor.length>2048)))fail(400,'invalid_request');
     if(raw.sourceWork!==undefined&&(!object(raw.sourceWork)||Object.keys(raw.sourceWork).some(k=>k!=='cursor')||raw.sourceWork.cursor!==undefined&&(typeof raw.sourceWork.cursor!=='string'||raw.sourceWork.cursor.length>2048)||!raw.quota&&(!object(raw.budget)||raw.budget.work!=='1')))fail(400,'invalid_request');
     const filter=raw.workFilter===undefined?undefined:parseWorkFilter(raw.workFilter);if(filter===null||raw.facets!==undefined&&raw.facets!==true)fail(400,'invalid_request');
-    const calendar=raw.calendar===undefined?undefined:parseCalendar(raw.calendar);if(calendar===null)fail(400,'invalid_request');
+    const calendarDemand=raw.calendar===undefined?undefined:parseCalendar(raw.calendar);if(calendarDemand===null)fail(400,'invalid_request');
     const request={...raw,...(filter?{workFilter:filter}:{})} as PeriodRequest,{store,directory}=self.hub,now=Date.now();
     if(request.calendar||request.quota||request.sessions||request.budget?.work==='1')self.hub.ingest.live.sweep(now);
     const revision=self.revision;
     const evaluatedAt=Math.min(request.evaluatedAt,now),range=evaluatedRange(selection,evaluatedAt);
     if(range.to<=now-config.retention.sampleDays*86_400_000||range.from>=now)fail(400,'history_range_invalid');
-    if(calendar&&!(calendar.edges[89]<=evaluatedAt&&evaluatedAt<calendar.edges[90]))fail(400,'invalid_request');
+    const calendar=calendarDemand?{...calendarDemand,edges:calendarPartition(range)}:undefined;
     const retainedFrom=Math.max(0,now-config.retention.sampleDays*86_400_000);
     const cut=Math.min(range.to,evaluatedAt),shown=store.authorizedSources(board),owner=store.privateOwner(board);
     const reservation=self.history.reservation();
@@ -213,16 +213,16 @@ export class PeriodReader {
       }
     })():null;
     const calendarPlan=calendar?(()=>{
-      const calendarKey=createHash('sha256').update(JSON.stringify([calendar.zone,calendar.edges])).digest('base64url');
+      const calendarKey=createHash('sha256').update(JSON.stringify([periodKey(selection),calendar.zone,calendar.edges[0],calendar.edges.at(-1),calendar.edges[1]-calendar.edges[0]])).digest('base64url');
       const filterKey=createHash('sha256').update(JSON.stringify(filter??null)).digest('base64url');
       const key=createHash('sha256').update(JSON.stringify(['calendar',identity,calendarKey,self.events.epoch])).digest('base64url');
       const before=self.decode(calendar.cursor);
       const delta=before?.kind==='calendar'&&before.identity===key&&before.revision>=self.workFloor&&before.revision<=revision&&before.cut<=evaluatedAt&&before.retainedFrom!==undefined&&before.retainedFrom<=retainedFrom;
       const indices:number[]=[];
       const dirty=delta?self.workChanges.filter(c=>c.revision>before.revision&&c.revision<=revision&&(c.owner?c.device?access?.devices.get(c.device)?.owner===c.owner:[...(access?.devices.values()??[])].some(d=>d.owner===c.owner):access?.sources.has(c.source))):[];
-      for(let i=0;i<90;i++)if(!delta||calendar.edges[i]<evaluatedAt&&calendar.edges[i+1]>before.cut||calendar.edges[i]<retainedFrom&&calendar.edges[i+1]>before.retainedFrom!||dirty.some(c=>c.since<calendar.edges[i+1]&&calendar.edges[i]<evaluatedAt))indices.push(i);
-      const cursor=self.encode({kind:'calendar',identity:key,revision,from:calendar.edges[0],cut:evaluatedAt,retainedFrom});
-      const basis:CalendarBasis={run:self.events.epoch,revision:String(revision),evaluatedAt,evidenceCut:evaluatedAt,range:{from:calendar.edges[0],to:calendar.edges[90]},calendarKey,workAuthority:sourceIdentity,filterKey};
+      for(let i=0;i<calendar.edges.length-1;i++)if(!delta||calendar.edges[i]<range.from&&calendar.edges[i+1]>before.from||calendar.edges[i]<cut&&calendar.edges[i+1]>before.cut||calendar.edges[i]<retainedFrom&&calendar.edges[i+1]>before.retainedFrom!||calendar.edges[i]<cut&&calendar.edges[i+1]>range.from&&dirty.some(c=>c.since<calendar.edges[i+1]))indices.push(i);
+      const cursor=self.encode({kind:'calendar',identity:key,revision,from:range.from,cut,retainedFrom});
+      const basis:CalendarBasis={run:self.events.epoch,revision:String(revision),evaluatedAt,evidenceCut:cut,range,calendarKey,workAuthority:sourceIdentity,filterKey};
       return {delta,indices,cursor,basis};
     })():null;
     // Plan every consumer before the first extraction, including independently advanced cursors.
@@ -232,7 +232,7 @@ export class PeriodReader {
     };
     if(selection.mode==='range'&&(request.sessions||request.quota&&request.quota.evidence!=='skip'||request.budget?.work==='1'))includeWork(fixedRange.from,fixedRange.to);
     if(selection.mode==='live'&&request.sessions)includeWork(replaceFrom,workFrontier.to);
-    const facetRanges=normalizeRanges([{from:Math.max(range.from,retainedFrom),to:cut},...(calendar?[{from:Math.max(calendar.edges[0],retainedFrom),to:evaluatedAt}]:[])]);
+    const facetRanges=normalizeRanges([{from:Math.max(range.from,retainedFrom),to:cut}]);
     if(sourcePlan)includeWork(sourcePlan.patch.from,sourcePlan.patch.to);
     if(request.quota&&request.quota.cells!=='skip'){
       const query=request.quota,cell=Number(query.cell);
@@ -240,7 +240,7 @@ export class PeriodReader {
     }
     ordinaryWork=normalizeRanges(workRanges);
     if(request.facets)for(const part of facetRanges)includeWork(part.from,part.to);
-    if(calendarPlan)for(const i of calendarPlan.indices)includeWork(calendar!.edges[i],calendar!.edges[i+1]);
+    if(calendarPlan)for(const i of calendarPlan.indices)includeWork(Math.max(range.from,calendar!.edges[i]),Math.min(cut,calendar!.edges[i+1]));
     workRange=normalizeRanges(workRanges);
     if(guard){
       const sources=new Map<string,Set<HistoryScope>>();
@@ -389,8 +389,8 @@ export class PeriodReader {
           work.ensureAccess?.();
           const known=workKnownFrom(store.historyKnown(shown,access?.owner,access));
           reserve(1024+calendarPlan.indices.length*160+calendar!.edges.length*16);
-          const rows=(function*(){for(const part of normalizeRanges(calendarPlan.indices.map(i=>({from:Math.max(calendar!.edges[i],retainedFrom),to:Math.min(calendar!.edges[i+1],evaluatedAt)}))))yield*views.selected(part.from,part.to);})();
-          const updates=yield*calendarCells(rows,calendar!.edges,calendarPlan.indices,evaluatedAt,known,retainedFrom,config.retention.sampleDays*86_400_000);
+          const rows=(function*(){for(const part of normalizeRanges(calendarPlan.indices.map(i=>({from:Math.max(range.from,calendar!.edges[i],retainedFrom),to:Math.min(calendar!.edges[i+1],cut)}))))yield*views.selected(part.from,part.to);})();
+          const updates=yield*calendarCells(rows,calendar!.edges,calendarPlan.indices,evaluatedAt,known,retainedFrom,config.retention.sampleDays*86_400_000,range,selection.mode==='live'?selection.periodMs:undefined);
           const common={availableFrom:known,retainedFrom,cursor:calendarPlan.cursor};
           response.calendar=calendarPlan.delta?{state:'delta',basis:calendarPlan.basis,value:{...common,updates}}:{state:'complete',basis:calendarPlan.basis,value:{...common,zone:calendar!.zone,edges:calendar!.edges,cells:updates.map(([,cell])=>cell)}};
         }catch(error){if(!(error instanceof HistoryLimit)&&!(error instanceof RangeError))throw error;response.calendar={state:'error',error:'history_limit'};}

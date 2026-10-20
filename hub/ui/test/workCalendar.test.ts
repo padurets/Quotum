@@ -1,129 +1,79 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {calendarWindow,calendarLevel,exactAgentHours,WorkCalendar,CALENDAR_RETENTION} from '../lib/workCalendar.js';
-import {calendarCells,normalizeRanges,parseCalendar,type CalendarBasis,type CalendarCell} from '../../server/domain/workCalendar.js';
+import {calendarWindow,calendarLevel,exactAgentHours,WorkCalendar} from '../lib/workCalendar.js';
+import {heatmapLayout} from '../lib/heatmap.js';
+import {calendarCells,calendarPartition,parseCalendar,type CalendarCell} from '../../server/domain/workCalendar.js';
 import {drain} from '../../server/domain/prepare.js';
 import type {Stretch} from '../../server/domain/work.js';
 import {EMPTY_VIEW,encodeView,decodeView} from '../../server/domain/view.js';
 import {AGENT_HOURS_HEATMAP,showWidgets,widgetVisible} from '../../server/domain/widgets.js';
 import {fixture,flush,NOW,M} from './periodRuntimeFixture.js';
-
 const H=3_600_000,DAY=24*H;
 const row=(from:number,to:number):Stretch=>({session:1,source:null,device:'d',user:'u',origin:'terminal',project:null,folder:null,startedAt:from,from,to});
-
-test('calendar partitions real local dates across DST, quarter-hour offsets and skipped dates',()=>{
-  for(const [at,zone,key,hours] of [
-    ['2026-03-08T17:00Z','America/New_York','2026-03-08',23],
-    ['2026-11-01T17:00Z','America/New_York','2026-11-01',25],
-    ['2026-10-20T17:00Z','Asia/Kathmandu','2026-10-20',24],
-    ['2011-12-31T12:00Z','Pacific/Apia','2011-12-30',0],
-  ] as const){
-    const window=calendarWindow(Date.parse(at),zone),i=window.dates.indexOf(key);assert.ok(i>=0);
-    assert.equal(window.edges[i+1]-window.edges[i],hours*H);assert.ok(parseCalendar({zone:window.zone,edges:window.edges}));
-    if(zone==='Asia/Kathmandu')assert.equal(new Date(window.edges[i]).toISOString(),'2026-10-19T18:15:00.000Z');
-    const cells=drain(calendarCells([row(window.edges[i],window.edges[i+1])],window.edges,[i],window.edges[90],window.edges[0],window.edges[0],90*DAY));
-    assert.equal(cells[0][1].agentMs,hours===0?null:hours*H);
+function reading(from:number,to:number,zone='UTC'){
+  const window=calendarWindow(to,zone,{mode:'range',from,to}),cells=drain(calendarCells([row(from,to)],window.edges,window.edges.slice(1).map((_,i)=>i),to,from,from,90*DAY,{from,to})).map(([,c])=>c);
+  return {window,value:{zone,edges:window.edges,cells,availableFrom:from,retainedFrom:from,cursor:'cursor'},basis:null,loading:false,error:null};
+}
+test('civil dates and registered sums survive 23/25-hour and half-hour DST days',()=>{
+  for(const [from,to,zone,hours] of [
+    ['2026-03-08T05:00Z','2026-03-09T04:00Z','America/New_York',23],
+    ['2026-11-01T04:00Z','2026-11-02T05:00Z','America/New_York',25],
+    ['2026-10-19T18:15Z','2026-10-20T18:15Z','Asia/Kathmandu',24],
+    ['2026-10-03T13:30Z','2026-10-04T13:00Z','Australia/Lord_Howe',23.5],
+  ] as const){const r=reading(Date.parse(from),Date.parse(to),zone);assert.equal(r.window.dates.length,1);assert.equal(r.window.dayEdges[1]-r.window.dayEdges[0],hours*H);assert.equal(r.value.cells.reduce((n,c)=>n+(c.agentMs??0),0),hours*H);}
+});
+test('hourly matrix retains repeated hours and omits nonexistent hours',()=>{
+  for(const [from,to,day,count] of [['2026-10-25T04:00Z','2026-11-08T05:00Z','2026-11-01',25],['2026-03-01T05:00Z','2026-03-15T04:00Z','2026-03-08',23]] as const){
+    const r=reading(Date.parse(from),Date.parse(to),'America/New_York'),layout=heatmapLayout(r,1138,'matrix','en'),cells=layout.cells.filter(c=>c.date===day);
+    assert.equal(cells.length,count);assert.equal(cells.reduce((n,c)=>n+c.cell.agentMs!,0),count*H);assert.equal(cells.filter(c=>c.repeated).length,count===25?2:0);
+    assert.equal(layout.cells.reduce((n,c)=>n+(c.cell.agentMs??0),0),r.window.range.to-r.window.range.from);
   }
 });
-
-test('midnight work splits without unioning concurrent agents, and partial retention expires exactly',()=>{
-  const window=calendarWindow(Date.UTC(2026,9,20,12),'UTC'),midnight=window.edges[89];
-  const cells=drain(calendarCells([row(midnight-H/2,midnight+H/2),row(midnight-H/4,midnight+H/4)],window.edges,[88,89],midnight+H,window.edges[0],window.edges[0],90*DAY));
-  assert.deepEqual(cells.map(([,c])=>c.agentMs),[.75*H,.75*H]);
-  const partial=drain(calendarCells([row(midnight,midnight+H)],window.edges,[89],midnight+H,window.edges[0],midnight+10*60_000,90*DAY))[0][1];
-  assert.equal(partial.agentMs,50*60_000);assert.equal(partial.validUntil,midnight+10*60_000+90*DAY+1);
-  assert.deepEqual(normalizeRanges([{from:0,to:2},{from:1,to:3},{from:10,to:12}]),[{from:0,to:3},{from:10,to:12}]);
+test('partial-minute selection and concurrent work precede responsive grouping',()=>{
+  const from=Date.UTC(2026,9,20,12)+123,to=from+61*M+456,edges=calendarPartition({from,to}),window=calendarWindow(to,'Asia/Kathmandu',{mode:'range',from,to});
+  const cells=drain(calendarCells([row(from,to),row(from+M,to-M)],edges,edges.slice(1).map((_,i)=>i),to,from,from,90*DAY,{from,to})).map(([,c])=>c);
+  const r={window,value:{zone:window.zone,edges,cells,availableFrom:from,retainedFrom:from,cursor:''},basis:null,loading:false,error:null};
+  for(const width of [248,538,1138])for(const view of ['matrix','calendar'] as const){const layout=heatmapLayout(r,width,view,'en');assert.equal(layout.cells.reduce((n,c)=>n+(c.cell.agentMs??0),0),2*(to-from)-2*M);assert.ok(layout.cells.every(c=>c.from>=from&&c.to<=to));assert.ok(layout.cells.every(c=>!c.repeated));}
+});
+test('server-derived partition is bounded and colour thresholds name their resolution',()=>{
+  assert.ok(calendarPartition({from:NOW-31*DAY,to:NOW}).length<=3073);assert.ok(parseCalendar({zone:'UTC'}));assert.equal(parseCalendar({zone:'UTC',edges:[0,1]}),null);
+  assert.deepEqual([0,1,H/2,H,2*H,4*H].map(n=>calendarLevel(n,H)),[0,1,2,3,4,5]);assert.equal(calendarLevel(4*H,4*H),calendarLevel(H,H));assert.equal(exactAgentHours(1,'en'),'0.000000278');
+});
+test('compact calendar fits all selected dates without separate date rows',()=>{
+  const r=reading(NOW-30*DAY,NOW);for(const width of [248,318,538,1138]){const l=heatmapLayout(r,width,'calendar','en');assert.ok(l.height<=204);assert.equal(l.cells.reduce((n,c)=>n+(c.cell.agentMs??0),0),30*DAY);assert.ok(l.cells.every(c=>c.x>=0&&c.x+c.width<=width));}
+});
+test('optional heatmap keeps its string codec identity on source-free boards',()=>{
+  assert.equal(widgetVisible(EMPTY_VIEW,AGENT_HOURS_HEATMAP,0),false);const v=showWidgets(EMPTY_VIEW,[AGENT_HOURS_HEATMAP]);assert.deepEqual(decodeView(encodeView(v)),v);
+});
+test('coordinator follows common-range navigation and shares credited-work requests',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({heatmap:true});t.after(()=>h.close());assert.ok(h.period.calendar.state.value);
+  h.selectRange({from:NOW-2*H,to:NOW-H});await flush();assert.equal(h.requests.filter(r=>r.calendar).length,1);assert.deepEqual(h.period.calendar.state.basis?.range,{from:NOW-2*H,to:NOW-H});
+  assert.equal(h.period.calendar.state.value.cells.reduce((n:number,c:CalendarCell)=>n+(c.agentMs??0),0),0);
+  h.selectRange(null);await flush();h.requests.length=0;h.credit(NOW-M,NOW);h.events.flush();await flush();assert.equal(h.requests.filter(r=>r.calendar).length,1);assert.ok(h.period.calendar.state.value.cells.some((c:CalendarCell)=>(c.agentMs??0)>0));
+});
+test('authority clearing rejects an older in-flight heatmap',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({heatmap:true});t.after(()=>h.close());const held=h.hold();h.credit(NOW-M,NOW);h.events.flush();await flush();h.remove();assert.equal(h.period.calendar.state.value,null);held.release();await flush();assert.ok(!h.period.calendar.state.value||h.period.calendar.state.value.cells.every((c:CalendarCell)=>!c.agentMs));
+});
+test('financial news and shared-clock advancement never poll heatmap history',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({heatmap:true,clocked:true});t.after(()=>h.close());h.event({type:'history',data:{sources:[h.source],since:NOW-M,changes:[{source:h.source,scope:'budget',since:NOW-M}]}});await flush();assert.equal(h.requests.filter(r=>r.calendar).length,0);h.jump(NOW+2*M);await flush();assert.equal(h.requests.filter(r=>r.calendar).length,0);
+});
+test('a selection replacement retires the old generation and hiding removes demand',()=>{
+  const calendar=new WorkCalendar();calendar.configure(true,'a',NOW,false,{mode:'live',periodMs:H});const generation=calendar.generation;calendar.configure(true,'a',NOW,false,{mode:'range',from:NOW-3*H,to:NOW-2*H});assert.ok(calendar.generation>generation);assert.equal(calendar.state.value,null);assert.deepEqual(calendar.demand(),{zone:calendar.state.window.zone});calendar.configure(false,'a',NOW);assert.equal(calendar.demand(),undefined);
 });
 
-test('intensity uses stable hour thresholds and tiny positive details remain nonzero',()=>{
-  assert.deepEqual([0,1,H-1,H,4*H,16*H,64*H,150*H].map(calendarLevel),[0,1,1,2,3,4,5,5]);
-  assert.equal(exactAgentHours(1,'en'),'0.000000278');assert.equal(exactAgentHours(150*H,'en'),'150');
+
+test('heatmap clock expiry does not reset already opened common filter choices',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({heatmap:true,clocked:true});t.after(()=>h.close());const stop=h.period.demandFacets();t.after(stop);await flush();const before=h.period.getFacets();assert.ok(before.value);assert.equal(h.requests.filter(r=>r.calendar).length,0,'opening common choices is not another heatmap demand');h.requests.length=0;h.jump(NOW+2*M);await flush();assert.equal(h.period.getFacets().value,before.value);assert.equal(h.period.getFacets().loading,false);assert.equal(h.requests.length,0);
 });
 
-test('clock expiry and midnight retire values without a request and stale generations cannot restore them',()=>{
-  const at=Date.now(),calendar=new WorkCalendar();calendar.configure(true,'board/authority/filter',at);
-  const window=calendar.state.window,basis:CalendarBasis={run:'run',revision:'1',evaluatedAt:at,evidenceCut:at,range:{from:window.edges[0],to:window.edges[90]},calendarKey:'key',workAuthority:'a',filterKey:'f'};
-  const cells=window.dates.map((_,i)=>({agentMs:i===89?H:0,from:window.edges[i],to:Math.min(at,window.edges[i+1]),validUntil:i===89?at+1000:null}));
-  const part={state:'complete' as const,basis,value:{zone:window.zone,edges:window.edges,cells,availableFrom:window.edges[0],retainedFrom:window.edges[0],cursor:'cursor'}};
-  calendar.receive(part,calendar.generation,()=>true);assert.equal(calendar.needed,false);
-  calendar.tick(at+1000);assert.equal(calendar.state.value?.cells[89].agentMs,null);assert.equal(calendar.needed,false,'expiry alone does not demand another HTTP read');calendar.dirty();assert.equal(calendar.needed,true);
-  const generation=calendar.generation;calendar.configure(true,'new filter',at+1000);calendar.receive(part,generation,()=>true);assert.equal(calendar.state.value,null);
-  calendar.tick(window.edges[90]);assert.notDeepEqual(calendar.state.window.edges,window.edges);assert.equal(calendar.state.value,null);
-  calendar.configure(false,'new filter',at);assert.equal(calendar.bytes,0);assert.equal(calendar.demand(),undefined);
+test('moving live boundaries expire positive evidence without demand or a clock loop',()=>{
+  const c=new WorkCalendar();c.configure(true,'a',NOW,false,{mode:'live',periodMs:H});const window=c.state.window,range=window.range;
+  const cells=drain(calendarCells([row(range.from,range.to)],window.edges,window.edges.slice(1).map((_,i)=>i),NOW,range.from,range.from,90*DAY,range,H)).map(([,cell])=>cell);
+  c.receive({state:'complete',basis:{run:'r',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range,calendarKey:'k',filterKey:'f',workAuthority:'a'},value:{zone:window.zone,edges:window.edges,cells,availableFrom:range.from,retainedFrom:range.from,cursor:'c'}},c.generation,()=>true);
+  assert.equal(c.nextAt(NOW),NOW+1);c.tick(NOW+1);assert.equal(c.state.value!.cells.find(cell=>cell.validUntil===NOW+1)!.agentMs,null);assert.equal(c.demand(),undefined);assert.ok(c.nextAt(NOW+1)>NOW+1);
 });
 
-test('the optional calendar uses the string codec tail and stays available on source-free boards',()=>{
-  assert.equal(widgetVisible(EMPTY_VIEW,AGENT_HOURS_HEATMAP,0),false);
-  const view=showWidgets({...EMPTY_VIEW,layout:{columns:6,places:{[AGENT_HOURS_HEATMAP]:{x:0,y:0,w:6,h:9}}}},[AGENT_HOURS_HEATMAP]);
-  assert.equal(widgetVisible(view,AGENT_HOURS_HEATMAP,0),true);
-  const encoded=encodeView(view);assert.ok(JSON.stringify(encoded).includes(AGENT_HOURS_HEATMAP));
-  assert.deepEqual(decodeView(encoded),view);
-});
 
-test('the real coordinator coalesces calendar work and retains its frontier across analytical navigation',async t=>{
-  t.mock.method(Date,'now',()=>NOW);const h=await fixture({heatmap:true});t.after(()=>h.close());
-  assert.ok(h.period.calendar.state.value);assert.equal(h.initialRequests.filter(r=>r.calendar).length,1);
-  const value=h.period.calendar.state.value,cursor=value.cursor;
-  h.selectRange({from:NOW-2*H,to:NOW-H});await flush();
-  assert.equal(h.requests.filter(r=>r.calendar).length,0,'common range navigation does not reread the calendar');
-  assert.equal(h.period.calendar.state.value,value);
-  h.requests.length=0;h.credit(NOW-M,NOW);h.events.flush();await flush();
-  assert.equal(h.requests.filter(r=>r.calendar).length,1,JSON.stringify({frames:h.frames,requests:h.requests,needed:h.period.calendar.needed}));
-  assert.equal(h.requests.find(r=>r.calendar)!.calendar!.cursor,cursor);
-  assert.ok(h.period.calendar.state.value.cells[89].agentMs>=2*M);
-});
-
-test('work authority clears the calendar before a delayed replacement and cannot be restored by its old flight',async t=>{
-  t.mock.method(Date,'now',()=>NOW);const h=await fixture({heatmap:true});t.after(()=>h.close());
-  assert.ok(h.period.calendar.state.value.cells[89].agentMs>0);
-  const held=h.hold();h.credit(NOW-M,NOW);h.events.flush();await flush();h.remove();
-  assert.equal(h.period.calendar.state.value,null);
-  held.release();await flush();
-  assert.ok(!h.period.calendar.state.value||h.period.calendar.state.value.cells.every((c:CalendarCell)=>c.agentMs===null||c.agentMs===0));
-});
-
-test('financial news and a local midnight do not poll calendar history',async t=>{
-  let at=NOW;t.mock.method(Date,'now',()=>at);const h=await fixture({heatmap:true,clocked:true});t.after(()=>h.close());
-  const before=h.period.calendar.state.value;
-  h.event({type:'history',data:{sources:[h.source],since:NOW-M,changes:[{source:h.source,scope:'budget',since:NOW-M}]}});await flush();
-  assert.equal(h.requests.filter(r=>r.calendar).length,0);assert.equal(h.period.calendar.state.value,before);
-  h.requests.length=0;at=h.period.calendar.state.window.edges[90];h.jump(at);await flush();
-  assert.equal(h.period.calendar.state.window.edges[89],at);assert.equal(h.period.calendar.state.value.cells[89].agentMs,null);
-  assert.equal(h.requests.filter(r=>r.calendar).length,0,'civil midnight changes presentation without polling');
-});
-
-test('zero-history boundaries advance once without a clock loop, and a clock correction clears future evidence',t=>{
-  const prior=process.env.TZ;process.env.TZ='America/New_York';t.after(()=>{if(prior===undefined)delete process.env.TZ;else process.env.TZ=prior;});
-  const at=Date.parse('2026-11-02T03:50:00Z'),calendar=new WorkCalendar();calendar.configure(true,'calendar',at);
-  const window=calendar.state.window,basis:CalendarBasis={run:'run',revision:'1',evaluatedAt:at,evidenceCut:at,range:{from:window.edges[0],to:window.edges[90]},calendarKey:'key',workAuthority:'a',filterKey:'f'};
-  const cells=window.dates.map((_,i)=>({agentMs:0,from:window.edges[i],to:Math.min(at,window.edges[i+1]),validUntil:null}));
-  calendar.receive({state:'complete',basis,value:{zone:window.zone,edges:window.edges,cells,availableFrom:window.edges[0],retainedFrom:at-CALENDAR_RETENTION,cursor:'cursor'}},calendar.generation,()=>true);
-  const entry=window.edges[0]+CALENDAR_RETENTION+1;assert.equal(calendar.nextAt(at),entry);
-  calendar.tick(entry+10*M);assert.equal(calendar.state.value!.cells[0].from,window.edges[0]+10*M+1);
-  assert.equal(calendar.state.value!.cells[0].agentMs,0);assert.equal(calendar.nextAt(entry+10*M),window.edges[90]);assert.equal(calendar.needed,false);
-  calendar.tick(at-1000);assert.equal(calendar.state.value,null);assert.equal(calendar.demand(),undefined);
-});
-
-test('a positive day becomes partial before its first credited instant expires, without a read',t=>{
-  const prior=process.env.TZ;process.env.TZ='America/New_York';t.after(()=>{if(prior===undefined)delete process.env.TZ;else process.env.TZ=prior;});
-  const at=Date.parse('2026-11-02T03:50:00Z'),calendar=new WorkCalendar();calendar.configure(true,'calendar',at);
-  const window=calendar.state.window,entry=window.edges[0]+CALENDAR_RETENTION+1,expiry=entry+30*M;
-  const basis:CalendarBasis={run:'run',revision:'1',evaluatedAt:at,evidenceCut:at,range:{from:window.edges[0],to:window.edges[90]},calendarKey:'key',workAuthority:'a',filterKey:'f'};
-  const cells=window.dates.map((_,i)=>({agentMs:i===0?H:0,from:window.edges[i],to:Math.min(at,window.edges[i+1]),validUntil:i===0?expiry:null}));
-  calendar.receive({state:'complete',basis,value:{zone:window.zone,edges:window.edges,cells,availableFrom:window.edges[0],retainedFrom:at-CALENDAR_RETENTION,cursor:'cursor'}},calendar.generation,()=>true);
-  assert.equal(calendar.nextAt(at),entry);calendar.tick(entry);
-  assert.equal(calendar.state.value!.cells[0].from,window.edges[0]+1);assert.equal(calendar.state.value!.cells[0].agentMs,H);
-  assert.equal(calendar.needed,false);assert.equal(calendar.nextAt(entry),expiry);
-  calendar.tick(expiry);assert.equal(calendar.state.value!.cells[0].agentMs,null);assert.equal(calendar.needed,false);
-});
-
-test('waking the coordinator after a timezone change replaces the calendar with a new local window',async t=>{
-  const prior=process.env.TZ;process.env.TZ='UTC';t.after(()=>{if(prior===undefined)delete process.env.TZ;else process.env.TZ=prior;});
-  t.mock.method(Date,'now',()=>NOW);const h=await fixture({heatmap:true});t.after(()=>h.close());
-  const before=h.period.calendar.state.window.edges;
-  process.env.TZ='Asia/Kathmandu';h.period.wakeCalendar();await flush();
-  const zone=Intl.DateTimeFormat().resolvedOptions().timeZone;
-  assert.equal(h.period.calendar.state.window.zone,zone);assert.notDeepEqual(h.period.calendar.state.window.edges,before);
-  assert.equal(h.requests.filter(r=>r.calendar).length,1);assert.equal(h.requests.find(r=>r.calendar)!.calendar!.zone,zone);
-  assert.ok(h.period.calendar.state.value);
+test('a repeated half-hour keeps its own hourly lane and actual clock label',()=>{
+  const r=reading(Date.parse('2026-03-29T13:00Z'),Date.parse('2026-04-12T13:30Z'),'Australia/Lord_Howe'),l=heatmapLayout(r,1138,'matrix','en'),day=l.cells.filter(c=>c.date==='2026-04-05');assert.equal(day.reduce((n,c)=>n+c.cell.agentMs!,0),24.5*H);assert.equal(day.filter(c=>c.repeated).length,2);assert.ok(l.labels.some(label=>label.text==='01:30'));
 });
