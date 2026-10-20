@@ -26,11 +26,6 @@ on:
         required: false
         type: boolean
         default: false
-      v8_calibration:
-        description: Run one temporary synthetic native-code mapping calibration
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -151,94 +146,8 @@ jobs:
           path: ${{ runner.temp }}/quotum-bench-dashboard
           if-no-files-found: warn
 
-  # Temporary method check; remove after its first outcome, regardless of verdict.
-  v8-code-calibration:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.v8_calibration }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: hub
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.diagnostic_ref }}
-          fetch-depth: 0
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: hub/package-lock.json
-      - name: Verify the exact synthetic-only mode
-        run: |
-          node --input-type=module <<'JS'
-          import assert from 'node:assert/strict';
-          import {execFileSync} from 'node:child_process';
-          const actual=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
-          assert(/^[a-f0-9]{40}$/.test(process.env.CALIBRATION_SHA??''));
-          assert(actual===process.env.CALIBRATION_SHA&&actual===process.env.GITHUB_SHA);
-          assert(process.env.OTHER_MODES==='false false');
-          JS
-        env:
-          CALIBRATION_SHA: ${{ inputs.diagnostic_ref }}
-          OTHER_MODES: ${{ inputs.trace_only }} ${{ inputs.original_timing }}
-      - run: npm ci
-      - name: Prepare pinned inputs and unchanged native sampler
-        env:
-          CALIBRATION_SHA: ${{ inputs.diagnostic_ref }}
-        run: |
-          set -eu
-          calibration_dir="$RUNNER_TEMP/quotum-v8-calibration"
-          [ ! -e "$calibration_dir" ]
-          [ "$(df -B1 --output=avail "$RUNNER_TEMP" | tail -n 1)" -gt 8589934592 ]
-          export QUOTUM_CALIBRATION_DIR="$calibration_dir"
-          python3 - <<'PYTHON'
-          import hashlib, json, os, subprocess
-          from pathlib import Path
-          root=Path(os.environ['QUOTUM_CALIBRATION_DIR']);root.mkdir(mode=0o700)
-          archive='36fa486d6409a75043c1455555da389d0a8019f9'
-          pins={'bootstrap.py': '23c67a692287e8491de0e16cc44996c4e8c98cbf356988e175e5811f1100b58f', 'control.mjs': '08aa63fa3eb5956c07bc97026456ef638b19b46846b4e6856b8c8a82d5b3167e', 'map_samples.py': '146666c809ffc06753bfec8d2413e95b05b360511c4fa1028e2f3b0b7cbf6d1e', 'temporal_ranges.py': '1ac8b09f1596e7ba8f2e7a6b1fe214ac4190642bae56cb1eb3a2aa9ec5510106', 'test_temporal_ranges.py': 'f6d062cdea8dce5bf2e6cec9aa0c5d57dd5cfac0e5eb716c0163210a6ee2df14', 'trace-config-first.json': '56523afe39b4020132044fbc32645f24159bf57ae2e6ea14a89af2744a273294'}
-          prefix='tooling/experiments/v8-code-calibration/'
-          for name,digest in pins.items():
-              body=subprocess.check_output(['git','show',archive+':'+prefix+name])
-              assert hashlib.sha256(body).hexdigest()==digest
-              if name=='control.mjs':
-                  text=body.decode();assert text.count('receipt.streamFormat')==4
-                  text=text.replace('receipt.streamFormat','receipt.traceFormat')
-                  before="  assert(runtime.product==='Chrome/155.0.8059.39'&&runtime.jsVersion==='15.5.35.20'&&runtime.revision.replace(/^@/,'')==='3ff7ac5a9224be9156d7f8703a06e22890aafd34');"
-                  after="  await save('browser-version',{product:runtime.product,jsVersion:runtime.jsVersion,revision:runtime.revision});\n  const acceptedRuntimes=[\n    ['Chrome/155.0.8059.39','15.5.35.20','3ff7ac5a9224be9156d7f8703a06e22890aafd34'],\n    ['Chrome/155.0.8059.84','15.5.35.25','5869fe313571d75152b77813cf0a4ee26a4e6df0'],\n  ];\n  assert(acceptedRuntimes.some(([product,jsVersion,revision])=>runtime.product===product&&runtime.jsVersion===jsVersion&&typeof runtime.revision==='string'&&runtime.revision.replace(/^@/,'')===revision));"
-                  assert text.count(before)==1
-                  body=text.replace(before,after).encode()
-                  assert hashlib.sha256(body).hexdigest()=='dbb2b48c226d7232ba884cb5871775e6560cb6c3c46b73488d52ad7788f89257'
-              (root/name).open('xb').write(body)
-          modules={}
-          for name in ['chrome','runOwner','cdp','browserProcess','deadline']:
-              file='hub/bench/'+name+'.ts';body=(Path(os.environ['GITHUB_WORKSPACE'])/file).read_bytes()
-              assert body==subprocess.check_output(['git','show',archive+':'+file])
-              modules[file]={'bytes':len(body),'sha256':hashlib.sha256(body).hexdigest()}
-          receipt={'archive':archive,'archiveInputs':pins,'controllerSha256':'dbb2b48c226d7232ba884cb5871775e6560cb6c3c46b73488d52ad7788f89257','modules':modules,'requestedHead':os.environ['CALIBRATION_SHA'],'actualHead':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()}
-          assert receipt['requestedHead']==receipt['actualHead']
-          (root/'workflow-inputs.json').open('x').write(json.dumps(receipt,indent=2)+'\n')
-          PYTHON
-          python3 "$calibration_dir/bootstrap.py"
-          python3 "$calibration_dir/test_temporal_ranges.py"
-          cc -std=c11 -O2 -Wall -Wextra -Werror "$calibration_dir/perf-sample.c" -o "$calibration_dir/perf-sample"
-          node --check "$calibration_dir/control.mjs"
-          sha256sum "$calibration_dir/perf-sample.c" "$calibration_dir/perf-sample" "$calibration_dir/control.mjs"
-      - name: Run one two-function calibration
-        run: node --import tsx "$QUOTUM_CALIBRATION_DIR/control.mjs"
-        env:
-          QUOTUM_CALIBRATION_DIR: ${{ runner.temp }}/quotum-v8-calibration
-      - name: Preserve the first calibration outcome
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: v8-code-calibration-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/quotum-v8-calibration
-          if-no-files-found: error
-
   idle-cpu-control:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.v8_calibration }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
