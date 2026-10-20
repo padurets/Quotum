@@ -11,6 +11,8 @@ import {union} from '../../server/domain/work.js';
 import {fixedTape,fixedWork} from '../../server/periodFixed.js';
 import {shifted} from '../../server/domain/periodShift.js';
 import {periodTextChangesAt} from '../lib/periodClock.js';
+import {expandPeriod,periodDictionary} from '../../server/domain/periodWire.js';
+import {compactJSON} from '../../server/history.js';
 
 test('shared work curves match exact session sums and concurrent unions across hour boundaries',()=>{
   const refs=Array.from({length:5},(_,i)=>({ref:String(i),source:String(i%2),device:{id:String(i%3),name:'Laptop'},origin:'terminal' as const,project:i%2?'P':null,folder:null,startedAt:0}));
@@ -24,6 +26,29 @@ test('shared work curves match exact session sums and concurrent unions across h
 
 const blank:History={range:'1h',live:true,since:0,to:60_000,cellMs:60_000,historyStart:0,events:[],series:[],activity:{since:0,known:{from:0,to:60_000},barMs:60_000,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
 const tape=():PeriodTape=>({from:0,cut:60_000,replaceFrom:0,cursor:'cursor',quota:[],money:[]});
+for(const bound of ['ttl','reset','hold','interruption','paired'] as const)test(`fixed endpoint validity survives wire and cached shifts with ${bound} money bounds independently of card values`,()=>{
+  const evidence=tape(),range={from:0,to:2000},at=100;
+  evidence.cut=at;evidence.quota=[{source:'s',window:'w',samples:packSamples([{at:10,used:17,staleAfterMs:1000,resetAt:600,validUntil:500}])}];
+  const reading:Reading={id:'balance',kind:'balance',unit:'credits:codex',amount:'1000000',limit:null,at:10,previousAt:null,staleAfterMs:1000,resetAt:bound==='reset'?350:null,minutes:null,scope:null,label:null};
+  const span={from:10,to:10,staleAfterMs:1000,...(bound==='hold'?{holdUntil:400}:{}),...(bound==='interruption'?{interruptedAt:450}:{})};
+  evidence.money=[{source:'s',meter:'balance',displayUnit:'USD',readings:[reading],spans:[span],rates:{'credits:codex\n10':[{id:'coefficient',base:'credits:codex',from:'1000000',to:'40000',source:'manual',date:0,fetchedAt:0}]},...(bound==='paired'?{paired:{readings:[{...reading,amount:'3000000'}],spans:[{...span,holdUntil:250}]}}:{})}];
+  const deadline={ttl:1011,reset:350,hold:400,interruption:450,paired:250}[bound];
+  const fixed=new PeriodAccounting(evidence,null).fixed(range,60_000,at);
+  assert.equal(fixed.quota[0].endValidUntil,500);assert.equal(fixed.money[0].endValidUntil,deadline);assert.notEqual(fixed.money[0].end,null);
+  const basis={run:'r',revision:'1',evaluatedAt:at,evidenceCut:at,range},reply={basis,quota:{state:'complete' as const,basis,value:{version:1 as const,run:'r',now:at,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:{...evidence,quota:[],money:[],fixed}}}};
+  const dictionary=periodDictionary(reply,()=>{}),decoded=expandPeriod(JSON.parse(compactJSON(reply,dictionary.replacer)));
+  if(decoded.quota?.state!=='complete')throw Error('fixed wire');const retained=decoded.quota.value.tape!;
+  for(const clock of [at,deadline-1,deadline,500,2000]){
+    const result=new PeriodAccounting(retained,null).project({...blank,live:false},range,undefined,false,Math.min(range.to,clock));
+    assert.equal(result.series[0].remainingAtEnd,clock<500?83:null);
+    assert.equal(result.meterSeries![0].end,clock<deadline?fixed.money[0].end:null);
+  }
+  const cached=fixedTape(evidence,null,{from:0,to:at-2},60_000,()=>{}).fixed!,moved=shifted(cached,{from:1,to:at-1});assert.ok(moved);
+  assert.equal(moved.quota[0].endValidUntil,500);assert.equal(moved.money[0].endValidUntil,deadline);
+  const accounting=new PeriodAccounting({...retained,fixed},null);
+  assert.equal(accounting.changesAt(at,0),Math.min(500,deadline));assert.equal(accounting.changesAt(Math.max(500,deadline),0),null);
+  assert.equal(accounting.changesAt(at,0,'another'),null);
+});
 test('ordered native quota bounds prepare in linear work and nonmonotonic bounds retain their deadlines',()=>{
   const count=4096,evidence=tape();
   const samples=Array.from({length:count},(_,i)=>({at:i*100,used:i%100,resetAt:1_000_000,staleAfterMs:1000}));

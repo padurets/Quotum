@@ -826,13 +826,20 @@ reader and cache. The ordinary `quota` and `money` tape arrays are empty. A summ
 applies only to its exact range and cell size; it cannot project another interval.
 The server and browser use the same accounting functions, including original scales,
 historical cap allowances, availability bounds and recorded currency provenance.
+Each fixed quota or money row retains `endValidUntil`, the absolute exclusive
+deadline of its admitted endpoint observation, or null when unavailable. It includes
+TTL, resets and availability interruptions, including both sides of a paired balance.
+The endpoint value expires through the shared clock independently of the optional
+card-values section. Nearby fixed shift snapshots and patches retain that deadline;
+plot bounds do not replace it.
 
 Values are measurement-only projections: source id/provider, retained native windows,
 meters, keys and the observed `creditBalance` status when authorized. Native windows include `observedAt`, `validUntil` and `stale`.
 Membership is the last nonempty retained batch strictly before the right edge.
-For a fixed interval, freshness is evaluated at the requested exclusive right edge,
-even when it is after the actual evidence cut. Observations are still admitted only
-before that cut. A retained value can be stale at the selected edge; the projection
+For a fixed interval, freshness is evaluated at `min(selected.to, evaluationClock)`.
+Past endpoints keep their historical state; future endpoints advance only with the
+evaluation clock. Observations are still admitted only before the evidence cut.
+A retained value can be stale at the evaluated edge; the projection
 never invents future readings or extends evidence coverage. A meter
 keeps exact decimal integer amounts, historical allowance, unit and conversion evidence.
 An explicitly removed key cap remains absent after its own observation time; later

@@ -1901,6 +1901,10 @@ and its complete rate path is unchanged. Explicit bindings and real rate changes
 remain, so accumulated history and a fresh read retain the same conversion provenance.
 Fixed selections carry exact totals and boundary geometry instead of a rolling
 ledger; the server and browser share the accounting implementation in `server/domain`.
+Their native endpoint values retain their own exclusive validity deadlines. A future
+endpoint uses the elapsed evaluation clock, while a past endpoint keeps its historical
+state. The shared clock expires chart and table values even if the separate card-values
+section fails; plotting bounds and cached shifts do not extend that validity.
 The interior drawing still uses cached history cells. Neighboring card states keep exact sparse changes instead of repeated measurement objects.
 Their interval lookup allocates no replay; restored values share immutable proofs.
 The server reads each source's neighboring state boundaries once and finds native batches

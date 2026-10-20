@@ -349,6 +349,22 @@ test('a failed calendar releases its partial reply before source work is prepare
   assert.equal(failed.sourceWork?.state,'complete','the failed optional projection must leave capacity for its sibling');assert.equal(failed.quota?.state,'complete');
 });
 
+test('fixed resource sections retain endpoint deadlines when card values exceed the shared capacity',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  h.store.record(h.source,{observedAt:now-M,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:now+H}],balances:[{id:'balance:credits',unit:'credits:codex',status:'finite',amount:'123',hasCredits:true}]});
+  const wallet=h.store.source('openrouter','b'.repeat(24),now-2*H);h.store.hold(wallet,h.user.id,now-2*H);
+  h.store.record(wallet,{type:'meters',observedAt:now-M,staleAfterMs:H,meters:[],keys:Array.from({length:100},(_,i)=>({id:i.toString(16).padStart(12,'a'),name:'N'.repeat(80),disabled:false,expiresAt:null,includeByok:false,at:now-M,staleAfterMs:H,presence:'observed',missCount:0,periods:{day:null,week:null,month:null}})),inventoryComplete:true,inventoryError:null});
+  const tiles=new HistoryTiles(h.store),events=new Events(h.hub,undefined,{now:()=>now,after:()=>()=>{}},null),reader=new PeriodReader(h.hub,tiles,events);t.after(()=>events.close());
+  const pin=tiles.reservation();pin.add(32*1024*1024-100_000);t.after(()=>pin.close());
+  const range={from:now-H,to:now+2*H},query={cell:String(M),from:String(range.from),to:String(range.to),cells:'skip' as const};
+  const reply=expandPeriod(JSON.parse(reader.read(h.board,h.user.id,{version:1,selection:{mode:'range',...range},evaluatedAt:now,quota:query,funds:{...query,unit:'USD',meters:JSON.stringify([[h.source,'balance:credits']])},values:[h.source,wallet]})));
+  assert.deepEqual(reply.values,{state:'error',error:'history_limit'});
+  for(const scope of ['quota','funds'] as const){
+    const part=reply[scope];assert.equal(part?.state,'complete');if(part?.state!=='complete')throw Error(scope);
+    const fixed=part.value.tape!.fixed!,row=scope==='quota'?fixed.quota[0]:fixed.money[0];assert.equal(row.endValidUntil,now-M+H+1);
+  }
+});
+
 test('a chart-only past tile reads only its work, and extraction replacement releases its reservation',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   h.credit(now-2*H,now-H);h.credit(now-30*M,now-M,'later');

@@ -166,6 +166,7 @@ class BoardPeriod {
   get=()=>this.workState;
   getFinancialProjectionRevision=(scope:PeriodScope)=>this.tapes.get(scope)?.accounting.financialAuthority??null;
   getProjectionRevision=(scope:PeriodScope)=>this.projectionRevision[scope];
+  projectionChangesAt=(scope:PeriodScope,now:number)=>this.selection.mode==='range'?this.tapes.get(scope)?.accounting.changesAt(now,0)??null:null;
   subscribeProjection=(scope:PeriodScope,listener:()=>void)=>{this.projectionListeners[scope].add(listener);return()=>{this.projectionListeners[scope].delete(listener);};};
   private publishProjection(scopes:readonly PeriodScope[]=PERIOD_SCOPES){for(const scope of scopes){this.projectionRevision[scope]++;for(const listener of this.projectionListeners[scope])listener();}}
   /** A discarded prefix cannot supply a new analytical range while replacement waits. */
@@ -757,7 +758,7 @@ class BoardPeriod {
     const orders=demands.flatMap(order=>order.worked??[]);
     const due=this.workAdvances(now)?this.index?.changesAt(now,this.workSelection.mode==='live'?this.workSelection.periodMs:0,orders)??null:null;
     const activityDue=this.workAdvances(now)?this.activity?.orderChangesAt(now,this.workSelection.mode==='live'?this.workSelection.periodMs:0,demands.flatMap(order=>order.activity?[order.activity]:[])):null;
-    this.nativeDue=this.selection.mode==='range'&&this.selection.to>now?Math.min(this.selection.to,...[...this.values.values()].flatMap(reading=>reading.value?[periodValueChangesAt(reading.value,now)??Infinity]:[])):Infinity;
+    this.nativeDue=this.selection.mode==='range'&&this.selection.to>now?Math.min(this.selection.to,...[...this.values.values()].flatMap(reading=>reading.value?[periodValueChangesAt(reading.value,now)??Infinity]:[]),...PERIOD_SCOPES.map(scope=>this.projectionChangesAt(scope,now)??Infinity)):Infinity;
     const next=Math.min(this.nativeDue,this.calendar.nextAt(now),due??Infinity,activityDue??Infinity,this.retiring||pan.get()?Infinity:this.retirementAt);
     clock.due(this.watch,Number.isFinite(next)?next:null,now);
   }

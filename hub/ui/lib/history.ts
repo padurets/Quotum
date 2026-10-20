@@ -1163,7 +1163,7 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false):Sho
   const revision=useSyncExternalStore(listener=>boardPeriod.subscribeProjection(loader===fundsHistory?'funds':loader.scope??'quota',listener),()=>(financial?boardPeriod.getFinancialProjectionRevision:boardPeriod.getProjectionRevision)(loader===fundsHistory?'funds':loader.scope??'quota'));
   const retained=useRef<{board:string;history:History;deadline:number}|null>(null);
   const now=useClock(at=>{
-    const next=Math.min(rolling?frameChangesAt(timeRange(),shown.history?.cellMs??60_000,at)??Infinity:Infinity,retained.current?.deadline??Infinity);
+    const next=Math.min(rolling?frameChangesAt(timeRange(),shown.history?.cellMs??60_000,at)??Infinity:Infinity,boardPeriod.projectionChangesAt(loader===fundsHistory?'funds':loader.scope??'quota',at)??Infinity,retained.current?.deadline??Infinity);
     return Number.isFinite(next)?next:null;
   },[shown,revision,panning]);
   const gesture=useRef<{active:boolean;target:string|null}>({active:false,target:null});

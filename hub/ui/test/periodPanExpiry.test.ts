@@ -43,7 +43,7 @@ async function fixture(detached:boolean){
     useLayoutEffect:(effect:()=>void,deps:unknown[])=>{const box=useRef(null);if(!box.current||deps.some((value,i)=>!Object.is(value,box.current[i]))){box.current=deps;effects.push(effect);}},
     clock,hubNow:clock.hubNow,pan,shallowEqual,planEventsAt,planEventsDeadline,fundsHistory:{},page:{get:()=>({board:{id:'b'}})},
     timeRange:()=>selected,timeRangeKey:(range:TimeRange)=>`${range.from}-${range.to}`,prefs:()=>({range:'1h'}),
-    boardPeriod:{subscribeProjection:()=>()=>{},getProjectionRevision:()=>0,projectionState:()=>({ready}),
+    boardPeriod:{subscribeProjection:()=>()=>{},getProjectionRevision:()=>0,projectionChangesAt:()=>null,projectionState:()=>({ready}),
       project:(base:History,_scope:string,at:number)=>{projects++;return accounting.project(base,selected??{from:at-H,to:at});}},
     read:null as unknown as (loader:HistoryStore,rolling:boolean)=>Shown&{drawing:History|null}};
   runInNewContext(ts.transpileModule(clockHook+'\n'+hook+'\nglobalThis.read=usePeriodHistory;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);

@@ -3,10 +3,14 @@ import assert from 'node:assert/strict';
 import {fixture,flush,NOW,H,M} from './periodRuntimeFixture';
 import type {History} from '../../server/domain/history';
 
-test('future fixed summaries stay expired when the clock reaches their endpoint while past endpoints remain historical',async t=>{
+for(const values of ['complete','error'] as const)test(`future fixed summaries with ${values} card values stay expired while past endpoints remain historical`,async t=>{
   let now=NOW;t.mock.method(Date,'now',()=>now);const h=await fixture({clocked:true,personal:true});t.after(()=>h.close());
   h.store.record(h.source,{observedAt:NOW-M,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:NOW+H}],balances:[{id:'balance:credits',unit:'credits:codex',status:'finite',amount:'123',hasCredits:true}]});
   const view=h.directory.view(h.board);h.directory.saveView(h.board,{...view,shown:[...view.shown,'subscription-funds']},h.alice.id,NOW);h.events.flush();await flush();
+  if(values==='error'){
+    const send=h.period.transport.send.bind(h.period.transport);
+    h.period.transport.send=async(...args:any[])=>{const reply=await send(...args);if(args[1].values)reply.values={state:'error',error:'history_limit'};return reply;};
+  }
   h.selectRange({from:NOW-H,to:NOW+2*H});await flush();h.requests.length=0;
   const history=(scope:'quota'|'funds'):History=>{
     const entry=h.period.tapes.get(scope);assert.ok(entry.tape.fixed);

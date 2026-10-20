@@ -114,6 +114,10 @@ class QuotaIndex {
     const workLo=lower(this.times,workRange.from);
     return {consumed:sum(this.spent),coveredMs:sum(this.covered),remainingAtStart:valid(first,range.from),remainingAtEnd:valid(last,stateAt),work:Number.isFinite(this.known)?{from:workRange.from,ms:workRange.to>workRange.from?this.activity?.read(workRange,true)??0:null,agentMs:workRange.to>workRange.from?this.activity?.read(workRange)??0:0,consumed:hi>workLo?numberAt(this.spent,hi)!-numberAt(this.spent,workLo)!:0,coveredMs:sum(this.worked),duringWork:sum(this.during)}:null};
   }
+  endValidUntil(range:PeriodRange){
+    const sample=sampleAt(this.series.samples,lower(this.times,range.to)-1);
+    return sample?Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity):null;
+  }
 }
 
 class AmountIndex {
@@ -268,6 +272,7 @@ class MoneyIndex {
   private value(observation:ReturnType<MoneyIndex['observation']>,at:number) {
     return observation&&at<observation.deadline?this.convert(observation.native,observation.reading,observation.observed):null;
   }
+  endValidUntil(range:PeriodRange){const deadline=this.observation(range.to)?.deadline;return deadline!==undefined&&Number.isFinite(deadline)?deadline:null;}
   plot(range:PeriodRange,cell:number,previous:MeterHistory['points'],quantities=range):MeterHistory['points'] {
     const leftEnd=(Math.floor(range.from/cell)+1)*cell,rightStart=Math.floor((range.to-1)/cell)*cell;
     const points=moneyInterior(previous,range,cell,quantities).map(p=>({...p,validUntil:p.validUntil??(Math.floor(p.at/cell)+1)*cell}));
@@ -387,8 +392,8 @@ export class PeriodAccounting {
   moneyWorkSummary(source:string,range:PeriodRange){const fixed=this.tape.fixed?.moneyWork?.find(row=>row.source===source);if(fixed)return fixed;const index=this.moneyWork.get(source);if(!index)return;const selected=this.directWork(source,range,index.counter.workFrom??Infinity);return {...index.at(range),selectedWork:{from:selected.from,activeMs:selected.ms,agentMs:selected.agentMs}};}
   fixed(range:PeriodRange,cell:number,evaluatedAt=Infinity):NonNullable<PeriodTape['fixed']> {
     const blank:History={range:'',live:false,since:range.from,to:range.to,cellMs:cell,historyStart:0,series:[],events:[],activity:{since:range.from,known:null,barMs:cell,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
-    const quota=this.project(blank,range,undefined,true,Math.min(range.to,evaluatedAt)).series;
-    const money=[...this.money.values()].flatMap(index=>{const group=index.group,last=group.readings.filter(row=>row.at<range.to).at(-1);return last?[{sourceId:group.source,meterId:group.meter,kind:group.paired?'balance' as const:last.kind,unit:group.displayUnit??last.unit,accounting:group.accounting,role:group.role,pointMode:last.kind==='cap'?'cell' as const:'observation' as const,...index.at(range,Math.min(range.to,evaluatedAt)),points:index.plot(range,cell,[])}]:[];});
+    const quota=this.project(blank,range,undefined,true,Math.min(range.to,evaluatedAt)).series.map(row=>({...row,endValidUntil:this.quota.get(row.sourceId+'\n'+row.windowId)!.endValidUntil(range)}));
+    const money=[...this.money.values()].flatMap(index=>{const group=index.group,last=group.readings.filter(row=>row.at<range.to).at(-1);return last?[{sourceId:group.source,meterId:group.meter,kind:group.paired?'balance' as const:last.kind,unit:group.displayUnit??last.unit,accounting:group.accounting,role:group.role,pointMode:last.kind==='cap'?'cell' as const:'observation' as const,...index.at(range,Math.min(range.to,evaluatedAt)),endValidUntil:index.endValidUntil(range),points:index.plot(range,cell,[])}]:[];});
     return {range,cell,quota,money,...(this.moneyWork.size?{moneyWork:[...this.moneyWork.keys()].map(source=>this.moneyWorkSummary(source,range)!)}:{})};
   }
   project(history:History,range:PeriodRange,values?:ReadonlyMap<string,PeriodValues>,boundaryOnly=false,stateAt=range.to):History {
@@ -399,8 +404,8 @@ export class PeriodAccounting {
       const leftEnd=(Math.floor(range.from/fixed.cell)+1)*fixed.cell,rightStart=Math.floor((range.to-1)/fixed.cell)*fixed.cell;
       const interior=(at:number)=>at>=leftEnd&&at<rightStart;
       return {...history,exact:true,since:range.from,to:range.to,...(fixed.moneyWork?{moneyWork:fixed.moneyWork}:{}),
-        series:fixed.quota.map(row=>({...row,...(values?.get(row.sourceId)?{remainingAtEnd:values.get(row.sourceId)!.windows.find(w=>w.id===row.windowId&&stateAt<w.validUntil)?.remaining??null}:{}),points:[...(history.series.find(s=>s.sourceId===row.sourceId&&s.windowId===row.windowId)?.points??[]).filter(([at])=>interior(at)),...row.points].sort((a,b)=>a[0]-b[0])})),
-        meterSeries:fixed.money.map(row=>({...row,...(values?.get(row.sourceId)&&values.get(row.sourceId)!.meters.some(m=>m.id===row.meterId&&stateAt>=(m.validUntil??m.at+m.staleAfterMs+1))?{end:null}:{}),points:[...moneyInterior(history.meterSeries?.find(s=>s.sourceId===row.sourceId&&s.meterId===row.meterId&&s.unit===row.unit)?.points??[],range,fixed.cell,{from:history.since,to:history.to}),...row.points].sort((a,b)=>a.at-b.at)}))};
+        series:fixed.quota.map(({endValidUntil,...row})=>({...row,...(endValidUntil!==undefined&&(endValidUntil===null||stateAt>=endValidUntil)?{remainingAtEnd:null}:{}),points:[...(history.series.find(s=>s.sourceId===row.sourceId&&s.windowId===row.windowId)?.points??[]).filter(([at])=>interior(at)),...row.points].sort((a,b)=>a[0]-b[0])})),
+        meterSeries:fixed.money.map(({endValidUntil,...row})=>({...row,...(endValidUntil!==undefined&&(endValidUntil===null||stateAt>=endValidUntil)?{end:null}:{}),points:[...moneyInterior(history.meterSeries?.find(s=>s.sourceId===row.sourceId&&s.meterId===row.meterId&&s.unit===row.unit)?.points??[],range,fixed.cell,{from:history.since,to:history.to}),...row.points].sort((a,b)=>a.at-b.at)}))};
     }
     const previous=new Map(history.series.map(s=>[s.sourceId+'\n'+s.windowId,s]));
     const series:HistorySeries[]=[];
@@ -418,7 +423,11 @@ export class PeriodAccounting {
     return {...history,exact:true,since:range.from,to:range.to,series,...(this.moneyWork.size?{moneyWork:[...this.moneyWork.keys()].map(source=>this.moneyWorkSummary(source,range)!)}:{}),meterSeries:history.meterSeries?.map(series=>{const index=this.money.get(series.sourceId+'\n'+series.meterId+'\n'+series.unit);return index?{...series,...index.at(range),...(!history.live?{points:index.plot(range,history.cellMs,series.points,{from:history.since,to:history.to}),...(series.kind!=='cap'?{pointMode:'observation' as const}:{})}:{})}:series;})};
   }
   changesAt(now:number,period:number,source?:string):number|null {
-    if(this.tape.fixed)return null;
+    if(this.tape.fixed){
+      const fixed=this.tape.fixed,rows=[...fixed.quota.filter(row=>row.remainingAtEnd!==null),...fixed.money.filter(row=>row.end!==null)];
+      const deadlines=rows.flatMap(row=>(!source||row.sourceId===source)&&row.endValidUntil!==null&&row.endValidUntil!==undefined&&row.endValidUntil>now&&row.endValidUntil<=fixed.range.to?[row.endValidUntil]:[]);
+      return deadlines.length?Math.min(...deadlines):null;
+    }
     let next=Infinity;for(const index of this.quota.values())if(!source||index.series.source===source)next=Math.min(next,index.changesAt(now,period),this.directWorkChangesAt(index.series.source,now,period,index.series.workFrom===null?Infinity:index.series.workFrom??0));
     for(const index of this.money.values())if(!source||index.group.source===source)next=Math.min(next,index.changesAt(now,period));
     for(const index of this.moneyWork.values())if(!source||index.counter.source===source)next=Math.min(next,index.changesAt(now,period)??Infinity,this.directWorkChangesAt(index.counter.source,now,period,index.counter.workFrom??Infinity));
