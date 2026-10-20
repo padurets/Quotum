@@ -2,7 +2,7 @@ import type {CalendarCell} from '../../server/domain/workCalendar';
 import type {CalendarReading} from './workCalendar';
 const MIN=60_000,HOUR=60*MIN,DAY=24*HOUR;
 export type HeatmapView='matrix'|'calendar';
-export type HeatCell={key:string;date:string;from:number;to:number;cell:CalendarCell;partial:boolean;repeated:boolean;row:number;column:number;x:number;y:number;width:number;height:number;dayRange:{from:number;to:number}};
+export type HeatCell={key:string;date:string;from:number;to:number;cell:CalendarCell;parts:CalendarCell[];partial:boolean;repeated:boolean;row:number;column:number;x:number;y:number;width:number;height:number;dayRange:{from:number;to:number}};
 export type HeatLabel={text:string;x:number;y:number;align?:'end'|'middle'};
 export type HeatmapLayout={cells:HeatCell[];labels:HeatLabel[];height:number;span:number;kind:'strip'|'rows'|'columns'|'calendar'};
 type Civil={date:string;hour:number;minute:number;offset:string};
@@ -15,6 +15,17 @@ function civilParts(reading:CalendarReading){
 }
 const time=(hour:number)=>String(hour).padStart(2,'0')+':00';
 
+/** Expiry changes only the cell's readout and paint, never prepared geometry. */
+export function heatCellAt(item:HeatCell,now:number):HeatCell {
+  let agentMs=0,known=0,from=Infinity,to=0,validUntil:number|null=null;
+  for(const c of item.parts)if(c.agentMs!==null&&(c.validUntil===null||c.validUntil>now)){
+    agentMs+=c.agentMs;known+=c.to-c.from;from=Math.min(from,c.from);to=Math.max(to,c.to);
+    if(c.validUntil!==null)validUntil=Math.min(validUntil??Infinity,c.validUntil);
+  }
+  return {...item,cell:{agentMs:known?agentMs:null,from:known?from:item.from,to:known?to:item.from,validUntil},partial:known>0&&known<item.to-item.from};
+}
+export const heatCellChangesAt=(item:HeatCell,now:number)=>item.parts.reduce<number|null>((next,c)=>c.agentMs!==null&&c.validUntil!==null&&c.validUntil>now?Math.min(next??Infinity,c.validUntil):next,null);
+
 /** Geometry groups exact fine intervals; resizing never divides coarse Activity bars. */
 export function heatmapLayout(reading:CalendarReading,width:number,view:HeatmapView,locale:string):HeatmapLayout {
   const {window,value}=reading,{range,dates,dayEdges,edges}=window,w=Math.max(100,width),short=range.to-range.from<=DAY;
@@ -25,14 +36,14 @@ export function heatmapLayout(reading:CalendarReading,width:number,view:HeatmapV
     const columns=Math.min(7,dates.length),cw=(w-(columns-1)*8)/columns,label=cw>=80?22:cw>=50?19:15,plot=cw-label;
     span=24*HOUR/(plot>=120?6:plot>=72?4:plot>=48?3:plot>=30?2:1);
   }else span=(rows?([1,2,4,6].find(n=>24/n<=(w-left)/22)??6):w<720?2:1)*HOUR;
-  type Group={date:string;from:number;to:number;hour:number;offset:string;minute:number;shifted:boolean;agentMs:number;known:number;availableFrom:number;availableTo:number;validUntil:number|null;fold:number};
+  type Group={date:string;from:number;to:number;hour:number;offset:string;minute:number;shifted:boolean;agentMs:number;known:number;availableFrom:number;availableTo:number;validUntil:number|null;fold:number;parts:CalendarCell[]};
   const parts=civilParts(reading),groups=new Map<string,Group>();
   for(let i=0;i<edges.length-1;i++){
     const from=Math.max(edges[i],range.from),to=Math.min(edges[i+1],range.to);if(from>=to)continue;
     const part=parts[i],hour=short?part.hour+Math.floor(part.minute/(span/MIN))*(span/MIN)/60:Math.floor(part.hour/(span/HOUR))*(span/HOUR);
     const key=short?String(Math.floor(from/span)):part.date+':'+hour+(span===HOUR?':'+part.offset:'');
-    let g=groups.get(key);if(!g){g={date:part.date,from,to,hour,offset:part.offset,minute:part.minute,shifted:false,agentMs:0,known:0,availableFrom:Infinity,availableTo:0,validUntil:null,fold:0};groups.set(key,g);}g.to=to;g.shifted ||= part.offset!==g.offset;
-    const c=value?.cells[i];if(c?.agentMs!==null&&c?.agentMs!==undefined){g.agentMs+=c.agentMs;g.known+=Math.max(0,c.to-c.from);g.availableFrom=Math.min(g.availableFrom,c.from);g.availableTo=Math.max(g.availableTo,c.to);if(c.validUntil!==null)g.validUntil=Math.min(g.validUntil??Infinity,c.validUntil);}
+    let g=groups.get(key);if(!g){g={date:part.date,from,to,hour,offset:part.offset,minute:part.minute,shifted:false,agentMs:0,known:0,availableFrom:Infinity,availableTo:0,validUntil:null,fold:0,parts:[]};groups.set(key,g);}g.to=to;g.shifted ||= part.offset!==g.offset;
+    const c=value?.cells[i];if(c)g.parts.push(c);if(c?.agentMs!==null&&c?.agentMs!==undefined){g.agentMs+=c.agentMs;g.known+=Math.max(0,c.to-c.from);g.availableFrom=Math.min(g.availableFrom,c.from);g.availableTo=Math.max(g.availableTo,c.to);if(c.validUntil!==null)g.validUntil=Math.min(g.validUntil??Infinity,c.validUntil);}
   }
   const list=[...groups.values()],counts=new Map<string,number>(),folds=new Map<number,number>();
   for(const g of list){const key=g.date+':'+g.hour;g.fold=counts.get(key)??0;counts.set(key,g.fold+1);folds.set(g.hour,Math.max(folds.get(g.hour)??1,g.fold+1));}
@@ -60,7 +71,7 @@ export function heatmapLayout(reading:CalendarReading,width:number,view:HeatmapV
     else if(kind==='rows'){row=day;column=slot;const dx=(w-left)/slots.length;x=left+slot*dx;y+=day*(dates.length>8?24:30);cw=dx-3;ch=dates.length>8?19:25;}
     else if(kind==='columns'){row=slot;column=day;const dx=(w-left)/dates.length,rh=span===HOUR?12:21;x=left+day*dx;y+=slot*rh;cw=dx-3;ch=rh-2;}
     else {const cols=Math.min(7,dates.length),gap=w<420?5:8,dx=(w-gap*(cols-1))/cols,label=dx>=80?22:dx>=50?19:15,pad=dates.length<7?0:(new Date(dates[0]+'T12:00Z').getUTCDay()+6)%7;row=Math.floor((pad+day)/cols);column=((pad+day)%cols)*(24*HOUR/span)+g.hour/(span/HOUR);const bx=(pad+day)%cols*(dx+gap);cw=(dx-label)/(24*HOUR/span)-2;x=bx+label+g.hour/(span/HOUR)*(dx-label)/(24*HOUR/span);y+=row*30;ch=22;}
-    cells.push({key:String(g.from),date:g.date,from:g.from,to:g.to,cell:{agentMs:g.known?g.agentMs:null,from:g.known?g.availableFrom:g.from,to:g.known?g.availableTo:g.from,validUntil:g.validUntil},partial:g.known>0&&g.known<g.to-g.from,repeated:g.shifted||(counts.get(g.date+':'+g.hour)??1)>1,row,column,x,y,width:Math.max(.5,cw),height:ch,dayRange:{from:dayEdges[day],to:dayEdges[day+1]}});
+    cells.push({key:String(g.from),date:g.date,from:g.from,to:g.to,cell:{agentMs:g.known?g.agentMs:null,from:g.known?g.availableFrom:g.from,to:g.known?g.availableTo:g.from,validUntil:g.validUntil},parts:g.parts,partial:g.known>0&&g.known<g.to-g.from,repeated:g.shifted||(counts.get(g.date+':'+g.hour)??1)>1,row,column,x,y,width:Math.max(.5,cw),height:ch,dayRange:{from:dayEdges[day],to:dayEdges[day+1]}});
   }
   return {cells,labels,height,span,kind};
 }

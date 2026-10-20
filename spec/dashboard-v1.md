@@ -666,9 +666,11 @@ retire prior values immediately; an old generation cannot restore them.
 Null means unavailable history; an available zero means no registered work.
 Partial bounds do not prove complete observation. Positive totals expire when
 retention or a moving live boundary can reduce their included durations. The
-shared clock removes expired evidence and advances presentation without HTTP
-polling. Fine interval frames remain at their accepted evidence until a refresh,
-civil-date change or actual expiry; idle minutes alone do not rebuild data.
+shared clock removes expired contributions in the affected bucket's paint and
+readout without HTTP polling or rebuilding geometry. Only buckets with expiring
+contributions subscribe to the clock and carry `data-time`; the widget itself
+does not. Fine interval frames remain at their accepted evidence until a refresh
+or civil-date change; idle minutes alone do not rebuild data.
 Work, authority and reconnect events refresh the projection; pure
 financial news does not. Hiding the widget removes its demand.
 

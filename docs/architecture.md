@@ -1547,8 +1547,9 @@ aggregates those fine cells into a chronological strip, day/hour matrix or compa
 calendar as the duration and width require, without new reads or inner scrolling.
 Named local dates, repeated hours and partial bounds preserve actual elapsed time.
 Shared filter choices cover the common selected work range; closed controls request
-nothing. Shared-clock expiry and live-boundary changes retire stale evidence without
-polling. Null history, registered zero and observation completeness remain distinct.
+nothing. Shared-clock expiry retires stale contributions in individual buckets
+without rebuilding geometry or polling. Null history, registered zero and
+observation completeness remain distinct.
 An explicit interval/day action changes the common selection; only elapsed retained
 evidence is counted. Fixed thresholds scale with the labelled interval, use the
 first Nord Warm colour and remain independent of the filtered sample.

@@ -208,6 +208,11 @@ async function main() {
           recentPeriods:performance.getEntriesByType('resource').filter(r=>/\\/period$/.test(new URL(r.name).pathname)).slice(-4).map(r=>({start:r.startTime,duration:r.duration,responseEnd:r.responseEnd,bytes:r.decodedBodySize})),
           budget:group?{meter:group.meter,counter:!!group.workCounter,readings:group.workCounter?.readings.length,workFrom:group.workCounter?.workFrom}:null,
           drawing:shown?{loading:shown.loading,error:shown.error,range:shown.history?.range,series:shown.history?.meterSeries?.slice(0,24).map(m=>({source:m.sourceId,meter:m.meterId,unit:m.unit,kind:m.kind,role:m.role}))}:null};
+      };window.__quotumPeriodState=()=>{
+        const p=[...pool.members].find(m=>m.tapes);
+        return {bytes:pool.estimatedBytes,reservations:pool.reservations.size,waiting:pool.waiting.length,
+          period:p?{generation:p.generation,revision:p.revision,workNeeded:p.workNeeded,dirty:[...p.dirtyScopes],error:p.get().error,calendar:p.calendar.state.error,calendarNeeded:p.calendar.needed,completed:p.transport.completed,failed:p.transport.failed,
+            flights:[...p.transport.flights].map(f=>({extras:f.extras,preparing:!!f.preparing,aborted:f.controller.signal.aborted,sections:Object.keys(f.intent.request)}))}:null};
       };};
       ${probeScript()}`;
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source:bootstrapSource});
@@ -731,7 +736,11 @@ async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cd
   await sleep(1000);
   for (let i = 0; i < 3; i++) {
     await cdp.evaluate('__quotumBench.reset()');
-    const calendarBefore=await cdp.evaluate<number>(`Array.from(document.querySelectorAll('.agent-hours-heatmap [data-agent-ms]')).reduce((sum,node)=>sum+Number(node.getAttribute('data-agent-ms')),0)`);
+    // The opposite end of a live period may retire older work during this report.
+    // Check the recent buckets receiving this credit, with one fixed comparison cut.
+    const calendarFrom=Date.now()-2*3_600_000;
+    const calendarTotal=`Array.from(document.querySelectorAll('.agent-hours-heatmap [data-agent-ms]')).filter(node=>Number(node.getAttribute('data-heatmap-cell'))>=${calendarFrom}).reduce((sum,node)=>sum+Number(node.getAttribute('data-agent-ms')),0)`;
+    const calendarBefore=await cdp.evaluate<number>(calendarTotal);
     const requests = new Requests(cdp); requests.counting = true;
     const from = Date.now();
     if (i === 2) demo.work(false); // This report credits the last working list.
@@ -742,8 +751,8 @@ async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cd
     const bytes = requests.historyBytes;
     reports.push({at, reads, bytes});
     if (reads !== 1 || bytes > HISTORY_BYTES_PER_MEASUREMENT) problems.push(`work report read history ${reads} times, ${bytes} bytes`);
-    const calendarAfter=await cdp.evaluate<number>(`Array.from(document.querySelectorAll('.agent-hours-heatmap [data-agent-ms]')).reduce((sum,node)=>sum+Number(node.getAttribute('data-agent-ms')),0)`);
-    if(calendarAfter<=calendarBefore)problems.push('work report did not update registered calendar hours');
+    const calendarAfter=await cdp.evaluate<number>(calendarTotal);
+    if(calendarAfter<=calendarBefore)problems.push('work report did not update recent registered calendar hours');
     problems.push(...renderProblems({card: source, renders: reading.renders, mutations: reading.mutations, from, to: Date.now()}));
   }
   return {reports, problems};

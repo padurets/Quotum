@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {calendarWindow,calendarLevel,exactAgentHours,WorkCalendar} from '../lib/workCalendar.js';
-import {heatmapLayout} from '../lib/heatmap.js';
+import {heatmapLayout,heatCellAt,heatCellChangesAt} from '../lib/heatmap.js';
 import {calendarCells,calendarPartition,parseCalendar,type CalendarCell} from '../../server/domain/workCalendar.js';
 import {drain} from '../../server/domain/prepare.js';
 import type {Stretch} from '../../server/domain/work.js';
@@ -66,11 +66,23 @@ test('heatmap clock expiry does not reset already opened common filter choices',
   t.mock.method(Date,'now',()=>NOW);const h=await fixture({heatmap:true,clocked:true});t.after(()=>h.close());const stop=h.period.demandFacets();t.after(stop);await flush();const before=h.period.getFacets();assert.ok(before.value);assert.equal(h.requests.filter(r=>r.calendar).length,0,'opening common choices is not another heatmap demand');h.requests.length=0;h.jump(NOW+2*M);await flush();assert.equal(h.period.getFacets().value,before.value);assert.equal(h.period.getFacets().loading,false);assert.equal(h.requests.length,0);
 });
 
-test('moving live boundaries expire positive evidence without demand or a clock loop',()=>{
+test('moving live boundaries expire only the affected bucket without rebuilding the evidence frame',()=>{
   const c=new WorkCalendar();c.configure(true,'a',NOW,false,{mode:'live',periodMs:H});const window=c.state.window,range=window.range;
   const cells=drain(calendarCells([row(range.from,range.to)],window.edges,window.edges.slice(1).map((_,i)=>i),NOW,range.from,range.from,90*DAY,range,H)).map(([,cell])=>cell);
   c.receive({state:'complete',basis:{run:'r',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range,calendarKey:'k',filterKey:'f',workAuthority:'a'},value:{zone:window.zone,edges:window.edges,cells,availableFrom:range.from,retainedFrom:range.from,cursor:'c'}},c.generation,()=>true);
-  assert.equal(c.nextAt(NOW),NOW+1);c.tick(NOW+1);assert.equal(c.state.value!.cells.find(cell=>cell.validUntil===NOW+1)!.agentMs,null);assert.equal(c.demand(),undefined);assert.ok(c.nextAt(NOW+1)>NOW+1);
+  const before=c.get(),layout=heatmapLayout(before,1138,'matrix','en'),first=layout.cells[0],next=layout.cells[1];let notifications=0;const stop=c.subscribe(()=>notifications++);
+  assert.equal(heatCellChangesAt(first,NOW),NOW+1);assert.equal(heatCellAt(first,NOW).cell.agentMs,first.cell.agentMs);
+  assert.equal(c.tick(NOW+1),false);assert.equal(c.get(),before);assert.equal(notifications,0);stop();
+  const after=heatCellAt(first,NOW+1);assert.equal(after.cell.agentMs,first.cell.agentMs!-first.parts[0].agentMs!);assert.equal(after.partial,true);assert.deepEqual(heatCellAt(next,NOW+1).cell,next.cell);
+  const last=first.parts.at(-1)!.validUntil!;assert.equal(heatCellAt(first,last).cell.agentMs,null);assert.equal(heatCellChangesAt(first,last),null);assert.equal(c.demand(),undefined);assert.ok(c.nextAt(NOW)>NOW+2*M);
+});
+
+test('coarse buckets retire exact fine contributions independently, preserving zero and partial bounds',()=>{
+  const r=reading(NOW-H,NOW),layout=heatmapLayout(r,248,'matrix','en'),item=layout.cells.find(c=>c.parts.length>1)!;
+  item.parts=item.parts.map((c,i)=>({...c,agentMs:i===0?2*(c.to-c.from):0,validUntil:i===0?NOW+1:null}));
+  const before=heatCellAt(item,NOW),after=heatCellAt(item,NOW+1);
+  assert.equal(before.cell.agentMs,2*(item.parts[0].to-item.parts[0].from));assert.equal(after.cell.agentMs,0);assert.equal(after.partial,true);assert.equal(after.cell.from,item.parts[1].from);assert.equal(heatCellChangesAt(item,NOW+1),null);
+  assert.equal(after.x,item.x);assert.equal(after.width,item.width);assert.equal(after.from,item.from);assert.equal(after.to,item.to);
 });
 
 

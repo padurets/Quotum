@@ -39,10 +39,16 @@ export class WorkCalendar {
   generation=0;
   state:CalendarReading={window:calendarWindow(Date.now()),value:null,basis:null,loading:false,error:null};
   private listeners=new Set<()=>void>();
+  private accountedState:CalendarReading|null=null;
+  private accountedBytes=0;
   get=()=>this.state;
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
   private publish(){for(const listener of this.listeners)listener();}
-  get bytes(){return !this.visible||!this.context?0:512+JSON.stringify(this.state).length*3;}
+  get bytes(){
+    if(!this.visible||!this.context)return 0;
+    if(this.accountedState!==this.state){this.accountedState=this.state;this.accountedBytes=512+JSON.stringify(this.state).length*3;}
+    return this.accountedBytes;
+  }
   clear(){this.context='';this.needed=false;this.generation++;this.state={...this.state,value:null,basis:null,loading:false,error:null};this.publish();}
   configure(visible:boolean,context:string,now:number,limited=false,selection:PeriodSelection=this.selection){
     const changed=this.context!==context||this.visible!==visible||periodKey(selection)!==periodKey(this.selection);
@@ -55,10 +61,10 @@ export class WorkCalendar {
   tick(now:number,checkZone=false){
     if(!this.visible)return false;
     const old=this.state,range=evaluatedRange(this.selection,now),zone=checkZone?calendarZone():old.window.zone;
-    // Fine cells follow accepted evidence; only civil edges and actual expiry wake the frame.
+    // Buckets expire independently; only civil edges and clock corrections wake the frame.
     const advance=this.selection.mode==='live'?Math.min(old.window.dayEdges.at(-1)!,old.window.dayEdges[1]+this.selection.periodMs):Infinity,moved=now>=advance;
-    const invalid=!!old.basis&&now<old.basis.evidenceCut,expired=old.value?.cells.some(c=>c.agentMs!==null&&c.validUntil!==null&&now>=c.validUntil);
-    if(!moved&&!invalid&&!expired&&zone===old.window.zone)return false;
+    const invalid=!!old.basis&&now<old.basis.evidenceCut;
+    if(!moved&&!invalid&&zone===old.window.zone)return false;
     const window=calendarWindow(now,zone,this.selection),partition=zone!==old.window.zone||window.edges[0]!==old.window.edges[0]||window.edges.at(-1)!==old.window.edges.at(-1);
     let value=invalid||zone!==old.window.zone?null:old.value;
     if(value){
@@ -73,11 +79,11 @@ export class WorkCalendar {
     if(partition||invalid)this.generation++;
     this.state={...old,window,value,basis:partition||invalid?null:old.basis};this.publish();return true;
   }
-  nextAt(now:number){
+  nextAt(_now:number){
     if(!this.visible)return Infinity;
-    const {value,window}=this.state;
+    const {window}=this.state;
     const advance=this.selection.mode==='live'?Math.min(window.dayEdges.at(-1)!,window.dayEdges[1]+this.selection.periodMs):Infinity;
-    return Math.min(advance,...(value?.cells.flatMap(c=>c.agentMs!==null&&c.validUntil!==null&&c.validUntil>now?[c.validUntil]:[])??[]));
+    return advance;
   }
   dirty(){if(this.visible&&!this.limited){this.needed=true;return true;}return false;}
   demand():CalendarDemand|undefined {return this.visible&&this.needed?{zone:this.state.window.zone,...(this.state.value?.cursor?{cursor:this.state.value.cursor}:{})}:undefined;}

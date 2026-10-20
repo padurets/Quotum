@@ -2,7 +2,8 @@ import {memo,useMemo,useLayoutEffect,useRef,useState,useSyncExternalStore,type C
 import {createPortal} from 'react-dom';
 import {boardPeriod} from '../lib/period';
 import {CALENDAR_OPACITY,calendarLevel,exactAgentHours} from '../lib/workCalendar';
-import {heatmapLayout,type HeatCell} from '../lib/heatmap';
+import {heatmapLayout,heatCellAt,heatCellChangesAt,type HeatCell} from '../lib/heatmap';
+import {useClock} from '../lib/clock';
 import {AGENT_HOURS_HEATMAP,withHidden,type Arrange} from '../lib/view';
 import {CATEGORY_COLORS} from '../lib/providers';
 import {MIN_TIME_RANGE,setTimeRange,useTimeRange} from '../lib/timeRange';
@@ -18,7 +19,12 @@ import {fillOf,useSizing} from './sizing';
 function Details({heading,label,interval,item}:{heading:boolean;label:string;interval:string;item:HeatCell}){
   return <>{heading&&<strong>{label}</strong>}{interval&&<p className="heatmap-interval">{interval}</p>}<p>{item.cell.agentMs===null?t('calendar.unavailable'):item.cell.agentMs===0?t('calendar.zero'):`${exactAgentHours(item.cell.agentMs,formatLocale())} ${t('calendar.hours')}`}</p>{item.partial&&<p>{t('calendar.partial')}</p>}</>;
 }
-const Bucket=memo(function Bucket({item,span,zone,tab,selected,focus,panel,onKey}:{item:HeatCell;span:number;zone:string;tab:boolean;selected:boolean;focus:(key:string)=>void;panel:RefObject<HTMLElement|null>;onKey:(event:KeyboardEvent<HTMLButtonElement>,item:HeatCell)=>void}){
+type BucketProps={item:HeatCell;span:number;zone:string;tab:boolean;selected:boolean;focus:(key:string)=>void;panel:RefObject<HTMLElement|null>;onKey:(event:KeyboardEvent<HTMLButtonElement>,item:HeatCell)=>void;timed?:boolean};
+function TimedBucket(props:BucketProps){
+  const now=useClock(now=>heatCellChangesAt(props.item,now),[props.item]);
+  return <Bucket {...props} item={heatCellAt(props.item,now)} timed/>;
+}
+const Bucket=memo(function Bucket({item,span,zone,tab,selected,focus,panel,onKey,timed}:BucketProps){
   const locale=useLocale(),[open,setOpen]=useState(false),[hover,setHover]=useState(false),[focused,setFocused]=useState(false);
   const anchor=useRef<HTMLDivElement>(null),active=!open&&(hover||focused),tip=useBubble(active,anchor,panel.current);
   const label=useMemo(()=>new Intl.DateTimeFormat(formatLocale(),{day:'numeric',month:'long',year:'numeric',timeZone:'UTC'}).format(new Date(item.date+'T12:00Z')),[item.date,locale]);
@@ -31,7 +37,7 @@ const Bucket=memo(function Bucket({item,span,zone,tab,selected,focus,panel,onKey
   const aria=[label,interval,available?t('calendar.exact',{hours:exactAgentHours(item.cell.agentMs!,formatLocale())}):t('calendar.unavailable'),...(item.partial?[t('calendar.partial')]:[])].join('\n');
   const day=span>=23*3_600_000,range=day?item.dayRange:{from:item.from,to:item.to};
   const changeOpen=(next:boolean)=>{setHover(false);setOpen(next);};
-  return <div className={`calendar-date heatmap-bucket${selected?' is-selected':''}${!available?' is-unavailable':''}${item.partial?' is-partial':''}`} role="gridcell" aria-selected={selected} ref={anchor}
+  return <div className={`calendar-date heatmap-bucket${selected?' is-selected':''}${!available?' is-unavailable':''}${item.partial?' is-partial':''}`} role="gridcell" aria-selected={selected} ref={anchor} data-time={timed?'calendar':undefined}
     style={{left:item.x,top:item.y,width:item.width,height:item.height}} onPointerEnter={()=>setHover(true)} onPointerLeave={()=>setHover(false)}>
     <Popover label={aria} trigger={<svg viewBox="0 0 24 24" preserveAspectRatio="none" aria-hidden="true"><rect width="24" height="24" rx="2" fill={level?CATEGORY_COLORS[0]:'var(--hair)'} fillOpacity={level?CALENDAR_OPACITY[level]:1}/></svg>} triggerClass="calendar-cell"
       open={open} onOpenChange={changeOpen} width={320} portal={panel.current}
@@ -75,7 +81,7 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
     <HistoryFailure error={error==='history_limit'?'history_limit':error==='filters_limit'?'filters_limit':error?'history_failed':undefined} retry={boardPeriod.retry}/>
     <div className="heatmap-plot" ref={matrix} role="grid" aria-label={t('calendar.registered')} aria-description={t('calendar.observations')} style={{height:layout.height} as CSSProperties} data-heatmap-view={layout.kind}>
       {layout.labels.map((label,i)=><span key={i} aria-hidden="true" className="heatmap-axis" style={{left:label.x,top:label.y,transform:label.align==='end'?'translate(-100%,-100%)':label.align==='middle'?'translate(-50%,-100%)':'translateY(-100%)'}}>{label.text}</span>)}
-      {[...new Set(layout.cells.map(c=>c.row))].map(row=><div role="row" className="heatmap-row" key={row}>{layout.cells.filter(c=>c.row===row).map(item=><Bucket key={item.key} item={item} span={layout.span} zone={window.zone} selected={selection?.from===item.from&&selection?.to===item.to} tab={item.key===tab?.key} focus={setFocused} panel={root} onKey={key}/>)}</div>)}
+      {[...new Set(layout.cells.map(c=>c.row))].map(row=><div role="row" className="heatmap-row" key={row}>{layout.cells.filter(c=>c.row===row).map(item=>{const Cell=item.cell.validUntil===null?Bucket:TimedBucket;return <Cell key={item.key} item={item} span={layout.span} zone={window.zone} selected={selection?.from===item.from&&selection?.to===item.to} tab={item.key===tab?.key} focus={setFocused} panel={root} onKey={key}/>;})}</div>)}
     </div>
     <div className="calendar-legend"><span className="heatmap-unit">{t(unit===60_000?'calendar.scaleMinutes':'calendar.scaleHours',{step:duration(layout.span)})}</span><div className="heatmap-scale">{thresholds.map((value,level)=><span key={level}><svg width="10" height="8" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="4" fill={level?CATEGORY_COLORS[0]:'var(--hair)'} fillOpacity={level?CALENDAR_OPACITY[level]:1}/></svg>{level===1?'>0':level===5?'≥ '+num(value/unit,2):num(value/unit,2)}</span>)}</div></div>
     {value&&value.cells.every(c=>c.agentMs===null)&&<p className="analytics-note">{t('calendar.unavailable')}</p>}
