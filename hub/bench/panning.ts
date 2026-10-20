@@ -21,7 +21,16 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
     await mouse('mousePressed', point.x, point.y);
     await mouse('mouseReleased', point.x, point.y);
   };
-  const settled = () => cdp.evaluate(`(async()=>{const until=Date.now()+15000,p=new URLSearchParams(location.search),wanted=p.has('from')?p.get('from')+'-'+p.get('to'):JSON.parse(localStorage.getItem('quotum.prefs')||'{}').range||'24h';while(document.querySelector('.history.is-loading, .activity.is-loading, .budget-history.is-loading, .subscription-funds.is-loading, .agents-panel.is-loading') || document.querySelector('.chart > svg[data-pan-end], .chart > svg[data-draw-ready="false"], .chart > svg.is-panning')||[...document.querySelectorAll('.forecast,.budget-table,.agents-panel')].some(table=>table.dataset.historyRange!==wanted)){if(Date.now()>until)throw new Error('charts and complete totals did not settle: '+JSON.stringify({wanted,panels:[...document.querySelectorAll('.history,.activity,.budget-history,.subscription-funds,.forecast,.budget-table,.agents-panel')].map(panel=>({class:panel.className,range:panel.dataset.historyRange,error:panel.querySelector('.history-error')?.textContent,panning:panel.querySelector('.chart>svg')?.classList.contains('is-panning')??null,plot:panel.querySelector('.chart>svg')?.dataset})),flights:window.__quotumPan?[...window.__quotumPan.flights.values()]:[]}));await new Promise(r=>setTimeout(r,20));}await new Promise(r=>setTimeout(r,250));})()`);
+  const settled = () => cdp.evaluate(`(async()=>{const until=Date.now()+15000,p=new URLSearchParams(location.search),wanted=p.has('from')?p.get('from')+'-'+p.get('to'):JSON.parse(localStorage.getItem('quotum.prefs')||'{}').range||'24h';
+    // Live collections avoid whole-board selector scans during measured movement.
+    const loading=document.getElementsByClassName('is-loading'),charts=document.getElementsByClassName('chart'),tables=['forecast','budget-table','agents-panel'].map(name=>document.getElementsByClassName(name));
+    const pending=()=>{
+      for(const node of loading)if(['history','activity','budget-history','subscription-funds','agents-panel'].some(name=>node.classList.contains(name)))return true;
+      for(const chart of charts)for(const svg of chart.children)if(svg.localName==='svg'&&(svg.hasAttribute('data-pan-end')||svg.getAttribute('data-draw-ready')==='false'||svg.classList.contains('is-panning')))return true;
+      for(const group of tables)for(const table of group)if(table.dataset.historyRange!==wanted)return true;
+      return false;
+    };
+    while(pending()){if(Date.now()>until)throw new Error('charts and complete totals did not settle: '+JSON.stringify({wanted,panels:[...document.querySelectorAll('.history,.activity,.budget-history,.subscription-funds,.forecast,.budget-table,.agents-panel')].map(panel=>({class:panel.className,range:panel.dataset.historyRange,error:panel.querySelector('.history-error')?.textContent,panning:panel.querySelector('.chart>svg')?.classList.contains('is-panning')??null,plot:panel.querySelector('.chart>svg')?.dataset})),flights:window.__quotumPan?[...window.__quotumPan.flights.values()]:[]}));await new Promise(r=>setTimeout(r,20));}await new Promise(r=>setTimeout(r,250));})()`);
   const reports: PanReading[] = [];
   // Count independent measured series intersecting the visible plot, never path parts.
   // These layout reads happen after settling, outside the moving-frame probe.

@@ -139,7 +139,7 @@ test('actual postconditions preserve failure and cleanup after motion sampling s
     let cleanupCalls=0;const cleanup=f.reading.cleanup;
     f.reading.cleanup=()=>{cleanupCalls++;cleanup();};
     let context='',held=false,complete=false,matrices=0,legends=0;
-    const cleanDocument={querySelector:()=>null,querySelectorAll:()=>[],getElementById:()=>null};
+    const cleanDocument={querySelector:()=>null,querySelectorAll:()=>[],getElementsByClassName:()=>[],getElementById:()=>null};
     const globals={...f.context,document:cleanDocument,setTimeout:(run:()=>void)=>{run();},localStorage:{getItem:()=>null,setItem:()=>{}}};
     const read=(code:string)=>runInNewContext(code,globals);
     const cdp={
