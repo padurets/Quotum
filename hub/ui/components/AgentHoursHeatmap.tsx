@@ -63,7 +63,7 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
   useLayoutEffect(()=>{const node=scroller.current;if(node)node.scrollLeft=node.scrollWidth;},[window.dates[0]]);
   const measure=useRef(()=>{});
   measure.current=()=>{const node=root.current;if(node&&sizing){const height=node.getBoundingClientRect().height-fillOf(node);sizing.report({min:height,natural:height,shown:height});}};
-  useLayoutEffect(()=>measure.current(),[sizing?.manual,sizing?.allocated,sizing?.width,loading,error,locale]);
+  useLayoutEffect(()=>measure.current(),[sizing?.manual,sizing?.allocated,sizing?.width,sizing?.report,loading,error,locale]);
   useLayoutEffect(()=>{
     const node=root.current;if(!node)return;
     const observer=new ResizeObserver(()=>measure.current());observer.observe(node);return()=>observer.disconnect();
@@ -74,7 +74,7 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
     const next=event.key==='ArrowUp'?i-1:event.key==='ArrowDown'?i+1:event.key==='ArrowLeft'?i-7:event.key==='ArrowRight'?i+7:event.key==='Home'?event.ctrlKey?0:i-day:event.key==='End'?event.ctrlKey?89:i+6-day:null;
     if(next===null)return;event.preventDefault();const date=window.dates[Math.max(0,Math.min(89,next))];setFocused(date);
     const button=scroller.current?.querySelector<HTMLButtonElement>(`[data-calendar-date="${date}"]`);button?.focus({preventScroll:true});
-    if(button&&scroller.current){const bounds=scroller.current.getBoundingClientRect(),at=button.getBoundingClientRect();if(at.left<bounds.left)scroller.current.scrollLeft-=bounds.left-at.left;else if(at.right>bounds.right)scroller.current.scrollLeft+=at.right-bounds.right;}
+    if(button&&scroller.current){const bounds=scroller.current.getBoundingClientRect(),at=button.getBoundingClientRect(),left=(scroller.current.querySelector('.calendar-day-label')?.getBoundingClientRect().right??bounds.left)+4;if(at.left<left)scroller.current.scrollLeft-=left-at.left;else if(at.right>bounds.right)scroller.current.scrollLeft+=at.right-bounds.right;}
   },[window,offset]);
   const formatters=useMemo(()=>({month:new Intl.DateTimeFormat(formatLocale(),{month:'short',timeZone:'UTC'}),weekday:new Intl.DateTimeFormat(formatLocale(),{weekday:'short',timeZone:'UTC'}),date:new Intl.DateTimeFormat(formatLocale(),{day:'numeric',month:'long',year:'numeric',timeZone:'UTC'})}),[locale]);
   const dateText=(date:string,options:Intl.DateTimeFormatOptions)=>(options.weekday?formatters.weekday:options.year?formatters.date:formatters.month).format(new Date(date+'T12:00:00Z'));

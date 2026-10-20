@@ -55,7 +55,7 @@ export function* prepareFixedWork(trace:WorkTrace,range:PeriodRange,cell:number,
     const admittedRange={from:Math.max(range.from,trace.anchor),to:range.to};
     const rows=index.advance(admittedRange,now).rows;projection.update(rows);
     const blank:History['activity']={since:range.from,known:null,barMs,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}};
-    const activity={...projection.project(blank,admittedRange),since:range.from};
+    const activity=projection.project(blank,admittedRange);
     for(const at of new Set([Math.floor(range.from/barMs)*barMs,Math.floor((range.to-1)/barMs)*barMs])){
       const part={from:Math.max(range.from,at),to:Math.min(range.to,at+barMs)};
       const agents=new Set(trace.refs.filter((_,i)=>index.curves.contexts[i].read(part)>0).map(ref=>ref.identityRef??ref.ref)).size;
