@@ -27,8 +27,8 @@ const TIMERS = [
   'components/SourceCard.tsx',
   // The chart's tooltip after a tap on a label past its edge.
   'components/Chart.tsx',
-  // A legend entry's tooltip pinned briefly after a tap.
-  'components/Activity.tsx',
+  // One chart legend preview held briefly after a tap.
+  'components/seriesFocus.ts',
   // Holding a press before a drag, on either chart along the analytics' time.
   'components/timeAxis.ts',
 ];

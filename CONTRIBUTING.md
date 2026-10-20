@@ -26,8 +26,11 @@ at p99; input to an actually updated chart frame must stay within 34 ms at p95. 
 callbacks and missing samples fail. The previous idle, measurement, work and native
 frequency-focus checks retain their budgets. Mixed Codex subscriptions also exercise
 changed credit balances and unchanged-value heartbeats: each updates its own card and
-funds history without waking quota or wallet analytics. No browser means the check
-was not run.
+funds history without waking quota or wallet analytics. A separate fixed Activity subset
+phase at 24h and 30d checks exact selected totals and bar values, dirty-cell reuse, coalesced late work, cancelled responses, and all transport
+and preparation costs under the shared pool limits. An isolated relevant historical
+work update may add one bounded subset read; the live work budget stays unchanged.
+No browser means the check was not run.
 The owned headless browser uses one raster worker: concurrent software raster jobs
 in Chrome 154 can leave a tile unfinished and deadlock an input frame's commit.
 An attached CDP browser retains its own launch settings.
@@ -405,8 +408,11 @@ without `--ci`) an idle board with neither measurements nor working agents asks 
 is told only `ping`, renders and changes only what shows time, and spends a fifth of
 the script it did before events. Then twenty measurements reach their card and chart,
 19 within a second, reading a small tail of history rather than the whole period.
-Finally the stand's laptop reports one working agent: each credited report makes at
-most one small history read and renders only its card, agents and analytics. The report
+Finally the stand's laptop reports one working agent: each live credited report makes
+at most one small history read and renders only its card, agents and analytics.
+A historical Activity chart with a local legend subset may add one bounded exact read
+for relevant late work, preserving clean cells. Its separate fixed-range benchmark
+counts all C/S traffic, cancellations and preparation under the same pool limits. The report
 prints latency, history bytes and reads as JSON and exits 1 over budget. After the
 readings, it also checks that consecutive frequency saves with native arrow keys keep
 focus in the card's menu and fails otherwise. It needs Chrome:

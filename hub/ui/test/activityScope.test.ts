@@ -5,6 +5,7 @@ import {defaultFilters,workFilter,matchesWork} from '../../server/domain/dataFil
 import {drain} from '../lib/prepare';
 import {packWork,type WorkTrace} from '../../server/domain/periodWork';
 import {PeriodActivity} from '../lib/periodActivity';
+import {fixedWork} from '../../server/periodFixed';
 
 test('legend exclusions intersect each typed board family without changing its opening filters',()=>{
   const base=workFilter(defaultFilters());base.projects={mode:'include',values:['A','B']};
@@ -19,6 +20,18 @@ test('legend exclusions intersect each typed board family without changing its o
   assert.equal(matchesWork(projects,{source:null,project:null,device:'d'}),false);
   assert.equal(matchesWork(projects,{source:null,project:'No project',device:'d'}),true);
   assert.equal(matchesWork(activityScope(base,'device',['d']),{source:null,project:'A',device:'d'}),false);
+});
+
+test('identical compact fixed cohorts can require different selected unions',()=>{
+  const M=60_000,H=60*M,range={from:0,to:24*H};
+  const refs=['A','B','C'].map((project,i)=>({ref:String(i),source:'s',project,device:{id:'d',name:'D'},origin:'terminal' as const,folder:null,startedAt:0}));
+  const a:[number,number,number][]=[[0,2*H,2*H+15*M],[0,2*H+25*M,2*H+30*M]];
+  const make=(overlap:boolean):WorkTrace=>({anchor:0,cut:range.to,knownFrom:0,refs,spans:[...a,...(overlap?a.map(([,from,to])=>[1,from,to] as [number,number,number]):[[1,2*H+10*M,2*H+30*M] as [number,number,number]]),[2,2*H,2*H+30*M]]});
+  const left=make(true),right=make(false);
+  assert.deepEqual(fixedWork(left,range,5*M,range.to,()=>{}),fixedWork(right,range,5*M,range.to,()=>{}),'the released fixed representation has already lost the distinguishing overlap');
+  const selected=(trace:WorkTrace)=>new PeriodActivity(drain(selectActivityWork(trace,'project',new Set(['"C"'])))).summary(range,'project');
+  assert.equal(selected(left).activeMs,20*M);assert.equal(selected(right).activeMs,30*M);
+  assert.equal(selected(left).agentMs,40*M);assert.equal(selected(right).agentMs,40*M);
 });
 
 test('selected live work preserves overlap, split identity, packed boundaries and confirmed zero',()=>{

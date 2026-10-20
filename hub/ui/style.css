@@ -596,22 +596,21 @@ td.muted, small.muted { color: var(--text-3); }
 .plot-move > svg, .plot-overlay > svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .chart-loading, .chart-empty { min-height: 220px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
 .chart-empty { position: absolute; inset: 0; min-height: 0; pointer-events: none; }
-/* Agent activity: its totals a quieter line under the title, each a whole, its value as the legend's. */
-.activity-totals { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 6px; font-size: 12.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+/* One information area explains the enabled series without moving the plot on hover. */
+.chart-info { margin-top: 6px; color: var(--text-3); font-size: 12.5px; container-type: inline-size; }
+.chart-info-name { height: 20px; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.chart-info + .chart { margin-top: 12px; }
+.activity-totals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 16px; min-height: 40px; font-variant-numeric: tabular-nums; }
 .activity-totals > span { white-space: nowrap; }
+.activity-totals > span:only-child { grid-column: 1 / -1; white-space: normal; }
 .activity-totals b { color: var(--text); font-weight: 500; }
-.activity-totals + .chart { margin-top: 12px; }
-.activity-since { font-size: 11px; color: var(--text-2); border: 1px solid var(--hair-2); padding: 0 6px; border-radius: 5px; }
+.activity-since { height: 16px; line-height: 16px; font-size: 11px; color: var(--text-2); }
+@container (min-width: 650px) { .activity-totals { grid-template-columns: repeat(4, minmax(0, 1fr)); min-height: 20px; } }
+.chart-info-detail { display: grid; white-space: pre-line; overflow-wrap: anywhere; }
+.chart-info-detail > div { grid-area: 1 / 1; }
+.chart-info-variant { visibility: hidden; pointer-events: none; }
 .activity .chart-loading { min-height: 200px; }
-/* Parts of a stack stand apart by a hair of the surface, so two of one colour do not run together. */
-/* Legend bubbles stay beside their own button, with the gap inside its hover area. */
-.activity-legend-item { position: relative; min-width: 0; }
-.activity-legend-tip { position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 4; display: none; width: max-content; max-width: min(320px, calc(100vw - 16px)); box-sizing: border-box; padding: 8px 10px; border-radius: 9px; font-size: 12.5px; color: var(--text); overflow-wrap: anywhere; }
-.activity-legend-tip.is-open { display: block; }
-.activity:has(.chart > svg.is-panning) .activity-legend-tip { display: none; }
-.activity-legend-item.is-open::before { content: ''; position: absolute; left: 0; right: 0; height: 6px; bottom: 100%; }
-.activity-legend-item.is-open[data-bubble-side=down]::before { bottom: auto; top: 100%; }
-.activity-shown { display: inline-block; margin-left: 8px; }
+.activity-legend-item { min-width: 0; }
 
 .activity-stack { stroke: var(--surface); stroke-width: .75; opacity: var(--series-focus, 1); }
 .activity-hatch { stroke: var(--hair-2); stroke-width: 1.5; }

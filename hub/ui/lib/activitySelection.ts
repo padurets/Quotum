@@ -30,25 +30,30 @@ export class ActivitySelection implements HistoryMember {
   private flight:Flight|null=null;
   private readonly owner={};
   private source:WorkTrace|null=null;
+  private awaiting:WorkTrace|null=null;
   private tiles=new Map<number,HistoryTile>();
   private bytes=0;
   private state:ActivitySelectionState={model:null,loading:false,error:null};
   private readonly listeners=new Set<()=>void>();
-  constructor(private readonly env:ActivitySelectionEnv){env.pool.register(this);}
+  constructor(private readonly env:ActivitySelectionEnv){}
   get estimatedBytes(){return this.bytes;}
   evictionCandidates(){return [];}
   get=()=>this.state;
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
   private publish(state:ActivitySelectionState){this.state=state;for(const listener of this.listeners)listener();}
   configure(scope:ActivityScope|null){
+    if(scope)try{
+      if(!executableWorkFilters(activityScope(scope.filters,scope.by,scope.muted)))throw new Error('history_limit');
+    }catch{this.reset();this.publish({model:null,loading:false,error:'history_limit'});return;}
     const identity=scope?JSON.stringify([scope.board,scope.authority,scope.by,[...scope.muted].sort(),scope.filters,scope.selection,scope.rangeKey,scope.barMs]):'';
     if(identity===this.identity){this.refresh();return;}
     this.reset();this.identity=identity;this.scope=scope;
-    if(scope){this.dirty=-Infinity;this.publish({model:null,loading:true,error:null});this.schedule();}
+    if(scope){this.env.pool.register(this);this.dirty=-Infinity;this.publish({model:null,loading:true,error:null});this.schedule();}
   }
-  private scheduler(){return this.env.scheduler?.()??preparations();}
+  private scheduler(){return this.env.scheduler?this.env.scheduler():preparations();}
   reset(){
-    this.generation++;this.identity='';this.scope=null;this.source=null;this.tiles.clear();this.bytes=0;this.dirty=Infinity;
+    this.generation++;this.identity='';this.scope=null;this.source=this.awaiting=null;this.tiles.clear();this.bytes=0;this.dirty=Infinity;
+    this.env.pool.unregister(this);
     this.flight?.controller.abort();this.scheduler()?.cancel(this.owner);
     // A cancelled response/preparation owns its reservation until its finally block.
     this.publish({model:null,loading:false,error:null});
@@ -57,18 +62,21 @@ export class ActivitySelection implements HistoryMember {
     if(!this.scope||this.scope.selection.mode!=='live')return;
     const reading=this.env.read();
     if(!reading.ready){this.publish({model:null,loading:!reading.error,error:reading.error});return;}
-    if(reading.trace!==this.source){this.source=reading.trace;this.news++;this.dirty=-Infinity;this.publish({model:null,loading:true,error:null});this.schedule();}
+    if(reading.trace!==this.source){this.source=reading.trace;this.awaiting=null;this.news++;this.dirty=-Infinity;this.publish({model:null,loading:true,error:null});this.schedule();}
   };
   changed(since:number){
     if(!this.scope)return;
     if(this.scope.selection.mode==='range'&&since>=this.scope.selection.to)return;
+    if(this.scope.selection.mode==='live')this.awaiting=this.env.read().trace;
     this.news++;this.dirty=Math.min(this.dirty,since);this.publish({...this.state,model:null,loading:true,error:null});this.schedule();
   }
   retry=()=>{if(this.scope){this.dirty=-Infinity;this.publish({model:null,loading:true,error:null});this.schedule();}};
   private schedule(){if(this.scheduled)return;this.scheduled=true;queueMicrotask(()=>queueMicrotask(()=>{this.scheduled=false;this.flush();}));}
   private flush(){
     const scope=this.scope;if(!scope||this.flight||this.dirty===Infinity)return;
-    if(!executableWorkFilters(activityScope(scope.filters,scope.by,scope.muted))){this.publish({model:null,loading:false,error:'history_limit'});return;}
+    if(scope.selection.mode==='live'&&this.awaiting&&this.env.read().trace===this.awaiting)return;
+    try{if(!executableWorkFilters(activityScope(scope.filters,scope.by,scope.muted)))throw new Error('history_limit');}
+    catch{this.dirty=Infinity;this.publish({model:null,loading:false,error:'history_limit'});return;}
     const flight:Flight={role:'visible',controller:new AbortController(),generation:this.generation};this.flight=flight;
     this.env.pool.request(this,flight,()=>{void this.run(scope,flight);},()=>flight.controller.abort());
   }
@@ -86,12 +94,13 @@ export class ActivitySelection implements HistoryMember {
         this.source=trace;
         const self=this;
         build=(function*(){
-          reserve(workPreparationBytes(trace)+trace.refs.length*1024+1024);
+          reserve(workPreparationBytes(trace)+jsonBytes({...trace,spans:[],packed:undefined})*4+trace.refs.length*1024+1024);
           const selected=yield*selectActivityWork(trace,scope.by,new Set(scope.muted));
           const curves=yield*PeriodCurves.prepare(selected),projector=yield*PeriodActivity.prepare(selected,curves);
           const activity={...projector.summary(evaluatedRange(scope.selection,self.env.now()),scope.by),barMs:scope.barMs};
           // Shared pattern/reference objects remain charged by their board owner too.
-          const bytes=curves.bytes+selected.refs.length*1024+(selected.packed?.blocks.length??0)*16+selected.spans.length*64+1024;
+          const bytes=curves.bytes+jsonBytes({...selected,spans:[],packed:undefined})*4+selected.refs.length*1024+(selected.packed?.blocks.length??0)*16+
+            (selected.packed?.patterns.reduce((bytes,pattern)=>bytes+64+pattern.length*16,0)??0)+selected.spans.length*64+1024;
           reserve(bytes);
           return {model:{projector,activity,selection:scope.selection,rangeKey:scope.rangeKey},tiles:new Map<number,HistoryTile>(),bytes};
         })();
@@ -123,11 +132,12 @@ export class ActivitySelection implements HistoryMember {
       const result=await prepareAsync(this.owner,build,valid,this.scheduler());
       if(!result||!valid())return;
       if(news!==this.news){this.schedule();return;}
+      pool.reserve(flight,transport);
       this.tiles=result.tiles;this.bytes=result.bytes;this.dirty=Infinity;
       this.publish({model:result.model,loading:false,error:null});
     }catch(error){
       if(valid()){
-        if(error&&typeof error==='object'&&'status' in error&&[401,403,404].includes(Number(error.status)))this.env.accessLost?.();
+        if(error&&typeof error==='object'&&'status' in error&&[401,403,404].includes(Number(error.status))){this.reset();this.env.accessLost?.();return;}
         this.publish({model:null,loading:false,error:error instanceof Error&&error.message==='history_limit'?'history_limit':'history_failed'});
         this.dirty=Infinity;
       }
@@ -148,6 +158,11 @@ export class ActivitySelection implements HistoryMember {
   }
   changesAt(now:number,read:(at:number)=>string){
     const model=this.state.model;if(!model||model.selection.mode!=='live'||!this.scope)return null;
-    return periodTextChangesAt(now,at=>model.projector.changesAt(at,model.selection.mode==='live'?model.selection.periodMs:0,this.scope!.by),read);
+    const period=model.selection.periodMs;
+    return periodTextChangesAt(now,at=>{
+      const next=Math.min(model.projector.changesAt(at,period,this.scope!.by)??Infinity,
+        ...[model.projector.trace.knownFrom+period,(model.projector.trace.cut??Infinity)+period].filter(value=>value>at));
+      return Number.isFinite(next)?next:null;
+    },read);
   }
 }

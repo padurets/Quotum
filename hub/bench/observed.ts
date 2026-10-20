@@ -51,7 +51,12 @@ export class ObservedWork {
   }
 
   async report(working=true) {
-    const to=Date.now()-this.floorAt;
+    return this.through(Date.now(),working);
+  }
+
+  /** Deliver a captured interval later, without moving its observed endpoints. */
+  async through(at:number,working=true) {
+    const to=at-this.floorAt;
     const next=working?null:{...this.state,contexts:this.state.contexts.map(c=>({...c,working:false}))};
     return this.send(to,next,true);
   }

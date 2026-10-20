@@ -31,6 +31,7 @@ import {reloadHubProbe} from './panningReload.js';
 import {creditSnapshot} from './credits.js';
 import {IdleCpuDiagnostic,clientIdentity,sourceIdentity,idleGeometry,planIdleEdge,type IdleEdgePlan,type IdleGeometry} from './idleCpuDiagnostic.js';
 import {ObservedWork} from './observed.js';
+import {fixedActivity} from './fixedActivity.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -333,6 +334,9 @@ async function main() {
     const credits=await creditPhase(demo,stand,cdp);
     problems.push(...credits.problems);
     const monetary=await moneyPhase(demo,stand,cdp);
+    say('checking fixed Activity subsets, late-work cells, cancellation and shared preparation costs at 24h/30d');
+    const selectedActivity=await fixedActivity(browser,stand);
+    problems.push(...selectedActivity.problems);
     problems.push(...monetary.problems);
     const result = {
       set: set.id,
@@ -370,6 +374,7 @@ async function main() {
       money:monetary,
       credits,
       historyTraffic: traffic,
+      selectedActivity,
       panning: panned.reports.map(report => ({...report,
         frames: {count: report.frames.length, p95Ms: round(percentile(report.frames, .95)), p99Ms: round(percentile(report.frames, .99))},
         latency: {count: report.latency.length, p95Ms: round(percentile(report.latency, .95))},

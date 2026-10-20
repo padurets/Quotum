@@ -61,3 +61,16 @@ test('a refused local preparation publishes an error and releases its reservatio
   reader.configure({board:'b',authority:'one',by:'source',muted:['unknown'],filters:workFilter(defaultFilters()),selection:{mode:'live',periodMs:50},rangeKey:'live',barMs:10});await flush();
   assert.equal(reader.get().error,'history_limit');assert.equal(reader.numbers(50),null);assert.equal(pool.estimatedBytes,0);assert.equal(pool.activeFlights,0);reader.reset();
 });
+
+test('a live work event waits for replacement board evidence and empty coverage has its own deadline',async()=>{
+  let trace:WorkTrace={anchor:0,knownFrom:0,cut:100,refs:[],spans:[]};
+  const pool=new HistoryPool(),reader=new ActivitySelection({pool,now:()=>100,read:()=>({trace,ready:true,error:null}),scheduler:()=>null,send:async()=>{throw new Error('unexpected request');}});
+  const scope:ActivityScope={board:'b',authority:'one',by:'source',muted:['unknown'],filters:workFilter(defaultFilters()),selection:{mode:'live',periodMs:50},rangeKey:'live',barMs:10};
+  try{
+    reader.configure(scope);await flush();assert.ok(reader.numbers(100)?.known);
+    assert.equal(reader.changesAt(100,at=>String(!!reader.numbers(at)?.known)),150);
+    reader.changed(90);await flush();assert.equal(reader.numbers(100),null,'the event cannot publish the pre-event C intervals again');
+    trace={...trace,cut:110};reader.refresh();await flush();assert.ok(reader.numbers(100)?.known);
+    assert.equal(reader.changesAt(100,at=>String(!!reader.numbers(at)?.known)),160);
+  }finally{reader.reset();await flush();assert.equal(pool.estimatedBytes,0);}
+});

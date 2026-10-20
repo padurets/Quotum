@@ -49,10 +49,13 @@ working agents: it asks the hub nothing and renders only what shows time. Every
 measurement reaches its card and chart, 95 of 100 within a second, reading only new
 history cells and rendering no other card nor the header. A mixed Codex subscription's
 credit changes and unchanged-value heartbeats update its card and funds history while
-quota and wallet analytics remain unchanged. A machine report crediting
+quota and wallet analytics remain unchanged. A live machine report crediting
 work makes at most one small history read and renders only its card, agents and
-analytics. Run it when you change the dashboard and have Chrome (`QUOTUM_CHROME`, one
-on `PATH`, or `--cdp` to one already running); CI fails over budget. After the readings,
+analytics. A historical Activity chart with a local legend subset may add one
+bounded exact read for a relevant late-work update, reusing clean cells. Its separate
+24h/30d fixed-subset benchmark counts all traffic, cancelled responses and preparation
+under the same transport and memory limits. Run it when you change the dashboard and
+have Chrome (`QUOTUM_CHROME`, one on `PATH`, or `--cdp` to one already running); CI fails over budget. After the readings,
 it also checks consecutive measuring-frequency saves with native arrow keys and fails
 if saving loses focus.
 Native horizontal wheel and Shift-drag scenarios start separately from each of the five
@@ -178,7 +181,12 @@ and platform smoke checks still apply.
   stays separate from the owner's column controls.
 - Chart legends share `hub/ui/components/seriesFocus.ts` to highlight a series under
   the pointer or keyboard focus. Apply it to every plot layer for that series;
-  highlighting changes paint, never the data, selection or prepared geometry.
+  highlighting changes paint, never the data, selection or prepared geometry. One local
+  controller arbitrates pointer, keyboard and touch for the paint and the information
+  area under the heading. Activity summaries and bar numbers describe the intersection
+  of board filters and enabled legend series, including exact interval union and distinct
+  sessions. Legend previews replace that summary in the same reserved area. Monetary
+  legend details use this area too; quota charts gain no empty strip or aggregate.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the list of agents, agent activity, the chart, the table).
 - Board widgets never add a vertical scroller inside the page. Table widgets share
   `TableWidget` for responsive layout, whole-row height fitting and the compact pager
