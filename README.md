@@ -164,6 +164,12 @@ notifications also stay live, independently of the board's historical range.
   make 4 agent-hours: the legend adds up to the total. Active time (at least one agent
   working), recorded sessions and the average at once are in the totals and
   tooltips. It zooms and moves through time as the chart does.
+  Its totals and bar values follow the enabled legend series as well as the board's
+  filters. Point to a legend entry or focus it with the keyboard to inspect its totals.
+- **Activity heatmap:** recorded agent-hours over the board's selected period, as a
+  day-by-hour matrix or compact calendar. It follows project, device and client filters;
+  open a cell to inspect that interval. No recorded work and unavailable history stay
+  distinct. Add it from the board's **+** menu.
 - **Agent sessions:** one table for projects, machines or subscriptions, or a row per
   agent. Grouped rows can also show active time and average concurrency; enable those
   columns in its settings. Open a group to see its retained sessions over the same
@@ -262,7 +268,7 @@ day, not a script thrown together over a weekend. In practice that meant:
   consumption. The agent says when its next measurement is due, so a sparse series isn't
   mistaken for a gap.
 - **Few moving parts.** The agent has nine direct dependencies. The hub is Fastify and
-  the SQLite built into Node, and the UI is plain React with about 311 KB of gzipped
+  the SQLite built into Node, and the UI is plain React with about 343 KB of gzipped
   JavaScript. There is no telemetry. The hub reads the two reset trackers (or the
   mirror you name) every ten minutes; `QUOTUM_RESETS=off` turns that off. When you
   connect OpenRouter, DeepSeek or z.ai, it also reads their balances or quotas through
@@ -531,6 +537,13 @@ manage dated assignments in **Settings → Clients and resources**. Update agent
 use device measurement controls and retain observed work through delayed delivery.
 Reload open dashboard tabs after the upgrade.
 
+Upgrading from 0.8 preserves measurements, agent-work history, boards, settings and
+encrypted connections. Saved resource selections move out of the layout into the
+common data filters; hidden cards remain hidden without excluding their data.
+Readers can change their current filters, and the owner can save opening defaults
+for the board. The database moves from layout 32 to 33. Reload open dashboard tabs
+after the upgrade. Existing 0.8 agents remain compatible.
+
 On each machine, run `quotum update`, then restart the background agent with
 `quotum stop` and `quotum start` (or restart its service). With npm, use the latest
 `quotum` package. Update the hub first: older agents still deliver measurements to the
@@ -795,11 +808,11 @@ Add the hashes of any new database layout steps to `RELEASED` in
 Refresh the README screenshots in both languages from the demo board, check the upgrade
 instructions and prepare the release notes outside the repository.
 
-For example, to prepare 0.8.0 on that branch:
+For example, to prepare 0.9.0 on that branch:
 
 ```sh
-(cd hub && npm version 0.8.0 --no-git-tag-version)
-# agent/Cargo.toml and desktop/Cargo.toml: version = "0.8.0"
+(cd hub && npm version 0.9.0 --no-git-tag-version)
+# agent/Cargo.toml and desktop/Cargo.toml: version = "0.9.0"
 (cd agent && cargo metadata --format-version 1 >/dev/null)
 (cd desktop && cargo metadata --format-version 1 >/dev/null)
 ```
@@ -813,8 +826,8 @@ commit to tag. Only after the maintainer approves that specific release:
 git fetch origin
 git switch main
 git pull --ff-only origin main
-git tag -a v0.8.0 -F /path/to/release-notes.md --cleanup=verbatim
-git push origin v0.8.0
+git tag -a v0.9.0 -F /path/to/release-notes.md --cleanup=verbatim
+git push origin v0.9.0
 ```
 
 [release.yml](.github/workflows/release.yml) refuses a tag that is not annotated or
