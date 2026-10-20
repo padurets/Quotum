@@ -185,8 +185,8 @@ export class Demo {
       QUOTUM_ALLOWED_HOSTS: address.hosts,
       QUOTUM_SECRET_KEY:Buffer.alloc(32,31).toString('base64url'),
     });
-    if (set.id === 'clients' || set.id === 'links') {
-      // These sets begin with work before their first native measurement.
+    if (set.id === 'clients' || set.id === 'links' || set.id === 'calendar') {
+      // These sets begin with retained work before any native measurement.
       const seeded = new Store(path.join(this.dir, 'quotum.sqlite'), this.start + earliest(set));
       seeded.close();
     }
