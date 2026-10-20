@@ -26,11 +26,6 @@ on:
         required: false
         type: boolean
         default: false
-      v8_calibration:
-        description: Run one temporary synthetic native-code mapping calibration
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -151,64 +146,8 @@ jobs:
           path: ${{ runner.temp }}/quotum-bench-dashboard
           if-no-files-found: warn
 
-  # Temporary method check; remove after its first outcome, regardless of verdict.
-  v8-code-calibration:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.v8_calibration }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: hub
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.diagnostic_ref }}
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: hub/package-lock.json
-      - name: Verify the exact synthetic-only mode
-        run: |
-          node --input-type=module <<'JS'
-          import assert from 'node:assert/strict';
-          import {execFileSync} from 'node:child_process';
-          const actual=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
-          assert(/^[a-f0-9]{40}$/.test(process.env.CALIBRATION_SHA??''));
-          assert(actual===process.env.CALIBRATION_SHA&&actual===process.env.GITHUB_SHA);
-          assert(process.env.OTHER_MODES==='false false');
-          JS
-        env:
-          CALIBRATION_SHA: ${{ inputs.diagnostic_ref }}
-          OTHER_MODES: ${{ inputs.trace_only }} ${{ inputs.original_timing }}
-      - run: npm ci
-      - name: Prepare pinned inputs and unchanged native sampler
-        run: |
-          set -eu
-          calibration_dir="$RUNNER_TEMP/quotum-v8-calibration"
-          [ ! -e "$calibration_dir" ]
-          [ "$(df -B1 --output=avail "$RUNNER_TEMP" | tail -n 1)" -gt 8589934592 ]
-          mkdir -m 700 "$calibration_dir"
-          cp ../tooling/experiments/v8-code-calibration/* "$calibration_dir/"
-          python3 "$calibration_dir/bootstrap.py"
-          python3 "$calibration_dir/test_temporal_ranges.py"
-          cc -std=c11 -O2 -Wall -Wextra -Werror "$calibration_dir/perf-sample.c" -o "$calibration_dir/perf-sample"
-          node --check "$calibration_dir/control.mjs"
-          sha256sum "$calibration_dir/perf-sample.c" "$calibration_dir/perf-sample" "$calibration_dir/control.mjs"
-      - name: Run one two-function calibration
-        run: node --import tsx "$QUOTUM_CALIBRATION_DIR/control.mjs"
-        env:
-          QUOTUM_CALIBRATION_DIR: ${{ runner.temp }}/quotum-v8-calibration
-      - name: Preserve the first calibration outcome
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: v8-code-calibration-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/quotum-v8-calibration
-          if-no-files-found: error
-
   idle-cpu-control:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.v8_calibration }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
