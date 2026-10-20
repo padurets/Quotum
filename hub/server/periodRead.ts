@@ -184,6 +184,7 @@ export class PeriodReader {
     const release=(bytes:number)=>{reservation.remove(bytes);replyBytes-=bytes;};
     const cell=cellOf(range.to-range.from),fixedRange={from:Math.max(0,Math.floor(range.from/cell)*cell-cell),to:Math.min(Math.ceil(range.to/cell)*cell+cell,now)};
     const sourcePlan=request.sourceWork&&selection.mode==='live'?(()=>{
+      try{
       // Resource families keep one source cursor, independently of selected sessions.
       const sources=shown;
       let scratch=256;for(const id of sources.keys())scratch+=128+id.length*4;
@@ -194,6 +195,10 @@ export class PeriodReader {
       const delta=previous?.identity===key&&previous.revision>=self.workFloor&&previous.revision<=revision&&range.from>=previous.from;
       const patch=frontier(delta?previous:null,self.workChanges,true),cursor=self.encode({identity:key,revision,from:patch.coveredFrom,cut:patch.coveredTo});
       return {sources,delta,patch,cursor};
+      }catch(error){
+        if(!(error instanceof HistoryLimit))throw error;
+        response.sourceWork={state:'error',error:'history_limit'};return null;
+      }
     })():null;
     // Plan every consumer before the first extraction, including independently advanced cursors.
     const workRanges:import('./domain/period.js').PeriodRange[]=[];

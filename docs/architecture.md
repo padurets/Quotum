@@ -1616,7 +1616,9 @@ share the existing 32 MiB server reservation; retained and staged facets share t
 browser's 15 MiB history pool. The selected-work matcher is prepared on its first
 consuming read. A failed preparation or raw read releases its matcher charge; a
 capacity failure stays within that section while independent native sections remain
-readable. Work authority changes retire closed-menu facets too.
+readable. Source cursor planning has the same section boundary: a refused plan does
+not widen the shared raw range or discard native siblings. Work authority changes
+retire closed-menu facets too.
 Ordinary session and work changes invalidate their cached choices without a closed-menu
 read. Reopening checks that generation and the live evaluated range; an older reply
 cannot mark newer choices complete.

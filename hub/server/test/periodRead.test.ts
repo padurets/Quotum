@@ -472,6 +472,28 @@ for(const selected of [false,true])test(`matcher pressure preserves native budge
   const recovered=await read(request);assert.equal(recovered.budget?.state,'complete');if(selected)assert.equal(recovered.sessions?.state,'complete');assert.equal(used,0);
 });
 
+test('source cursor planning pressure cannot discard an independent native budget and recovers without a new planner',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const tiles=new HistoryTiles(h.store),events=new Events(h.hub,undefined,{now:()=>now,after:()=>()=>{}},null),reader=new PeriodReader(h.hub,tiles,events);t.after(()=>events.close());
+  const wallet=h.store.source('openrouter','source-plan-wallet',now-3*H);h.store.hold(wallet,h.user.id,now-3*H);
+  const meter=(id:string,amount:string)=>({id,at:now-M,amount,kind:'counter' as const,unit:'USD',stale:false,staleAfterMs:4*H,limit:null,resetAt:null,minutes:null,scope:null,label:null});
+  h.store.record(wallet,{type:'meters',observedAt:now-M,staleAfterMs:4*H,meters:[meter('usage','0'),meter('credits','15000000')],keys:[],inventoryComplete:true,inventoryError:null});
+  for(let i=0;i<1998;i++){const source=h.store.source('codex','source-plan-'+i,now-3*H);h.store.hold(source,h.user.id,now-3*H);}
+  const query={cell:String(M),from:String(now-H),to:String(now),cells:'skip'};
+  const request:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,sourceWork:{},quota:{...query,evidence:'skip',sources:'[]'},budget:{...query,unit:'USD',meters:JSON.stringify([[wallet,'balance']])}};
+  let used=0;const refused:number[]=[],reservation=tiles.reservation.bind(tiles);
+  t.mock.method(tiles,'reservation',()=>{const own=reservation();let bytes=0;return {add:(size:number)=>{try{own.add(size);}catch(error){refused.push(size);throw error;}bytes+=size;used+=size;},remove:(size:number)=>{own.remove(size);bytes-=size;used-=size;},close:()=>{own.close();used-=bytes;bytes=0;}};});
+  const pin=tiles.reservation(),pinned=32*1024*1024-periodInputBytes(request)-200_000;pin.add(pinned);t.after(()=>pin.close());
+  const native={...request,sourceWork:undefined,quota:undefined},padding=periodInputBytes(request)-periodInputBytes(native);pin.add(padding);
+  const read=async(body:PeriodRequest)=>expandPeriod(JSON.parse(await reader.readAsync(h.board,h.user.id,body)) as PeriodWireReply);
+  assert.equal((await read(native)).budget?.state,'complete','native evidence fits beside the same input charge');pin.remove(padding);
+  const reply=await read(request);assert.equal(reply.budget?.state,'complete');assert.deepEqual(reply.sourceWork,{state:'error',error:'history_limit'});
+  if(reply.budget?.state!=='complete')throw new Error('native budget failed');assert.equal(reply.budget.value.tape!.money[0].paired!.readings[0].amount,'15000000');
+  const scratch=256+[...h.store.authorizedSources(h.board).keys()].reduce((bytes,id)=>bytes+128+id.length*4,0);assert.ok(refused.includes(scratch),'the actual cursor plan reservation was refused');
+  assert.equal(used,pinned,'access, plan and response staging are released');pin.close();assert.equal(used,0);
+  const recovered=await read(request);assert.equal(recovered.sourceWork?.state,'complete');assert.equal(recovered.quota?.state,'complete');assert.equal(recovered.budget?.state,'complete');assert.equal(used,0);
+});
+
 test('a refused source-curve publication cannot escape through a sibling fixed section and recovers after capacity returns',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   const start=now-H,tiles=new HistoryTiles(h.store),events=new Events(h.hub,undefined,{now:()=>now,after:()=>()=>{}},null),reader=new PeriodReader(h.hub,tiles,events);
