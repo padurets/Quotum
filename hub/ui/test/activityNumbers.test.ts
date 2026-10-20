@@ -60,7 +60,7 @@ test('a mouse-focused legend keeps its own metric description when keyboard moda
   try{
     assert.ok(view.render().includes(t('activity.seriesHidden')));view.focus(false);
     const enabled=view.update({...props,muted:false});
-    for(const key of ['activity.agentHours','activity.active','activity.agents','activity.atOnce'])assert.ok(enabled.includes(t(key)),key);
+    for(const key of ['activity.agentHours','activity.active','activity.agents','activity.atOnce'] as const)assert.ok(enabled.includes(t(key)),key);
     assert.ok(enabled.includes('aria-describedby="legend-description"'));
   }finally{view.close();d.close();await h.close();}
 });
