@@ -183,3 +183,22 @@ test('a late forbidden reply cannot close a newer board, while current auth loss
   reader.configure(scope);await flush();reader.configure({...scope,authority:'two'});reader.reset();gate.resolve();await flush();assert.equal(lost,0);
   reader.configure({...scope,authority:'three'});await flush();assert.equal(lost,1);assert.equal(reader.numbers(100),null);assert.equal(pool.estimatedBytes,0);assert.equal(pool.activeFlights,0);
 });
+
+for(const fixed of [false,true])for(const returnToA of [false,true])test(`queued ${fixed?'fixed':'live'} ${returnToA?'A to B to A':'A to B'} keeps the latest demand after cancellation`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({personal:true}),pool=new HistoryPool();
+  const blockers=[{role:'visible'},{role:'visible'}] as const;
+  for(const flight of blockers)pool.request({estimatedBytes:0,evictionCandidates:()=>[]},flight,()=>{},()=>{});
+  let requests=0;
+  const reader=new ActivitySelection({pool,now:()=>NOW,read:()=>{const value=h.period.get();return {trace:value.value,ready:!value.loading&&!value.error,error:value.error};},scheduler:()=>null,
+    send:async(board,body,_signal,reserve)=>{requests++;const wire=h.reader.read(board,h.alice.id,body);assert.ok(reserve(wire.length*3));return expandPeriod(JSON.parse(wire));}});
+  try{
+    for(const [project,from,to] of [['A',NOW-30*M,NOW-25*M],['B',NOW-20*M,NOW-10*M]] as const)h.store.creditWork(h.device,from,to,[{source:h.source,client:'codex',origin:'terminal',project,folder:'',startedAt:NOW-H,identity:{kind:'stable',sessionId:project}}]);
+    h.events.flush();await flush();assert.equal(pool.activeFlights,2);
+    const a:ActivityScope={board:h.board,authority:'one',by:'project',muted:['"B"','"Work project"'],filters:workFilter(defaultFilters()),selection:fixed?{mode:'range',from:NOW-H,to:NOW}:{mode:'live',periodMs:H},rangeKey:fixed?'fixed':'1h',barMs:M};
+    reader.configure(a);await flush();reader.configure({...a,muted:['"A"','"Work project"']});if(returnToA)reader.configure(a);await flush();
+    assert.equal(reader.numbers(NOW),null);assert.equal(requests,0);
+    for(const flight of blockers)pool.release(flight);await flush();
+    assert.equal(reader.numbers(NOW)?.agentMs,(returnToA?5:10)*M,'the current generation starts when a shared slot is released');
+    assert.equal(requests,fixed?1:0,'retired queued generations never reach HTTP');assert.equal(pool.activeFlights,0);
+  }finally{reader.reset();for(const flight of blockers)pool.release(flight);await flush();assert.equal(pool.estimatedBytes,0);await h.close();}
+});

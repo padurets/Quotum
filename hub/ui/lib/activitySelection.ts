@@ -86,7 +86,7 @@ export class ActivitySelection implements HistoryMember {
     this.env.pool.request(this,flight,()=>{void this.run(scope,flight);},()=>flight.controller.abort());
   }
   private async run(scope:ActivityScope,flight:Flight){
-    const {pool}=this.env,generation=this.generation,news=this.news,since=this.dirty;
+    const {pool}=this.env,generation=flight.generation,news=this.news,since=this.dirty;
     const valid=()=>!flight.controller.signal.aborted&&generation===this.generation&&this.scope===scope;
     let transport=0,scratch=0;
     const reserve=(bytes:number)=>{if(!pool.reserve(flight,transport+bytes))throw new Error('history_limit');scratch=bytes;};
