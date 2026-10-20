@@ -20,7 +20,7 @@ export const FIXED_ACTIVITY_BUDGET={request:76*1024,body:7*1024*1024,pool:15*102
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 type Numbers={agentMs:number;activeMs:number;agents:number};
 type Body={id:string;subset:boolean;requestBytes:number;decoded:number;encoded:number;cancelled:boolean;body:PeriodRequest};
-type Sample={numbers:Numbers;activity:History['activity'];tiles:[number,number][];bytes:number;flights:number;subsetFlights:number;advances:number;subsetAdvances:number;preparationMs:number;failedReservations:number};
+type Sample={numbers:Numbers;activity:History['activity'];tiles:[number,number][];bytes:number;flights:number;subsetFlights:number;advances:number;subsetAdvances:number;preparationMs:number;failedReservations:number;preferenceWrites:number};
 
 /** Independent endpoint sweep: no group aggregate, PeriodActivity or new selection helper. */
 export function activityOracle(trace:WorkTrace,from:number,to:number):Numbers {
@@ -37,7 +37,8 @@ export function activityOracle(trace:WorkTrace,from:number,to:number):Numbers {
 function observationScript(period:string){return historyPoolReceiptScript()+`;(() => {
   localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d',activityBy:'project'}));
   const original=window.__quotumInspectHistoryPool,ids=new WeakMap();let serial=0,pool,stats;
-  const reset=()=>stats={bytes:0,flights:0,subsetFlights:0,advances:0,subsetAdvances:0,preparationMs:0,failedReservations:0};reset();
+  const reset=()=>stats={bytes:0,flights:0,subsetFlights:0,advances:0,subsetAdvances:0,preparationMs:0,failedReservations:0,preferenceWrites:0};reset();
+  const save=Storage.prototype.setItem;Storage.prototype.setItem=function(key,...args){if(key==='quotum.prefs')stats.preferenceWrites++;return save.call(this,key,...args);};
   const reader=()=>[...pool.members].find(m=>m.tiles instanceof Map&&typeof m.numbers==='function');
   window.__quotumInspectHistoryPool=p=>{original(p);pool=p;
     const reserve=p.reserve;p.reserve=function(...args){const result=reserve.apply(this,args);stats.bytes=Math.max(stats.bytes,this.estimatedBytes);if(!result)stats.failedReservations++;return result;};
@@ -49,7 +50,7 @@ function observationScript(period:string){return historyPoolReceiptScript()+`;((
 
 /** Physical requests are retained through cancellation and their final response-body accounting. */
 function traffic(cdp:Cdp){
-  const bodies:Body[]=[],active=new Map<string,Body>(),pending=new Set<Promise<unknown>>();
+  const bodies:Body[]=[],active=new Map<string,Body>(),pending=new Set<Promise<unknown>>(),errors:unknown[]=[];
   cdp.on<{requestId:string;request:{url:string;postData?:string}}>('Network.requestWillBeSent',event=>{
     if(!/\/api\/boards\/[^/]+\/period(?:\/sessions)?$/.test(new URL(event.request.url).pathname))return;
     const body=JSON.parse(event.request.postData??'{}') as PeriodRequest;
@@ -60,10 +61,10 @@ function traffic(cdp:Cdp){
   cdp.on<{requestId:string}>('Network.loadingFailed',event=>{const row=active.get(event.requestId);if(row){row.cancelled=true;active.delete(row.id);}});
   cdp.on<{requestId:string}>('Network.loadingFinished',event=>{
     const row=active.get(event.requestId);if(!row)return;active.delete(row.id);
-    const work=cdp.send<{body:string;base64Encoded:boolean}>('Network.getResponseBody',{requestId:row.id}).then(result=>{row.decoded=result.base64Encoded?Buffer.from(result.body,'base64').length:Buffer.byteLength(result.body);});
+    const work=cdp.send<{body:string;base64Encoded:boolean}>('Network.getResponseBody',{requestId:row.id}).then(result=>{row.decoded=result.base64Encoded?Buffer.from(result.body,'base64').length:Buffer.byteLength(result.body);}).catch(error=>{if(!row.cancelled)errors.push(error);});
     pending.add(work);void work.finally(()=>pending.delete(work));
   });
-  return {bodies,active,pending};
+  return {bodies,active,pending,errors};
 }
 
 /** Actual mounted widget, production reader/HTTP parser/pool and one synthetic interval writer. */
@@ -74,7 +75,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
     const bodies=traffic(cdp),selection={mode:'range' as const,from:actor.floorAt+1000-days*DAY+123,to:actor.floorAt+1000};
     try{
       await pause(Math.max(0,selection.to+10-Date.now()));
-      await cdp.send('Network.enable');await cdp.send('Page.enable');
+      await cdp.send('Network.enable');await cdp.send('Page.enable');await cdp.send('Performance.enable');
       await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:probeScript()});
       await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
       const split=owner.cookie.indexOf('=');await cdp.send('Network.setCookie',{name:owner.cookie.slice(0,split),value:owner.cookie.slice(split+1),url:owner.base,httpOnly:true,sameSite:'Lax'});
@@ -93,8 +94,8 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       await cdp.evaluate(`(()=>{const b=document.querySelector('.activity .legend-item[aria-pressed="true"]');b.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));})()`);
       await pause(40);
       const hovered=await sample(),paint=await cdp.evaluate<Reading>('__quotumBench.read()');
-      assert.equal(bodies.bodies.length,hoverStart,'hover cannot request history');assert.equal(hovered.advances,0,'hover cannot prepare paths or accounting');assert.equal(await geometry(),beforeHover);
-      assert.ok(!paint.renders.some(part=>!part.time&&part.node.endsWith('section.activity')),'hover cannot render Activity itself');
+      assert.equal(bodies.bodies.length,hoverStart,'hover cannot request history');assert.equal(hovered.advances,0,'hover cannot prepare paths or accounting');assert.equal(hovered.preferenceWrites,0);assert.equal(await geometry(),beforeHover);
+      assert.ok(!paint.renders.some(part=>part.widget==='activity'&&part.kind==='chart'),'hover cannot render Activity or its plot');
       await cdp.evaluate(`document.querySelector('.activity .legend-item[aria-pressed="true"]').dispatchEvent(new PointerEvent('pointerout',{bubbles:true,pointerType:'mouse'}))`);
       const subsetRequest=[...bodies.bodies].reverse().find(body=>body.subset)!.body;
       const reference=async()=>{
@@ -105,19 +106,28 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       const check=async()=>{
         const current=await sample(),trace=await reference();assert.deepEqual(current.numbers,activityOracle(trace,selection.from,selection.to));
         for(const [at,activeMs,agentMs,agents] of current.activity.cells)assert.deepEqual({activeMs,agentMs,agents},activityOracle(trace,Math.max(selection.from,at),Math.min(selection.to,at+current.activity.barMs)));
+        for(let at=cellStart(selection.from,current.activity.barMs);at<selection.to;at+=current.activity.barMs){
+          const expected=activityOracle(trace,Math.max(selection.from,at),Math.min(selection.to,at+current.activity.barMs));
+          if(expected.agentMs)assert.deepEqual(current.activity.cells.find(([start])=>start===at)?.slice(1),[expected.activeMs,expected.agentMs,expected.agents],'every nonempty reference bar must be present');
+        }
         return current;
       };
       const phase=async(name:string,run:()=>Promise<void>,expected:number|null)=>{
         const start=bodies.bodies.length;await cdp.evaluate('window.__quotumFixedActivity.reset()');const at=Date.now();
+        const metrics=async()=>{const {metrics}=await cdp.send<{metrics:{name:string;value:number}[]}>('Performance.getMetrics');return Object.fromEntries(metrics.map(metric=>[metric.name,metric.value]));};
+        const before=await metrics();
         await run();await pause(350);await settled();while(bodies.active.size||bodies.pending.size){await Promise.allSettled([...bodies.pending]);await pause(20);}
         const current=await check(),reads=bodies.bodies.slice(start),subset=reads.filter(row=>row.subset);
+        const after=await metrics();assert.deepEqual(bodies.errors,[],'every completed response must remain accounted');
+        assert.ok(Number.isFinite(after.ScriptDuration-before.ScriptDuration)&&Number.isFinite(after.TaskDuration-before.TaskDuration));
         if(expected!==null)assert.equal(subset.length,expected,name+' subset requests');
         assert.ok(current.flights<=2&&current.subsetFlights<=1&&current.bytes<=FIXED_ACTIVITY_BUDGET.pool&&!current.failedReservations);
         assert.ok(current.advances<=FIXED_ACTIVITY_BUDGET.advances);
+        if(expected&&expected>0)assert.ok(current.advances>0&&current.subsetAdvances>0,'real C/S preparation must be observed');
         for(const row of reads)assert.ok(row.requestBytes<=FIXED_ACTIVITY_BUDGET.request&&row.decoded<=FIXED_ACTIVITY_BUDGET.body);
         const decoded=reads.reduce((n,row)=>n+row.decoded,0),selectedBytes=subset.reduce((n,row)=>n+row.decoded,0);
         if(expected===1){assert.ok(selectedBytes<=(days===1?FIXED_ACTIVITY_BUDGET.subset24h:FIXED_ACTIVITY_BUDGET.subset30d));assert.ok(decoded<=(days===1?FIXED_ACTIVITY_BUDGET.combined24h:FIXED_ACTIVITY_BUDGET.combined30d));}
-        reports.push({days,name,excluded,requests:reads.length,subset:subset.length,requestBytes:reads.reduce((n,row)=>n+row.requestBytes,0),decoded,selectedBytes,encoded:reads.reduce((n,row)=>n+row.encoded,0),cancelled:reads.filter(row=>row.cancelled).length,coherentMs:Date.now()-at,...current,numbers:current.numbers,activity:undefined,tiles:undefined});
+        reports.push({days,name,excluded,requests:reads.length,subset:subset.length,requestBytes:reads.reduce((n,row)=>n+row.requestBytes,0),decoded,selectedBytes,encoded:reads.reduce((n,row)=>n+row.encoded,0),cancelled:reads.filter(row=>row.cancelled).length,coherentMs:Date.now()-at,scriptMs:(after.ScriptDuration-before.ScriptDuration)*1000,taskMs:(after.TaskDuration-before.TaskDuration)*1000,...current,numbers:current.numbers,activity:undefined,tiles:undefined});
         return {current,subset};
       };
       const isolated=await phase('isolated',async()=>{await actor.through(actor.floorAt+100);},1);

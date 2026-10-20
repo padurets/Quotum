@@ -31,6 +31,7 @@ export class ActivitySelection implements HistoryMember {
   private readonly owner={};
   private source:WorkTrace|null=null;
   private awaiting:WorkTrace|null=null;
+  private waitingForBoard=false;
   private tiles=new Map<number,HistoryTile>();
   private bytes=0;
   private state:ActivitySelectionState={model:null,loading:false,error:null};
@@ -52,7 +53,7 @@ export class ActivitySelection implements HistoryMember {
   }
   private scheduler(){return this.env.scheduler?this.env.scheduler():preparations();}
   reset(){
-    this.generation++;this.identity='';this.scope=null;this.source=this.awaiting=null;this.tiles.clear();this.bytes=0;this.dirty=Infinity;
+    this.generation++;this.identity='';this.scope=null;this.source=this.awaiting=null;this.waitingForBoard=false;this.tiles.clear();this.bytes=0;this.dirty=Infinity;
     this.env.pool.unregister(this);
     this.flight?.controller.abort();this.scheduler()?.cancel(this.owner);
     // A cancelled response/preparation owns its reservation until its finally block.
@@ -61,8 +62,8 @@ export class ActivitySelection implements HistoryMember {
   refresh=()=>{
     if(!this.scope||this.scope.selection.mode!=='live')return;
     const reading=this.env.read();
-    if(!reading.ready){this.publish({model:null,loading:!reading.error,error:reading.error});return;}
-    if(reading.trace!==this.source){this.source=reading.trace;this.awaiting=null;this.news++;this.dirty=-Infinity;this.publish({model:null,loading:true,error:null});this.schedule();}
+    if(!reading.ready){this.waitingForBoard=true;this.publish({model:null,loading:!reading.error,error:reading.error});return;}
+    if(reading.trace!==this.source||this.waitingForBoard){this.waitingForBoard=false;this.source=reading.trace;this.awaiting=null;this.news++;this.dirty=-Infinity;this.publish({model:null,loading:true,error:null});this.schedule();}
   };
   changed(since:number){
     if(!this.scope)return;
@@ -119,6 +120,10 @@ export class ActivitySelection implements HistoryMember {
             const id=tileOf(chunk.from,cell),old=tiles.get(id)??new HistoryTile(tileStart(id,cell),cell);
             const tile=yield*old.staged(chunk,answer.known,bytes=>{reserve(1024+jsonBytes(trace)*4+tileBytes+bytes);return true;},answer.now,'activity');
             if(!tile)throw new Error('history_limit');
+            const covered=old.readTo>old.readFrom;
+            tile.readFrom=covered?Math.min(old.readFrom,chunk.from):chunk.from;
+            tile.readTo=covered?Math.max(old.readTo,chunk.to):chunk.to;
+            tile.validTo=Math.min(tile.readTo,answer.now);tile.writeSeq=old.writeSeq+1;
             tileBytes+=tile.bytes-(tiles.get(id)?.bytes??0);tiles.set(id,tile);yield;
           }
           const chunks:Chunk[]=[];reserve(1024+jsonBytes(trace)*4+tileBytes*4);
@@ -139,7 +144,7 @@ export class ActivitySelection implements HistoryMember {
       if(valid()){
         if(error&&typeof error==='object'&&'status' in error&&[401,403,404].includes(Number(error.status))){this.reset();this.env.accessLost?.();return;}
         this.publish({model:null,loading:false,error:error instanceof Error&&error.message==='history_limit'?'history_limit':'history_failed'});
-        this.dirty=Infinity;
+        // Failed cells remain dirty. A later event cannot confirm the failed prefix.
       }
     }finally{
       pool.release(flight);if(this.flight===flight)this.flight=null;

@@ -9,15 +9,17 @@ import {expandPeriod} from '../../server/domain/periodWire';
 import type {PeriodRequest} from '../../server/domain/periodRead';
 import {fixture,flush,NOW,H,M} from './periodRuntimeFixture';
 import {packWork,type WorkTrace} from '../../server/domain/periodWork';
+import {Preparations} from '../lib/prepare';
+import {ApiError} from '../lib/http';
 
 const deferred=()=>{let resolve!:()=>void;const promise=new Promise<void>(yes=>{resolve=yes;});return {promise,resolve};};
 
 for(const days of [1,30])test(`production fixed subset ${days}d replaces dirty cells with exact totals and keeps clean cells`,async t=>{
   t.mock.method(Date,'now',()=>NOW);
   const h=await fixture({personal:true,periodName:days===1?'24h':'30d'}),requests:PeriodRequest[]=[],pool=new HistoryPool();
-  let gate:ReturnType<typeof deferred>|null=null,inFlight=0,peak=0;
+  let gate:ReturnType<typeof deferred>|null=null,inFlight=0,peak=0,fail=false;
   const reader=new ActivitySelection({pool,now:()=>NOW,read:()=>({trace:null,ready:false,error:null}),scheduler:()=>null,
-    send:async(_board,body,_signal,reserve)=>{requests.push(body);peak=Math.max(peak,++inFlight);try{const wire=h.reader.read(h.board,h.alice.id,body);assert.ok(reserve(wire.length*3));const reply=expandPeriod(JSON.parse(wire)),waiting=gate;gate=null;await waiting?.promise;return reply;}finally{inFlight--;}}
+    send:async(_board,body,_signal,reserve)=>{requests.push(body);peak=Math.max(peak,++inFlight);try{if(fail){fail=false;throw Error('fixture unavailable');}const wire=h.reader.read(h.board,h.alice.id,body);assert.ok(reserve(wire.length*3));const reply=expandPeriod(JSON.parse(wire)),waiting=gate;gate=null;await waiting?.promise;return reply;}finally{inFlight--;}}
   });
   const add=(project:string,from:number,to:number,id=project)=>{h.store.creditWork(h.device,from,to,[{source:h.source,client:'codex',origin:'terminal',project,folder:'',startedAt:NOW-days*24*H,identity:{kind:'stable',sessionId:id}}]);h.events.flush();};
   try{
@@ -41,6 +43,11 @@ for(const days of [1,30])test(`production fixed subset ${days}d replaces dirty c
     gate=deferred();const waiting=gate;reader.changed(NOW-10*M);await flush();assert.equal(requests.length,4);
     add('A',NOW-4*M,NOW-3*M);reader.changed(NOW-4*M);assert.equal(reader.numbers(NOW),null,'an older answer cannot label newer work');waiting.resolve();await flush();
     assert.equal(peak,1);assert.equal(requests.length,5);assert.deepEqual([reader.numbers(NOW)!.agentMs,reader.numbers(NOW)!.activeMs],[47*M,37*M]);
+    fail=true;add('A',NOW-10*H,NOW-10*H+5*M,'late-A');reader.changed(NOW-10*H);await flush();assert.equal(reader.get().error,'history_failed');assert.equal(reader.numbers(NOW),null);
+    add('A',NOW-2*M,NOW-M);reader.changed(NOW-2*M);await flush();
+    assert.equal(Number(requests.at(-1)!.quota!.from),Math.floor((NOW-10*H)/cellOf(days*24*H))*cellOf(days*24*H),'a later event must also replace the earlier failed cells');
+    assert.deepEqual([reader.numbers(NOW)!.agentMs,reader.numbers(NOW)!.activeMs],[53*M,43*M]);
+    const repaired=reader.numbers(NOW)!;assert.deepEqual(repaired.cells.find(([at])=>at===Math.floor((NOW-10*H)/repaired.barMs)*repaired.barMs)?.slice(1),[5*M,5*M,1],'the earlier failed bar agrees with the fresh exact summary');
     reader.configure(null);await flush();assert.equal(pool.estimatedBytes,0);assert.equal(pool.activeFlights,0);
   }finally{reader.reset();await flush();await h.close();}
 });
@@ -63,8 +70,8 @@ test('a refused local preparation publishes an error and releases its reservatio
 });
 
 test('a live work event waits for replacement board evidence and empty coverage has its own deadline',async()=>{
-  let trace:WorkTrace={anchor:0,knownFrom:0,cut:100,refs:[],spans:[]};
-  const pool=new HistoryPool(),reader=new ActivitySelection({pool,now:()=>100,read:()=>({trace,ready:true,error:null}),scheduler:()=>null,send:async()=>{throw new Error('unexpected request');}});
+  let trace:WorkTrace={anchor:0,knownFrom:0,cut:100,refs:[],spans:[]},ready=true;
+  const pool=new HistoryPool(),reader=new ActivitySelection({pool,now:()=>100,read:()=>({trace,ready,error:null}),scheduler:()=>null,send:async()=>{throw new Error('unexpected request');}});
   const scope:ActivityScope={board:'b',authority:'one',by:'source',muted:['unknown'],filters:workFilter(defaultFilters()),selection:{mode:'live',periodMs:50},rangeKey:'live',barMs:10};
   try{
     reader.configure(scope);await flush();assert.ok(reader.numbers(100)?.known);
@@ -72,5 +79,35 @@ test('a live work event waits for replacement board evidence and empty coverage 
     reader.changed(90);await flush();assert.equal(reader.numbers(100),null,'the event cannot publish the pre-event C intervals again');
     trace={...trace,cut:110};reader.refresh();await flush();assert.ok(reader.numbers(100)?.known);
     assert.equal(reader.changesAt(100,at=>String(!!reader.numbers(at)?.known)),160);
+    ready=false;reader.refresh();assert.equal(reader.numbers(100),null);
+    ready=true;reader.refresh();await flush();assert.ok(reader.numbers(100)?.known,'the same trace can recover after its board dependency waits');
   }finally{reader.reset();await flush();assert.equal(pool.estimatedBytes,0);}
+});
+
+test('an oversized or invalid local predicate sends nothing and narrowing recovers',async()=>{
+  const trace:WorkTrace={anchor:0,knownFrom:0,cut:100,refs:[],spans:[]},pool=new HistoryPool();let requests=0;
+  const reader=new ActivitySelection({pool,now:()=>100,read:()=>({trace,ready:true,error:null}),scheduler:()=>null,send:async()=>{requests++;throw Error('unexpected request');}});
+  const scope:ActivityScope={board:'b',authority:'one',by:'project',muted:Array.from({length:4000},(_,i)=>JSON.stringify(`project-${i}-${'x'.repeat(20)}`)),filters:workFilter(defaultFilters()),selection:{mode:'range',from:0,to:100},rangeKey:'fixed',barMs:10};
+  reader.configure(scope);await flush();assert.equal(requests,0);assert.equal(reader.get().error,'history_limit');assert.equal(reader.numbers(100),null);assert.equal(pool.estimatedBytes,0);
+  reader.configure({...scope,muted:['invalid JSON']});await flush();assert.equal(requests,0);assert.equal(reader.get().error,'history_limit');
+  reader.configure({...scope,muted:['"A"'],selection:{mode:'live',periodMs:50}});await flush();assert.equal(reader.get().error,null);assert.equal(reader.numbers(100)?.agentMs,0);reader.reset();
+});
+
+test('unmount during sliced preparation releases scratch and cannot publish its retired cohort',async()=>{
+  const queued:(()=>void)[]=[];let time=0;
+  const scheduler=new Preparations({now:()=>++time,post:run=>queued.push(run)}),pool=new HistoryPool();
+  const trace:WorkTrace={anchor:0,knownFrom:0,cut:100,refs:Array.from({length:20},(_,i)=>({ref:String(i),source:null,project:'p'+i,device:{id:'d',name:'D'},origin:'terminal',folder:null,startedAt:0})),spans:Array.from({length:20},(_,i)=>[i,0,100])};
+  const reader=new ActivitySelection({pool,now:()=>100,read:()=>({trace,ready:true,error:null}),scheduler:()=>scheduler,send:async()=>{throw Error('unexpected request');}});
+  reader.configure({board:'b',authority:'one',by:'project',muted:['"p0"'],filters:workFilter(defaultFilters()),selection:{mode:'live',periodMs:100},rangeKey:'live',barMs:10});await flush();
+  assert.ok(queued.length);queued.shift()!();assert.ok(pool.estimatedBytes>0);assert.equal(reader.numbers(100),null);
+  reader.reset();await flush();queued.splice(0).forEach(run=>run());await flush();
+  assert.equal(reader.numbers(100),null);assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);assert.equal(scheduler.size,0);scheduler.dispose();
+});
+
+test('a late forbidden reply cannot close a newer board, while current auth loss retires all local evidence',async()=>{
+  const pool=new HistoryPool(),gate=deferred();let lost=0;
+  const reader=new ActivitySelection({pool,now:()=>100,read:()=>({trace:null,ready:false,error:null}),scheduler:()=>null,accessLost:()=>{lost++;},send:async()=>{await gate.promise;throw new ApiError(403,'forbidden');}});
+  const scope:ActivityScope={board:'b',authority:'one',by:'project',muted:['"p0"'],filters:workFilter(defaultFilters()),selection:{mode:'range',from:0,to:100},rangeKey:'fixed',barMs:10};
+  reader.configure(scope);await flush();reader.configure({...scope,authority:'two'});reader.reset();gate.resolve();await flush();assert.equal(lost,0);
+  reader.configure({...scope,authority:'three'});await flush();assert.equal(lost,1);assert.equal(reader.numbers(100),null);assert.equal(pool.estimatedBytes,0);assert.equal(pool.activeFlights,0);
 });
