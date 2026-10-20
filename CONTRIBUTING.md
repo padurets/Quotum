@@ -84,9 +84,11 @@ synthetic browser. These optional modes retain the complete traffic matrix and
 separate from the required benchmark; observer overhead is unqualified.
 The manual CI control checks the requested checkout and compiled client hash before
 running. Neither diagnostic mode can satisfy the required benchmark.
-Over-budget work traffic retains bounded request shapes and numerical transfer counts.
-After all three work verdicts, at most three response-body reads partition the decoded
-JSON into exact section sizes; original transferred-byte limits remain unchanged.
+Work traffic retains bounded request shapes and numerical transfer counts. After all
+three work verdicts, at most three response-body reads partition the decoded JSON into
+exact section sizes and retain fixed section states and array counts. Passing replies
+remain available for comparison with intermittent overruns; original transferred-byte
+limits remain unchanged.
 Native outliers retain their wheel, drag or return origin and the final sample's
 running and moving chart masks, with bits ordered quota, activity, budget, funds,
 session. These masks do not describe the whole measured interval.

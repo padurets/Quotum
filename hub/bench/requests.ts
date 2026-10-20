@@ -71,11 +71,17 @@ export class Requests {
       const serialize=compactJSON(raw)===text?compactJSON:JSON.stringify(raw)===text?JSON.stringify:null;
       if(!serialize||!raw||Array.isArray(raw)||typeof raw!=='object')return {...metadata,status:'insufficient-evidence'};
       const allowed=new Set(['basis',...PERIOD_SCOPES,'values','sessions','facets','sourceWork','calendar','moneySemantics','rateLegs']);
-      const sections:Record<string,number>={},unknown={count:0,bytes:0};let framing=2;
-      for(const [key,value]of Object.entries(raw)){const size=Buffer.byteLength(serialize(value));framing+=Buffer.byteLength(JSON.stringify(key))+1;if(allowed.has(key))sections[key]=size;else{unknown.count++;unknown.bytes+=size;}}
+      const sections:Record<string,number>={},sectionStates:Record<string,{state:string|null;arrays:Record<string,number>}>={},unknown={count:0,bytes:0};let framing=2;
+      for(const [key,value]of Object.entries(raw)){
+        const size=Buffer.byteLength(serialize(value));framing+=Buffer.byteLength(JSON.stringify(key))+1;
+        if(allowed.has(key)){sections[key]=size;const part=value as {state?:unknown;value?:Record<string,unknown>}|null;
+          sectionStates[key]={state:part&&['complete','delta','error'].includes(String(part.state))?String(part.state):null,
+            arrays:Object.fromEntries(['chunks','patch','updates','cells','refs','rows','values','sources','patterns'].flatMap(name=>Array.isArray(part?.value?.[name])?[[name,(part.value[name] as unknown[]).length]]:[]))};
+        }else{unknown.count++;unknown.bytes+=size;}
+      }
       framing+=Math.max(0,Object.keys(raw).length-1);
       const partition=framing+unknown.bytes+Object.values(sections).reduce((sum,size)=>sum+size,0);
-      return {...metadata,status:partition===bytes.length?'complete':'insufficient-evidence',body:{decodedBytes:bytes.length,sections,unknown,framing,partition,headerBytes:null}};
+      return {...metadata,status:partition===bytes.length?'complete':'insufficient-evidence',body:{decodedBytes:bytes.length,sections,sectionStates,unknown,framing,partition,headerBytes:null}};
     }catch{return {...metadata,status:'insufficient-evidence'};}
   }
 }

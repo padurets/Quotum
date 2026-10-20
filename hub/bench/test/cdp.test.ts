@@ -360,6 +360,8 @@ test('work diagnostics partition the original compact body without changing phys
   const result=await requests.diagnose(cdp);assert.equal(result.status,'complete');assert.ok('body' in result);
   assert.equal(result.body.partition,Buffer.byteLength(body));assert.equal(result.body.decodedBytes,Buffer.byteLength(body));
   assert.equal(result.body.sections.basis,Buffer.byteLength('{"evidenceCut":3e3,"run":"private-run"}'));
+  assert.deepEqual(result.body.sectionStates.sessions,{state:'delta',arrays:{refs:1}});
+  assert.deepEqual(result.body.sectionStates.calendar,{state:null,arrays:{updates:1}});
   assert.deepEqual(result.body.unknown,{count:1,bytes:5});assert.equal(result.body.headerBytes,null);
   assert.equal(result.reads[0].encodedTotal,4712);assert.equal(result.reads[0].encodedBodyLower,4200);assert.equal(result.reads[0].contentLength,4300);
   assert.equal(requests.historyBytes,4712,'decoded and encoded body observations cannot replace the original budget');
@@ -382,7 +384,7 @@ test('ambiguous, cancelled and omitted work reads cannot cause speculative respo
   }
 });
 
-test('the actual work phase freezes all three original verdicts before optional body diagnostics, whose failure cannot erase the budget failure',async()=>{
+test('the actual work phase freezes all three original verdicts before body diagnostics, whose failure cannot erase the budget failure',async()=>{
   const source=readFileSync(new URL('../index.ts',import.meta.url),'utf8'),ast=ts.createSourceFile('index.ts',source,ts.ScriptTarget.Latest,true);
   const node=ast.statements.find((node):node is ts.FunctionDeclaration=>ts.isFunctionDeclaration(node)&&node.name?.text==='work')!;
   const code=ts.transpileModule('('+node.getText(ast)+')',{compilerOptions:{target:ts.ScriptTarget.ESNext}}).outputText;
@@ -398,8 +400,9 @@ test('the actual work phase freezes all three original verdicts before optional 
     assert.equal(result.reports.length,3);assert.equal(saved.length,1);
     assert.deepEqual(Array.from(result.reports,(row:{bytes:number})=>row.bytes),overBudget?[4712,3842,3842]:[3842,3842,3842]);
     assert.equal(result.problems.length,overBudget?1:0);
-    assert.equal(order.filter(value=>value==='Network.getResponseBody').length,overBudget?3:0);
-    if(overBudget){assert.equal(result.problems[0],'work report read history 1 times, 4712 bytes');assert.ok(order.indexOf('Network.getResponseBody')>order.indexOf('report4'));assert.ok(order.indexOf('save')<order.indexOf('Network.getResponseBody'));assert.deepEqual(result.traffic.originalCommandFailure,originalFailure);assert.ok(result.traffic.reports.every((row:{status:string})=>row.status===(failedBody?'insufficient-evidence':'complete')));}
+    assert.equal(order.filter(value=>value==='Network.getResponseBody').length,3);
+    if(overBudget)assert.equal(result.problems[0],'work report read history 1 times, 4712 bytes');
+    assert.ok(order.indexOf('Network.getResponseBody')>order.indexOf('report4'));assert.ok(order.indexOf('save')<order.indexOf('Network.getResponseBody'));assert.deepEqual(result.traffic.originalCommandFailure,originalFailure);assert.ok(result.traffic.reports.every((row:{status:string})=>row.status===(failedBody?'insufficient-evidence':'complete')));
     const original=saved[0] as {reports:unknown;problems:unknown};
     assert.deepEqual(JSON.parse(JSON.stringify({reports:result.reports,problems:result.problems})),{reports:original.reports,problems:original.problems});
   }

@@ -831,7 +831,8 @@ async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cd
   }
   const original={reports,problems,traffic:{reports:traffic.map(requests=>requests.trafficReading)}};
   evidence.save('work',original);
-  if(!problems.some(problem=>problem.startsWith('work report read history')))return original;
+  // A passing first reply is the comparison for an intermittent byte overrun.
+  // Fetch all three bodies only after their original measurements are frozen.
   const originalCommandFailure=cdp.snapshot().failure;
   cdp.at('work/traffic-diagnostic');
   const diagnostics=await Promise.all(traffic.map(requests=>requests.diagnose(cdp)));
