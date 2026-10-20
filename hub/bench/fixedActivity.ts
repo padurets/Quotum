@@ -13,6 +13,8 @@ import {probeScript,type Reading} from './probe.js';
 
 /** Compact fixed summaries include exact neighboring-position programs, even on a one-cell read.
  * The mixed analytics reference measured 33/146 KiB cold and 28/145 KiB warm at 24h/30d.
+ * The controlled browser profile measured 42/156 KiB for a selected update and 480/1185 KiB
+ * combined at 24h/30d, with at most 333k preparation advances across a phase.
  * Dense canonical work has more contexts; these independent caps retain the hard 7 MiB body,
  * 76 KiB request, 15 MiB pool and two-slot ceilings. Live budgets are unchanged. */
 export const FIXED_ACTIVITY_BUDGET={request:76*1024,body:7*1024*1024,pool:15*1024*1024,
@@ -57,7 +59,7 @@ function traffic(cdp:Cdp){
     const subset=body.quota?.sources==='[]'&&body.quota?.meters==='[]'&&body.quota?.evidence==='skip'&&!!body.sessions&&!body.values&&!body.budget&&!body.funds&&!body.sourceWork;
     const row={id:event.requestId,subset,requestBytes:Buffer.byteLength(event.request.postData??''),decoded:0,encoded:0,cancelled:false,body};bodies.push(row);active.set(row.id,row);
   });
-  cdp.on<{requestId:string;encodedDataLength:number}>('Network.dataReceived',event=>{const row=active.get(event.requestId);if(row)row.encoded+=event.encodedDataLength;});
+  cdp.on<{requestId:string;dataLength:number;encodedDataLength:number}>('Network.dataReceived',event=>{const row=active.get(event.requestId);if(row){row.decoded+=event.dataLength;row.encoded+=event.encodedDataLength;}});
   cdp.on<{requestId:string}>('Network.loadingFailed',event=>{const row=active.get(event.requestId);if(row){row.cancelled=true;active.delete(row.id);}});
   cdp.on<{requestId:string}>('Network.loadingFinished',event=>{
     const row=active.get(event.requestId);if(!row)return;active.delete(row.id);
@@ -87,7 +89,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       const settled=()=>waitFor(`window.__quotumFixedActivity?.ready()===true`);
       await settled();
       const sample=()=>cdp.evaluate<Sample>('window.__quotumFixedActivity.sample()');
-      const baseline=await sample();assert.ok(baseline.activity.known);
+      const baseline=await sample();assert.ok(baseline.activity.known);assert.ok(baseline.tiles.length<=8);
       const geometry=()=>cdp.evaluate<string>(`JSON.stringify([...document.querySelectorAll('.widgets>.widget,.activity .chart,.activity .activity-stack')].map(e=>{const b=e.getBoundingClientRect();return[b.x,b.y,b.width,b.height,e.getAttribute('d')];}))`);
       const beforeHover=await geometry(),hoverStart=bodies.bodies.length;
       await cdp.evaluate('window.__quotumFixedActivity.reset();__quotumBench.reset()');
@@ -133,7 +135,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         const report={days,name,excluded,requests:reads.length,subset:subset.length,requestBytes:reads.reduce((n,row)=>n+row.requestBytes,0),decoded,selectedBytes,encoded:reads.reduce((n,row)=>n+row.encoded,0),cancelled:reads.filter(row=>row.cancelled).length,coherentMs:coherentAt-at,verificationMs:Date.now()-coherentAt,reference:referenceReceipt,scriptMs:(after.ScriptDuration-before.ScriptDuration)*1000,taskMs:(after.TaskDuration-before.TaskDuration)*1000,...current,numbers:current.numbers,activity:undefined,tiles:undefined};
         reports.push(report);console.error('bench: fixed Activity '+JSON.stringify(report));
         if(expected!==null)assert.equal(subset.length,expected,name+' subset requests');
-        assert.ok(current.flights<=2&&current.subsetFlights<=1&&current.bytes<=FIXED_ACTIVITY_BUDGET.pool&&!current.failedReservations);
+        assert.ok(current.flights<=2&&current.subsetFlights<=1&&current.bytes<=FIXED_ACTIVITY_BUDGET.pool&&!current.failedReservations&&current.tiles.length<=8);
         assert.ok(current.advances<=FIXED_ACTIVITY_BUDGET.advances);
         if(expected&&expected>0)assert.ok(current.advances>0&&current.subsetAdvances>0,'real C/S preparation must be observed');
         for(const row of reads)assert.ok(row.requestBytes<=FIXED_ACTIVITY_BUDGET.request&&row.decoded<=FIXED_ACTIVITY_BUDGET.body);
