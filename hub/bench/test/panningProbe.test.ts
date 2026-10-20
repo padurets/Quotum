@@ -64,7 +64,7 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quo
   }
   const paintFold = (owner:{style:{transform:string}},transform:string) => {if (typed) computed.set(owner,transform);else owner.style.transform=transform;};
   runInNewContext(probe.replace('${JSON.stringify(initiator)}', JSON.stringify(initiator)).replace('${JSON.stringify(period)}', JSON.stringify('24h')).replace('${panTransactionsScript()}', panTransactionsScript()), context);
-  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {running:boolean; feeding: boolean; cleanup(): void; readTransactions(): PanTransactions; pending: object[]}}).__quotumPan;
+  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {running:boolean; feeding: boolean; cleanup(): void; readTransactions(): PanTransactions; pending: object[]; samples: NonNullable<PanReading['outliers']>}}).__quotumPan;
   for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg, sessionSvg]) Object.assign(svg.dataset, {panMinEnd: '-1000000000', panMaxEnd: '1000000000'});
   const limits = (min: number, max: number) => {for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg, sessionSvg]) Object.assign(svg.dataset, {panMinEnd: String(min), panMaxEnd: String(max)});};
   const wheel = (stamp: number, delivered: number, deltaMode = 0, handled = () => {}, deltaX = initiator==='activity'?7:12) => {
@@ -359,6 +359,8 @@ test('input-free gaps are excluded but pending input keeps delayed frames measur
   f.requestFrame(() => f.update(3, 200)); f.runFrame(200);
   assert.ok(f.reading.frames[0] > 80, 'pending input cannot erase a delayed movement interval');
   assert.equal(f.reading.latency[2], 80, 'native delivery and processing delays remain in the budget');
+  assert.equal(f.reading.samples[0].callbacksSinceMovingFrame,1,'ordinary RAF ticks without a sample are not counted');
+  assert.equal(f.reading.samples[0].maxCallbackGapMs,f.reading.frames[0],'the stationary reset starts a fresh diagnostic interval');
 });
 
 test('unpainted final input is credited only after its geometry commits', () => {
@@ -393,10 +395,42 @@ test('the probe measures a delayed HTML or SVG fold and cannot credit final inpu
     f.paintFold(moving,'translateX(10px) scaleX(.9)'); f.runFrame(110);
     assert.equal(f.reading.updated, 2);
     assert.deepEqual(Array.from(f.reading.frames), [80], 'a slow fold remains in the original moving-frame budget');
+    assert.equal(f.reading.samples[0].callbacksSinceMovingFrame,1);
+    assert.equal(f.reading.samples[0].maxCallbackGapMs,80);
     assert.equal(f.reading.latency.length, 0, 'final geometry alone cannot credit an unfinished animation');
     moving.getAnimations = () => []; f.paintFold(moving,'none'); f.runFrame(120);
     assert.deepEqual(Array.from(f.reading.latency), [120]);
   }
+});
+
+test('fold outliers retain sample-entry gaps after a phase change, including repeated RAF timestamps',()=>{
+  for(const [entries,end,count,gap] of [[[40,60,80],100,4,20],[[100,100],110,3,80]] as const){
+    const f=fixture();
+    f.wheel(0,0);f.requestFrame(()=>f.update(1,5));f.runFrame(5);
+    for(const svg of [f.historySvg,f.activitySvg,f.budgetSvg,f.fundsSvg,f.sessionSvg])delete svg.dataset.panEnd;
+    f.historyLayer.getAnimations=()=>[{playState:'running'}];
+    f.historyLayer.style.transform='translateX(40px)';f.runFrame(10);
+    f.historyLayer.style.transform='translateX(30px)';f.runFrame(20);
+    for(const at of entries)f.runFrame(at);
+    f.historyLayer.style.transform='translateX(10px)';f.runFrame(end);
+    assert.deepEqual(Array.from(f.reading.frames),[end-20]);
+    assert.equal(f.reading.samples[0].callbacksSinceMovingFrame,count);
+    assert.equal(f.reading.samples[0].maxCallbackGapMs,gap);
+    assert.deepEqual(Array.from(f.reading.latency),[5]);
+  }
+});
+
+test('movement with the same RAF timestamp cannot reset the next outlier receipt',()=>{
+  const f=fixture();
+  for(const svg of [f.historySvg,f.activitySvg,f.budgetSvg,f.fundsSvg,f.sessionSvg])delete svg.dataset.panEnd;
+  f.historyLayer.getAnimations=()=>[{playState:'running'}];
+  f.historyLayer.style.transform='translateX(40px)';f.runFrame(10);
+  f.historyLayer.style.transform='translateX(30px)';f.runFrame(20);
+  f.historyLayer.style.transform='translateX(20px)';f.runFrame(100);
+  f.historyLayer.style.transform='translateX(15px)';f.runFrame(100);
+  f.historyLayer.style.transform='translateX(10px)';f.runFrame(180);
+  assert.deepEqual(Array.from(f.reading.frames),[80,80]);
+  assert.deepEqual(Array.from(f.reading.samples,sample=>[sample.callbacksSinceMovingFrame,sample.maxCallbackGapMs]),[[1,80],[2,80]]);
 });
 
 test('each follower fold cannot be skipped or credited early by an idle initiator', () => {

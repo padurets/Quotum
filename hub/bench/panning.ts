@@ -172,10 +172,14 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         const originalRAF=window.requestAnimationFrame||requestAnimationFrame;
         const schedule=callback=>originalRAF.call(window,callback);
         let previous=charts.map(()=>'0:1'),phase='idle',lastFrame=null,paintedToken=null;
+        let sampleEntry=0,callbacksSinceMovingFrame=0,maxCallbackGapMs=0;
         const consume=(count,now,stamp,reachedGesture)=>{const reached=probe.pending.slice(0,count).filter(input=>input.gesture===reachedGesture);probe.pending=probe.pending.filter((input,i)=>i>=count||input.gesture!==reachedGesture);for(const input of reached){const ms=now-input.at;probe.latency.push(ms);probe.responses.push({ms,queued:input.delivered-input.at,processed:now-input.delivered,segment:input.segment,requests:probe.flights.size});}};
         const sample=(stamp,afterCallback=false)=>{
           if(!probe.running)return;
           const now=performance.now(),demand=probe.pending.length,layers=owners(),active=!!root.dataset.panEnd;
+          // Count sample entries, including callbacks with the same RAF timestamp.
+          if(probe.last){callbacksSinceMovingFrame++;maxCallbackGapMs=Math.max(maxCallbackGapMs,now-sampleEntry);}
+          sampleEntry=now;
           const folds=active?[]:layers.map((layer,i)=>{
             for(const owner of [layer,slides[i]]){const animation=owner.getAnimations().find(a=>a.playState==='running');if(animation)return{owner,animation};}
             return null;
@@ -197,7 +201,16 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
             if(reached>=0)consume(reached+1,now,stamp,gesture);
           }
           if(active&&moved.every(Boolean)||folding&&moved.some(Boolean)){
-            if(stamp!==lastFrame){probe.updated++;if(probe.last){const ms=now-probe.last;probe.frames.push(ms);probe.samples.push({ms,segment:folding?'fold':probe.segment,pending:demand,requests:probe.flights.size});}probe.last=now;lastFrame=stamp;}
+            if(stamp!==lastFrame){
+              probe.updated++;
+              if(probe.last){
+                const ms=now-probe.last;probe.frames.push(ms);
+                const receipt={ms,segment:folding?'fold':probe.segment,pending:demand,requests:probe.flights.size};
+                if(ms>50){receipt.callbacksSinceMovingFrame=callbacksSinceMovingFrame;receipt.maxCallbackGapMs=maxCallbackGapMs;}
+                probe.samples.push(receipt);
+              }
+              probe.last=now;lastFrame=stamp;callbacksSinceMovingFrame=0;maxCallbackGapMs=0;
+            }
           }
           if(!active&&!folding&&probe.pending.length&&charts.every(svg=>svg.dataset.drawReady==='true'&&!svg.classList.contains('is-panning'))){
             // Release may commit the last coalesced input before its own RAF.
