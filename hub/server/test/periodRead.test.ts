@@ -34,37 +34,28 @@ async function fixture() {
   const device=directory.saveDevice({userId:user.id,machine:{id:'machine-0123456789',name:'Laptop',os:'linux',arch:'x86_64'},agent:'quotum/0.6.0',tokenId:null},now-3*H).id;
   const hub:Hub={store,directory,ingest:new Ingest(store,directory,new Duty(),new Cadence()),resets:new ResetFeed(undefined,()=>{}),pairing:new Pairing(directory),setup:new Setup(false,null),local:null};
   const app=await buildApp(hub);
-  const read=(body:PeriodRequest,asBoard=board,headers:Record<string,string>={})=>app.inject({method:'POST',url:`/api/boards/${asBoard}/period`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`,...headers},payload:body});
+  const read=(body:PeriodRequest,asBoard=board)=>app.inject({method:'POST',url:`/api/boards/${asBoard}/period`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`},payload:body});
   const credit=(from:number,to:number,id='stable')=>store.creditWork(device,from,to,[{source,origin:'terminal',startedAt:now-3*H,project:'Project',folder:'folder',identity:{kind:'stable',sessionId:id}}]);
   const details=(body:unknown)=>app.inject({method:'POST',url:`/api/boards/${board}/period/sessions`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`},payload:body as object});
   return {store,directory,hub,app,user,board,source,device,read,credit,details};
 }
 
-test('opted-in period cells borrow source ordinals only from their captured history metadata',async t=>{
+test('period cells and baseline tapes borrow only matching captured metadata',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   h.store.record(h.source,{observedAt:now-3*M,plan:'pro',resets:null,staleAfterMs:H,windows:[{id:'weekly',kind:'weekly',label:null,minutes:10080,used:25,remaining:75,resetAt:now+H}]});
   h.credit(now-2*M,now-M);
-  const headers={'x-quotum-history-sources':'basis'};
   const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,quota:{cell:String(M),from:String(now-4*M),to:String(now),meta:'',evidence:'skip'}};
-  const seed=await h.read(body),optedSeed=await h.read(body,h.board,headers);
-  assert.equal(seed.statusCode,200,seed.body);assert.equal(optedSeed.body,seed.body,'full metadata keeps the legacy wire even after opting in');
+  const seed=await h.read(body);assert.equal(seed.statusCode,200,seed.body);
   const initial=expandPeriod(seed.json<PeriodWireReply>()).quota!;
   if(initial.state!=='complete'||!('known' in initial.value))throw new Error('missing full metadata');
   const prior:HistoryBasis={run:initial.value.run,now:initial.value.now,historyStart:initial.value.historyStart,known:initial.value.known,meta:initial.value.meta};
   const retained=JSON.stringify(prior),request={...body,quota:{...body.quota!,meta:prior.meta}};
-  const legacy=await h.read(request),packed=await h.read(request,h.board,headers);
-  assert.equal(packed.statusCode,200,packed.body);
-  const wire=packed.json();
-  assert.equal(wire.quota.value.sourceEncoding,'basis');
-  assert.equal(typeof wire.quota.value.chunks[0].series[0].source,'number');
-  let reserved=0;
-  const restored=expandPeriod(wire,n=>{reserved+=n;},{quota:prior});
-  assert.ok(reserved>0,'decoding reserves its source lookup before allocation');
-  assert.deepEqual(restored,expandPeriod(legacy.json<PeriodWireReply>()),'the real serialized reply restores every original field');
+  const response=await h.read(request);assert.equal(response.statusCode,200,response.body);
+  const restored=expandPeriod(response.json<PeriodWireReply>());
   if(restored.quota?.state!=='complete')throw new Error('missing quota');
   assert.deepEqual(expandHistory(restored.quota.value,prior).chunks,initial.value.chunks);
   assert.equal(JSON.stringify(prior),retained,'decoding cannot mutate retained metadata');
-  assert.equal((await h.read(request)).body,legacy.body,'packing cannot change cached server cells');
+  assert.equal((await h.read(request)).body,response.body,'reading cannot change cached server cells');
   const baseline:PeriodRequest={...body,selection:{mode:'range',from:now-H,to:now},quota:{...body.quota!,cells:'skip',evidence:undefined,meta:''}};
   const full=(await h.read(baseline)).json<PeriodReply>(),compactResponse=await h.read({...baseline,quota:{...baseline.quota!,meta:prior.meta}});
   assert.equal(compactResponse.statusCode,200,compactResponse.body);
@@ -74,16 +65,15 @@ test('opted-in period cells borrow source ordinals only from their captured hist
   assert.deepEqual(expandHistory(compact.quota.value,prior),expandHistory(full.quota.value),'baseline tapes and all native facts survive metadata borrowing');
   assert.ok(compactResponse.body.length<JSON.stringify(full).length);
   const source=h.store.source('codex','b'.repeat(24),now-H);h.store.hold(source,h.user.id,now-H);
-  const changed=(await h.read(request,h.board,headers)).json();
+  const changed=(await h.read(request)).json();
   assert.ok(changed.quota.value.known.sources[source]!==undefined,'a changed source set supplies fresh metadata');
-  assert.equal(changed.quota.value.sourceEncoding,undefined,'an old token cannot authorize new source ordinals');
   const known=h.store.historyKnown.bind(h.store);
   t.mock.method(h.store,'historyKnown',(...args:Parameters<Store['historyKnown']>)=>{const value=known(...args);return {...value,sources:Object.fromEntries(Object.entries(value.sources).reverse())};});
   const reordered=(await h.read(body)).json().quota.value;
   const reorderedRequest={...body,quota:{...body.quota!,meta:reordered.meta}};
-  const reorderedLegacy=await h.read(reorderedRequest),reorderedPacked=await h.read(reorderedRequest,h.board,headers);
-  assert.equal('known' in reorderedPacked.json().quota.value,false,'the reversed metadata token really matched');
-  assert.equal(reorderedPacked.body,reorderedLegacy.body,'a different captured key order keeps literal source IDs');
+  const reorderedReply=(await h.read(reorderedRequest)).json().quota.value;
+  assert.equal('known' in reorderedReply,false,'the reversed metadata token really matched');
+  assert.equal(reorderedReply.chunks[0].series[0].source,h.source,'captured key order preserves literal source IDs');
 });
 
 test('a period response rechecks authentication after cooperative preparation',async t=>{
