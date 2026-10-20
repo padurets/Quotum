@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {calendarWindow,calendarLevel,exactAgentHours,WorkCalendar} from '../lib/workCalendar.js';
+import {calendarWindow,calendarLevel,exactAgentHours,WorkCalendar,CALENDAR_RETENTION} from '../lib/workCalendar.js';
 import {calendarCells,normalizeRanges,parseCalendar,type CalendarBasis,type CalendarCell} from '../../server/domain/workCalendar.js';
 import {drain} from '../../server/domain/prepare.js';
 import type {Stretch} from '../../server/domain/work.js';
@@ -90,4 +90,16 @@ test('financial news and a local midnight do not poll calendar history',async t=
   h.requests.length=0;at=h.period.calendar.state.window.edges[90];h.jump(at);await flush();
   assert.equal(h.period.calendar.state.window.edges[89],at);assert.equal(h.period.calendar.state.value.cells[89].agentMs,null);
   assert.equal(h.requests.filter(r=>r.calendar).length,0,'civil midnight changes presentation without polling');
+});
+
+test('zero-history boundaries advance once without a clock loop, and a clock correction clears future evidence',t=>{
+  const prior=process.env.TZ;process.env.TZ='America/New_York';t.after(()=>{if(prior===undefined)delete process.env.TZ;else process.env.TZ=prior;});
+  const at=Date.parse('2026-11-02T03:50:00Z'),calendar=new WorkCalendar();calendar.configure(true,'calendar',at);
+  const window=calendar.state.window,basis:CalendarBasis={run:'run',revision:'1',evaluatedAt:at,evidenceCut:at,range:{from:window.edges[0],to:window.edges[90]},calendarKey:'key',workAuthority:'a',filterKey:'f'};
+  const cells=window.dates.map((_,i)=>({agentMs:0,from:window.edges[i],to:Math.min(at,window.edges[i+1]),validUntil:null}));
+  calendar.receive({state:'complete',basis,value:{zone:window.zone,edges:window.edges,cells,availableFrom:window.edges[0],retainedFrom:at-CALENDAR_RETENTION,cursor:'cursor'}},calendar.generation,()=>true);
+  const entry=window.edges[0]+CALENDAR_RETENTION+1;assert.equal(calendar.nextAt(at),entry);
+  calendar.tick(entry+10*M);assert.equal(calendar.state.value!.cells[0].from,window.edges[0]+10*M+1);
+  assert.equal(calendar.state.value!.cells[0].agentMs,0);assert.equal(calendar.nextAt(entry+10*M),window.edges[90]);assert.equal(calendar.needed,false);
+  calendar.tick(at-1000);assert.equal(calendar.state.value,null);assert.equal(calendar.demand(),undefined);
 });

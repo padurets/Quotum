@@ -51,24 +51,24 @@ async function fixture(t:TestContext) {
   return {store,user,board,source,record,ingest,read,clock:(at:number)=>{clock=at;}};
 }
 
-test('an authenticated accepted future credit heartbeat cannot revive the card, fixed chart or readout',async t=>{
+test('a future credit heartbeat preserves the admitted anchor and elapsed-day TTL',async t=>{
   const h=await fixture(t),at=now-M,future=now+5_000;
   h.clock(at);await h.ingest(at);h.clock(now);
   const id=h.store.sources(h.board)[0].id;
-  assert.equal((await h.read(id,'balance:credits','funds',{currency:'USD'})).summary.end,null);
+  assert.equal((await h.read(id,'balance:credits','funds',{currency:'USD'})).summary.end,'100000000','the incomplete period evaluates at the elapsed clock');
   await h.ingest(future,H);
   for(const live of [false,true]){
     const result=await h.read(id,'balance:credits','funds',{currency:'USD',live}),native=result.value.meters.find(m=>m.id==='balance:credits')!;
-    assert.equal(native.at,at);assert.equal(native.validUntil,at+70_000+1);assert.equal(native.stale,!live);
-    assert.equal(result.summary.end,live?'100000000':null);assert.equal(result.summary.coveredMs,0);
+    assert.equal(native.at,at);assert.equal(native.validUntil,at+70_000+1);assert.equal(native.stale,false);
+    assert.equal(result.summary.end,'100000000');assert.equal(result.summary.coveredMs,0);
     assert.equal(result.summary.semantics!.conversion!.original.at,at);
     if(live)assert.deepEqual(result.tape.money[0].spans.map(s=>[s.to,s.staleAfterMs]),[[at,70_000]]);
     else assert.equal(moneyPointAt(result.summary,to-1),undefined);
     const quota=await h.read(id,'','quota',{live});
-    assert.equal(quota.value.windows[0].observedAt,at);assert.equal(quota.fixed.quota[0].remainingAtEnd,live?83:null);
+    assert.equal(quota.value.windows[0].observedAt,at);assert.equal(quota.fixed.quota[0].remainingAtEnd,83);
   }
   assert.equal(h.store.meters.spans(id,'balance:credits',0,now)[0].to,future,'admission does not rewrite the producer ledger');
-  h.clock(future);assert.equal((await h.read(id,'balance:credits','funds',{currency:'USD'})).summary.end,null,'the cut remains exclusive');
+  h.clock(future);assert.equal((await h.read(id,'balance:credits','funds',{currency:'USD'})).value.meters.find(m=>m.id==='balance:credits')!.at,at,'the cut remains exclusive');
   h.clock(future+1);
   const admitted=await h.read(id,'balance:credits','funds',{currency:'USD'});
   assert.equal(admitted.summary.end,'100000000');assert.equal(admitted.summary.coveredMs,future-at);
@@ -83,11 +83,11 @@ test('paired native and converted money share admitted TTL, exact amounts and ne
     const base=await h.read(id,'balance','budget',{currency});
     for(const edge of [now-1,now,deadline-1,deadline,to-1,to]){
       const result=await h.read(id,'balance','budget',{currency,to:edge}),native=result.value.meters.find(m=>m.id==='balance')!,expected=currency?'18014398509481986':'9007199254740993';
-      assert.equal(native.amount,'9007199254740993');assert.equal(native.at,at);assert.equal(native.stale,edge>=deadline);
-      assert.equal(result.summary.end,edge>=deadline?null:expected);assert.equal(result.summary.coveredMs,0);assert.equal(result.summary.spent,null);assert.equal(result.summary.topup,null);
+      assert.equal(native.amount,'9007199254740993');assert.equal(native.at,at);assert.equal(native.stale,Math.min(edge,now)>=deadline);
+      assert.equal(result.summary.end,Math.min(edge,now)>=deadline?null:expected);assert.equal(result.summary.coveredMs,0);assert.equal(result.summary.spent,null);assert.equal(result.summary.topup,null);
       const replay=shifted(base.fixed,{from:edge-H,to:edge});
       if(edge<=now||edge===to)assert.deepEqual(replay?.money,result.fixed.money);else assert.equal(replay,null,'future neighboring geometry has no reuse proof');
-      assert.deepEqual(periodValueAt(base.value,edge)?.meters,result.value.meters);
+      assert.deepEqual(periodValueAt(base.value,Math.min(edge,now))?.meters,result.value.meters);
       if(currency)assert.equal(result.summary.semantics!.conversion!.original.at,at);
     }
     const live=await h.read(id,'balance','budget',{currency,live:true});
@@ -104,7 +104,7 @@ test('admitted changed readings keep their own TTL and accounting before a futur
     const result=await h.read(id,'balance','budget',{live});
     assert.equal(result.value.meters.find(m=>m.id==='usage')!.validUntil,b+20_000+1);
     assert.equal(result.summary.coveredMs,b-a);assert.equal(result.summary.spent,'17');assert.equal(result.summary.topup,'0');
-    assert.equal(result.summary.end,live?'9007199254740976':null);
+    assert.equal(result.summary.end,'9007199254740976');
   }
 });
 

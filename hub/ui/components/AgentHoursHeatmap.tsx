@@ -1,7 +1,8 @@
 import {memo,useCallback,useMemo,useLayoutEffect,useRef,useState,useSyncExternalStore,type CSSProperties,type KeyboardEvent,type RefObject} from 'react';
 import {createPortal} from 'react-dom';
 import {boardPeriod} from '../lib/period';
-import {CALENDAR_OPACITY,calendarLevel,exactAgentHours} from '../lib/workCalendar';
+import {CALENDAR_OPACITY,CALENDAR_RETENTION,calendarLevel,exactAgentHours} from '../lib/workCalendar';
+import {useClock} from '../lib/clock';
 import type {CalendarCell} from '../../server/domain/workCalendar';
 import {AGENT_HOURS_HEATMAP,withHidden,type Arrange} from '../lib/view';
 import {CATEGORY_COLORS} from '../lib/providers';
@@ -15,11 +16,17 @@ import {fillOf,useSizing} from './sizing';
 
 function Details({date,zone,cell,start,end,heading=true}:{heading?:boolean;date:string;zone:string;cell:CalendarCell|null;start:number;end:number}){
   const available=cell?.agentMs!==null&&cell?.agentMs!==undefined;
+  const now=useClock(at=>{
+    if(!available||at-CALENDAR_RETENTION>=cell!.to)return null;
+    const entry=cell!.from+CALENDAR_RETENTION+1;
+    return entry>at?entry:(Math.floor(at/60_000)+1)*60_000;
+  });
+  const from=available?Math.min(cell!.to,Math.max(cell!.from,now-CALENDAR_RETENTION)):start;
   return <>
     {heading&&<strong>{date}</strong>}
     <p>{available?t('calendar.exact',{hours:exactAgentHours(cell!.agentMs!,formatLocale())}):t('calendar.unavailable')}</p>
     {available&&cell!.agentMs===0&&<p>{t('calendar.zero')}</p>}
-    {available&&(cell!.from>start||cell!.to<end)&&<><p>{t('calendar.partial')}</p><p>{t('calendar.bounds')}</p><p>{stamp(cell!.from)} — {stamp(cell!.to)}</p></>}
+    {available&&(from>start||cell!.to<end)&&<><p>{t('calendar.partial')}</p><p>{t('calendar.bounds')}</p><p data-time="calendar-bounds">{stamp(from)} — {stamp(cell!.to)}</p></>}
     <p>{zone}</p><p>{t('calendar.observations')}</p>
   </>;
 }
@@ -30,8 +37,8 @@ const Day=memo(function Day({date,dateKey,index,start,end,zone,cell,selected,tab
   const tip=useBubble(active,anchor,panel.current);
   const available=cell?.agentMs!==undefined&&cell.agentMs!==null;
   const level=available?calendarLevel(cell!.agentMs!):0;
-  const label=[date,available?t('calendar.exact',{hours:exactAgentHours(cell!.agentMs!,formatLocale())}):t('calendar.unavailable'),zone].join('\n');
   const partial=available&&(cell!.from>start||cell!.to<end);
+  const label=[date,available?t('calendar.exact',{hours:exactAgentHours(cell!.agentMs!,formatLocale())}):t('calendar.unavailable'),zone,...(partial?[t('calendar.partial'),`${stamp(cell!.from)} — ${stamp(cell!.to)}`]:[]),t('calendar.observations')].join('\n');
   return <div className={`calendar-date${selected?' is-selected':''}${!available?' is-unavailable':''}${partial?' is-partial':''}`} role="gridcell" aria-selected={selected} ref={anchor}
     onPointerEnter={()=>setHover(true)} onPointerLeave={()=>setHover(false)}>
     <Popover label={label} trigger={<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="3" fill={CATEGORY_COLORS[0]} fillOpacity={CALENDAR_OPACITY[level]}/></svg>} triggerClass="calendar-cell"
@@ -90,7 +97,8 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
       </div>
     </div>
     <div className="calendar-legend" aria-label={t('calendar.registered')}>{['0','<1','1–4','4–16','16–64','64+'].map((label,level)=><span key={label}><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="3" fill={CATEGORY_COLORS[0]} fillOpacity={CALENDAR_OPACITY[level]}/></svg>{label} {t('calendar.hours')}</span>)}</div>
-    {value&&value.cells.every(c=>c.agentMs===0)&&<p className="analytics-note">{t('calendar.empty')}</p>}
+    {value&&value.cells.some(c=>c.agentMs!==null)&&value.cells.every(c=>c.agentMs===null||c.agentMs===0)&&<p className="analytics-note">{t('calendar.empty')}</p>}
+    {value&&value.cells.every(c=>c.agentMs===null)&&<p className="analytics-note">{t('calendar.unavailable')}</p>}
     {!value&&!error&&<p className="analytics-note" role="status">{t(loading?'calendar.loading':'calendar.pending')}</p>}
   </section>;
 });

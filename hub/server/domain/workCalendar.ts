@@ -14,7 +14,7 @@ export type CalendarSection={state:'complete';basis:CalendarBasis;value:Calendar
 export function parseCalendar(value:unknown):CalendarDemand|null {
   if(!value||typeof value!=='object'||Array.isArray(value))return null;
   const v=value as Record<string,unknown>;
-  if(Object.keys(v).some(k=>!['zone','edges','cursor'].includes(k))||typeof v.zone!=='string'||!v.zone.length||v.zone.length>128||!/^[\x20-\x7e]+$/.test(v.zone)||v.cursor!==undefined&&(typeof v.cursor!=='string'||v.cursor.length>2048))return null;
+  if(Object.keys(v).some(k=>!['zone','edges','cursor'].includes(k))||typeof v.zone!=='string'||!v.zone.length||v.zone.length>128||!/^[\x20-\x7e]+$/.test(v.zone)||v.cursor!==undefined&&(typeof v.cursor!=='string'||v.cursor.length>2048||!/^[-_A-Za-z0-9.]*$/.test(v.cursor)))return null;
   try{new Intl.DateTimeFormat('en',{timeZone:v.zone});}catch{return null;}
   if(!Array.isArray(v.edges)||v.edges.length!==91||v.edges.some((n,i,a)=>!Number.isSafeInteger(n)||n<0||i>0&&(n<a[i-1]||n-a[i-1]>2*DAY))||v.edges[90]<=v.edges[0]||v.edges[90]-v.edges[0]>92*DAY)return null;
   return {zone:v.zone,edges:v.edges,...(v.cursor?{cursor:v.cursor as string}:{})};

@@ -1,6 +1,7 @@
 import type {CalendarBasis,CalendarDemand,CalendarSection,CalendarValue} from '../../server/domain/workCalendar.js';
 
 const DAY=86_400_000;
+export const CALENDAR_RETENTION=90*DAY;
 export const calendarZone=()=>Intl.DateTimeFormat().resolvedOptions().timeZone;
 const civilFormatter=(zone:string)=>new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'});
 function civil(at:number,formatter:Intl.DateTimeFormat){const parts=formatter.formatToParts(at);return ['year','month','day'].map(key=>parts.find(p=>p.type===key)!.value).join('-');}
@@ -53,6 +54,9 @@ export class WorkCalendar {
     if(!this.visible)return false;
     const zone=calendarZone(),today=civil(now,civilFormatter(zone)),key=zone+today;
     let changed=false;
+    if(this.state.basis&&now<this.state.basis.evidenceCut){
+      this.generation++;this.state={...this.state,value:null,basis:null,loading:false,error:null};changed=true;
+    }
     if(key!==this.key){
       const window=calendarWindow(now,zone),old=this.state;
       const sameZone=old.window.zone===zone;
@@ -64,9 +68,13 @@ export class WorkCalendar {
     if(value?.cells.some(cell=>cell.validUntil!==null&&now>=cell.validUntil&&cell.agentMs!==null)){
       this.state={...this.state,value:{...value,cells:value.cells.map(cell=>cell.validUntil!==null&&now>=cell.validUntil?{...cell,agentMs:null}:cell)}};changed=true;
     }
+    const current=this.state.value,floor=now-CALENDAR_RETENTION;
+    if(current?.cells.some(cell=>cell.agentMs===0&&floor>cell.from)){
+      this.state={...this.state,value:{...current,cells:current.cells.map(cell=>cell.agentMs===0&&floor>cell.from?{...cell,from:Math.min(cell.to,floor),...(floor>=cell.to?{agentMs:null}:{})}:cell)}};changed=true;
+    }
     if(changed)this.publish();return changed;
   }
-  nextAt(now:number){if(!this.visible)return Infinity;return Math.min(this.state.window.edges[90],...(this.state.value?.cells.flatMap(c=>c.agentMs!==null&&c.validUntil!==null&&c.validUntil>now?[c.validUntil]:[])??[]));}
+  nextAt(now:number){if(!this.visible)return Infinity;return Math.min(this.state.window.edges[90],...(this.state.value?.cells.flatMap((c,i)=>[...(c.agentMs!==null&&c.validUntil!==null&&c.validUntil>now?[c.validUntil]:[]),...(c.agentMs===0&&c.from===this.state.window.edges[i]&&c.from+CALENDAR_RETENTION+1>now?[c.from+CALENDAR_RETENTION+1]:[])])??[]));}
   dirty(){if(this.visible&&!this.limited){this.needed=true;return true;}return false;}
   demand(facets=false):CalendarDemand|undefined {return this.visible&&(this.needed||facets)?{zone:this.state.window.zone,edges:this.state.window.edges,...(this.state.value?.cursor?{cursor:this.state.value.cursor}:{})}:undefined;}
   receive(part:CalendarSection,generation:number,reserve:(bytes:number)=>boolean){

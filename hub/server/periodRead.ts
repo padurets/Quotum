@@ -163,8 +163,15 @@ export class PeriodReader {
     const cut=Math.min(range.to,evaluatedAt),shown=store.authorizedSources(board),owner=store.privateOwner(board);
     const reservation=self.history.reservation();
     try{
-    let workRange:import('./domain/period.js').PeriodRange[]=[];
-    const work:import('./store/store.js').WorkRead=request.calendar||request.sessions||request.facets||request.quota||request.budget?.work==='1'?sharedWork(self.hub,shown,()=>workRange,bytes=>reservation.add(bytes),bytes=>reservation.remove(bytes),owner,now,board):()=>[],access=work.access;
+    let workRange:import('./domain/period.js').PeriodRange[]=[],ordinaryWork:typeof workRange=[],calendarLimited=false;
+    const workLimit=(from:number,to:number)=>{
+      if(!calendar||calendarLimited)return false;
+      calendarLimited=true;response.calendar={state:'error',error:'history_limit'};
+      if(request.facets)response.facets={state:'error',error:'history_limit'};
+      workRange=ordinaryWork;
+      return ordinaryWork.some(range=>range.from<=from&&range.to>=to);
+    };
+    const work:import('./store/store.js').WorkRead=request.calendar||request.sessions||request.facets||request.quota||request.budget?.work==='1'?sharedWork(self.hub,shown,()=>workRange,bytes=>reservation.add(bytes),bytes=>reservation.remove(bytes),owner,now,board,workLimit):()=>[],access=work.access;
     if(request.values?.some(id=>!shown.has(id)))fail(404,'not_found');
     const views={sourceWide:work,selected:filter?selectedWork(work,filter):work};
     const workRequested=!!(request.calendar||request.sessions||request.facets||request.quota||request.budget?.work==='1');
@@ -226,13 +233,14 @@ export class PeriodReader {
     if(selection.mode==='range'&&(request.sessions||request.quota&&request.quota.evidence!=='skip'||request.budget?.work==='1'))includeWork(fixedRange.from,fixedRange.to);
     if(selection.mode==='live'&&request.sessions)includeWork(replaceFrom,workFrontier.to);
     const facetRanges=normalizeRanges([{from:Math.max(range.from,retainedFrom),to:cut},...(calendar?[{from:Math.max(calendar.edges[0],retainedFrom),to:evaluatedAt}]:[])]);
-    if(request.facets)for(const part of facetRanges)includeWork(part.from,part.to);
-    if(calendarPlan)for(const i of calendarPlan.indices)includeWork(calendar!.edges[i],calendar!.edges[i+1]);
     if(sourcePlan)includeWork(sourcePlan.patch.from,sourcePlan.patch.to);
     if(request.quota&&request.quota.cells!=='skip'){
       const query=request.quota,cell=Number(query.cell);
       includeWork(Number(query.from),Math.min(Math.ceil(Number(query.to)/cell)*cell,cellStart(now+CLOCK_TOLERANCE_MS,cell)+cell,now));
     }
+    ordinaryWork=normalizeRanges(workRanges);
+    if(request.facets)for(const part of facetRanges)includeWork(part.from,part.to);
+    if(calendarPlan)for(const i of calendarPlan.indices)includeWork(calendar!.edges[i],calendar!.edges[i+1]);
     workRange=normalizeRanges(workRanges);
     if(guard){
       const sources=new Map<string,Set<HistoryScope>>();
@@ -339,7 +347,7 @@ export class PeriodReader {
         if(selection.mode==='range'){
           const trace=scope==='quota'||query.work==='1'?yield*retainedWork():null;
           const full=filter&&(scope==='quota'||query.work==='1')?yield*fullSourceCurves(fixedRange):undefined;
-          const tape=yield*temporary(()=>prepareFixedTape(periodTape(store,board,tapeShown,user,historyScope,query,fixedRange,cursor,fixedRange.from,reserve,fixedRange.to,release,true,now,work),trace,range,Number(query.cell),reserve,release,full));
+          const tape=yield*temporary(()=>prepareFixedTape(periodTape(store,board,tapeShown,user,historyScope,query,fixedRange,cursor,fixedRange.from,reserve,fixedRange.to,release,true,now,work),trace,range,Number(query.cell),reserve,release,full,evaluatedAt));
           reserve(Buffer.byteLength(JSON.stringify(tape))*3);return {...value,tape};
         }
         const tape=periodTape(store,board,tapeShown,user,historyScope,query,{from:patch.coveredFrom,to:patch.to},cursor,patch.from,reserve,cut,bytes=>{reservation.remove(bytes);replyBytes-=bytes;},false,now,work);
@@ -360,7 +368,7 @@ export class PeriodReader {
         })());
         response.sessions=delta&&part.state==='complete'?{state:'delta',basis,value:{...part.value,replaceFrom,replaceTo:workFrontier.to}}:part;
       }
-      if(request.facets)response.facets=yield*section((function*(){
+      if(request.facets&&!calendarLimited)response.facets=yield*section((function*(){
         const projects=new Set<string|null>(),devices=new Map<string,string>(),clients=new Set<string|null>(),funding=new Set<'unknown'|'notProvided'>();
         const add=(project:string|null,device:string,name:string,client:string|null,source:string|null,status?:'notProvided')=>{
           if(source===null)funding.add(status??'unknown');
@@ -376,7 +384,7 @@ export class PeriodReader {
         return {...value,ranges:facetRanges,...(retained?{retained}:{})};
       })());
       if(response.facets?.state==='complete'&&facetRanges.length)response.facets.basis={...basis,range:{from:facetRanges[0].from,to:facetRanges.at(-1)!.to}};
-      if(calendarPlan){
+      if(calendarPlan&&!calendarLimited){
         try{
           work.ensureAccess?.();
           const known=workKnownFrom(store.historyKnown(shown,access?.owner,access));

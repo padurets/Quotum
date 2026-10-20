@@ -610,10 +610,21 @@ test('calendar-only deltas replace the original date and never read native histo
 test('calendar parser keeps ordinary limits and rejects invalid partitions',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   const window=calendarWindow(now,'UTC'),body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,calendar:{zone:'UTC',edges:window.edges}};
-  for(const calendar of [{zone:'invalid/zone',edges:window.edges},{zone:'UTC',edges:window.edges.slice(1)},{zone:'UTC',edges:window.edges.map((n,i)=>i===4?n+.5:n)},{zone:'UTC',edges:window.edges.map(n=>n-24*H)}])assert.equal((await h.read({...body,calendar})).statusCode,400);
+  for(const calendar of [{zone:'invalid/zone',edges:window.edges},{zone:'UTC',edges:window.edges.slice(1)},{zone:'UTC',edges:window.edges.map((n,i)=>i===4?n+.5:n)},{zone:'UTC',edges:window.edges.map(n=>n-24*H)},{zone:'UTC',edges:window.edges,cursor:'é'},{zone:'UTC',edges:window.edges,cursor:'x'.repeat(2049)}])assert.equal((await h.read({...body,calendar})).statusCode,400);
   assert.equal((await h.read({...body,selection:{mode:'live',periodMs:32*24*H}})).statusCode,400);
   const first=(await h.read(body)).json<PeriodReply>();if(first.calendar?.state!=='complete')throw new Error('availability');
   assert.equal(first.calendar.value.cells[0].agentMs,null);assert.equal(first.calendar.value.cells[89].agentMs,0);
+});
+
+test('an oversized calendar cannot discard a readable ordinary work section or shrink its facet universe',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture(now-100*24*H);t.after(async()=>{await h.app.close();h.store.close();});
+  h.credit(now-2*M,now-M);const window=calendarWindow(now,'UTC');
+  const original=h.store.admittedWork.bind(h.store);t.mock.method(h.store,'admittedWork',(...args:Parameters<Store['admittedWork']>)=>{if(args[1]<now-31*24*H)throw new HistoryLimit();return original(...args);});
+  const response=await h.read({version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,sessions:{},calendar:{zone:window.zone,edges:window.edges},facets:true,values:[h.source]});
+  assert.equal(response.statusCode,200,response.body);const reply=expandPeriod(response.json());
+  assert.deepEqual(reply.calendar,{state:'error',error:'history_limit'});assert.deepEqual(reply.facets,{state:'error',error:'history_limit'});
+  assert.equal(reply.values?.state,'complete');if(reply.sessions?.state!=='complete')throw new Error('ordinary work was discarded by calendar pressure');
+  assert.equal(workedSessions(reply.sessions.value,reply.basis.range,now)[0].workedMs,M);
 });
 
 test('current-day drill evaluates native states at elapsed time and keeps the full selected date',async t=>{
@@ -641,4 +652,10 @@ test('retention and a current credit replace disjoint calendar dates in one spar
   const reply=response.json<PeriodReply>();if(reply.calendar?.state!=='delta')throw new Error('sparse delta');
   assert.deepEqual(reply.calendar.value.updates.map(([i,c])=>[i,c.agentMs]),[[0,50*M],[89,M]]);
   assert.equal(ranges.length,1);assert.equal(ranges[0]?.length,2);assert.ok(ranges[0]![0].to<ranges[0]![1].from);
+  const selection={mode:'range' as const,from:oldest,to:window.edges[1]};
+  const day=(await h.read({version:1,selection,evaluatedAt:at,sessions:{}})).json<PeriodReply>();
+  if(day.sessions?.state!=='complete')throw new Error('partial day drill');
+  assert.deepEqual(day.basis.range,{from:oldest,to:window.edges[1]});assert.equal(day.sessions.value.knownFrom,at-90*24*H);
+  assert.equal(workedSessions(day.sessions.value,day.basis.range,at).reduce((sum,row)=>sum+row.workedMs,0),50*M);
+  assert.equal((await h.read({version:1,selection:{mode:'range',from:oldest-24*H,to:oldest},evaluatedAt:at,sessions:{}})).statusCode,400,'a fully expired day stays unavailable');
 });

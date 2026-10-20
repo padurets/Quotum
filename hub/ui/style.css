@@ -1285,7 +1285,7 @@ summary.filter-group-heading::-webkit-details-marker { display: none; }
 .agent-hours-heatmap { position:relative; min-width:0; }
 .agent-hours-heatmap > .analytics-note { display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 16px; }
 .calendar-scroll { overflow-x:auto; overflow-y:hidden; padding:4px 3px 10px; }
-.calendar-grid { display:grid; grid-template-columns:36px repeat(var(--calendar-weeks),minmax(24px,1fr)); grid-template-rows:20px repeat(7,24px); gap:4px; min-width:calc(36px + var(--calendar-weeks) * 28px); }
+.calendar-grid { display:grid; grid-template-columns:36px repeat(var(--calendar-weeks),24px); grid-template-rows:20px repeat(7,24px); gap:4px; width:max-content; margin-inline:auto; min-width:calc(36px + var(--calendar-weeks) * 28px); }
 .calendar-weekday { display:contents; }
 .calendar-slot { min-width:0; }
 .calendar-month { color:var(--text-2); font-size:11px; white-space:nowrap; }

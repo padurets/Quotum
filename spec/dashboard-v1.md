@@ -622,7 +622,8 @@ aggregation, independently of card visibility and Activity legend choices.
 
 `POST /api/boards/:board/period` accepts an optional
 `calendar: {zone: string, edges: number[], cursor?: string}`. `zone` is a valid IANA
-zone of at most 128 ASCII characters. Exactly 91 nonnegative safe integer edges
+zone of at most 128 ASCII characters; a supplied cursor has at most 2048 URL-safe
+ASCII characters (letters, digits, hyphen, underscore and dot). Exactly 91 nonnegative safe integer edges
 form a nondecreasing partition of positive total length at most 92 days; each
 positive step is at most 48 hours. The final interval contains the evaluated clock.
 The partition is a bounded reader selection, never proof of authority. Every read
