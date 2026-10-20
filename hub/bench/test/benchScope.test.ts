@@ -24,7 +24,7 @@ const declarations=['parseArgs','main'].map(name=>{
 const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={main,parseArgs};',{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},
 }).outputText;
-type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention';
+type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'fixed-activity'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention';
 async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),diagnosticFiles=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
   const listeners=new Map<string,()=>void>(),waits:number[]=[];let now=startedAt,phaseStart=now,metricReads=0,retentionReads=0;
@@ -43,6 +43,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   }};
   const cdp={send:async()=>({}),evaluate:async(expression:string)=>{
     if(expression.includes(".card:not(.is-loading)"))return 1;
+    if(expression.includes('.agent-hours-heatmap[data-calendar-ready='))return true;
     if(expression==='__quotumBench.read()')return reading;
     if(expression==='window.__quotumIdleRetention()'){
       mark('retention-'+(++retentionReads));
@@ -100,6 +101,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     frequencyKeys:async()=>{mark('frequency');},panning,
     creditPhase:async()=>{mark('credits');if(fault==='credits-throw')throw new Stop('credits-original');return{updates:[],problems:problems('credits')};},
     moneyPhase:async()=>{mark('money');return{problems:problems('money')};},
+    fixedActivity:async()=>{mark('fixed-activity');return{reports:[],problems:problems('fixed-activity')};},
     clientIdentity:()=>({status:'unavailable'}),
   };
   runInNewContext(code,context);
@@ -108,7 +110,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   if(cancellationStarted)await exited;
   return{calls,saved,diagnosticFiles,exits,statuses,logs,error,waits,fixtureStart:stand.start,parse:selected.parseArgs};
 }
-const tail=['measure','work','observed-work','private-work','frequency','panning','credits','money'];
+const tail=['measure','work','observed-work','private-work','frequency','panning','credits','money','fixed-activity'];
 const order=(calls:string[])=>calls.filter(call=>call==='history'||call==='openTab'||tail.includes(call));
 test('actual main passes the aligned fixture anchor and keeps the legacy warm wait',async()=>{
   const cell=300_000,minute=60_000,base=Date.parse('2026-10-15T12:00:10Z');
@@ -138,6 +140,8 @@ for(const args of [[],['--scope','all'],['--scope','dashboard']])test('actual ma
   assert.equal((safeEvidence(result.saved.get('result')) as {mode:string}).mode,mode);
   assert.ok(result.calls.indexOf('phase:idle')<result.calls.indexOf('measure'));
   assert.equal((result.saved.get('panning') as {reports:unknown[]}).reports.length,10);
+  assert.ok(result.saved.has('fixed-activity'));
+  assert.ok((result.saved.get('result') as {selectedActivity:unknown}).selectedActivity);
   const idle=result.saved.get('idle') as {counterFrom:number;counterTo:number;performance:unknown};
   assert.deepEqual(safeEvidence(idle.performance),{before:{Timestamp:idle.counterFrom/1000,ScriptDuration:0,ThreadTime:.4},after:{Timestamp:idle.counterTo/1000,ScriptDuration:0,ThreadTime:.45},instrumentMs:0});
 });
@@ -171,7 +175,7 @@ test('the actual full caller retains simultaneous history and every dashboard bu
   const result=await run([],'all-red');assert.equal(result.error,undefined);assert.deepEqual(result.exits,[1]);
   assert.deepEqual(order(result.calls),['history','openTab',...tail]);assert.deepEqual(result.statuses,['failed']);
   const problems=(result.saved.get('result') as {problems:string[]}).problems;
-  for(const name of ['history','work','observed-work','private-work','panning','credits','money'])assert.ok(problems.includes(name+'-red'));
+  for(const name of ['history','work','observed-work','private-work','panning','credits','money','fixed-activity'])assert.ok(problems.includes(name+'-red'));
   for(const message of ['script took ','never showed on their card','never showed on their chart'])assert.ok(problems.some(value=>value.includes(message)));
 });
 for(const fault of ['red','throw','cancel','browser-close','demo-stop'] as const)test('history cannot pass '+fault,async()=>{
@@ -181,7 +185,7 @@ for(const fault of ['red','throw','cancel','browser-close','demo-stop'] as const
   for(const name of ['browser-close','demo-stop'])assert.equal(result.calls.filter(call=>call===name).length,1);
   if(fault==='throw')assert.ok(result.logs.includes('history-original'));
 });
-for(const fault of ['idle','measure','work','observed-work','private-work','panning','credits','money'] as const)test('dashboard retains '+fault+' failure and the later tail',async()=>{
+for(const fault of ['idle','measure','work','observed-work','private-work','panning','credits','money','fixed-activity'] as const)test('dashboard retains '+fault+' failure and the later tail',async()=>{
   const result=await run(['--scope','dashboard'],fault);assert.equal(result.error,undefined);assert.deepEqual(result.exits,[1]);
   assert.deepEqual(order(result.calls),['openTab',...tail]);assert.deepEqual(result.statuses,['failed']);
   const problems=(result.saved.get('result') as {problems:string[]}).problems;

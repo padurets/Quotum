@@ -155,6 +155,8 @@ export const wakeDue = () => clock.wakeDue();
  * the moment `changesAt` gives for that time (null: time no longer changes what it shows).
  * Rendered by its data at any other moment, it shows it with the time then. A
  * preparation context keeps that timestamp through its own completion renders.
+ * Disabling a consumer keeps its component and hook state while releasing its
+ * clock subscription, for cells whose evidence gains or loses an expiry.
  */
 export function useClock(changesAt: (now: number) => number | null, context?: readonly unknown[], enabled = true): number {
   const [watch] = useState(() => clock.watch());

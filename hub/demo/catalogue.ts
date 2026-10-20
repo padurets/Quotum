@@ -50,6 +50,21 @@ export const ANALYTICS_SCENES=[
   {id:'empty',expect:['pending-empty','explicit-empty','sticky-placement']},
 ] as const;
 
+/** In analytics, filter a project, then toggle a different legend entry. The selected
+ * summary and its four quantities occupy the same area as pointer/keyboard previews.
+ * Toggle every entry off, then restore one. Money provenance uses its heading area.
+ * Pending/error/generation races are held by ui/test/activitySelection.test.ts;
+ * the rendered numerical states and these codes by ui/test/activityNumbers.test.ts.
+ */
+export const CHART_SERIES_SCENES=[
+  {id:'enabled-subset',expect:['selected-summary','exact-union','distinct-sessions']},
+  {id:'all-muted',expect:['no-selected-series']},
+  {id:'legend-context',expect:['one-group-preview','pending-without-wider-totals'],look:[
+    'On the analytics board, point to one visible project while keyboard focus remains on another. The four metrics directly below the heading and the highlight follow the pointer, without a separate project-name row; each button retains its own accessible description.',
+    'Check long names, narrow and manually sized widgets in English and Russian: previews preserve the plot and widget geometry. Monetary details appear above the plot; limit charts have no empty strip.',
+  ]},
+] as const;
+
 /** The same activity fixture can be viewed in the past without changing current status.
  * Pending/error retention, cursor races and bounded large rosters are held by
  * server/test/periodRead.test.ts and ui/test/period.test.ts.
@@ -594,7 +609,7 @@ const all: DemoSet = {
         'Agent activity over 7 days by project: atlas and harbor on days −5 and −4, harbor again on day −3',
         'Its hour bars stack agent-hours and can stand above an hour; over 30 days the bars are two hours',
         'The legend adds up to 44 agent-hours; atlas has 28 agent-hours and 16 active hours',
-        'The atlas legend bubble shows 28 agent-hours, 16 active hours, 1.8 at once and two agents: hover, Tab or tap; Escape dismisses it even when focus is elsewhere, a tap also switches the group',
+        'The atlas legend bubble shows 28 agent-hours, 16 active hours, 1.8 average parallel sessions and two agents: hover, Tab or tap; Escape dismisses it even when focus is elsewhere, a tap also switches the group',
         'Switch harbor off: stacks and scale shrink, 28h shown appears in the totals and Shown in the bar tooltip; active time, agents and at once keep their values',
         'Over 30 days the first twenty are hatched: not known before',
         'The table, for the weekly window: active time, spent per active hour, the forecast by work and, turned on, the share of spending while active',
@@ -1713,4 +1728,14 @@ const measurementDevices:DemoSet={id:'devices',about:'Measurement participation,
   {kind:'machine',id:'local-only',expect:[{name:'local-only'}]},
   {kind:'card',id:'codex-managed',provider:'codex',plan:'Plus',machines:['laptop','desktop','backup'],history:6*HOUR,windows:[weekly({since:-DAY,use:steady(0,5)})],on:{ana:{name:'Measurement selection'}},expect:[{title:'Measurement selection'}],look:['The existing status and settings open My connections without changing card height']},
 ]};
-export const SETS: DemoSet[] = [all, showcase, activity,dataFilters,SESSION_ANALYTICS,money,quotas,analytics, machineClients,linkedClients,measurementDevices, ONBOARDING];
+/** Loading, failure, revocation and midnight expiry are held by workCalendar/periodRead tests. */
+export const CALENDAR_SCENES=[{id:'registered',expect:['common-period','parallel-hours','midnight-split','fixed-opacity','source-free','keyboard-touch','partial-date','day-hour-matrix','minute-detail','compact-calendar','current-period-work']},{id:'empty',expect:['empty-filter','registered-zero']},{id:'unavailable',expect:['unavailable-history']} ] as const;
+const calendar:DemoSet={id:'calendar',about:'Selected-period agent-hours with day/hour and compact calendar views',scene:'quiet',workHistoryMs:90*DAY,entries:[
+  {kind:'person',id:'ana',name:'Ana',expect:[{state:'widgets'}],look:['Activity heatmap follows the common period and work filters. Compare day/hour and compact calendar views at 1h, 3d and 30d; inspect or open an interval with pointer, keyboard or touch.']},
+  {kind:'person',id:'boris',name:'Boris',expect:[{state:'widgets'}],look:['The personal calendar has zero registered work. No available work history is a separate shared board without admitted devices.']},
+  {kind:'machine',id:'laptop',person:'ana',expect:[{name:'laptop'}]},
+  {kind:'board',id:'team',name:'Registered calendar',owner:'ana',members:['boris'],expect:[{state:'widgets'}]},
+  {kind:'board',id:'empty',name:'Empty project selection',owner:'ana',members:[],filterProjects:{mode:'include',values:[]},expect:[{state:'widgets'}]},
+  {kind:'board',id:'unavailable',name:'No available work history',owner:'boris',members:[],expect:[{state:'widgets'}]},
+]};
+export const SETS: DemoSet[] = [all, showcase, activity,dataFilters,SESSION_ANALYTICS,money,quotas,analytics, machineClients,linkedClients,measurementDevices, ONBOARDING,calendar];

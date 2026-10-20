@@ -47,12 +47,13 @@ export type Prefs = {
   agentsBy: AgentsBy;
   /** What the activity widget stacks its hours by. */
   activityBy: ActivityDimension;
+  heatmapView:'matrix'|'calendar';
 };
 
 const KEY = 'quotum.prefs';
 export const HORIZONS: Horizon[] = ['auto', '1d', '3d', '7d'];
 export const ACTIVITY_BY: ActivityDimension[] = ['project', 'device', 'source'];
-const DEFAULTS: Prefs = {forecastSort:null,sessionSort:null,moneySort:null,funds:DEFAULT_MONEY,money:DEFAULT_MONEY,muted: {}, range: DEFAULT_PERIOD, horizon: 'auto', filtersVisible: false, showPlan: true, showForecast: true, showSessionForecast:true, showResets: true, locked: false, agentsSort: null, agentsBy: 'project', activityBy: 'project'};
+const DEFAULTS: Prefs = {forecastSort:null,sessionSort:null,moneySort:null,funds:DEFAULT_MONEY,money:DEFAULT_MONEY,muted: {}, range: DEFAULT_PERIOD, horizon: 'auto', filtersVisible: false, showPlan: true, showForecast: true, showSessionForecast:true, showResets: true, locked: false, agentsSort: null, agentsBy: 'project', activityBy: 'project',heatmapView:'matrix'};
 
 const CHARTS:readonly string[]=[ACTIVITY,QUOTA_HISTORY,QUOTA_SESSION_HISTORY,BUDGET_HISTORY,SUBSCRIPTION_FUNDS];
 export const chartMuteKey=(widget:string,source:string,resource:string)=>JSON.stringify([widget,source,
@@ -89,7 +90,7 @@ function read(): Prefs {
       moneySort:readMoneySort(stored.moneySort),
       funds:readMoney(stored.funds,'funds'),money:readMoney(stored.money),muted:readMuted(stored.muted),range,horizon,filtersVisible:filtersVisible===true,
       showPlan:showPlan!==false,showForecast:showForecast!==false,showSessionForecast:Object.hasOwn(parsed,'showSessionForecast')?parsed.showSessionForecast!==false:showForecast!==false,
-      showResets:showResets!==false,locked:locked===true,agentsSort:readAgentsSort(stored.agentsSort),agentsBy:readAgentsBy(stored.agentsBy),activityBy};
+      showResets:showResets!==false,locked:locked===true,agentsSort:readAgentsSort(stored.agentsSort),agentsBy:readAgentsBy(stored.agentsBy),activityBy,heatmapView:stored.heatmapView==='calendar'?'calendar':'matrix'};
   } catch {
     return DEFAULTS;
   }

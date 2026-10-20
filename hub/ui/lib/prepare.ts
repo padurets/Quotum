@@ -75,6 +75,8 @@ export function preparations(): Preparations | null {
     let next: (() => void) | null = null;
     channel.port1.onmessage = () => {const run = next; next = null; run?.();};
     scheduler = new Preparations({now: () => performance.now(), post: run => {next = run; channel.port2.postMessage(null);}, dispose: () => {channel.port1.close(); channel.port2.close();}});
+    const inspect=(globalThis as typeof globalThis&{__quotumInspectPreparations?:(scheduler:Preparations)=>void}).__quotumInspectPreparations;
+    if(typeof inspect==='function')try{inspect(scheduler);}catch{/* Diagnostics do not affect scheduling. */}
   }
   return scheduler;
 }

@@ -1,3 +1,6 @@
+import * as periodValueClockBindings from '../../server/domain/periodValues';
+import {WorkCalendar} from '../lib/workCalendar';
+import {AGENT_HOURS_HEATMAP} from '../../server/domain/widgets';
 import * as filterModelBindings from '../../server/domain/dataFilters';
 import * as filterRuntimeBindings from '../lib/filterSelection';
 import * as filterCurveBindings from '../../server/domain/periodCurves';
@@ -116,10 +119,10 @@ function harness(visible:string[]=['quota-history']) {
     if(body.values)reply.values=failValues?{state:'error',error:'unavailable'}:{state:'complete',basis,value:body.values.map(id=>({id,provider:'openrouter',windows:[],meters:[],keys:[]}))};
     return reply;
   };
-  const context={exports:{} as {BoardPeriod:new()=>Coordinator},hubNow:()=>NOW,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod:send,page:{get:()=>({board})},pan:{get:()=>null},preparations:()=>null,
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {BoardPeriod:new()=>Coordinator},hubNow:()=>NOW,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod:send,page:{get:()=>({board})},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:async(_owner:object,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,
     empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>selected,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
-  runInNewContext(coordinatorCode,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  runInNewContext(coordinatorCode,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   const period=new context.exports.BoardPeriod();
   return {board,settings,pool,period,attempts,fail,select:(range:PeriodRange|null)=>{selected=range;period.changed();},hold:(fn:typeof held)=>{held=fn;},failWork:(value:boolean)=>{failWork=value;},failValues:(value:boolean)=>{failValues=value;}};
 }
@@ -241,8 +244,8 @@ test('a chart sharing retired period extras immediately reads its current cells 
 function readerFor(period:Coordinator,pool:HistoryPool,scope:'quota'|'budget',family:'budget'|'funds'='budget') {
   const source=readFileSync(new URL('../lib/history.ts',import.meta.url),'utf8');
   const code=source.slice(source.indexOf('function reader('),source.indexOf('export const quotaHistory'));
-  const context={reader:null as unknown as (scope:'quota'|'budget',family:'budget'|'funds')=>HistoryStore,HistoryStore,boardPeriod:period,retention,historyPool:pool,STORED_BYTES:15*1024*1024,hubNow:()=>NOW,pan:{get:()=>null},expandHistory,setTimeout,clearTimeout};
-  runInNewContext(ts.transpileModule(code+'\nglobalThis.reader=reader;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,reader:null as unknown as (scope:'quota'|'budget',family:'budget'|'funds')=>HistoryStore,HistoryStore,boardPeriod:period,retention,historyPool:pool,STORED_BYTES:15*1024*1024,hubNow:()=>NOW,pan:{get:()=>null},expandHistory,setTimeout,clearTimeout};
+  runInNewContext(ts.transpileModule(code+'\nglobalThis.reader=reader;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   return context.reader(scope,family);
 }
 

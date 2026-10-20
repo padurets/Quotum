@@ -6,6 +6,6 @@ export const MeasurementClock=createContext<number|null>(null);
 export const useMeasurementTime=()=>useContext(MeasurementClock);
 export function useMeasurementClock(changesAt:(now:number)=>number|null) {
   const fixed=useMeasurementTime();
-  const live=useClock(now=>fixed===null?changesAt(now):null);
-  return fixed??live;
+  const live=useClock(now=>fixed===null||now<fixed?changesAt(now):null);
+  return fixed===null?live:Math.min(fixed,live);
 }

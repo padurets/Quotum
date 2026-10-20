@@ -37,7 +37,7 @@ function harness(base=history,rolling=true){
   const context={useRef,useMemo,useSyncExternalStore,pan,planEventsAt,planEventsDeadline,shallowEqual,hubNow:()=>now,useClock:(changes:(at:number)=>number|null)=>{changesAt=changes;return clockNow;},usePanning:()=>useSyncExternalStore(pan.onPhase,pan.active),
     frameChangesAt:()=>null,
     fundsHistory:{},page:{get:()=>({board:{id:board}})},timeRange:()=>selected,timeRangeKey:(range:{from:number;to:number})=>`${range.from}-${range.to}`,prefs:()=>({range:'1m'}),
-    boardPeriod:{subscribeProjection:(_scope:string,listen:()=>void)=>{projectionListeners.add(listen);return()=>projectionListeners.delete(listen);},getProjectionRevision:()=>revision,
+    boardPeriod:{subscribeProjection:(_scope:string,listen:()=>void)=>{projectionListeners.add(listen);return()=>projectionListeners.delete(listen);},getProjectionRevision:()=>revision,projectionChangesAt:()=>null,
       projectionState:()=>({ready,error:null}),project:(base:History,_scope:string,at:number)=>{projects++;return {...base,since:selected?.from??at-M,to:selected?.to??at,series:[...base.series]};}},
     read:null as unknown as (loader:unknown,rolling:boolean)=>Shown&{drawing:History|null}};
   runInNewContext(ts.transpileModule(body+'\nglobalThis.read=usePeriodHistory;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);

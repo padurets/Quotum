@@ -30,7 +30,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       for(const group of tables)for(const table of group)if(table.dataset.historyRange!==wanted)return true;
       return false;
     };
-    while(pending()){if(Date.now()>until)throw new Error('charts and complete totals did not settle: '+JSON.stringify({wanted,panels:[...document.querySelectorAll('.history,.activity,.budget-history,.subscription-funds,.forecast,.budget-table,.agents-panel')].map(panel=>({class:panel.className,range:panel.dataset.historyRange,error:panel.querySelector('.history-error')?.textContent,panning:panel.querySelector('.chart>svg')?.classList.contains('is-panning')??null,plot:panel.querySelector('.chart>svg')?.dataset})),flights:window.__quotumPan?[...window.__quotumPan.flights.values()]:[]}));await new Promise(r=>setTimeout(r,20));}await new Promise(r=>setTimeout(r,250));})()`);
+    while(pending()){if(Date.now()>until)throw new Error('charts and complete totals did not settle: '+JSON.stringify({wanted,period:window.__quotumPeriodState?.(),panels:[...document.querySelectorAll('.history,.activity,.budget-history,.subscription-funds,.forecast,.budget-table,.agents-panel')].map(panel=>({class:panel.className,range:panel.dataset.historyRange,error:panel.querySelector('.history-error')?.textContent,panning:panel.querySelector('.chart>svg')?.classList.contains('is-panning')??null,plot:panel.querySelector('.chart>svg')?.dataset})),flights:window.__quotumPan?[...window.__quotumPan.flights.values()]:[]}));await new Promise(r=>setTimeout(r,20));}await new Promise(r=>setTimeout(r,250));})()`);
   const reports: PanReading[] = [];
   // Count independent measured series intersecting the visible plot, never path parts.
   // These layout reads happen after settling, outside the moving-frame probe.
@@ -333,7 +333,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       await mouse('mouseMoved', geometry.x, geometry.y);
       await key(true, 'Shift', 16);
       await wait(30);
-      if (await cdp.evaluate<boolean>(`!!document.querySelector('.subscription-funds .tooltip,.history .tooltip,.budget-history .tooltip,.activity .tooltip,.activity-legend-tip.is-open')`)) throw new Error('holding Shift left a chart readout visible');
+      if (await cdp.evaluate<boolean>(`!!document.querySelector('.subscription-funds .tooltip,.history .tooltip,.budget-history .tooltip,.activity .tooltip,.activity-info[data-series-context]')`)) throw new Error('holding Shift left a chart readout visible');
       at('held-shift-first-minus-12');
       await wheel(-12, true); await wait(300);
       const first = await cdp.evaluate<number>(`new DOMMatrix(document.querySelector('${selector} ${initiator==='activity'?'.plot-clip.is-band .plot-move':'.plot-move[data-plot-main]'}').style.transform).e`);
@@ -350,10 +350,10 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       if (!(await cdp.evaluate<boolean>(`new URLSearchParams(location.search).has('from')`))) throw new Error('Back did not restore the whole previous gesture');
       await cdp.evaluate(`history.forward()`); await wait(300); await settled();
       if (!(await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`))) throw new Error('Forward did not restore live');
-      // A wheel does not blur a keyboard-focused legend. Its bubble must stay
+      // A wheel does not blur a keyboard-focused legend. Its preview must stay
       // hidden through ordinary panning, a latched drag and their final fold.
       progress(`${initiator}/${period}/legend`);
-      const legendVisible = () => cdp.evaluate<boolean>(`[...document.querySelectorAll('.activity-legend-tip.is-open')].some(tip=>getComputedStyle(tip).display!=='none')`);
+      const legendVisible = () => cdp.evaluate<boolean>(`[...document.querySelectorAll('.activity-info[data-series-context]')].some(tip=>getComputedStyle(tip).display!=='none')`);
       await key(true, 'Tab', 9); await key(false, 'Tab', 9);
       await cdp.evaluate(`document.querySelector('.activity .legend-item').focus()`); await wait(40);
       if (!(await legendVisible())) throw new Error('focused activity legend did not open its readout');

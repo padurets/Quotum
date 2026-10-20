@@ -1,3 +1,5 @@
+import {seedCalendar} from '../workCalendar.js';
+import {calendarWindow} from '../../ui/lib/workCalendar.js';
 import {matchesSelection,workFilter,type FilterEnvelope} from '../../server/domain/dataFilters.js';
 import {sourceWorkCurves} from '../../server/domain/periodCurves.js';
 import {currentCohort,capturedCohort} from './sessionOracle.js';
@@ -471,6 +473,7 @@ async function bringUp(t: TestContext, set: DemoSet, start: number) {
   });
   const stand = await setUp(hub.base, set, start, SETUP, () => Date.now());
   seedWork(hub.store, stand);
+  if(set.id==='calendar')seedCalendar(hub.store,new Directory(hub.store.db),stand);
   if(set.id==='sessions')await seedSessionClients(hub.store,new Directory(hub.store.db),stand);
   return {stand, trackers, hub};
 }
@@ -920,6 +923,28 @@ test('data filter catalogue keeps empty work recoverable beside supplier measure
   assert.ok(choices.facets.value.projects.length>=57);assert.ok(choices.facets.value.devices.length>=5);
   assert.ok(choices.sessions.value.refs.length>=125);
   assert.deepEqual(FILTER_SCENES,['mixed-resources','populated-work','selected-empty','unfiltered-facets','resources-continue','member-current','save-restore']);
+});
+
+test('the calendar scene signs up both readers and keeps populated, empty and unavailable work distinct',async t=>{
+  const set=setOf('calendar'),start=Math.floor(Date.now()/MIN)*MIN,{stand}=await bringUp(t,set,start);t.mock.timers.setTime(start);
+  const owner=stand.people.get('ana')!,member=stand.people.get('boris')!,window=calendarWindow(start,'UTC');
+  const read=async(reader:typeof owner,board:string,filter?:FilterEnvelope['filters'])=>{
+    const reply=expandPeriod(await reader.post<PeriodWireReply>('/api/boards/'+board+'/period',{version:1,selection:{mode:'live',periodMs:30*24*HOUR},evaluatedAt:start,calendar:{zone:window.zone},...(filter?{workFilter:workFilter(filter)}:{})}));
+    if(reply.calendar?.state!=='complete')throw new Error('incomplete calendar scene');return reply.calendar.value;
+  };
+  const personal=await read(owner,owner.personalBoard),shared=await read(member,stand.boards.get('team')!);
+  assert.ok(personal.cells.length<=3072);assert.ok(personal.cells.some(cell=>cell.agentMs!==null&&cell.agentMs>HOUR));
+  assert.ok(personal.cells.some(cell=>cell.agentMs===0));assert.deepEqual(shared.cells,personal.cells);
+  assert.ok(personal.cells.filter(cell=>(cell.agentMs??0)>0).length>=300,'the selected month has enough work to show its hourly pattern');
+  assert.ok(new Set(personal.cells.map(cell=>cell.agentMs)).size>=6,'the overview has varied daily intensities');
+  const selection={mode:'live' as const,periodMs:24*HOUR};
+  const recent=expandPeriod(await owner.post<PeriodWireReply>('/api/boards/'+owner.personalBoard+'/period',{version:1,selection,evaluatedAt:start,sessions:{}}));
+  if(recent.sessions?.state!=='complete')throw new Error('incomplete recent work');
+  assert.ok(workedSessions(recent.sessions.value,{from:start-24*HOUR,to:start},start).length>=3,'the opening analytics is populated');
+  const empty=stand.boards.get('empty')!,filters=await owner.get<FilterEnvelope>('/api/boards/'+empty+'/filters');
+  assert.ok((await read(owner,empty,filters.filters)).cells.every(cell=>cell.agentMs===0||cell.agentMs===null));
+  assert.ok((await read(member,member.personalBoard)).cells.some(cell=>cell.agentMs===0));
+  assert.ok((await read(member,stand.boards.get('unavailable')!)).cells.every(cell=>cell.agentMs===null));
 });
 
 test('session comparison catalogue exposes grouped session columns and retained work with a whole union total',async t=>{

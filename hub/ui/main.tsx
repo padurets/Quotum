@@ -1,3 +1,5 @@
+import {AgentHoursHeatmap} from './components/AgentHoursHeatmap';
+import {AGENT_HOURS_HEATMAP} from '../server/domain/widgets';
 import {followDataFilters} from './lib/filterSession';
 import {retireDataFilters,useDataFilters} from './lib/dataFilters';
 import {matchesSource} from '../server/domain/dataFilters';
@@ -152,6 +154,7 @@ function Dashboard({
     content: <AgentsPanel arrange={arrange} />,
   });
   const panels = new Map<string, Widget>([
+    [AGENT_HOURS_HEATMAP,{id:AGENT_HOURS_HEATMAP,name:t('calendar.title'),content:<AgentHoursHeatmap arrange={arrange}/>}],
     [QUOTA_SESSION_HISTORY,{id:QUOTA_SESSION_HISTORY,name:t('history.sessionTitle'),content:<History arrange={arrange} kind="session"/>}],
     [QUOTA_SESSION_TABLE,{id:QUOTA_SESSION_TABLE,name:t('forecast.sessionTitle'),content:<Forecast arrange={arrange} kind="session"/>}],
     [SUBSCRIPTION_FUNDS,{id:SUBSCRIPTION_FUNDS,name:t('widgets.subscriptionFunds'),content:<MoneyHistory arrange={arrange} family="funds"/>}],

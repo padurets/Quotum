@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {activityEmpty, activityScale, atOnce, shownActivity, groupColors, mutedKey, OTHER_COLOR} from '../lib/activity';
+import {activityEmpty, activityScale, atOnce, groupColors, mutedKey, OTHER_COLOR} from '../lib/activity';
 import {CATEGORY_COLORS, PROVIDERS} from '../lib/providers';
 import type {ActivityGroup, View} from '../lib/types';
 
@@ -61,13 +61,6 @@ test('the scale shows agent-hours beyond a bar, with at most three round marks a
   }
 });
 
-test('switching groups off recomputes only shown agent time, including each bar', () => {
-  const p = group('P', {agentMs: 3 * HOUR, cells: [[0, 3 * HOUR]]});
-  const q = group('Q', {agentMs: HOUR, cells: [[0, HOUR]]});
-  assert.deepEqual(shownActivity([p, q]), {agentMs: 4 * HOUR, cells: new Map([[0, 4 * HOUR]])});
-  assert.deepEqual(shownActivity([p]), {agentMs: 3 * HOUR, cells: new Map([[0, 3 * HOUR]])});
-  assert.deepEqual(shownActivity([]), {agentMs: 0, cells: new Map()});
-});
 
 test('at once reads the mean during active time, in each language', async () => {
   const {setLocale} = await import('../i18n');

@@ -1,3 +1,4 @@
+import {AGENT_HOURS_HEATMAP,showWidgets} from '../server/domain/widgets.js';
 import {migrateUnified} from '../server/domain/unifiedView.js';
 import {defaultFilters} from '../server/domain/dataFilters.js';
 import {migrateFixed} from '../server/domain/fixedView.js';
@@ -254,7 +255,8 @@ export function viewOf(stand: Stand, key: string) {
     view.layout.places[id] = board?.places?.[id] ?? auto;
   }
   const resources=shown.map(card=>({id:stand.sources.get(card.id)!,provider:card.provider}));
-  return {...migrateFixed(migrateUnified({...view,version:2},resources),resources),version:5 as const,windows:[]};
+  const result={...migrateFixed(migrateUnified({...view,version:2},resources),resources),version:5 as const,windows:[]};
+  return set.id==='calendar'?showWidgets(result,[AGENT_HOURS_HEATMAP,'agents','activity']):result;
 }
 
 /**
