@@ -14,6 +14,7 @@ export class HistoryPool {
 
   constructor(readonly budget = 15 * 1024 * 1024) {}
   register(member: HistoryMember) {this.members.add(member);}
+  unregister(member:HistoryMember){this.members.delete(member);}
   get activeFlights() {return this.active.size;}
   get estimatedBytes() {return [...this.members].reduce((n, member) => n + member.estimatedBytes, 0) + [...this.reservations.values()].reduce((a,b) => a+b, 0);}
   isActive(flight: Flight) {return this.active.has(flight);}

@@ -261,7 +261,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       await mouse('mouseMoved', geometry.x, geometry.y);
       await key(true, 'Shift', 16);
       await wait(30);
-      if (await cdp.evaluate<boolean>(`!!document.querySelector('.subscription-funds .tooltip,.history .tooltip,.budget-history .tooltip,.activity .tooltip,.activity-legend-tip.is-open')`)) throw new Error('holding Shift left a chart readout visible');
+      if (await cdp.evaluate<boolean>(`!!document.querySelector('.subscription-funds .tooltip,.history .tooltip,.budget-history .tooltip,.activity .tooltip,.activity-info[data-series-context]')`)) throw new Error('holding Shift left a chart readout visible');
       await wheel(-12, true); await wait(300);
       const first = await cdp.evaluate<number>(`new DOMMatrix(document.querySelector('${selector} .plot-move[data-plot-main]').style.transform).e`);
       if (!(await cdp.evaluate<boolean>(`!!document.querySelector('[data-pan-end]')&&!new URLSearchParams(location.search).has('from')`))) throw new Error('Shift-wheel committed before Shift was released');
@@ -275,10 +275,10 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       if (!(await cdp.evaluate<boolean>(`new URLSearchParams(location.search).has('from')`))) throw new Error('Back did not restore the whole previous gesture');
       await cdp.evaluate(`history.forward()`); await wait(300); await settled();
       if (!(await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`))) throw new Error('Forward did not restore live');
-      // A wheel does not blur a keyboard-focused legend. Its bubble must stay
+      // A wheel does not blur a keyboard-focused legend. Its preview must stay
       // hidden through ordinary panning, a latched drag and their final fold.
       progress(`${initiator}/${period}/legend`);
-      const legendVisible = () => cdp.evaluate<boolean>(`[...document.querySelectorAll('.activity-legend-tip.is-open')].some(tip=>getComputedStyle(tip).display!=='none')`);
+      const legendVisible = () => cdp.evaluate<boolean>(`[...document.querySelectorAll('.activity-info[data-series-context]')].some(tip=>getComputedStyle(tip).display!=='none')`);
       await key(true, 'Tab', 9); await key(false, 'Tab', 9);
       await cdp.evaluate(`document.querySelector('.activity .legend-item').focus()`); await wait(40);
       if (!(await legendVisible())) throw new Error('focused activity legend did not open its readout');

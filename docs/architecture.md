@@ -729,12 +729,20 @@ agent-hours, in order: red, orange, yellow, green, teal, frost, blue, deep blue 
 Those past them share a neutral one. Each group is its own however
 small. Above the stacks are agent-hours, active time, recorded sessions and the average
 at once (agent-hours divided by active time). Active time is not drawn: it is in the
-totals and tooltips. A bar's tooltip gives these totals first, then its group parts;
-a legend entry's glass bubble gives the group's agent-hours, active time, average at
-once and recorded sessions. Hover or keyboard focus opens it, Escape dismisses it; a
-tap also switches the group and keeps the bubble for four seconds. Switching groups
-off recomputes stacks, scale and the shown agent-hours; active time, agents and at
-once still cover all the board's agents. A subscription's activity grouping includes all admitted work. Its quota work columns
+totals and tooltips. A bar's tooltip gives these totals first, then its enabled group parts.
+The summary and bar numbers describe the intersection of board work filters and the
+chart's enabled legend series. All four metrics change together: active time is an
+interval union and recorded sessions are distinct identities across the selected work.
+Empty selection, confirmed zero, unavailable work and pending exact evidence remain
+separate states. Zero active time has no average concurrency.
+The four metrics sit directly below the heading, without a separate group-name row.
+Pointing to a visible legend entry or focusing it with the keyboard temporarily shows
+that group's metrics in the same space. Pointer takes visual priority over keyboard
+focus; each focused entry keeps its own accessible description. Escape dismisses the
+preview, and a tap toggles visibility and holds an enabled entry's preview for four
+seconds. A hidden entry supplies no preview or peer dimming. Shift and panning suppress
+temporary readouts. The heading area, plot and widget retain their geometry throughout.
+A subscription's activity grouping includes all admitted work. Its quota work columns
 use the separate source-grant cutoff, so work before a subscription was provided can
 appear in Activity without entering quota attribution.
 The Agent sessions table compares the same work by project, machine or subscription,
@@ -1949,6 +1957,9 @@ composite and detail reads, cancellations and responses that finish after measur
 Quota history, wallet budgets, subscription funds and agent activity read and move along time alike
 (`ui/components/timeAxis.ts`), each with its legend under it. Pointing to a legend
 entry or focusing it with the keyboard highlights that series and dims its peers.
+Monetary legend details and currency provenance appear in the reserved heading area,
+using the existing exact money presentation. They do not open native tooltips over the
+plot. Limit charts without such details reserve no information strip.
 The common Resources filter selects accounts, key caps and subscription funds
 across cards, charts and tables. An account selects its total balance; a key selects
 its reported remaining cap within the shared 32-meter bound. Balance components
@@ -2046,6 +2057,26 @@ discard. Completed projections pin the current tile entry and its write sequence
 Financial and work ledgers share their immutable native observations only when every
 reading agrees. Retention preserves that shared suffix, and the pool charges its storage
 once; differing observations and each ledger's spans retain their own charges.
+
+An Activity legend mask is local to that widget. It intersects the existing typed
+work predicate without changing board filters, session tables or source-wide supplier
+estimates. Live summaries prepare an independent selected interval index from the
+board's authorized work evidence and follow its exact clock boundaries. Fixed subsets
+use the existing period route with empty resource selectors: selected drawing cells and
+a compact exact work summary with boundary bars, without a historical work ledger.
+The reader shares the preparation scheduler, two transport slots and 15 MiB pool.
+Changing its mask, range or authority retires earlier generations; pending or failed
+results never borrow wider-cohort totals. All-visible and all-off choices need no
+additional reader request.
+For a warmed fixed subset, a relevant late-work event may add one bounded local request
+beyond the board's ordinary update. It retains clean cells and reads the potentially
+dirty tail on the full range's cell grid, together with a fresh compact exact summary
+for the whole selection. News accumulated before dispatch coalesces; news received
+during a response remains dirty until a current answer commits. There is at most one
+local subset flight. An event whose work starts at or after the fixed upper endpoint
+asks nothing. Live work retains its existing one-read / 4650-byte budget. The separate
+24h/30d fixed-subset benchmark covers dirty-cell reuse, exact overlap, outside events,
+coalescing, cancelled and late traffic, preparation and the shared resource ceilings.
 
 Selected activity cells have their own filter identity, coverage and prepared strip.
 Changing a project, device or client retires those cells and pending selected jobs,

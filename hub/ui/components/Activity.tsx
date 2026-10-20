@@ -1,15 +1,14 @@
 import {AnalyticsPanel} from './AnalyticsPanel';
-import {memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentProps} from 'react';
-import {createPortal} from 'react-dom';
+import {memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps} from 'react';
 import type {Activity as ActivityData, ActivityDimension, ActivityGroup} from '../lib/types';
 import {clock, num, shortDay, stamp, workHours} from '../lib/format';
 import {activityEmpty, activityScale, activityGroupName as groupName, atOnce, groupColors, mutedKey} from '../lib/activity';
 import {ACTIVITY_BY, setMuted, setPrefs, usePref, useChartMuted, chartMuteKey, chartSeriesMuted} from '../lib/prefs';
 import {setTimeRange, timeRangeKey, useTimeRange, type TimeRange} from '../lib/timeRange';
-import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks} from '../lib/periods';
+import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks, periodOf} from '../lib/periods';
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
-import {usePersonalBoard, useBoardId, useLineup, useTitles} from '../lib/board';
-import {useClock} from '../lib/clock';
+import {page, usePersonalBoard, useBoardId, useLineup, useTitles} from '../lib/board';
+import {useClock,hubNow} from '../lib/clock';
 import {quotaHistory, useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {boardPeriod} from '../lib/period';
 import type {History} from '../../server/domain/history';
@@ -18,18 +17,25 @@ import {usePrepared, usePreparationBasis} from './prepared';
 import {axisNavigation, navigationKey, type AxisNavigation} from '../lib/axisNavigation';
 import {groupRegistry, type GroupIdentity} from '../lib/plotRegistry';
 import {StackPaths} from '../lib/stackPaths';
-import {pan, usePanning, useShifting} from '../lib/pan';
+import {pan, usePanning} from '../lib/pan';
 import {targetOf, cellStart} from '../../server/domain/history';
 import {colorOf} from '../lib/view';
 import {t, useLocale, type Key} from '../i18n';
 import {Segmented} from './Kit';
 import {HideRow, Popover, SlidersIcon} from './Popover';
-import {Tooltip, useBubble, useTip} from './Tooltip';
+import {Tooltip, useTip} from './Tooltip';
 import {navigate, settingsHref} from '../lib/router';
 import {useTimeAxis} from './timeAxis';
 import {usePlot} from './sizing';
 import {clipPlot, PlotLayer, PlotOverlay} from './PlotLayer';
-import {seriesFocusStyle, useSeriesFocus} from './seriesFocus';
+import {seriesFocusStyle, useSeriesFocus, type SeriesFocus} from './seriesFocus';
+
+import {ActivitySelection} from '../lib/activitySelection';
+import {effectiveFilters,onDataFilters} from '../lib/filterSelection';
+import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
+import {fetchPeriod} from '../lib/periodTransport';
+import {historyPool} from '../lib/historyPool';
+import {UNAUTHORIZED} from '../lib/http';
 
 const MINUTE = 60_000;
 const EMPTY_ACTIVITY: ActivityData = {since: 0, known: null, barMs: MINUTE, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}};
@@ -56,14 +62,13 @@ function ActivitySettings({arrange}: {arrange: Arrange}) {
   );
 }
 
-/** The same quantities for a bar and a legend group; totals always cover every agent. */
-function Metrics({agentMs, activeMs, agents, shownMs}: {agentMs: number; activeMs: number; agents: number; shownMs?: number}) {
+/** All four quantities describe the same enabled cohort. */
+function Metrics({agentMs, activeMs, agents}: {agentMs: number; activeMs: number; agents: number}) {
   const rows = [
     [t('activity.agentHours'), workHours(agentMs)],
-    ...(shownMs !== undefined && shownMs < agentMs ? [[t('activity.shownRow'), workHours(shownMs)]] : []),
     [t('activity.active'), workHours(activeMs)],
     [t('activity.agents'), num(agents)],
-    [t('activity.atOnce'), atOnce(agentMs, activeMs)],
+    [t('activity.atOnce'), activeMs>0?atOnce(agentMs, activeMs):'—'],
   ];
   return (
     <span className="tooltip-grid" style={{gridTemplateColumns: 'minmax(0, 1fr) auto'}}>
@@ -100,127 +105,86 @@ function LegendMetrics({history,by,groupKey,group,active}:{history:History|null;
   return <span data-time="activity-metrics">{value?<Metrics agentMs={value.agentMs} activeMs={value.activeMs} agents={value.agents}/>:<span>{t('activity.pendingRange')}</span>}</span>;
 }
 
-/** Hover and touch state belong to one legend entry, leaving the stacks untouched. */
-const LegendItem = memo(function LegendItem({history, group, groupKey, by, name, color, muted}: {history:History|null;group: ActivityGroup | null; groupKey: string; by: ActivityDimension; name: string; color: string; muted: boolean}) {
-  useLocale();
-  const shifting = useShifting();
-  const id = useId();
-  const button = useRef<HTMLButtonElement>(null);
-  const wrap = useRef<HTMLDivElement>(null);
-  const [hovered, setHovered] = useState(false);
-  const [focused, setFocused] = useState(false);
-  const [pinned, setPinned] = useState(0);
-  const [dismissed, setDismissed] = useState(false);
-  const active = !shifting && !dismissed && (hovered || focused || pinned > 0);
-  const container = button.current?.closest<HTMLElement>('.activity');
-  const tip = useBubble(active, button, container);
-  useEffect(() => {
-    if (!active) return;
-    // A bubble opened by the pointer must dismiss even while another control has focus.
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setDismissed(true);
-        setPinned(0);
-      }
-    };
-    addEventListener('keydown', escape);
-    return () => removeEventListener('keydown', escape);
-  }, [active]);
-  useEffect(() => {
-    if (!pinned) return;
-    const timer = setTimeout(() => setPinned(0), 4000);
-    const outside = (event: PointerEvent) => {
-      if (!wrap.current?.contains(event.target as Node)) setPinned(0);
-    };
-    addEventListener('pointerdown', outside);
-    return () => {
-      clearTimeout(timer);
-      removeEventListener('pointerdown', outside);
-    };
-  }, [pinned]);
-  const bubble = (
-    <span
-      ref={tip}
-      id={id}
-      role="tooltip"
-      className={`activity-legend-tip glass ${active ? 'is-open' : ''}`}
-      onPointerDown={event => event.stopPropagation()}
-      onClick={event => event.stopPropagation()}
-    >
-      <span className="tooltip-time">{name}</span>
-      <LegendMetrics history={history} by={by} groupKey={groupKey} group={group} active={active}/>
-    </span>
-  );
-  return (
-    <div
-      ref={wrap}
-      className={`activity-legend-item ${active ? 'is-open' : ''}`}
-      onPointerEnter={event => {
-        if (event.pointerType !== 'touch') {
-          setHovered(true);
-          setDismissed(false);
-        }
-      }}
-      onPointerLeave={event => {
-        if (event.pointerType !== 'touch') setHovered(false);
-      }}
-    >
-      <button
-        ref={button}
-        type="button"
-        className="legend-item"
-        data-series-key={mutedKey(by, groupKey)}
-        data-agent-ms={group?.agentMs}
-        style={seriesFocusStyle(mutedKey(by, groupKey))}
-        aria-describedby={id}
-        aria-pressed={!muted}
-        onClick={() => setMuted(chartMuteKey(ACTIVITY,by,groupKey), !muted)}
-        onFocus={event => {
-          setFocused(event.currentTarget.matches(':focus-visible'));
-          setDismissed(false);
-        }}
-        onBlur={() => setFocused(false)}
-        onPointerUp={event => {
-          if (event.pointerType === 'touch') {
-            setPinned(value => value + 1);
-            setDismissed(false);
-          }
-        }}
-      >
-        <i className="activity-swatch" style={{background: color}} />
-        <span>{name}</span>
-        <LegendAmount history={history} by={by} groupKey={groupKey} group={group}/>
-      </button>
-      {container ? createPortal(bubble, container) : bubble}
-    </div>
-  );
+/** Keyboard descriptions belong to their own entry even when the pointer wins visually. */
+const LegendItem = memo(function LegendItem({history,group,groupKey,by,name,color,muted}:{history:History|null;group:ActivityGroup|null;groupKey:string;by:ActivityDimension;name:string;color:string;muted:boolean}) {
+  useLocale();const id=useId(),[focused,setFocused]=useState(false);
+  return <div className="activity-legend-item">
+    <button type="button" className="legend-item" data-series-key={mutedKey(by,groupKey)} data-agent-ms={group?.agentMs} style={seriesFocusStyle(mutedKey(by,groupKey))}
+      aria-describedby={id} aria-pressed={!muted} onFocus={()=>setFocused(true)} onBlur={()=>setFocused(false)}
+      onClick={()=>setMuted(chartMuteKey(ACTIVITY,by,groupKey),!muted)}>
+      <i className="activity-swatch" style={{background:color}}/><span>{name}</span><LegendAmount history={history} by={by} groupKey={groupKey} group={group}/>
+    </button>
+    <span id={id} className="sr-only">{muted?t('activity.seriesHidden'):focused?<LegendMetrics history={history} by={by} groupKey={groupKey} group={group} active/>:null}</span>
+  </div>;
 });
 
-/** Complete quantities do not render for partial plot arrivals. */
-const Totals = memo(function Totals({history,by,muted,since}: {history:History|null;by:ActivityDimension;muted:Record<string,boolean>;since:number|null}) {
-  useLocale();
-  const shown=(activity:ActivityData)=>activity.by[by].reduce((sum,group)=>sum+(chartSeriesMuted(muted,ACTIVITY,by,group.key,!!muted[mutedKey(by,group.key)])?0:group.agentMs),0);
-  const activity=useActivityNumbers(history,by,value=>JSON.stringify([!!value.known,...metricsText(value),shown(value)<value.agentMs,workHours(shown(value))]));
-  if (!activity?.known || activity.activeMs <= 0) return null;
-  const shownMs=shown(activity);
-  return (
-    <div className="activity-totals" data-time="activity-totals" data-agent-ms={activity.agentMs}>
-      <span title={t('activity.agentHoursHint')}>
-        {t('activity.agentHours')} <b>{workHours(activity.agentMs)}</b>
-        {shownMs < activity.agentMs && <span className="activity-since activity-shown">{t('activity.shown', {time: workHours(shownMs)})}</span>}
-      </span>
-      <span title={t('activity.activeHint')}>
-        {t('activity.active')} <b>{workHours(activity.activeMs)}</b>
-      </span>
-      <span title={t('activity.agentsHint')}>
-        {t('activity.agents')} <b>{num(activity.agents)}</b>
-      </span>
-      <span title={t('activity.atOnceHint')}>
-        {t('activity.atOnce')} <b>{atOnce(activity.agentMs, activity.activeMs)}</b>
-      </span>
-      {since !== null && <span className="activity-since">{t('activity.since', {time: stamp(since)})}</span>}
+/** Keep dormant exclusions so a newly arriving group follows the saved legend choice. */
+export function activityMutedKeys(muted:Record<string,boolean>,by:ActivityDimension) {
+  const keys=new Set<string>(),prefix=`activity:${by}:`;
+  for(const [key,on] of Object.entries(muted))if(key.startsWith(prefix)&&on)keys.add(key.slice(prefix.length));
+  for(const [key,on] of Object.entries(muted))try{const parts=JSON.parse(key);if(Array.isArray(parts)&&parts.length===3&&parts[0]===ACTIVITY&&parts[1]===by&&typeof parts[2]==='string'){if(on)keys.add(parts[2]);else keys.delete(parts[2]);}}catch{/* Legacy keys were read above. */}
+  return [...keys].sort();
+}
+
+function useActivitySubset(history:History|null,by:ActivityDimension,muted:Record<string,boolean>,authority:number,allOff:boolean,scoped:boolean) {
+  const [reader]=useState(()=>new ActivitySelection({pool:historyPool,now:hubNow,send:fetchPeriod,
+    read:()=>{const value=boardPeriod.get();return {trace:value.value,ready:!value.loading&&!value.error&&!!value.value,error:value.error};},
+    accessLost:()=>{page.dispatch({type:'board-close'});window.dispatchEvent(new Event(UNAUTHORIZED));},
+  }));
+  const selected=useTimeRange(),range=usePref('range');
+  const configure=useRef(()=>{});
+  configure.current=()=>{
+    const off=activityMutedKeys(muted,by),board=page.get().board;
+    reader.configure(scoped&&!allOff&&off.length&&history&&board&&history.board===board.id?{board:board.id,authority:JSON.stringify([authority,board.workAuthority]),workAuthority:board.workAuthority,by,muted:off,filters:workFilter(effectiveFilters()??defaultFilters()),
+      selection:selected?{mode:'range',...selected}:{mode:'live',periodMs:periodOf(range).ms},rangeKey:selected?timeRangeKey(selected):range,barMs:history.activity.barMs}:null);
+  };
+  useLayoutEffect(()=>configure.current());
+  useEffect(()=>{
+    const stops=[boardPeriod.subscribe(reader.refresh),onDataFilters(()=>configure.current()),page.listen((event,state)=>{
+      if(!state.board||event.type==='board-close')reader.reset();
+      else if(event.type==='hub'){
+        if(event.event.type==='history'&&event.event.data.workSince!==undefined){
+          reader.changed(event.event.data.workSince,event.event.data.workAuthority);
+          configure.current();
+        }else if(['snapshot','mine','lineup'].includes(event.event.type)){reader.reset();configure.current();}
+        else if(event.event.type==='hello')reader.reset();
+      }
+    })];
+    return()=>{stops.forEach(stop=>stop());reader.reset();};
+  },[reader]);
+  return reader;
+}
+
+function useSubsetNumbers(reader:ActivitySelection,history:History|null,enabled:boolean,bar?:number) {
+  const state=useSyncExternalStore(reader.subscribe,reader.get),panning=usePanning();
+  const at=(now:number)=>state.model?.rangeKey===history?.range?reader.numbers(now,bar):null;
+  const frozen=useRef<ReturnType<typeof at>>(null);
+  const now=useClock(now=>enabled&&panning===null?reader.changesAt(now,at=>{const value=reader.numbers(at,bar);return JSON.stringify([value?.available,!!value?.known,...metricsText(value??EMPTY_ACTIVITY)]);}):null);
+  if(!enabled||!state.model)frozen.current=null;
+  else if(panning===null)frozen.current=at(now);
+  return {activity:enabled?(panning===null?at(now):state.model?frozen.current:null):null,state};
+}
+
+/** Only this small region hears legend preview changes. Its reserved geometry is constant. */
+const Totals=memo(function Totals({history,by,subset,scoped,allOff,since,focus,groups}:{history:History|null;by:ActivityDimension;subset:ActivitySelection;scoped:boolean;allOff:boolean;since:number|null;focus:SeriesFocus;groups:ActivityGroup[]}) {
+  useLocale();const selected=useSyncExternalStore(focus.subscribe,focus.get);
+  const group=groups.find(group=>mutedKey(by,group.key)===selected),key=group?.key;
+  const base=useActivityNumbers(history,by,value=>JSON.stringify([!!value.known,...metricsText(value)]),!scoped||!!group,undefined,key);
+  const local=useSubsetNumbers(subset,history,scoped&&!group);
+  const preview=group&&base?.by[by].find(part=>part.key===group.key);
+  const activity=group&&base?{...base,agentMs:preview?.agentMs??0,activeMs:preview?.activeMs??0,agents:preview?.agents??0}:scoped?local.activity:base;
+  const text=allOff?t('activity.noSeries'):scoped&&!group&&local.state.error?t(local.state.error==='history_limit'?'money.historyLimit':'analytics.failed'):!activity?t('activity.pendingRange'):activity.available===false?t('activity.noSessions'):!activity.known?t('activity.knownFrom',{time:stamp(activity.since)}):null;
+  return <div className="chart-info activity-info" data-time="activity-info" data-series-context={group?selected:undefined}>
+    <div className="activity-totals" data-time="activity-totals" data-agent-ms={!text?activity?.agentMs:undefined}>
+      {text?<span>{text}{local.state.error&&<button className="button" onClick={subset.retry}>{t('analytics.retry')}</button>}</span>:activity&&<>
+        <span title={t('activity.agentHoursHint')}>{t('activity.agentHours')} <b>{workHours(activity.agentMs)}</b></span>
+        <span title={t('activity.activeHint')}>{t('activity.active')} <b>{workHours(activity.activeMs)}</b></span>
+        <span title={t('activity.agentsHint')}>{t('activity.agents')} <b>{num(activity.agents)}</b></span>
+        <span title={t('activity.atOnceHint')}>{t('activity.atOnce')} <b>{activity.activeMs>0?atOnce(activity.agentMs,activity.activeMs):'—'}</b></span>
+      </>}
     </div>
-  );
+    <div className="activity-since">{since!==null?t('activity.since',{time:stamp(since)}):'\u00a0'}</div>
+  </div>;
 });
 
 /**
@@ -235,7 +199,6 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const registry = useRef<{authority: number; token: number; by: ActivityDimension; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
   if (registry.current?.authority !== authority) registry.current = null;
   const panel = useRef<HTMLElement>(null);
-  useSeriesFocus(panel);
   // Made taller by its owner, the widget gives the room to the stacks, as the chart does.
   const {plot, onBase} = usePlot(panel);
   const lineup = useLineup();
@@ -245,6 +208,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const prefs=useMemo(()=>({range,horizon,activityBy,muted}),[range,horizon,activityBy,muted]);
   const groupMuted=(key:string)=>chartSeriesMuted(muted,ACTIVITY,activityBy,key,!!muted[mutedKey(activityBy,key)]);
   const by = prefs.activityBy;
+  const focus=useSeriesFocus(panel,`${authority}:${drawing?.range}:${by}`);
   const locale = useLocale();
   const selected = useTimeRange();
   const navigation = axisNavigation(useBoardId(), selected, prefs);
@@ -290,6 +254,9 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const currentGroups=drawnActivity?.by[by]??[];
   const shownSources = lineup.filter(id => titles[id] && !isHidden(arrange.view, cardId(id)));
   // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).
+  const allOff=presentation.identities.length>0&&presentation.identities.every(identity=>groupMuted(identity.key));
+  const scoped=currentGroups.some(group=>groupMuted(group.key));
+  const subset=useActivitySubset(drawing,by,muted,authority,allOff,scoped);
   const since = history && activity?.known && activity.known.from > history.since ? activity.known.from : null;
 
   const said = activityEmpty(history, shownSources.length, personal);
@@ -307,10 +274,12 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     <AnalyticsPanel ref={panel} className="activity" title={t('activity.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
       settings={<ActivitySettings arrange={arrange}/>}
     >
-      <Totals history={drawing} by={by} muted={prefs.muted} since={since} />
+      <Totals history={drawing} by={by} subset={subset} scoped={scoped} allOff={allOff} since={since} focus={focus} groups={currentGroups}/>
       <>
           <Stacks
             history={history}
+            subset={subset}
+            scoped={scoped}
             activity={drawnActivity ?? EMPTY_ACTIVITY}
             currentActivity={activity ?? EMPTY_ACTIVITY}
             origin={drawing?.since ?? from}
@@ -351,14 +320,16 @@ export const stacksHeight = (width: number) => (width < 560 ? 160 : 200);
 const EMPTY_CELLS: PlotGroup['cells'] = [];
 
 /** A stationary readout advances its clipped numbers without waking the SVG. */
-function ActivityReadout({history,by,hover,barMs,bar,parts,tipProps}:{history:History|null;by:ActivityDimension;hover:number;barMs:number;bar:number[];parts:{key:string;name:string;color:string;ms:number}[];tipProps:Omit<ComponentProps<typeof Tooltip>,'children'>}) {
+function ActivityReadout({history,by,hover,barMs,bar,parts,tipProps,subset,scoped}:{subset:ActivitySelection;scoped:boolean;history:History|null;by:ActivityDimension;hover:number;barMs:number;bar:number[];parts:{key:string;name:string;color:string;ms:number}[];tipProps:Omit<ComponentProps<typeof Tooltip>,'children'>}) {
   const values=(activity:ActivityData)=>parts.map(part=>({...part,ms:activity.by[by].find(group=>group.key===part.key)?.agentMs??0})).filter(part=>part.ms>0);
-  const activity=useActivityNumbers(history,by,value=>{const shown=values(value),sum=shown.reduce((total,part)=>total+part.ms,0);return JSON.stringify([...metricsText(value),sum<value.agentMs,workHours(sum),...shown.map(part=>[part.key,workHours(part.ms)])]);},true,hover);
-  const current=activity?values(activity):parts,agentMs=activity?.agentMs??bar[2],activeMs=activity?.activeMs??bar[1],agents=activity?.agents??bar[3],shownMs=current.reduce((sum,part)=>sum+part.ms,0);
-  if(!current.length)return null;
+  const base=useActivityNumbers(history,by,value=>JSON.stringify([...metricsText(value),...values(value).map(part=>[part.key,workHours(part.ms)])]),!scoped,hover);
+  const local=useSubsetNumbers(subset,history,scoped,hover);
+  const activity=scoped?local.activity:base;
+  const current=activity?values(activity):parts,agentMs=activity?.agentMs??bar[2],activeMs=activity?.activeMs??bar[1],agents=activity?.agents??bar[3];
+  if(!current.length||scoped&&!activity)return null;
   return <Tooltip {...tipProps}>
     <div className="tooltip-time">{cellLabel(hover,barMs)}</div>
-    <div data-time="activity-readout"><Metrics agentMs={agentMs} activeMs={activeMs} agents={agents} shownMs={shownMs}/>
+    <div data-time="activity-readout"><Metrics agentMs={agentMs} activeMs={activeMs} agents={agents}/>
       <div className="tooltip-sep"/>
       <div className="tooltip-grid" style={{gridTemplateColumns:'14px minmax(0, 1fr) auto'}}>
         {current.map(part=><div className="tooltip-row" key={part.key}><i className="activity-swatch" style={{background:part.color}}/><span className="tooltip-name">{part.name}</span><strong>{workHours(part.ms)}</strong></div>)}
@@ -369,6 +340,8 @@ function ActivityReadout({history,by,hover,barMs,bar,parts,tipProps}:{history:Hi
 
 const Stacks = memo(function Stacks({
   history,
+  subset,
+  scoped,
   activity: incomingActivity,
   currentActivity,
   origin: incomingOrigin,
@@ -388,6 +361,8 @@ const Stacks = memo(function Stacks({
   empty,
 }: {
   history?: History|null;
+  subset:ActivitySelection;
+  scoped:boolean;
   activity: ActivityData;
   /** Exact boundary bars and readout advance without rebuilding interior stacks. */
   currentActivity?: ActivityData;
@@ -613,7 +588,7 @@ const Stacks = memo(function Stacks({
       {empty && <div className="chart-empty">{empty}</div>}
       {allMuted && <div className="chart-empty">{t('activity.allOff')}</div>}
       {hover !== null && bar && parts.length > 0 && !drag && (
-        <ActivityReadout history={history??null} by={by} hover={hover} barMs={barMs} bar={bar} parts={parts} tipProps={{tip,className:narrow?'is-below':'',style:tipStyle}}/>
+        <ActivityReadout subset={subset} scoped={scoped} history={history??null} by={by} hover={hover} barMs={barMs} bar={bar} parts={parts} tipProps={{tip,className:narrow?'is-below':'',style:tipStyle}}/>
       )}
     </div>
   );

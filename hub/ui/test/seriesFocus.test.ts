@@ -10,31 +10,42 @@ const planMarkup=chart.slice(chart.indexOf('{plans.map('),chart.indexOf('{foreca
 const planRenderer={exports:{} as {paint:(plans:unknown[],planPaths:string[])=>{children:{props:{style:Record<string,string>;d:string}}[][]}},seriesFocusStyle,node:(_tag:unknown,props:unknown,...children:unknown[])=>({props,children})};
 runInNewContext(ts.transpileModule(`export const paint=(plans,planPaths)=><g>${planMarkup}</g>;`,{fileName:'plans.tsx',compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React,jsxFactory:'node'}}).outputText,planRenderer);
 
-test('legend focus paints only its widget, respects hover/keyboard/muted state, and cleans up',()=>{
-  const properties=new Map<string,string>(),events=new Map<string,(event:any)=>void>();let writes=0,cleanup=()=>{},refresh=()=>{};
-  class Button {dataset:Record<string,string>;pressed='true';visible=true;attached=true;constructor(key:string){this.dataset={seriesKey:key};}closest(){return this;}getAttribute(){return this.pressed;}matches(){return this.visible;}}
-  const root={contains:(button:Button)=>button.attached,style:{setProperty:(key:string,value:string)=>{writes++;properties.set(key,value);},removeProperty:(key:string)=>{writes++;properties.delete(key);}},addEventListener:(name:string,run:(event:any)=>void)=>events.set(name,run),removeEventListener:(name:string)=>events.delete(name)};
-  const context={exports:{} as {useSeriesFocus:(panel:unknown)=>void},Element:Button,require:()=>({useRef:(current:unknown)=>({current}),useLayoutEffect:(run:()=>void)=>{refresh=run;},useEffect:(run:()=>()=>void)=>{cleanup=run();}})};
+test('one legend arbiter handles pointer, keyboard, toggles, touch, dismissal and cleanup',()=>{
+  const properties=new Map<string,string>(),events=new Map<string,(event:any)=>void>(),globalEvents=new Map<string,(event:any)=>void>(),microtasks:(()=>void)[]=[],timers=new Map<number,()=>void>();
+  let writes=0,phase=()=>{},shift=false,active:number|null=null,folding=false,changed=()=>{},observing=false;
+  class Button {dataset:Record<string,string>;pressed='true';visible=true;attached=true;isConnected=true;constructor(key:string){this.dataset={seriesKey:key};}closest(){return this;}contains(target:unknown){return target===this;}getAttribute(){return this.pressed;}matches(){return this.visible;}}
+  const root={querySelector:()=>folding?{}:null,contains:(button:Button)=>button.attached,style:{setProperty:(key:string,value:string)=>{writes++;properties.set(key,value);},removeProperty:(key:string)=>{writes++;properties.delete(key);}},addEventListener:(name:string,run:(event:any)=>void)=>events.set(name,run),removeEventListener:(name:string)=>events.delete(name)};
+  const context={exports:{} as {SeriesFocus:new()=>{attach:(panel:unknown,phase:unknown)=>()=>void;get:()=>string|null;refresh:()=>void;reset:()=>void;subscribe:(run:()=>void)=>()=>void}},Element:Button,require:()=>({}),
+    queueMicrotask:(run:()=>void)=>microtasks.push(run),setTimeout:(run:()=>void)=>{timers.set(1,run);return 1;},clearTimeout:(id:number)=>timers.delete(id),
+    addEventListener:(name:string,run:(event:any)=>void)=>globalEvents.set(name,run),removeEventListener:(name:string)=>globalEvents.delete(name),
+    MutationObserver:class{constructor(run:()=>void){changed=run;}observe(){observing=true;}disconnect(){observing=false;}}};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/seriesFocus.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
-  context.exports.useSeriesFocus({current:root});
+  const controller=new context.exports.SeriesFocus(),cleanup=controller.attach(root,{active:()=>active,shifting:()=>shift,onPhase:(run:()=>void)=>{phase=run;return()=>{};}}),changes:(string|null)[]=[];
+  controller.subscribe(()=>changes.push(controller.get()));
   const a=new Button('source@window'),b=new Button('Group 😀'),muted=new Button('muted');muted.pressed='false';
   const send=(type:string,target:Button|null,relatedTarget:Button|null=null,pointerType='mouse')=>events.get(type)!({type,target,relatedTarget,pointerType});
   const plans=planRenderer.exports.paint([{key:'source@resetHour',lines:[a.dataset.seriesKey,b.dataset.seriesKey]},{key:'other@resetHour',lines:['other@weekly']}],['M0,0L10,10','M0,10L10,0']).children[0];
   const focus=(plan:typeof plans[number])=>Math.max(...[...plan.props.style['--series-focus'].matchAll(/var\((--series-[\w-]+)/g)].map(([,key])=>Number(properties.get(key)??properties.get('--chart-focus')??1)));
-  send('pointerover',a);assert.equal(properties.get('--chart-focus'),'.25');assert.equal(properties.size,2);
-  assert.equal(focus(plans[0]),1,'the selected line retains its associated plan despite a different reset identity');assert.equal(focus(plans[1]),.25);
-  const previous=writes;send('pointerover',a);send('pointerout',a,a);refresh();assert.equal(writes,previous,'moving within an entry does no paint work');
-  send('focusin',b);assert.equal(writes,previous,'hover wins over a different focused legend item');
-  send('pointerout',a);assert.ok([...properties.keys()].some(key=>key.startsWith('--series-47-')),'keyboard focus remains after the pointer leaves');
-  assert.equal(focus(plans[0]),1,'a shared plan follows either associated line under keyboard focus');assert.equal(focus(plans[1]),.25);
-  assert.deepEqual(plans.map(plan=>plan.props.d),['M0,0L10,10','M0,10L10,0'],'focusing the legend does not rebuild plan geometry');
-  send('focusout',b);assert.equal(properties.size,0);
-  send('pointerover',muted);assert.equal(properties.size,0,'a switched-off line cannot dim the visible lines');
-  send('pointerover',a,null,'touch');assert.equal(properties.size,0,'touch keeps the existing visibility gesture');
-  send('pointerover',a);a.pressed='false';refresh();assert.equal(properties.size,0,'a visibility change clears stale paint state');
-  a.pressed='true';refresh();assert.equal(properties.size,2);a.attached=false;refresh();assert.equal(properties.size,0,'removed selections do not dim replacements');
-  send('pointerover',b);cleanup();assert.equal(properties.size,0);assert.equal(events.size,0);
-  assert.notDeepEqual(seriesFocusStyle('a:b'),seriesFocusStyle('ab'),'series variables retain identity');
+  send('pointerover',a);assert.equal(controller.get(),a.dataset.seriesKey);assert.equal(properties.get('--chart-focus'),'.25');assert.equal(properties.size,2);
+  assert.equal(focus(plans[0]),1);assert.equal(focus(plans[1]),.25);
+  const previous=writes;send('pointerover',a);send('pointerout',a,a);controller.refresh();assert.equal(writes,previous);
+  send('focusin',b);assert.equal(writes,previous,'pointer priority also selects the numerical context');
+  send('pointerout',a);assert.equal(controller.get(),b.dataset.seriesKey);assert.equal(focus(plans[0]),1);
+  send('focusout',b);assert.equal(controller.get(),null);
+  send('pointerover',muted);assert.equal(properties.size,0);
+  send('pointerover',a);a.pressed='false';controller.refresh();assert.equal(controller.get(),null);
+  a.pressed='true';controller.refresh();assert.equal(properties.size,2);a.attached=false;controller.refresh();assert.equal(properties.size,0);
+  send('pointerover',b);globalEvents.get('keydown')!({key:'Escape'});assert.equal(controller.get(),null);controller.refresh();assert.equal(controller.get(),null,'Escape holds until a new entry or focus');
+  send('pointerout',b);send('focusin',b);assert.equal(controller.get(),b.dataset.seriesKey);
+  shift=true;phase();assert.equal(controller.get(),null);shift=false;active=1;phase();assert.equal(controller.get(),null);active=null;phase();assert.equal(controller.get(),b.dataset.seriesKey);
+  active=1;phase();folding=true;active=null;phase();assert.equal(controller.get(),null,'the completed gesture still suppresses its final fold');
+  folding=false;changed();assert.equal(controller.get(),b.dataset.seriesKey,'the DOM fold completion restores an existing keyboard context');
+  controller.reset();send('pointerup',b,null,'touch');globalEvents.get('click')!({target:b});microtasks.splice(0).forEach(run=>run());assert.equal(controller.get(),b.dataset.seriesKey);assert.equal(timers.size,1);
+  globalEvents.get('pointerdown')!({target:a});assert.equal(controller.get(),null);assert.equal(timers.size,0);
+  send('pointerup',muted,null,'touch');globalEvents.get('click')!({target:muted});microtasks.splice(0).forEach(run=>run());assert.equal(controller.get(),null);
+  send('pointerup',b,null,'touch');globalEvents.get('click')!({target:b});microtasks.splice(0).forEach(run=>run());timers.get(1)!();assert.equal(controller.get(),null);
+  assert.ok(changes.length>5);cleanup();assert.equal(properties.size,0);assert.equal(events.size,0);assert.equal(globalEvents.size,0);assert.equal(observing,false);
+  assert.notDeepEqual(seriesFocusStyle('a:b'),seriesFocusStyle('ab'));
 });
 
 test('focus styles reuse immutable values without encoding retained keys and keep bounded recent identities',()=>{

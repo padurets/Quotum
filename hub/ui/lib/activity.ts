@@ -74,12 +74,5 @@ export function activityEmpty(history: Pick<History, 'since' | 'activity'> | nul
  */
 export const mutedKey = (by: ActivityDimension, key: string) => `activity:${by}:${key}`;
 
-/** Agent time still shown after switching groups off, in all and by bar. */
-export function shownActivity(groups: readonly ActivityGroup[]) {
-  const cells = new Map<number, number>();
-  for (const group of groups) for (const [at, ms] of group.cells) cells.set(at, (cells.get(at) ?? 0) + ms);
-  return {agentMs: groups.reduce((sum, group) => sum + group.agentMs, 0), cells};
-}
-
 /** The mean number of agents working while any worked, rounded only for display. */
 export const atOnce = (agentMs: number, activeMs: number) => num(activeMs > 0 ? agentMs / activeMs : 0, 1);

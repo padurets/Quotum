@@ -50,6 +50,21 @@ export const ANALYTICS_SCENES=[
   {id:'empty',expect:['pending-empty','explicit-empty','sticky-placement']},
 ] as const;
 
+/** In analytics, filter a project, then toggle a different legend entry. The selected
+ * summary and its four quantities occupy the same area as pointer/keyboard previews.
+ * Toggle every entry off, then restore one. Money provenance uses its heading area.
+ * Pending/error/generation races are held by ui/test/activitySelection.test.ts;
+ * the rendered numerical states and these codes by ui/test/activityNumbers.test.ts.
+ */
+export const CHART_SERIES_SCENES=[
+  {id:'enabled-subset',expect:['selected-summary','exact-union','distinct-sessions']},
+  {id:'all-muted',expect:['no-selected-series']},
+  {id:'legend-context',expect:['one-group-preview','pending-without-wider-totals'],look:[
+    'On the analytics board, point to one visible project while keyboard focus remains on another. The four metrics directly below the heading and the highlight follow the pointer, without a separate project-name row; each button retains its own accessible description.',
+    'Check long names, narrow and manually sized widgets in English and Russian: previews preserve the plot and widget geometry. Monetary details appear above the plot; limit charts have no empty strip.',
+  ]},
+] as const;
+
 /** The same activity fixture can be viewed in the past without changing current status.
  * Pending/error retention, cursor races and bounded large rosters are held by
  * server/test/periodRead.test.ts and ui/test/period.test.ts.
