@@ -55,7 +55,8 @@ export class WorkCalendar {
   tick(now:number,checkZone=false){
     if(!this.visible)return false;
     const old=this.state,range=evaluatedRange(this.selection,now),zone=checkZone?calendarZone():old.window.zone;
-    const step=old.window.edges[1]-old.window.edges[0],moved=this.selection.mode==='live'&&Math.floor(range.from/step)!==Math.floor(old.window.range.from/step);
+    // Fine cells follow accepted evidence; only civil edges and actual expiry wake the frame.
+    const advance=this.selection.mode==='live'?Math.min(old.window.dayEdges.at(-1)!,old.window.dayEdges[1]+this.selection.periodMs):Infinity,moved=now>=advance;
     const invalid=!!old.basis&&now<old.basis.evidenceCut,expired=old.value?.cells.some(c=>c.agentMs!==null&&c.validUntil!==null&&now>=c.validUntil);
     if(!moved&&!invalid&&!expired&&zone===old.window.zone)return false;
     const window=calendarWindow(now,zone,this.selection),partition=zone!==old.window.zone||window.edges[0]!==old.window.edges[0]||window.edges.at(-1)!==old.window.edges.at(-1);
@@ -74,8 +75,8 @@ export class WorkCalendar {
   }
   nextAt(now:number){
     if(!this.visible)return Infinity;
-    const {value,window}=this.state,step=window.edges[1]-window.edges[0];
-    const advance=this.selection.mode==='live'&&value?(Math.floor((now-this.selection.periodMs)/step)+1)*step+this.selection.periodMs:Infinity;
+    const {value,window}=this.state;
+    const advance=this.selection.mode==='live'?Math.min(window.dayEdges.at(-1)!,window.dayEdges[1]+this.selection.periodMs):Infinity;
     return Math.min(advance,...(value?.cells.flatMap(c=>c.agentMs!==null&&c.validUntil!==null&&c.validUntil>now?[c.validUntil]:[])??[]));
   }
   dirty(){if(this.visible&&!this.limited){this.needed=true;return true;}return false;}

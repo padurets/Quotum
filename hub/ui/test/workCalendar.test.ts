@@ -77,3 +77,10 @@ test('moving live boundaries expire positive evidence without demand or a clock 
 test('a repeated half-hour keeps its own hourly lane and actual clock label',()=>{
   const r=reading(Date.parse('2026-03-29T13:00Z'),Date.parse('2026-04-12T13:30Z'),'Australia/Lord_Howe'),l=heatmapLayout(r,1138,'matrix','en'),day=l.cells.filter(c=>c.date==='2026-04-05');assert.equal(day.reduce((n,c)=>n+c.cell.agentMs!,0),24.5*H);assert.equal(day.filter(c=>c.repeated).length,2);assert.ok(l.labels.some(label=>label.text==='01:30'));
 });
+
+test('an idle heatmap does not rebuild its evidence frame at every minute',()=>{
+  const at=Date.UTC(2026,9,20,12,10),c=new WorkCalendar();c.configure(true,'a',at,false,{mode:'live',periodMs:H});const window=c.state.window,range=window.range;
+  const cells=drain(calendarCells([],window.edges,window.edges.slice(1).map((_,i)=>i),at,range.from,range.from,90*DAY,range,H)).map(([,cell])=>cell);
+  c.receive({state:'complete',basis:{run:'r',revision:'1',evaluatedAt:at,evidenceCut:at,range,calendarKey:'k',filterKey:'f',workAuthority:'a'},value:{zone:window.zone,edges:window.edges,cells,availableFrom:range.from,retainedFrom:range.from,cursor:'c'}},c.generation,()=>true);
+  const before=c.get();assert.equal(c.tick(at+2*M),false);assert.equal(c.get(),before);assert.ok(c.nextAt(at)>at+2*M);assert.equal(c.demand(),undefined);
+});

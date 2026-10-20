@@ -656,7 +656,9 @@ Null means unavailable history; an available zero means no registered work.
 Partial bounds do not prove complete observation. Positive totals expire when
 retention or a moving live boundary can reduce their included durations. The
 shared clock removes expired evidence and advances presentation without HTTP
-polling. Work, authority and reconnect events refresh the projection; pure
+polling. Fine interval frames remain at their accepted evidence until a refresh,
+civil-date change or actual expiry; idle minutes alone do not rebuild data.
+Work, authority and reconnect events refresh the projection; pure
 financial news does not. Hiding the widget removes its demand.
 
 Short periods use a chronological strip. Several dates use date rows and clock
