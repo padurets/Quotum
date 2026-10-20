@@ -12,10 +12,11 @@ import {historyPoolReceiptScript} from './historyPoolReceipt';
 import {ScriptBinding} from './scriptBinding';
 import {clientIdentity} from './evidence';
 import {deadline} from './deadline';
+import {periodBodyDiagnostic} from './requests';
 
 const DAY = 86_400_000;
 type ResourceRead={scope?:PeriodScope;selection:string;from:number;to:number;cell:number;answer?:Pick<HistoryAnswer,'run'|'now'|'known'>;chunks?:[number,number][]};
-type RequestDiagnostic={selection?:{mode:'live';periodMs:number}|{mode:'range';from:number;to:number};evaluatedAt?:number;sections:{scope:PeriodScope;from:number;to:number;cell:number;cells:'skip'|'read';evidence:'skip'|'cursor'|'baseline'}[];values:number;sessions:boolean;calendar?:boolean};
+type RequestDiagnostic={selection?:{mode:'live';periodMs:number}|{mode:'range';from:number;to:number};evaluatedAt?:number;sections:{scope:PeriodScope;from:number;to:number;cell:number;cells:'skip'|'read';evidence:'skip'|'cursor'|'baseline'}[];values:number;sessions:boolean;sessionsCursor?:boolean;sourceWork?:boolean;sourceWorkCursor?:boolean;calendar?:boolean;calendarCursor?:boolean};
 type Read = {requestBytes?:number;errorCode?:'history_limit'|'too_large'|'other'|'unavailable';httpStatus?:number;endpoint?:'history'|'period'|'period/sessions';stage?:string;diagnostic?:RequestDiagnostic;sections?:ResourceRead[];request?:Promise<void>;selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
 const lowerHeaders = (headers: Record<string, string>) => Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
 let pageSerial = 0;
@@ -69,12 +70,18 @@ export class HistoryBodies {
   readonly errors: unknown[] = [];
   private readonly active = new Map<string, Read>();
   private readonly metadata = new Map<string, HistoryBasis>();
+  private readonly rawBodies=new Map<Read,Buffer>();
+  private readonly bodyDiagnostics=new Map<Read,ReturnType<typeof periodBodyDiagnostic>>();
+  private bodyBytes=0;
+  private bodyOmitted=0;
   get activeCount() {return this.active.size;}
   get resources():Read[] {return this.reads.flatMap(read=>read.sections?read.sections.map(section=>({...read,...section})):read.cell>0?[read]:[]);}
   /** Only request shape and body counts: identities, cursors and response contents stay private. */
   diagnostic(phase:string){
     const reads=this.reads.filter(read=>read.phase===phase);
-    return {attempts:reads.length,omitted:Math.max(0,reads.length-64),reads:reads.slice(0,64).map(read=>({...read.attemptId&&/^b\d+:\d+$/.test(read.attemptId)?{attemptId:read.attemptId}:{},stage:read.stage,endpoint:read.endpoint,request:read.diagnostic,requestBytes:read.requestBytes??null,errorCode:read.errorCode??null,httpStatus:read.httpStatus??null,canceled:read.canceled??false,complete:read.count?.complete??false,decoded:read.count?.decoded,encodedLower:read.count?.lower,encodedUpper:read.count?.upper}))};
+    // The phase's original traffic verdict is frozen before diagnostics consume bodies.
+    for(const read of reads){const raw=this.rawBodies.get(read);if(raw){this.bodyDiagnostics.set(read,periodBodyDiagnostic(raw));this.bodyBytes-=raw.length;this.rawBodies.delete(read);}}
+    return {attempts:reads.length,omitted:Math.max(0,reads.length-64),bodyOmitted:this.bodyOmitted,reads:reads.slice(0,64).map(read=>({...read.attemptId&&/^b\d+:\d+$/.test(read.attemptId)?{attemptId:read.attemptId}:{},stage:read.stage,endpoint:read.endpoint,request:read.diagnostic,requestBytes:read.requestBytes??null,errorCode:read.errorCode??null,httpStatus:read.httpStatus??null,canceled:read.canceled??false,complete:read.count?.complete??false,decoded:read.count?.decoded,encodedLower:read.count?.lower,encodedUpper:read.count?.upper,body:this.bodyDiagnostics.get(read)??null}))};
   }
   constructor(cdp: Pick<Cdp, 'on' | 'send'>) {
     cdp.on<{requestId: string; request: {url: string;postData?:string; headers?: Record<string, string>}}>('Network.requestWillBeSent', event => {
@@ -87,7 +94,7 @@ export class HistoryBodies {
           read.requestBytes=Buffer.byteLength(postData);
           const body=JSON.parse(postData) as PeriodRequest;
           const selection=body.selection;
-          read.diagnostic={...(selection?{selection:selection.mode==='live'?{mode:'live',periodMs:Number(selection.periodMs)}:{mode:'range',from:Number(selection.from),to:Number(selection.to)}}:{}),evaluatedAt:Number(body.evaluatedAt),sections:PERIOD_SCOPES.flatMap(scope=>{const query=body[scope];return query?[{scope,from:Number(query.from),to:Number(query.to),cell:Number(query.cell),cells:query.cells==='skip'?'skip' as const:'read' as const,evidence:query.evidence==='skip'?'skip' as const:query.evidence?'cursor' as const:'baseline' as const}]:[];}),values:body.values?.length??0,sessions:!!body.sessions,calendar:!!body.calendar};
+          read.diagnostic={...(selection?{selection:selection.mode==='live'?{mode:'live',periodMs:Number(selection.periodMs)}:{mode:'range',from:Number(selection.from),to:Number(selection.to)}}:{}),evaluatedAt:Number(body.evaluatedAt),sections:PERIOD_SCOPES.flatMap(scope=>{const query=body[scope];return query?[{scope,from:Number(query.from),to:Number(query.to),cell:Number(query.cell),cells:query.cells==='skip'?'skip' as const:'read' as const,evidence:query.evidence==='skip'?'skip' as const:query.evidence?'cursor' as const:'baseline' as const}]:[];}),values:body.values?.length??0,sessions:!!body.sessions,sessionsCursor:!!body.sessions?.cursor,sourceWork:!!body.sourceWork,sourceWorkCursor:!!body.sourceWork?.cursor,calendar:!!body.calendar,calendarCursor:!!body.calendar?.cursor};
           for(const scope of PERIOD_SCOPES)if(body[scope]&&body[scope]!.cells!=='skip'){const query=new URL('/api/history',url);query.search=new URLSearchParams({board:decodeURIComponent(url.pathname.split('/')[3]),scope:scope==='funds'?'budget':scope,...body[scope]}).toString();read.sections!.push({scope,selection:historyReadSelection(query),from:Number(body[scope]!.from),to:Number(body[scope]!.to),cell:Number(body[scope]!.cell)});}
           if(read.sections![0])Object.assign(read,read.sections![0]);
         };
@@ -141,6 +148,10 @@ export class HistoryBodies {
         }
         if(read.sections?.[0])Object.assign(read,read.sections[0]);
         read.count = {complete: true, decoded: decoded.length, lower: read.length ?? NaN, upper: read.length, length: read.length, coding: read.coding, id: read.attemptId ?? read.transferId, responseId: read.transferId};
+        if(read.phase.endsWith('/cold')&&read.endpoint==='period'&&read.sections?.length===0){
+          if(decoded.length<=1024*1024&&this.rawBodies.size<8&&this.bodyBytes+decoded.length<=8*1024*1024){this.rawBodies.set(read,decoded);this.bodyBytes+=decoded.length;}
+          else this.bodyOmitted++;
+        }
       }).catch(error => {this.errors.push(error); read.count = {complete: false, lower: read.lower, upper: read.length, length: read.length, coding: read.coding, id: read.attemptId ?? read.transferId, responseId: read.transferId};});
       this.pending.add(work); void work.then(() => this.pending.delete(work));
     });

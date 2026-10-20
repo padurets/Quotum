@@ -140,7 +140,15 @@ test('failed cold cohorts retain original wire sizes and section errors without 
     assert.deepEqual(observer.errors,[]);assert.equal(observer.reads[0].count?.complete,true);
     assert.equal(observer.reads[0].count?.decoded,Buffer.byteLength(answer));assert.equal(observer.reads[0].count?.lower,40);
     assert.equal(sends,1,'body accounting makes no additional renderer command');
-    assert.doesNotMatch(JSON.stringify(observer.diagnostic(phase)),/private-canary/);
+    const diagnostic=observer.diagnostic(phase),body=diagnostic.reads[0].body;
+    assert.doesNotMatch(JSON.stringify(diagnostic),/private-canary/);
+    assert.equal(diagnostic.bodyOmitted,0);
+    if(phase.endsWith('/cold')){
+      assert.ok(body);assert.equal(body.partition,Buffer.byteLength(answer));
+      assert.deepEqual(body.sectionStates.values,{state:'complete',arrays:{values:69}});
+      assert.deepEqual(body.sectionStates.sessions,{state:'complete',arrays:{refs:0}});
+      assert.equal(body.headerBytes,null);assert.deepEqual(observer.diagnostic(phase),diagnostic,'partition is retained after raw bytes are released');
+    }else assert.equal(body,null);
   }
   assert.equal(compactJSON(reply),original,'observing the wire cannot mutate retained evidence');
   const listeners=new Map<string,(event:never)=>void>();let sends=0;
@@ -152,6 +160,13 @@ test('failed cold cohorts retain original wire sizes and section errors without 
   emit('Network.loadingFinished',{requestId:'64'});await Promise.all([...observer.pending]);
   assert.equal(observer.reads[64].count?.complete,true);
   assert.equal(observer.diagnostic(observer.phase).omitted,1);assert.equal(observer.diagnostic(observer.phase).reads.length,64);assert.equal(sends,1);
+  for(let i=0;i<9;i++){
+    emit('Network.requestWillBeSent',{requestId:'cap'+i,request:{url:'http://localhost/api/boards/private-canary/period',postData:JSON.stringify(request)}});
+    emit('Network.responseReceived',{requestId:'cap'+i,response:{status:200,headers:{'Content-Encoding':'br','Content-Length':'40'}}});
+    emit('Network.loadingFinished',{requestId:'cap'+i});await Promise.all([...observer.pending]);
+  }
+  assert.equal(observer.diagnostic(observer.phase).bodyOmitted,1,'raw-body cap is explicit without altering physical reads');
+  assert.equal(observer.reads.filter(read=>read.count?.complete).length,10);assert.equal(sends,10);
 });
 
 test('native history setup rejects a covered point or a different chart without moving its point', async () => {
@@ -530,7 +545,7 @@ test('warm failure diagnostics distinguish exact reads and gesture stages withou
   const diagnostic=observer.diagnostic('warm');
   assert.equal(diagnostic.attempts,2);assert.equal(diagnostic.omitted,0);
   assert.deepEqual(diagnostic.reads[0],{stage:'cached return',endpoint:'period',request:{selection:{mode:'live',periodMs:30*86_400_000},evaluatedAt:900,
-    sections:[{scope:'quota',cell:1,from:0,to:60,cells:'skip',evidence:'cursor'},{scope:'funds',cell:1,from:0,to:60,cells:'read',evidence:'skip'}],values:1,sessions:true,calendar:true},requestBytes:Buffer.byteLength(postData),errorCode:null,httpStatus:null,canceled:true,complete:false,decoded:undefined,encodedLower:123,encodedUpper:undefined});
+    sections:[{scope:'quota',cell:1,from:0,to:60,cells:'skip',evidence:'cursor'},{scope:'funds',cell:1,from:0,to:60,cells:'read',evidence:'skip'}],values:1,sessions:true,sessionsCursor:true,sourceWork:false,sourceWorkCursor:false,calendar:true,calendarCursor:true},requestBytes:Buffer.byteLength(postData),errorCode:null,httpStatus:null,canceled:true,complete:false,decoded:undefined,encodedLower:123,encodedUpper:undefined,body:null});
   assert.equal(diagnostic.reads[1].stage,'cached repeat');assert.equal(diagnostic.reads[1].endpoint,'period/sessions');
   assert.deepEqual(diagnostic.reads[1].request?.selection,{mode:'range',from:10,to:20});
   assert.equal(JSON.stringify(diagnostic).includes('private'),false);

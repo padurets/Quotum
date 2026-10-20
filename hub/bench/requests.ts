@@ -6,6 +6,28 @@ import {PERIOD_SCOPES,type PeriodRequest} from '../server/domain/periodRead';
 const ASKED=new Set(['Fetch','XHR','EventSource','Document']);
 type TrafficRead={endpoint:'history'|'period'|'period/sessions';requestBytes:number|null;request:unknown;complete:boolean;encodedTotal?:number;encodedBodyLower:number;decodedObserved:number;contentLength?:number;coding:string;httpStatus?:number};
 
+/** Exact decoded-wire partition, with only fixed names, states and counts exported. */
+export function periodBodyDiagnostic(bytes:Buffer) {
+  try{
+    if(bytes.length>1024*1024)return;
+    const text=bytes.toString(),raw=JSON.parse(text) as Record<string,unknown>;
+    const serialize=compactJSON(raw)===text?compactJSON:JSON.stringify(raw)===text?JSON.stringify:null;
+    if(!serialize||!raw||Array.isArray(raw)||typeof raw!=='object')return;
+    const allowed=new Set(['basis',...PERIOD_SCOPES,'values','sessions','facets','sourceWork','calendar','moneySemantics','rateLegs']);
+    const sections:Record<string,number>={},sectionStates:Record<string,{state:string|null;arrays:Record<string,number>}>={},unknown={count:0,bytes:0};let framing=2;
+    for(const [key,value]of Object.entries(raw)){
+      const size=Buffer.byteLength(serialize(value));framing+=Buffer.byteLength(JSON.stringify(key))+1;
+      if(allowed.has(key)){sections[key]=size;const part=value as {state?:unknown;value?:Record<string,unknown>}|null;
+        sectionStates[key]={state:part&&['complete','delta','error'].includes(String(part.state))?String(part.state):null,
+          arrays:{...(Array.isArray(part?.value)?{values:part.value.length}:{}),...Object.fromEntries(['chunks','patch','updates','cells','refs','rows','values','sources','patterns'].flatMap(name=>Array.isArray(part?.value?.[name])?[[name,(part.value[name] as unknown[]).length]]:[]))}};
+      }else{unknown.count++;unknown.bytes+=size;}
+    }
+    framing+=Math.max(0,Object.keys(raw).length-1);
+    const partition=framing+unknown.bytes+Object.values(sections).reduce((sum,size)=>sum+size,0);
+    if(partition===bytes.length)return {decodedBytes:bytes.length,sections,sectionStates,unknown,framing,partition,headerBytes:null};
+  }catch{/* Unavailable or noncanonical bodies cannot provide an exact partition. */}
+}
+
 /** Counts what the page asks the hub while `counting`: the stream of events it opened before is not asked again, one opened meanwhile is. */
 export class Requests {
   counting = false;
@@ -66,22 +88,8 @@ export class Requests {
     try{
       const [requestId]=this.traffic.keys(),reply=await cdp.send<{body:string;base64Encoded:boolean}>('Network.getResponseBody',{requestId});
       const bytes=reply.base64Encoded?Buffer.from(reply.body,'base64'):Buffer.from(reply.body);
-      if(bytes.length>1024*1024)return {...metadata,status:'insufficient-evidence'};
-      const text=bytes.toString(),raw=JSON.parse(text) as Record<string,unknown>;
-      const serialize=compactJSON(raw)===text?compactJSON:JSON.stringify(raw)===text?JSON.stringify:null;
-      if(!serialize||!raw||Array.isArray(raw)||typeof raw!=='object')return {...metadata,status:'insufficient-evidence'};
-      const allowed=new Set(['basis',...PERIOD_SCOPES,'values','sessions','facets','sourceWork','calendar','moneySemantics','rateLegs']);
-      const sections:Record<string,number>={},sectionStates:Record<string,{state:string|null;arrays:Record<string,number>}>={},unknown={count:0,bytes:0};let framing=2;
-      for(const [key,value]of Object.entries(raw)){
-        const size=Buffer.byteLength(serialize(value));framing+=Buffer.byteLength(JSON.stringify(key))+1;
-        if(allowed.has(key)){sections[key]=size;const part=value as {state?:unknown;value?:Record<string,unknown>}|null;
-          sectionStates[key]={state:part&&['complete','delta','error'].includes(String(part.state))?String(part.state):null,
-            arrays:Object.fromEntries(['chunks','patch','updates','cells','refs','rows','values','sources','patterns'].flatMap(name=>Array.isArray(part?.value?.[name])?[[name,(part.value[name] as unknown[]).length]]:[]))};
-        }else{unknown.count++;unknown.bytes+=size;}
-      }
-      framing+=Math.max(0,Object.keys(raw).length-1);
-      const partition=framing+unknown.bytes+Object.values(sections).reduce((sum,size)=>sum+size,0);
-      return {...metadata,status:partition===bytes.length?'complete':'insufficient-evidence',body:{decodedBytes:bytes.length,sections,sectionStates,unknown,framing,partition,headerBytes:null}};
+      const body=periodBodyDiagnostic(bytes);
+      return body?{...metadata,status:'complete',body}:{...metadata,status:'insufficient-evidence'};
     }catch{return {...metadata,status:'insufficient-evidence'};}
   }
 }

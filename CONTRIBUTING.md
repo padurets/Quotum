@@ -89,6 +89,8 @@ three work verdicts, at most three response-body reads partition the decoded JSO
 exact section sizes and retain fixed section states and array counts. Passing replies
 remain available for comparison with intermittent overruns; original transferred-byte
 limits remain unchanged.
+History traffic also partitions its existing metadata-only cold replies after the
+original verdict, retaining at most eight bodies of 1 MiB each and reporting omissions.
 Native outliers retain their wheel, drag or return origin and the final sample's
 running and moving chart masks, with bits ordered quota, activity, budget, funds,
 session. These masks do not describe the whole measured interval.
