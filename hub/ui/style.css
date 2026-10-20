@@ -945,9 +945,9 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 
-html:has(.compact) { scrollbar-gutter: auto; }
-html:has(.compact.is-native) { background: transparent; }
-body:has(.compact)::before, body:has(.compact)::after { display: none; }
+html[data-compact] { scrollbar-gutter: auto; }
+html:root[data-compact="native"] { background: transparent; }
+:where(html)[data-compact] body::before, :where(html)[data-compact] body::after { display: none; }
 .compact { padding: 10px; min-width: 0; border-radius: var(--popup-radius); background-color: var(--surface); }
 .compact > header { display: flex; align-items: center; gap: 8px; padding: 2px 2px 8px; }
 .compact h1 { font-size: 15px; margin: 0; flex: 1; }
