@@ -568,15 +568,15 @@ td.muted, small.muted { color: var(--text-3); }
 .period-name svg { flex-shrink: 0; }
 
 /* Under its chart, as on either chart. */
-.legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 12px 0 0; }
-.legend-item { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; border: 0; background: none; font-size: 12.5px; color: var(--text-2); text-align: left; opacity: calc(var(--series-focus, 1) * var(--legend-opacity, 1)); transition: opacity .15s; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 12px 0 0; font-size: 12.5px; }
+.legend-item { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; border: 0; background: none; font-size: inherit; color: var(--text-2); text-align: left; opacity: calc(var(--series-focus, 1) * var(--legend-opacity, 1)); transition: opacity .15s; }
 /* A long name (a project's path) breaks anywhere rather than widening the row; its value stays whole. */
 .legend-item span { min-width: 0; overflow-wrap: anywhere; }
 .legend-item b { color: var(--text); font-weight: 500; white-space: nowrap; }
 .series-focus { opacity: var(--series-focus, 1); }
 .legend-item[aria-pressed=false] { --legend-opacity: .35; }
 .legend-item:hover { --legend-opacity: 1; color: var(--text); }
-.legend-empty { font-size: 12.5px; color: var(--text-4); padding: 4px 0; }
+.legend-empty { color: var(--text-4); padding: 4px 0; }
 
 .chart { position: relative; margin-top: 18px; }
 /* Dimmed while the next period loads. Not the chart itself: that would lay its tooltip under the next widget. */
@@ -1296,7 +1296,7 @@ summary.filter-group-heading::-webkit-details-marker { display: none; }
 .calendar-date.is-unavailable .calendar-cell > svg { visibility:hidden; }
 .calendar-date.is-unavailable .calendar-cell::before { content:''; position:absolute; inset:0; border-radius:2px; background:repeating-linear-gradient(135deg,var(--hair),var(--hair) 3px,var(--hair-2) 3px,var(--hair-2) 4px); }
 .calendar-date.is-partial .calendar-cell::after { content:''; position:absolute; right:1px; bottom:1px; border-right:3px solid var(--text-2); border-top:3px solid transparent; }
-.calendar-legend { display:flex; flex-wrap:wrap; align-items:center; gap:5px 10px; margin-top:10px; color:var(--text-3); font-size:10.5px; }
+.calendar-legend { align-items:center; gap:5px 10px; margin-top:10px; color:var(--text-3); }
 .heatmap-unit { margin-right:4px; }
 .heatmap-key { display:flex; align-items:center; gap:4px; white-space:nowrap; }
 .calendar-legend svg { flex-shrink:0; }

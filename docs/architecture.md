@@ -1538,7 +1538,7 @@ caches and selections. The two monetary readers share the budget history protoco
 selected source IDs isolate their invalidations.
 Budget reads never query native quota or agent-work history, and money never enters
 quota forecasts. Legacy unscoped history replies retain their combined contract.
-The optional Agent-hours heatmap shares the common selection and work filters.
+The optional Activity heatmap shares the common selection and work filters.
 The server partitions its exact selected interval into minute or quarter-hour cells
 inside the same period transport. Compact signed demands replace changed intervals
 and share one sparse extraction with other work consumers; they read neither
@@ -1546,6 +1546,8 @@ financial history nor a full session ledger just for the heatmap. Browser geomet
 aggregates those fine cells into a chronological strip, day/hour matrix or compact
 calendar as the duration and width require, without new reads or inner scrolling.
 Its cells fill a manually chosen height while labels and gaps keep their size.
+Its legend inherits the same typography as the other charts and keeps the
+agent-hours unit beside its scale.
 Anonymous aggregate hour patterns share the history budget and preserve exact
 within-cell changes, so cached return and nearby endpoints reuse accepted work
 without rereading it or dividing already aggregated amounts. Work or authority

@@ -594,7 +594,7 @@ const all: DemoSet = {
         'Agent activity over 7 days by project: atlas and harbor on days −5 and −4, harbor again on day −3',
         'Its hour bars stack agent-hours and can stand above an hour; over 30 days the bars are two hours',
         'The legend adds up to 44 agent-hours; atlas has 28 agent-hours and 16 active hours',
-        'The atlas legend bubble shows 28 agent-hours, 16 active hours, 1.8 at once and two agents: hover, Tab or tap; Escape dismisses it even when focus is elsewhere, a tap also switches the group',
+        'The atlas legend bubble shows 28 agent-hours, 16 active hours, 1.8 average parallel sessions and two agents: hover, Tab or tap; Escape dismisses it even when focus is elsewhere, a tap also switches the group',
         'Switch harbor off: stacks and scale shrink, 28h shown appears in the totals and Shown in the bar tooltip; active time, agents and at once keep their values',
         'Over 30 days the first twenty are hatched: not known before',
         'The table, for the weekly window: active time, spent per active hour, the forecast by work and, turned on, the share of spending while active',
@@ -1716,7 +1716,7 @@ const measurementDevices:DemoSet={id:'devices',about:'Measurement participation,
 /** Loading, failure, revocation and midnight expiry are held by workCalendar/periodRead tests. */
 export const CALENDAR_SCENES=[{id:'registered',expect:['common-period','parallel-hours','midnight-split','fixed-opacity','source-free','keyboard-touch','partial-date','day-hour-matrix','minute-detail','compact-calendar','current-period-work']},{id:'empty',expect:['empty-filter','registered-zero']},{id:'unavailable',expect:['unavailable-history']} ] as const;
 const calendar:DemoSet={id:'calendar',about:'Selected-period agent-hours with day/hour and compact calendar views',scene:'quiet',workHistoryMs:90*DAY,entries:[
-  {kind:'person',id:'ana',name:'Ana',expect:[{state:'widgets'}],look:['Agent-hours follows the common period and work filters. Compare day/hour and compact calendar views at 1h, 3d and 30d; inspect or open an interval with pointer, keyboard or touch.']},
+  {kind:'person',id:'ana',name:'Ana',expect:[{state:'widgets'}],look:['Activity heatmap follows the common period and work filters. Compare day/hour and compact calendar views at 1h, 3d and 30d; inspect or open an interval with pointer, keyboard or touch.']},
   {kind:'person',id:'boris',name:'Boris',expect:[{state:'widgets'}],look:['The personal calendar has zero registered work. No available work history is a separate shared board without admitted devices.']},
   {kind:'machine',id:'laptop',person:'ana',expect:[{name:'laptop'}]},
   {kind:'board',id:'team',name:'Registered calendar',owner:'ana',members:['boris'],expect:[{state:'widgets'}]},
