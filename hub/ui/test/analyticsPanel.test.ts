@@ -12,6 +12,14 @@ import {ReadState} from '../components/ReadState';
 import {AnalyticsTable} from '../components/AnalyticsTable';
 import type {History} from '../lib/types';
 
+test('reader affordances use the shared icon geometry in pending, retained and failed states',()=>{
+  for(const state of [{loading:true},{retained:true},{error:'history_failed'},{error:'history_limit'}]){
+    const html=renderToStaticMarkup(React.createElement(ReadState,{...state,retry:()=>{}}));
+    assert.match(html,/class="icon-button"/);
+    assert.doesNotMatch(html,/text-button/,'a text trigger is two pixels taller than the heading icons');
+  }
+});
+
 test('an oversized selected predicate names its recovery without offering an ineffective retry',()=>{
   for(const locale of ['en','ru'] as const){
     i18n.setLocale(locale,false);

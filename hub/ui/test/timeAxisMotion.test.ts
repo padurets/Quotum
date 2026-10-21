@@ -216,3 +216,19 @@ test('the actual last-input RAF uses the gesture CSS scale rather than the mount
   assert.ok(Math.abs(offset - 57) < 1e-9, 'the last 13px input is presented at the actual captured 270px plot width');
   assert.ok(Math.abs(context.pose.current.offset - 57) < 1e-9);
 });
+
+test('committed axis ticks reuse shaped widths across frames and measure only changed glyphs',async()=>{
+  const {tickPresentation}=await import('../lib/axisTicks');let reads=0;
+  const tick=(text:string,x:number)=>({textContent:text,x,style:{visibility:'',transform:''},getAttribute:()=>String(x),getComputedTextLength:()=>{reads++;return 44;}});
+  const ticks=[tick('14 Oct',60),tick('15 Oct',200)];
+  const context={box:{current:{querySelectorAll:()=>ticks}},tickWidths:{current:new WeakMap()},paintTicks:{current:()=>{}},pose:{current:{a:1,b:0,offset:0}},scale:.73,left:48,right:12,width:920,tickPresentation,
+    useLayoutEffect:(run:()=>void)=>run(),measure:null as unknown as ()=>void};
+  const source=readFileSync(new URL('../components/timeAxis.ts',import.meta.url),'utf8'),start=source.indexOf('  useLayoutEffect(() => {\n    // Measure only after DOM commit.');
+  const body=source.slice(start,source.indexOf('\n  return {box, svg',start));
+  runInNewContext(ts.transpileModule('globalThis.measure=()=>{'+body+'};',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+  context.measure();assert.equal(reads,2);assert.equal(ticks[0].style.visibility,'hidden');assert.equal(ticks[1].style.visibility,'');
+  for(let i=0;i<100;i++){context.pose.current.offset=i*.01;context.paintTicks.current();context.measure();}
+  assert.equal(reads,2,'input and ordinary commits never force text layout for retained labels');
+  ticks[0].textContent='16 Oct';context.measure();assert.equal(reads,3);
+  context.tickWidths.current=new WeakMap();context.measure();assert.equal(reads,5,'a font change retires the shaped widths');
+});

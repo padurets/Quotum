@@ -145,12 +145,13 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
           if(!probe.running)return;
           const now=performance.now(),demand=probe.pending.length,layers=owners(),active=!!root.dataset.panEnd,folding=!active&&slides[0].getAnimations().some(a=>a.playState==='running');
           probe.sizeStable&&=connected()&&charts.every((svg,i)=>svg.isConnected&&size(svg)===sizes[i]);
-          const matrices=layers.map((layer,i)=>{const outer=matrixOf(layer.style.transform),inner=matrixOf(folding&&i===0?getComputedStyle(slides[i]).transform:slides[i].style.transform);return {a:inner.a,e:outer.e+inner.e*scales[i]};}),current=active?charts.map((svg,i)=>{const p=presentation(svg,layers[i],i,gesture?.origin);return p.x+':'+p.perMs;}):matrices.map(matrix=>matrix.e+':'+matrix.a);
+          const actual=active?charts.map((svg,i)=>presentation(svg,layers[i],i,gesture?.origin)):null;
+          const current=actual?actual.map(p=>p.x+':'+p.perMs):layers.map((layer,i)=>{const outer=matrixOf(layer.style.transform),inner=matrixOf(folding&&i===0?getComputedStyle(slides[i]).transform:slides[i].style.transform);return (outer.e+inner.e*scales[i])+':'+inner.a;});
           const nextPhase=active?'pan':folding?'fold':'idle';
           // The wheel's intentional 200 ms rest is stationary, before the fold begins.
           if(nextPhase!==phase||active&&paintedToken!==root.dataset.panToken){probe.last=0;lastFrame=null;previous=nextPhase==='pan'&&gesture?gesture.shown.map(p=>p.x+':'+p.perMs):current;phase=nextPhase;paintedToken=root.dataset.panToken;}
           const moved=current.map((value,i)=>value!==previous[i]);
-          if(active){probe.synchronized&&=connected()&&charts.every((svg,i)=>{const shown=gesture?.shown[i],actual=presentation(svg,layers[i],i,gesture?.origin),delta=(Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin));return svg.dataset.panEnd===root.dataset.panEnd&&Math.abs(delta/Number(svg.dataset.panScale)+matrixOf(layers[i].style.transform).e-Number(svg.dataset.panBase||0))<.01&&shown&&Number.isFinite(actual.x)&&Math.abs(actual.perMs*Number(svg.dataset.panScale)-1)<1e-6&&Math.abs(actual.perMs/shown.perMs-1)<1e-6&&Math.abs(actual.x-(shown.x-delta*shown.perMs))<.1;})&&bands.every(layer=>layer.isConnected!==false&&Math.abs(matrixOf(layer.style.transform).e-matrixOf(layers[1].style.transform).e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
+          if(active){probe.synchronized&&=connected()&&charts.every((svg,i)=>{const shown=gesture?.shown[i],p=actual[i],delta=(Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin));return svg.dataset.panEnd===root.dataset.panEnd&&Math.abs(delta/Number(svg.dataset.panScale)+matrixOf(layers[i].style.transform).e-Number(svg.dataset.panBase||0))<.01&&shown&&Number.isFinite(p.x)&&Math.abs(p.perMs*Number(svg.dataset.panScale)-1)<1e-6&&Math.abs(p.perMs/shown.perMs-1)<1e-6&&Math.abs(p.x-(shown.x-delta*shown.perMs))<.1;})&&bands.every(layer=>layer.isConnected!==false&&Math.abs(matrixOf(layer.style.transform).e-matrixOf(layers[1].style.transform).e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
           // Each input reaches all five plots. Activity has no future, so only the
           // remaining-share chart must move during the final future fold.
           if(active&&probe.synchronized&&(moved.every(Boolean)||afterCallback)){
@@ -237,9 +238,11 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       await cdp.evaluate('window.__quotumPan.returnInput={pixels:0,events:0,tokens:[]}');
       await cdp.evaluate('window.__quotumPan.feeding=true');
       const returnPixels = await cdp.evaluate<number>(`(() => {
-        const p=new URLSearchParams(location.search),from=Number(p.get('from')),to=Number(p.get('to'));
-        const svg=document.querySelector('${selector} .chart>svg'),width=svg.getBoundingClientRect().width,box=svg.viewBox.baseVal.width;
-        return (Date.now()-to)/(to-from)*(width*(box-${inset})/box);
+        const to=Number(new URLSearchParams(location.search).get('to'));
+        const svg=document.querySelector('${selector} .chart>svg'),box=svg.viewBox.baseVal.width;
+        const slides=svg.parentElement.querySelector('${initiator==='activity'?'.plot-clip.is-band .slides':'[data-plot-main] .slides'}');
+        const perMs=slides.getScreenCTM().a*(box-${inset})/(Number(svg.dataset.drawTo)-Number(svg.dataset.drawFrom));
+        return (Date.now()-to)*perMs;
       })()`);
       await scroll(-Math.max(0, returnPixels - 4));
       await cdp.evaluate('window.__quotumPan.feeding=false');

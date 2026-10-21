@@ -112,6 +112,13 @@ export function useTimeAxis({
   const wheelBounds = useRef<DOMRect | null>(null);
   const panLayers = useRef<HTMLElement[]>([]);
   const paintTicks = useRef(() => {});
+  const tickWidths=useRef(new WeakMap<SVGTextElement,{text:string;length:number}>());
+  useEffect(()=>{
+    const fonts=document.fonts;
+    const changed=()=>{tickWidths.current=new WeakMap();present(value=>value+1);};
+    fonts.addEventListener('loadingdone',changed);
+    return()=>fonts.removeEventListener('loadingdone',changed);
+  },[]);
   /** Where a drag across the chart started and where it is now, in chart pixels. */
   const [drag, setDrag] = useState<{start: number; end: number} | null>(null);
   /** A finger held on the chart, before it starts a range. */
@@ -494,7 +501,12 @@ export function useTimeAxis({
   useLayoutEffect(() => {
     // Measure only after DOM commit. Native input reuses these widths without
     // reading layout, and hides a whole edge date instead of clipping its digits.
-    const ticks=[...(box.current?.querySelectorAll<SVGTextElement>('.slides text.tick')??[])].map(element=>({element,x:Number(element.getAttribute('x')),length:element.getComputedTextLength()}));
+    const ticks=[...(box.current?.querySelectorAll<SVGTextElement>('.slides text.tick')??[])].map(element=>{
+      const text=element.textContent??'',old=tickWidths.current.get(element);
+      const measured=old?.text===text?old:{text,length:element.getComputedTextLength()};
+      if(measured!==old)tickWidths.current.set(element,measured);
+      return {element,x:Number(element.getAttribute('x')),length:measured.length};
+    });
     paintTicks.current=()=>{
       for(const {element,x,length} of ticks){
         const view=tickPresentation(x,length,pose.current,scale,left,width-right);

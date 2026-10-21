@@ -176,9 +176,13 @@ export async function fixedActivity(browser:Browser,stand:Stand){
           await whileHeld();await cdp.send('Fetch.continueResponse',{requestId:event.requestId}).catch(()=>{});
         }finally{clearTimeout(deadline);await cdp.send('Fetch.disable');cdp.off('Fetch.requestPaused',intercept);}
       };
+      const retained=await sample(),summary=await cdp.evaluate<string[]>(`[...document.querySelectorAll('.activity-totals b')].map(element=>element.textContent)`);
       const during=await phase('news during response',()=>intercepted(async()=>{await actor.through(actor.floorAt+500);},async()=>{
         await actor.through(actor.floorAt+600);await pause(350);
-        assert.equal(await cdp.evaluate('window.__quotumFixedActivity.sample()'),null,'pending news cannot borrow the held summary');
+        const pending=await sample();
+        assert.deepEqual(pending.numbers,retained.numbers,'same-context pending news retains its complete cohort');
+        assert.deepEqual(pending.activity,retained.activity,'cells and all summary quantities retain one complete basis');
+        assert.deepEqual(await cdp.evaluate<string[]>(`[...document.querySelectorAll('.activity-totals b')].map(element=>element.textContent)`),summary,'all four displayed metrics remain coherent');
       }),2);
       assert.ok(during.current.subsetFlights<=1);
       const generations=await phase('cancelled A to B to A',()=>intercepted(async()=>{await cdp.evaluate(`window.__quotumFixedActivity.reader().changed(${actor.floorAt})`);},async()=>{

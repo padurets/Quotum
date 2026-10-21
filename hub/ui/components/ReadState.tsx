@@ -8,7 +8,7 @@ import {Popover} from './Popover';
 export function ReadState({loading=false,error,range,retained=false,retry,children}:{loading?:boolean;error?:string|null;range?:TimeRange|null;retained?:boolean;retry:()=>void;children?:ReactNode}) {
   if(!loading&&!error&&!retained&&!children)return null;
   const label=t(error==='filters_limit'?'api.filters_limit':error==='history_limit'?'period.limit':error?'period.failed':loading?'period.loading':'analytics.details');
-  return <span className="reader-state"><Popover label={label} trigger={<span className={error?'reader-error':'reader-pending'} aria-hidden="true">{error?'!':'○'}</span>} triggerClass="icon-button">
+  return <span className="reader-state"><Popover label={label} icon={<span className={error?'reader-error':'reader-pending'} aria-hidden="true">{error?'!':'○'}</span>}>
     <div className="popover-body">
       {(loading||error)&&<p>{label}</p>}
       {range&&<p>{t('analytics.retainedRange',{range:timeRangeLabel(range)})}</p>}

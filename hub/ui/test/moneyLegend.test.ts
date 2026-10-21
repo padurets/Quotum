@@ -118,9 +118,14 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
       if(phase==='unknown')replaceFirst({end:null,spent:null,coveredMs:0});
       if(phase==='unavailable')replaceFirst({end:'0',spent:null,coveredMs:history!.to-history!.since});
       if(phase==='partial')replaceFirst({spent:'1234',coveredMs:1,unlocated:[]});
-      if(phase==='cap')replaceFirst({kind:'cap',meterId:'key:cap',semantics:{limit:'10000000',resetAt:null,minutes:60,scope:'scope',label:'Cap'},end:'0',spent:null});
+      if(phase==='cap'){
+        const id='key:fixture:cap';
+        sources=sources.map((s,i)=>i?s:{...s,keys:[{id:'fixture',name:'Cap',disabled:false,expiresAt:null,includeByok:false,at:NOW,staleAfterMs:H,presence:'observed',missCount:0,periods:{day:null,week:null,month:null}}],meters:[...s.meters!,{...s.meters![0],id,kind:'cap',limit:'10000000'}]});
+        prefs={...prefs,money:{...prefs.money,selected:{USD:cards.map((c,i)=>[c.id,i?'balance':id])}}};
+        replaceFirst({kind:'cap',meterId:id,semantics:{limit:'10000000',resetAt:null,minutes:60,scope:'scope',label:'Cap'},end:'0',spent:null});
+      }
       if(phase==='hide'){view={...view,hidden:['source:wallet0']};history=null;drawing=null;authority++;}
-      if(phase==='restore'){view=views.EMPTY_VIEW;history=index.project(base,{from:now-H,to:now});drawing=history;authority++;}
+      if(phase==='restore'){view=views.EMPTY_VIEW;prefs={...prefs,money:{...prefs.money,selected:{}}};history=index.project(base,{from:now-H,to:now});drawing=history;authority++;}
       if(phase==='unit')prefs={...prefs,money:{...prefs.money,unit:'EUR'}};
       if(phase==='resetunit')prefs={...prefs,money:{...prefs.money,unit:'USD'}};
       if(phase==='revoke'){history=null;drawing=null;authority++;}

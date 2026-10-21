@@ -358,7 +358,7 @@ body.is-resizing-bottom-right, body.is-resizing-bottom-right * { cursor: nwse-re
 .measurement-details { display: flex; flex-direction: column; gap: 20px; }
 .measurement-proof { display: block; white-space: pre-line; margin-top: 8px; color: var(--text-3); }
 .measurement-details .limit-name { white-space: pre-line; overflow-wrap: anywhere; }
-.money-primary-trigger { display: block; padding: 0; border: 0; background: none; width: 100%; text-align: left; color: inherit; }
+.text-button.money-primary-trigger { display: block; height: auto; padding: 0; border: 0; background: none; width: 100%; text-align: left; color: inherit; }
 .limit-top { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .limit-name { font-size: 13px; color: var(--text-2); padding-bottom: 2px; }
 .limit-value { font-size: 27px; font-weight: 420; letter-spacing: -.04em; line-height: 1; color: var(--text); }
@@ -469,7 +469,7 @@ td.muted, small.muted { color: var(--text-3); }
 .table-preview-content { max-height: calc(var(--row-budget, 100000px) - 22px); overflow: hidden; }
 .table-preview.has-detail > .table-preview-content { padding-right: 22px; }
 .table-preview > .picker { position: absolute; right: 0; top: 0; }
-.table-preview-trigger { border: 0; padding: 0 3px; height: 20px; color: var(--text-2); background: var(--surface); border-radius: 4px; }
+.text-button.table-preview-trigger { border: 0; padding: 0 3px; height: 20px; color: var(--text-2); background: var(--surface); border-radius: 4px; }
 .table-cell-details { white-space: normal; overflow-wrap: anywhere; }
 .table-cell-details .analytics-name { display: block; }
 .reader-state .popover-body { white-space: pre-line; }

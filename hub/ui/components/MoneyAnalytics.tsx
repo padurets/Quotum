@@ -98,8 +98,9 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
   const now=useClock(now=>frameChangesAt(selected,history?.cellMs??60_000,now));
   const frame=frameOf(selected,{range:prefs.range,horizon:prefs.horizon},now,start),measured=measuredTo(frame,history,selected,prefs.range);
   const unit=settings.unit===DEFAULT_CURRENCY?context.target.id:settings.unit??DEFAULT_CURRENCY,symbol=currencySymbol(unit,context);
-  const original=useMemo(()=>history?.meterSeries?.filter(s=>s.unit===unit&&moneyBalanceSeries(s))??[],[history?.meterSeries,unit]);
   const selection=moneySelection(sources,arrange.view.hidden,settings,context,family).selection;
+  const selectionKey=JSON.stringify(selection?.ids??[]);
+  const original=useMemo(()=>history?.meterSeries?.filter(s=>s.unit===unit&&moneyBalanceSeries(s)&&selection?.ids.some(([source,meter])=>source===s.sourceId&&meter===s.meterId))??[],[history?.meterSeries,unit,selectionKey]);
   const focus=useSeriesFocus(panel,JSON.stringify([authority,board,history?.range,unit,selection?.ids]));
   const descriptions=useMemo(()=>original.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId),detail=moneySeriesDetail(s,context);return {key,name:nameOf(s,card?.title??s.sourceId,context,family),detail:detail?[money(s.end,s.unit,true,context),detail].join('\n'):'',muted:isMuted(s)};}),[original,sources,context,family,muted,settings,widget,locale]);
   const noSelection=!(selection?.ids.length);
@@ -110,7 +111,7 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
     let low:bigint|null=null,high:bigint|null=null;
     const plotted=strip?.meterChunks?yield* composeMetersPrepared(strip.meterChunks,strip.cell,strip.from,strip.to,strip.meterFrame):drawing?.meterSeries?.filter(s=>s.unit===unit)??[];
     for(const source of plotted) {
-      if(source.unit!==unit||!moneyBalanceSeries(source))continue;
+      if(source.unit!==unit||!moneyBalanceSeries(source)||!selection?.ids.some(([id,meter])=>id===source.sourceId&&meter===source.meterId))continue;
       const entry=source;
       entries.push(entry);
       if(isMuted(entry))continue;
@@ -147,11 +148,12 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
   },[model,unit,locale,context,strip?.cell,history?.cellMs]);
   const legend=useMemo(()=><div className="legend">{original.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId);return <SeriesLegendItem key={key} seriesKey={key} name={nameOf(s,card?.title??s.sourceId,context,family)} description={descriptions.find(entry=>entry.key===key)?.detail} color={colorOf(arrange.view,s.sourceId,card?.provider??'')} dash={s.kind==='cap'?'7 5':undefined} muted={isMuted(s)} onToggle={()=>setMuted(chartMuteKey(widget,s.sourceId,s.meterId),!isMuted(s))}><b><MoneyLegendAmount value={s.end} unit={s.unit} context={context}/></b></SeriesLegendItem>;})}</div>,[original,sources,context,family,history,arrange.view,muted,settings,widget,locale,authority,board,descriptions]);
   const answered=history?.range===(selected?timeRangeKey(selected):prefs.range);
-  return <AnalyticsPanel ref={panel} className={funds?'subscription-funds':'budget-history'} title={t(funds?'widgets.subscriptionFunds':'widgets.budgetHistory')} chart history={history} loading={loading} error={error} retry={reader.retry} details={details}
+  const emptySelection=noResources||noSelection,settledEmpty=emptySelection&&!loading&&!error;
+  return <AnalyticsPanel ref={panel} className={funds?'subscription-funds':'budget-history'} title={t(funds?'widgets.subscriptionFunds':'widgets.budgetHistory')} chart history={settledEmpty?null:history} loading={loading} error={error} retry={reader.retry} details={details}
     settings={<MoneyChartSettings arrange={arrange} widget={widget} family={family} sources={sources} series={history?.meterSeries??[]}/>}>
 
     <SeriesDetails focus={focus} entries={descriptions} panel={panel}/>
-    <Chart lines={lines} axis={axis} stepped from={frame.from} now={strip?now:measured} to={frame.to} cellMs={strip?.cell??history?.cellMs??60_000} strip={model?.strip??null} prepared={prepared.ready&&(panning!==null||answered||!!error)} empty={error?null:!history?null:noResources?t(funds?'analytics.noFunds':'analytics.noBudget'):noSelection?t('analytics.noSelection'):entries.length&&!lines.length?t('analytics.allMuted'):t('money.unknown')} plot={plot} onBase={onBase} onSelect={setTimeRange} navigation={navigation} live={frame.live} clock={now} modelContext={modelContext}/>
+    <Chart lines={lines} axis={axis} stepped from={frame.from} now={strip?now:measured} to={frame.to} cellMs={strip?.cell??history?.cellMs??60_000} strip={model?.strip??null} prepared={prepared.ready&&(panning!==null||answered||!!error||settledEmpty)} empty={error?null:noResources?t(funds?'analytics.noFunds':'analytics.noBudget'):noSelection?t('analytics.noSelection'):!history?null:entries.length&&!lines.length?t('analytics.allMuted'):t('money.unknown')} plot={plot} onBase={onBase} onSelect={setTimeRange} navigation={navigation} live={frame.live} clock={now} modelContext={modelContext}/>
     {legend}
   </AnalyticsPanel>;
 }
