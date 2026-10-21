@@ -504,7 +504,6 @@ const Stacks = memo(function Stacks({
   const hover = incomingReady && prepared.ready ? axis.hover : null;
   const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
   const {ticks, daily} = niceTicks(tickFrom, tickTo, (narrow ? 4 : 7) * (tickTo - tickFrom) / span);
-  useLayoutEffect(() => {axis.commitDrawing(basis, incomingReady && prepared.ready);});
 
   const innerClip = `${clip}-inner`;
   const bandClip = useRef<HTMLDivElement>(null);
@@ -513,7 +512,6 @@ const Stacks = memo(function Stacks({
   const valueBand=useRef<SVGGElement>(null),valueAxis=useRef<SVGGElement>(null);
   const paintedValue=useRef('');
   const valuePin=useRef<{context:string;range:string;maximum:number}|null>(null);
-  const edgePaint = useRef<(range?:TimeRange,pin?:boolean)=>void>(() => {});
   const painted = useRef('');
   // The prepared paths own their numeric basis. The native painter owns the
   // visible value projection, just as timeAxis owns their horizontal projection.
@@ -548,7 +546,7 @@ const Stacks = memo(function Stacks({
       const bar=plotBar(strip,at,target,by);
       if(bar)maximum=Math.max(maximum,[...bar.groups].reduce((sum,[key,part])=>sum+(groups.some(row=>row.group.key===key)?part.ms:0),0));
     }
-    if(pin||!draft){
+    if(pin||!draft&&(!axis.held||!!forced)){
       const context=`${navigation.context}:${width}:${height}:${valueContext}`,projectionKey=navigationKey(navigationAt(navigation,forced??timeRange()));
       if(pin)valuePin.current={context,range:projectionKey,maximum:activityScale(maximum).max};
       if(valuePin.current?.context!==context||valuePin.current.range!==projectionKey)valuePin.current=null;
@@ -596,14 +594,16 @@ const Stacks = memo(function Stacks({
     }
     edges.current.querySelectorAll('path').forEach((path, i) => {if (path.getAttribute('d') !== paths[i]) path.setAttribute('d', paths[i]);});
   };
-  // Input uses the committed groups while React prepares their replacement.
-  useLayoutEffect(() => {edgePaint.current = paintEdges; painted.current = '';paintedValue.current=''; paintEdges();});
-  useLayoutEffect(() => pan.subscribe(() => edgePaint.current()), []);
-  useLayoutEffect(()=>pan.onStop(stop=>{
-    if(stop.canceled||!stop.changed)return;
-    if(stop.range)edgePaint.current(stop.range,true);
-    else valuePin.current=null;
-  }),[]);
+  // Value projection follows the committed time pose, including the final RAF.
+  // Logical cancellation alone still leaves the previous native pose on screen.
+  useLayoutEffect(() => {
+    painted.current = '';paintedValue.current='';
+    axis.commitDrawing(basis, incomingReady && prepared.ready, stop => {
+      if(stop&&!stop.canceled&&stop.changed&&!stop.range)valuePin.current=null;
+      paintEdges(stop?.range??undefined,!!stop&&!stop.canceled&&stop.changed&&!!stop.range);
+    });
+    if(!axis.held)paintEdges();
+  });
   useEffect(() => {if (!strip) painted.current = '';}, [strip]);
 
   const partialBar = strip && hover !== null ? plotBar(strip, hover, targetOf(strip.length, to, 'hover', {from, to}), by) : null;

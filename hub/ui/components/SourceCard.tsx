@@ -8,7 +8,8 @@ import {timeRangeLabel} from '../lib/timeRange';
 import {PeriodStatus} from './PeriodStatus';
 import {MoneyValues} from './MoneyCard';
 import {useCurrencyContext} from '../lib/board';
-import {keyShown} from '../lib/view';
+import {selectedAllowanceIds} from '../lib/moneySelection';
+import {usePref} from '../lib/prefs';
 import {budgetVisible, subscriptionFundsVisible, historicalCurrencyContext} from '../lib/money';
 import {memo, useEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import type {Card, Win} from '../lib/types';
@@ -507,7 +508,8 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
 
 /** The two inputs are explicit: live operations never masquerade as historical measurements. */
 function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;boardId:string}) {
-  useDataFilters();
+  const filters=useDataFilters().current,moneyPrefs=usePref('money');
+  const allowances=selectedAllowanceIds(source,arrange.view,moneyPrefs.unit??undefined,filters);
   const reading=usePeriodValues(source.id),selected=useTimeRange(),context=useCurrencyContext(source.id);
   const historical=!!selected,value=historical?reading.value:null;
   const historicalContext=value?historicalCurrencyContext(context,source.id,value.meters):context;
@@ -516,11 +518,11 @@ function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;
   const visible=windows.filter(w=>!isWindowHidden(arrange.view,source.id,w.id)),weekly=planOf(arrange.view,source.id),caps=hasSubscriptionCaps(source.provider);
   const primary=primaryQuotaPeriods(shownPeriods);
   const wallet=providerOf(source.provider)?.funding==='wallet';
-  const noEvidence=historical&&!!value&&!reading.loading&&!reading.error&&!windows.length&&!value.meters.length&&value.creditBalance?.status!=='unlimited';
+  const noEvidence=historical&&!!value&&!reading.loading&&!reading.error&&!windows.length&&!value.meters.length&&value.creditBalance?.status!=='unlimited'&&!allowances.length;
   return <MeasurementClock.Provider value={historical?reading.basis?.range.to??selected.to:null}>
     <div className={`limits card-primary${wallet?' is-wallet':''}`}>
       {historical?<>
-        {!caps&&providerOf(source.provider)?.funding==='wallet'&&value&&value.meters.length>0&&<MoneyValues source={value} keys={value.keys.filter(k=>keyShown(arrange.view,source.id,k.id,value.keys))} meters={value.meters} context={historicalContext}/>}
+        {!caps&&wallet&&value&&(value.meters.length>0||allowances.length>0)&&<MoneyValues source={value} keys={[...value.keys,...(source.keys??[]).filter(key=>!value.keys.some(part=>part.id===key.id))]} meters={value.meters} allowances={allowances} context={historicalContext}/>}
       </>:budgetVisible(source)&&wallet&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
       {primary.map(period=>{const w=visible.find(w=>w.id===period.id),measurement=historical?value:source;return w?<Limit key={w.id} w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={weekly}/>:caps&&measurement?<QuotaCard key={period.id} source={measurement} ids={[period.id]}/>:null;})}
       {noEvidence&&<div className="card-empty">{t('period.noEvidence')}</div>}

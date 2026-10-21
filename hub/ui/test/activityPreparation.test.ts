@@ -22,7 +22,7 @@ import {preparationFixture} from './preparationFixture';
 test('the actual activity edge painter advances clipped bars without preparing the interior again', () => {
   const source = readFileSync(new URL('../components/Activity.tsx', import.meta.url), 'utf8');
   const start = source.indexOf('  const paintEdges = (');
-  const region = source.slice(start, source.indexOf('  // Input uses the committed groups', start));
+  const region = source.slice(start, source.indexOf('  // Value projection follows the committed time pose', start));
   const attributes = new Map<string, string>(), path = new Map<string, string>();
   const clips: number[][] = []; let draft: {token: number} | null = null;
   const node = (values: Map<string, string>) => ({getAttribute: (name: string) => values.get(name), setAttribute: (name: string, value: string) => values.set(name, value)});
@@ -257,7 +257,7 @@ test('native Activity value projection excludes a departed peak before release a
     groups:[{group:{key:'s'}}],activity:{by:{source:[]}},currentActivity:{},from:0,to:2*M,barMs:M,by:'source',left:0,right:0,width:120,scale:1,perMs:1/M,x:(at:number)=>at/M,y:(value:number)=>272-value/(12*H)*260,
     cellStart,plotBar,targetOf,clipPlot:()=>{},painted:{current:''},paint:null as unknown as (range?:{from:number;to:number},pin?:boolean)=>void};
   const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8'),start=source.indexOf('  const paintValue=');
-  const body=source.slice(start,source.indexOf('  // Input uses the committed groups',start));
+  const body=source.slice(start,source.indexOf('  // Value projection follows the committed time pose',start));
   runInNewContext(ts.transpileModule(body+'\nglobalThis.paint=paintEdges;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
   context.paint();assert.equal(band.getAttribute('transform'),null,'an overscan peak cannot enlarge the visible scale');
   visualFrom=M;draft={length:2*M};context.paint();assert.match(band.getAttribute('transform')!,/scale\(1 12\)/);

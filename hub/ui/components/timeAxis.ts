@@ -112,6 +112,7 @@ export function useTimeAxis({
   const wheelBounds = useRef<DOMRect | null>(null);
   const panLayers = useRef<HTMLElement[]>([]);
   const paintTicks = useRef(() => {});
+  const paintDrawing = useRef<((stop?: PanStop) => void) | undefined>(undefined);
   // Strips replace nodes; their shared axis font keeps the same shaped glyphs.
   const tickWidths=useRef(new Map<string,number>());
   const tickGlyphs=useRef(new WeakMap<SVGTextElement,{x:number;a:number;transform:string}>());
@@ -212,6 +213,7 @@ export function useTimeAxis({
     for (const layer of panLayers.current) layer.style.transform = pose.current.offset ? `translateX(${pose.current.offset}px)` : '';
     paintTicks.current();
     if (frame) {
+      paintDrawing.current?.();
       element.dataset.panEnd = String(frame.to);
       if (!element.classList.contains('is-panning')) element.classList.add('is-panning');
       element.classList.toggle('is-grabbing', frame.source === source.current && frame.input === 'pointer');
@@ -262,6 +264,7 @@ export function useTimeAxis({
       for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) layer.style.transform = `translateX(${pose.current.b}px) scaleX(${pose.current.a})`;
       for (const layer of panLayers.current) layer.style.transform = pose.current.offset ? `translateX(${pose.current.offset}px)` : '';
       paintTicks.current();
+      paintDrawing.current?.(stop);
       present(value => value + 1);
     });
     captured.current = null;
@@ -459,7 +462,8 @@ export function useTimeAxis({
   };
   useLayoutEffect(publishWanted);
 
-  const commitDrawing = (next: DrawingGeometry, ready: boolean) => {
+  const commitDrawing = (next: DrawingGeometry, ready: boolean, afterPose?: (stop?: PanStop) => void) => {
+    paintDrawing.current = afterPose;
     const before = drawing.current;
     const movedBasis = before.from !== next.from || before.to !== next.to;
     const visual = movedBasis ? visualGeometry() : null;

@@ -1,3 +1,5 @@
+import {defaultFilters} from '../../server/domain/dataFilters';
+import {selectedAllowanceIds} from '../lib/moneySelection';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -10,10 +12,10 @@ import {MAX_METERS} from '../../server/domain/meterHistory';
 function fixture(){
   let cursor=0,ids=['extra-a'],board='one';
   const slots:any[]=[],effects:(()=>void)[]=[],flights:{ids:string[];signal:AbortSignal;resolve:(v:any)=>void;reject:(e:unknown)=>void}[]=[];
-  const source={id:'source',keys:[],meters:[]};
+  const source={id:'source',provider:'openrouter',keys:[],meters:[]};
   const hooks={useState:(initial:any)=>{const at=cursor++;if(!(at in slots))slots[at]=initial;return [slots[at],(next:any)=>slots[at]=typeof next==='function'?next(slots[at]):next];},
     useEffect:(run:()=>void|(()=>void),deps:unknown[])=>{const at=cursor++,previous=slots[at];if(!previous||deps.some((d,i)=>d!==previous.deps[i]))effects.push(()=>{previous?.cleanup?.();slots[at]={deps,cleanup:run()};});}};
-  const modules:Record<string,unknown>={react:hooks,'./dataFilters':{useDataFilters:()=>({current:{}})},'./prefs':{usePref:()=>({})},'../../server/domain/dataFilters':{walletRule:()=>({mode:'only',values:ids.map(key=>({source:source.id,kind:'keyCap',key}))})},'./view':{keyShown:()=>true},'./http':{ApiError},'../../server/domain/meterHistory':{MAX_METERS},'./keyReads':{readKeyIds:(_board:string,_source:string,ids:string[],signal:AbortSignal)=>new Promise((resolve,reject)=>flights.push({ids,signal,resolve,reject}))}};
+  const modules:Record<string,unknown>={react:hooks,'./moneySelection':{selectedAllowanceIds},'./dataFilters':{useDataFilters:()=>({current:{...defaultFilters(),wallet:{mode:'only',values:ids.map(key=>({source:source.id,kind:'keyCap',key}))}}})},'./prefs':{usePref:()=>({})},'../../server/domain/dataFilters':{walletRule:()=>({mode:'only',values:ids.map(key=>({source:source.id,kind:'keyCap',key}))})},'./view':{keyShown:()=>true},'./http':{ApiError},'../../server/domain/meterHistory':{MAX_METERS},'./keyReads':{readKeyIds:(_board:string,_source:string,ids:string[],signal:AbortSignal)=>new Promise((resolve,reject)=>flights.push({ids,signal,resolve,reject}))}};
   const context={exports:{} as typeof import('../lib/moneyKeys'),require:(name:string)=>modules[name],AbortController};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../lib/moneyKeys.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
   const render=(commit=true)=>{cursor=0;const result=context.exports.useShownKeys(source as any,undefined,board);if(commit)effects.splice(0).forEach(run=>run());return result;};

@@ -72,6 +72,7 @@ export class HistoryStore {
   private shownNativeVersion=0;
   private financialVersion=-1;
   private nativePresentation=0;
+  private activityPresentation=0;
   private snapshotEvidence:string|undefined;
   private windowsKey = '';
   private windows = new Set<string>();
@@ -172,6 +173,7 @@ export class HistoryStore {
     this.cancelProjection();
     this.presentation++;
     this.nativePresentation++;
+    this.activityPresentation++;
     this.epoch++;
     this.board = null;
     this.workAuthority = undefined;
@@ -242,7 +244,7 @@ export class HistoryStore {
     const next = new Set(windows);
     const key = keyOf([...next]);
     if (key === this.windowsKey) return;
-    if([...this.windows].some(window=>!next.has(window)))this.retirePresentation();
+    if([...this.windows].some(window=>!next.has(window)))this.retirePresentation('native');
     this.windowsKey = key;
     this.windows = next;
     this.nativeVersion++;
@@ -254,7 +256,7 @@ export class HistoryStore {
 
   setMeters(meters: MeterSelection | undefined) {
     if(JSON.stringify(meters)===JSON.stringify(this.meters))return;
-    this.retirePresentation();
+    this.retirePresentation('native');
     this.meters=meters;
     this.historyLimit=false;this.readError=false;this.activityError=null;this.clear('activityRetry');this.meta=null;this.metaAt=null;
     this.grids.clear();
@@ -270,7 +272,7 @@ export class HistoryStore {
     const available=!filter||executableWorkFilters(filter);
     const initialized=this.workKey!==undefined;this.workKey=key;this.workAvailable=available;
     if(!initialized&&!this.grids.size&&!this.flights.size)return false;
-    this.presentation++;this.epoch++;
+    this.presentation++;this.activityPresentation++;this.epoch++;
     this.cancelProjection();this.abortFlights();
     for(const tiles of this.grids.values())for(const [id,tile] of tiles)tiles.set(id,tile.retireActivity());
     this.plotIdentity='';this.plotVersion=-1;this.version++;
@@ -319,6 +321,7 @@ export class HistoryStore {
   }
 
   get = () => {if(this.expirePlans())this.publish();return this.state;};
+  getActivityPresentation=()=>this.activityPresentation;
   getFinancial=()=>{if(this.expirePlans())this.publish();return this.financialState;};
   subscribeFinancial=(listener:()=>void)=>{this.financialListeners.add(listener);return()=>{this.financialListeners.delete(listener);};};
   getPlot = () => {if(this.expirePlans())this.publish();return this.plot;};
@@ -412,9 +415,10 @@ export class HistoryStore {
   private elapsedNow() {return this.env.elapsedNow?.() ?? performance.now();}
 
   /** A different resource or authority cannot borrow the previous complete frame. */
-  private retirePresentation() {
+  private retirePresentation(scope:'all'|'native'='all') {
     this.presentation++;
     this.nativePresentation++;
+    if(scope==='all')this.activityPresentation++;
     this.shown=null;
     this.cancelProjection();this.strip=null;this.plotChunks.clear();this.setPlot(null);
   }
@@ -1175,20 +1179,21 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false,acti
   // same. Only a changed snapshot should render a table or its static measure.
   const read=useMemo(()=>()=>{
     const shownNow=(financial?loader.getFinancial:loader.get)(),revisionNow=(financial?boardPeriod.getFinancialProjectionRevision:boardPeriod.getProjectionRevision)(loader===fundsHistory?'funds':loader.scope??'quota'),panning=pan.active();
+    const presentation=activity?loader.getActivityPresentation():shownNow.presentation;
     const board=page.get().board?.id??'';
     const selected=timeRange(),target=board+':'+(selected?timeRangeKey(selected):prefs().range);
     const workState=activity?boardPeriod.activityProjectionState(shownNow.history):null;
     if(workState?.retired)retained.current=null;
-    const inputs=[shownNow,revisionNow,loader,panning,now,board,target,workState?.retired],previous=snapshot.current,validAt=hubNow();
+    const inputs=[shownNow,presentation,revisionNow,loader,panning,now,board,target,workState?.retired],previous=snapshot.current,validAt=hubNow();
     // A retained frame can outlive the raw tiles that scheduled its expiry.
     // Retire its plan facts before even the stable-snapshot fast path.
     const held=retained.current,expired=!!held&&validAt>=held.deadline;
     if(expired){const events=planEventsAt(held.history.events,validAt);retained.current={...held,history:{...held.history,events},deadline:planEventsDeadline(events)};}
     if(!expired&&previous&&inputs.every((value,i)=>Object.is(value,previous.inputs[i])))return previous.value;
     const at=gesture.current.active&&panning===null||shownNow!==shown||revisionNow!==revision?validAt:now;
-    const value=(()=>{
-      if(authority.current?.board!==board||authority.current.loader!==loader||authority.current.presentation!==shownNow.presentation){
-        retained.current=null;gesture.current={active:false,target:null};authority.current={board,loader,presentation:shownNow.presentation};
+    const candidate=(()=>{
+      if(authority.current?.board!==board||authority.current.loader!==loader||authority.current.presentation!==presentation){
+        retained.current=null;gesture.current={active:false,target:null};authority.current={board,loader,presentation};
       }
       if(panning!==null){gesture.current.active=true;gesture.current.target=null;}
       else if(gesture.current.active){gesture.current.active=false;gesture.current.target=target;}
@@ -1197,7 +1202,7 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false,acti
       // The data layers move through their strips during a gesture. Keep the last
       // complete accounting frame until release, including its full opacity.
       if(panning!==null&&retained.current)return {...shownNow,history:retained.current.history,loading:false,error:shownNow.error};
-      if(!shownNow.history)return shownNow;
+      if(!shownNow.history)return activity&&retained.current?{...shownNow,history:retained.current.history}:shownNow;
       const scope=loader===fundsHistory?'funds':loader.scope??'quota',state=workState??boardPeriod.projectionState(shownNow.history,scope);
       if(!state.ready)return {...shownNow,history:retained.current?.history??null,loading:!folding&&!state.error&&!shownNow.error,error:state.error??shownNow.error};
       const projected=boardPeriod.project(shownNow.history,scope,at),deadline=held?.history.events===projected.events?held.deadline:planEventsDeadline(projected.events);
@@ -1205,6 +1210,7 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false,acti
       retained.current={board,history,deadline:events===projected.events?deadline:planEventsDeadline(events)};
       if(!shownNow.loading)gesture.current.target=null;return {...shownNow,history,loading:folding?false:shownNow.loading,error:state.error??shownNow.error};
     })();
+    const value=activity?{...candidate,presentation}:candidate;
     snapshot.current={inputs,phase:panning,phaseRevision:(previous?.phaseRevision??0)+(previous&&previous.phase!==panning?1:0),value:previous&&shallowEqual(previous.value,value)?previous.value:value};
     return snapshot.current.value;
   },[shown,revision,loader,now,financial,activity]);

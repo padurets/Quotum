@@ -159,7 +159,12 @@ export const SESSION_ACTIVITY_SCENES=[
  * cancellation, coverage and whole-cell accounting; bench/panning.ts exercises native
  * wheel and Shift-drag with delayed history on all five charts. Cooperative preparation
  * and the held final pose are checked by ui/test/prepare.test.ts, history.test.ts and
- * timeAxisMotion.test.ts; they add no lasting demo state. Heatmap preparation,
+ * timeAxisMotion.test.ts; they add no lasting demo state.
+ * Activity's atomic X/Y cancellation frame is held by ui/test/activityAxisCancel.test.ts.
+ * Native catalogue changes retain selected work in ui/test/activityCoherence.test.ts;
+ * selected wallet reads in flight are held by ui/test/moneyDisclosure.test.ts.
+ *
+ * Heatmap preparation,
  * compatible replacement, authority retirement and hidden-width recovery are held
  * by ui/test/heatmapFocus.test.ts.
  *
@@ -1690,7 +1695,9 @@ const activity: DemoSet = {
   ],
 };
 
-const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter and DeepSeek wallets, partial readings and private access failures'};
+const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter and DeepSeek wallets, partial readings and private access failures',entries:all.entries.map(entry=>entry.kind==='person'&&entry.id==='ana'?{...entry,look:[...(entry.look??[]),
+  'Select several OpenRouter key allowances, including a key beyond the preview. Move the common historical endpoint before its first observation and between observations: the balance disclosure keeps the selected count, full names and unavailable values beside any known caps. Current amounts never fill an older gap. Check both languages; compact opens the same full detail layout.',
+]}:entry)};
 export const FILTER_SCENES=['mixed-resources','populated-work','selected-empty','unfiltered-facets','resources-continue','member-current','save-restore'] as const;
 const dataFilters:DemoSet={...SESSION_ANALYTICS,id:'filters',about:'Populated mixed-resource filter playground, with a separate saved-empty board',entries:[
   ...SESSION_ANALYTICS.entries.filter(entry=>entry.kind!=='board').map(entry=>entry.kind==='card'?{...entry,

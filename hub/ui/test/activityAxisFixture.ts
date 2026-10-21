@@ -1,0 +1,75 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import ts from 'typescript';
+import {Pan} from '../lib/pan';
+import {Preparations,prepare} from '../lib/prepare';
+import {navigationAt,navigationKey,axisNavigation} from '../lib/axisNavigation';
+import {activityScale} from '../lib/activity';
+import {StackPaths} from '../lib/stackPaths';
+import {workHours} from '../lib/format';
+import {cellStart,targetOf} from '../../server/domain/history';
+import {plotBar} from '../lib/historyPlot';
+import {tickVisible,tickPresentation} from '../lib/axisTicks';
+import {niceTicks} from '../lib/periods';
+const M=60000,H=3600000;
+const source=(file:string)=>readFileSync(new URL('../../'+file,import.meta.url),'utf8');
+/** Mount the actual chart hooks and DOM painters; keep RAF and React commits independent. */
+export function activityAxisFixture(live:boolean){
+ let selected:any=live?null:{from:9*M,to:11*M},dirty=true,index=0,renderCount=0,now=100*M,nextFrame=0,tree:any=null,flushCause='initial';
+ const states:any[]=[],effects:Function[]=[],tasks:Function[]=[],rafs=new Map<number,Function>(),commits:any[]=[],trace:any[]=[];
+ const scheduler=new Preparations({now:()=>0,post:(run:Function)=>tasks.push(run)});
+ const useRef=(current:any)=>states[index++]??(states[index-1]={current});
+ const useState=(initial:any)=>{const at=index++;if(!(at in states))states[at]=typeof initial==='function'?initial():initial;return [states[at],(value:any)=>{const next=typeof value==='function'?value(states[at]):value;if(!Object.is(next,states[at])){states[at]=next;dirty=true;trace.push({event:'setState',cause:flushCause});}}];};
+ const useLayoutEffect=(effect:Function,deps?:any[])=>{const at=index++,old=states[at];if(deps&&old?.deps&&deps.length===old.deps.length&&deps.every((v,i)=>Object.is(v,old.deps[i])))return;effects.push(()=>{old?.stop?.();states[at]={deps,stop:effect()};});};
+ const useMemo=(read:Function,deps:any[])=>{const slot=useRef(null);if(!slot.current||deps.some((v,i)=>!Object.is(v,slot.current.deps[i])))slot.current={deps,value:read()};return slot.current.value;};
+ const useSyncExternalStore=(subscribe:Function,get:Function)=>{useLayoutEffect(()=>subscribe(()=>{dirty=true;trace.push({event:'external-store',cause:flushCause});}),[subscribe]);return get();};
+ const props:any={history:null,subset:{},scoped:false,activity:{barMs:M,cells:[],by:{source:[]}},origin:live?98*M:9*M,groups:[],paint:new Map([['s','red']]),registry:null,from:live?98*M:9*M,to:live?100*M:11*M,unknownTo:null,onSelect:()=>{},plot:300,onBase:()=>{},strip:null,prepared:true,authority:0,navigation:{context:'test',range:live?'live':`${selected.from}-${selected.to}`},by:'source',allMuted:false,empty:null};
+ const cells=live?[[97*M,12*H],[98*M,H],[99*M,H]]:[[9*M,H],[10*M,H],[11*M,H],[12*M,12*H]];
+ props.groups=[{group:{key:'s',name:'S',cells},name:'S',color:'red'}];props.activity.by.source=[props.groups[0].group];props.currentActivity=props.activity;
+ const frame=(run:Function)=>{rafs.set(++nextFrame,run);return nextFrame;};
+ const pan=new Pan({now:()=>now,commit:(range:any)=>{commits.push(range);selected=range;props.from=range?.from??now-2*M;props.to=range?.to??now;props.navigation={context:'test',range:range?`${range.from}-${range.to}`:'live'};dirty=true;},requestFrame:frame,cancelFrame:id=>rafs.delete(id as number),setTimeout:()=>null,clearTimeout:()=>{}});
+ class Host {
+  tag:string;props:any={};children:Host[]=[];parent:Host|null=null;style:any={};dataset:any={};attrs=new Map<string,string>();textContent='';isConnected=true;
+  constructor(tag:string){this.tag=tag;}
+  get firstElementChild(){return this.children[0];}
+  get classList(){const node=this;return {contains:(name:string)=>(node.attrs.get('class')??'').split(' ').includes(name),add:(name:string)=>{if(!this.classList.contains(name))this.attrs.set('class',((this.attrs.get('class')??'')+' '+name).trim());},remove:(name:string)=>this.attrs.set('class',(this.attrs.get('class')??'').split(' ').filter(x=>x!==name).join(' ')),toggle:(name:string,on:boolean)=>on?this.classList.add(name):this.classList.remove(name)};}
+  setAttribute(name:string,value:string){this.attrs.set(name,value);}
+  getAttribute(name:string){return this.attrs.get(name)??null;}
+  hasAttribute(name:string){return this.attrs.has(name);}
+  removeAttribute(name:string){this.attrs.delete(name);}
+  addEventListener(){}removeEventListener(){}hasPointerCapture(){return false;}releasePointerCapture(){}getBoundingClientRect(){return {width:400,left:0,right:400};}getComputedTextLength(){return this.textContent.length*7;}getAnimations(){return [];}
+  matches(selector:string):boolean{const match=selector.match(/^(\w+)?(?:\.([\w-]+))?$/);if(match)return (!match[1]||match[1]===this.tag)&&(!match[2]||this.classList.contains(match[2]));const attr=selector.match(/^\[([^\]]+)\]$/);return !!attr&&this.hasAttribute(attr[1]);}
+  querySelectorAll(selector:string):Host[]{const parts=selector.split(' ');const all=this.children.flatMap(child=>[child,...child.querySelectorAll('*')]);if(selector==='*')return all;return all.filter(node=>{if(!node.matches(parts.at(-1)!))return false;let parent=node.parent;for(let i=parts.length-2;i>=0;i--){while(parent&&!parent.matches(parts[i]))parent=parent.parent;if(!parent)return false;parent=parent.parent;}return true;});}
+  querySelector(selector:string){return this.querySelectorAll(selector)[0]??null;}
+ }
+ const hosts=new Map<string,Host>();
+ const createElement=(type:any,props:any,...children:any[])=>({type,props:{...props,children:children.length===1?children[0]:children}});
+ function commitHost(node:any,path:string,parent:Host|null):Host[]{
+  if(node==null||node===false)return [];if(Array.isArray(node))return node.flatMap((n,i)=>commitHost(n,path+'.'+(n?.props?.key??i),parent));if(typeof node==='string'||typeof node==='number')return [];
+  if(typeof node.type==='function')return commitHost(node.type(node.props),path+'.fn',parent);
+  const host=hosts.get(path)??new Host(node.type);hosts.set(path,host);host.parent=parent;const old=host.props,p=node.props;
+  for(const [key,value]of Object.entries(p)){if(key==='children'||key==='ref'||key==='key'||key.startsWith('on'))continue;if(key==='style'){for(const [k,v]of Object.entries(value as object??{}))if(!Object.is(old.style?.[k],v))host.style[k]=v;continue;}if(Object.is(old[key],value))continue;if(value==null||value===false)host.removeAttribute(key==='className'?'class':key);else host.setAttribute(key==='className'?'class':key,String(value));if(key.startsWith('data-'))host.dataset[key.slice(5).replace(/-([a-z])/g,(_a,b)=>b.toUpperCase())]=String(value);}
+  const text=(v:any):string=>Array.isArray(v)?v.map(text).join(''):typeof v==='string'||typeof v==='number'?String(v):'';
+  const nextText=text(p.children);if(nextText!==text(old.children))host.textContent=nextText;
+  host.children=commitHost(p.children,path+'.children',host);host.props=p;if(p.ref){if(typeof p.ref==='function')p.ref(host);else p.ref.current=host;}return [host];
+ }
+ const hooks={useRef,useState,useLayoutEffect,useEffect:useLayoutEffect,useMemo,useSyncExternalStore};
+ const context:any={...hooks,React:{createElement},memo:(fn:any)=>fn,useId:()=>useRef('id').current,pan,usePanning:()=>useSyncExternalStore(pan.onPhase,pan.active),useShifting:()=>useSyncExternalStore(pan.onPhase,pan.shifting),hubNow:()=>now,timeRange:()=>selected,periodOf:()=>({ms:2*M}),prefs:()=>({range:'2m'}),useHistoryBegins:()=>0,useSizing:()=>({width:'400'}),axisNavigation,navigationAt,navigationKey,tickVisible,tickPresentation,requestAnimationFrame:frame,cancelAnimationFrame:(id:number)=>rafs.delete(id),ResizeObserver:class{observe(){}disconnect(){}},document:{fonts:{addEventListener(){},removeEventListener(){}}},window:{},matchMedia:()=>({matches:true}),performance:{now:()=>0},useLocale:()=> 'en',useTip:()=>({tip:{current:null},style:{}}),activityScale,stacksHeight:()=>160,StackPaths,niceTicks,MINUTE:M,cellStart,plotBar,targetOf,seriesFocusStyle:()=>({}),mutedKey:(_by:string,key:string)=>key,workHours,clock:()=>'',shortDay:()=>'',stamp:()=>'',t:(key:string)=>key,CSS:{escape:(s:string)=>s},getComputedStyle:()=>({transform:'none'}),slideOf:null};
+ const compile=(code:string)=>ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React,module:ts.ModuleKind.CommonJS}}).outputText;
+ context.exports={};context.require=(name:string)=>name==='react'?hooks:{prepare:(owner:any,work:any,valid:any,ready:any)=>prepare(owner,work,valid,ready,scheduler),preparations:()=>scheduler};
+ runInNewContext(compile(source('ui/components/prepared.ts')),context);Object.assign(context,context.exports);
+ const axis=source('ui/components/timeAxis.ts');runInNewContext(compile(axis.slice(axis.indexOf('const HOLD_MS'),axis.indexOf('export type DrawingGeometry'))+axis.slice(axis.indexOf('export function slideOf')).replace('export function slideOf','function slideOf').replace('export function useTimeAxis','function useTimeAxis')+'\nglobalThis.useTimeAxis=useTimeAxis;'),context);
+ const layers=source('ui/components/PlotLayer.tsx');runInNewContext(compile(layers.slice(layers.indexOf('export function PlotLayer')).replaceAll('export function','function')+'\nglobalThis.PlotLayer=PlotLayer;globalThis.PlotOverlay=PlotOverlay;globalThis.clipPlot=clipPlot;'),context);
+ let activity=source('ui/components/Activity.tsx').slice(source('ui/components/Activity.tsx').indexOf('const Stacks = memo(function Stacks('));
+ runInNewContext(compile(activity+'\nglobalThis.Stacks=Stacks;'),context);
+ function flush(){let count=0;while(dirty){if(count++>50)throw Error('render loop');dirty=false;index=0;effects.length=0;const vnode=context.Stacks(props);tree=commitHost(vnode,'root',null)[0];effects.splice(0).forEach(run=>run());renderCount++;}}
+ function settle(){for(let count=0;count<1000&&(dirty||tasks.length);count++){flush();while(tasks.length)tasks.shift()!();}assert.ok(!dirty&&!tasks.length);}
+ const band=()=>{const paths=tree.querySelectorAll('path.activity-stack');return paths[0]?.parent?.parent;};
+ function snapshot(label:string){const transform=band()?.getAttribute('transform')??null;const ratio=Number(transform?.match(/scale\(1 ([^)]+)\)/)?.[1]??1);const path=tree.querySelector('path.activity-stack')?.getAttribute('d');const ys=tree.querySelector('.activity-value-axis')?.children.map((row:Host)=>row.querySelector('text')?.textContent);const axis=tree.querySelector('svg');const main=tree.querySelector('[data-plot-main]'),slides=main?.querySelector('.slides'),matrix=slides?.style.transform??'',a=Number(matrix.match(/scaleX\(([-.\d]+)\)/)?.[1]??1),b=Number(matrix.match(/translateX\(([-.\d]+)px\)/)?.[1]??0),offset=Number(main?.style.transform?.match(/translateX\(([-.\d]+)px\)/)?.[1]??0),drawFrom=Number(axis?.dataset.drawFrom),drawTo=Number(axis?.dataset.drawTo),landmarks=[live?98*M:10*M,live?99*M:11*M].map(at=>a*(48+(at-drawFrom)/Math.max(M,drawTo-drawFrom)*340)+b+offset),lowTop=Number([...(path??'').matchAll(/M[^,]*,([-.\d]+)/g)][live?1:0]?.[1]??NaN),lowBarY=272+(lowTop-272)*ratio;return {label,transform,ratio,labels:ys,landmarks,lowBarY,path,preparing:scheduler.size,tasks:tasks.length,panEnd:axis?.dataset.panEnd,drawReady:axis?.dataset.drawReady,renderCount,pendingRender:dirty,rafs:rafs.size,selected};}
+ function runFrame(){flushCause='RAF';const callbacks=[...rafs.values()];rafs.clear();callbacks.forEach(run=>run());return snapshot('after-native-RAF-before-React');}
+ function begin(){flushCause='begin';return pan.begin({source:Symbol('input'),input:'pointer',selected,length:2*M,now,historyStart:0,span:2*M,width:340})!;}
+ settle();
+ if(!live){const token=begin();flush();pan.move(token,170);runFrame();settle();flushCause='finish';pan.finish(token);flush();runFrame();settle();assert.equal(selected.from,10*M);}
+ return {pan,begin,flush,settle,runFrame,snapshot,props,commits,trace,stageModel:()=>{props.groups=props.groups.map((row:any)=>({...row,group:{...row.group,cells:[...row.group.cells]}}));dirty=true;},parentUpdate:()=>{dirty=true;},setCause:(name:string)=>flushCause=name,pendingFrames:()=>[...rafs.values()]};
+}

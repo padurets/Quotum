@@ -4,7 +4,28 @@ import {defaultFilters} from '../../server/domain/dataFilters';
 import {publishDataFilters} from '../lib/filterSelection';
 import type {PeriodReply} from '../../server/domain/periodRead';
 import type {HubEvent} from '../lib/board';
-import {drawings,fixture,flush,NOW,H,M} from './periodRuntimeFixture';
+import {consumer,drawings,fixture,flush,NOW,H,M} from './periodRuntimeFixture';
+
+for(const fixed of [false,true])for(const excluded of [false,true])test(`${fixed?'fixed':'live'} Activity survives ${excluded?'excluded':'selected'} native window replacement`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const h=await fixture({fixed,personal:true,initialFilters:defaultFilters()});let d:Awaited<ReturnType<typeof drawings>>|undefined;
+  try{
+    const extra=h.store.source('codex','b'.repeat(24),NOW-3*H);h.store.hold(extra,h.alice.id,NOW-3*H);
+    const sample=(at:number,id:string)=>({observedAt:at,plan:'',resets:null,staleAfterMs:H,windows:[{id,kind:'weekly' as const,label:null,minutes:10080,used:17,remaining:83,resetAt:NOW+H}]});
+    h.store.record(extra,sample(NOW-2*M,'old'));h.events.flush();await flush();
+    const filters=defaultFilters();filters.sources={mode:'include',values:[{source:h.source}]};publishDataFilters(filters);h.period.changed();await flush();
+    d=await drawings(h);const mounted=consumer({...h,...d}),before=mounted.settle(),shown=d.renderActivity(),work=h.period.get().value,authority=h.page.get().board!.workAuthority,native=d.loader.get().presentation;
+    assert.ok(before.paths.length);h.requests.length=0;
+    const held=h.hold();h.store.record(excluded?extra:h.source,sample(NOW-M,'new'));h.events.flush();await flush();
+    // Render for the first time after the complete event batch. A missed transient
+    // null must not revoke the already committed SVG and legend either.
+    const after=mounted.render();assert.deepEqual(after.paths,before.paths);assert.deepEqual(after.names,before.names);
+    assert.equal(d.renderActivity().presentation,shown.presentation);assert.equal(h.period.get().value,work);assert.equal(h.page.get().board!.workAuthority,authority);
+    assert.ok(d.loader.get().presentation>native,'native quota still retires its own catalogue');
+    assert.equal(h.requests.length,excluded?0:1,'only a selected native window needs replacement transport');
+    held.release();await flush();assert.deepEqual(mounted.settle().names,before.names);
+  }finally{d?.close();await h.close();publishDataFilters(null,false);}
+});
 
 for(const fixed of [false,true])test(`${fixed?'fixed':'live'} Activity ignores retirement of an excluded in-board source`,async t=>{
   t.mock.method(Date,'now',()=>NOW);

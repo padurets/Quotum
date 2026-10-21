@@ -1,3 +1,5 @@
+import type {KeyPart,Meter} from '../../server/domain/meters';
+import {selectedAllowanceIds} from '../lib/moneySelection';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -15,10 +17,10 @@ const nodes=(value:any):Node[]=>Array.isArray(value)?value.flatMap(nodes):value&
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 function fixture(compact=false){
   const filters=defaultFilters();filters.wallet={mode:'only',values:[{source:'s',kind:'balance'},{source:'s',kind:'keyCap',key:'extra'}]};
-  const source={id:'s',provider:'openrouter',keys:[],meters:[{id:'balance',kind:'balance',unit:'USD',amount:'12345678',limit:null,at:1,staleAfterMs:1000,stale:false,resetAt:null,minutes:null,scope:null,label:null}]};
+  const source={id:'s',provider:'openrouter',keys:[] as KeyPart[],meters:[{id:'balance',kind:'balance',unit:'USD',amount:'12345678',limit:null,at:1,staleAfterMs:1000,stale:false,resetAt:null,minutes:null,scope:null,label:null}] as Meter[]};
   let cursor=0;const slots:any[]=[],effects:(()=>void)[]=[],flights:{resolve:(reply:unknown)=>void;reject:(error:unknown)=>void}[]=[];
   const hooks={useState:(initial:any)=>{const at=cursor++;if(!(at in slots))slots[at]=initial;return [slots[at],(next:any)=>slots[at]=typeof next==='function'?next(slots[at]):next];},useEffect:(run:()=>unknown,deps:unknown[])=>{const at=cursor++,previous=slots[at];if(!previous||deps.some((d,i)=>d!==previous.deps[i]))effects.push(()=>{previous?.cleanup?.();slots[at]={deps,cleanup:run()};});}};
-  const modules:Record<string,unknown>={react:hooks,'./dataFilters':{useDataFilters:()=>({current:filters})},'./prefs':{usePref:()=>({unit:'USD'})},'../../server/domain/dataFilters':{walletRule},'./view':{keyShown:()=>true},'./http':{ApiError},'../../server/domain/meterHistory':{MAX_METERS},'./keyReads':{readKeyIds:()=>new Promise((resolve,reject)=>flights.push({resolve,reject}))}};
+  const modules:Record<string,unknown>={react:hooks,'./moneySelection':{selectedAllowanceIds},'./dataFilters':{useDataFilters:()=>({current:filters})},'./prefs':{usePref:()=>({unit:'USD'})},'../../server/domain/dataFilters':{walletRule},'./view':{keyShown:()=>true},'./http':{ApiError},'../../server/domain/meterHistory':{MAX_METERS},'./keyReads':{readKeyIds:()=>new Promise((resolve,reject)=>flights.push({resolve,reject}))}};
   const keys={exports:{} as typeof import('../lib/moneyKeys'),require:(name:string)=>modules[name],AbortController};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../lib/moneyKeys.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,keys);
   const jsx=(type:unknown,props:Node['props'])=>({type,props}),context={exports:{} as {MoneyValues:(props:unknown)=>Node},require:()=>({jsx,jsxs:jsx}),...money,currencySymbol,t,useDataFilters:()=>({current:filters}),usePref:()=>({unit:'USD'}),walletRule,matchesWallet,fundsRule,matchesSelection,Popover:'popover',CreditBalanceValue:({children}:{children:unknown})=>children,ErrorLine:'error',BudgetKeyMetrics:'key',stamp:String,day:String,ApiError};
@@ -26,8 +28,8 @@ function fixture(compact=false){
   runInNewContext(ts.transpileModule(src.slice(src.indexOf('export function MoneyValues('),src.indexOf('/** Subscription funds')),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   let latest:ReturnType<typeof keys.exports.useShownKeys>;
   const render=()=>{cursor=0;latest=keys.exports.useShownKeys(source as any,undefined,'board');effects.splice(0).forEach(run=>run());return nodes(context.exports.MoneyValues({source,...latest,context:defaultCurrencyContext,compact}));};
-  const key={id:'extra',name:'Laptop with the complete selected allowance name',disabled:false,presence:'observed'};
-  return {render,flights,key,retry:()=>latest.retry(),cap:{...source.meters[0],id:'key:extra:cap',kind:'cap',amount:'3000000',limit:'10000000'}};
+  const key:KeyPart={id:'extra',name:'Laptop with the complete selected allowance name',disabled:false,presence:'observed',expiresAt:null,includeByok:false,at:1,staleAfterMs:1000,missCount:0,periods:{day:null,week:null,month:null}};
+  return {render,flights,key,source,filters,retry:()=>latest.retry(),cap:{...source.meters[0],id:'key:extra:cap',kind:'cap' as const,amount:'3000000',limit:'10000000'}};
 }
 
 for(const locale of ['en','ru'] as const)test(`${locale} selected allowance disclosure stays accessible while pending, missing, failed and ready`,async()=>{
@@ -46,4 +48,29 @@ for(const locale of ['en','ru'] as const)test(`${locale} selected allowance disc
 test('compact balance disclosure renders selected allowances in the full detail layout',async()=>{
   const f=fixture(true);f.render();f.flights[0].resolve({keys:[f.key],meters:[f.cap]});await flush();
   const metric=f.render().find(n=>n.type==='key');assert.ok(metric);assert.notEqual(metric.props.compact,true,'full disclosure names must wrap instead of using the compact row ellipsis');
+});
+
+for(const compact of [false,true])test(`${compact?'compact':'dashboard'} mixed selected scope names the unavailable allowance beside the known one`,async()=>{
+  const f=fixture(compact),known={...f.key,id:'known',name:'Known allowance'};
+  f.source.keys.push(known);f.source.meters.push({...f.cap,id:'key:known:cap'});
+  f.filters.wallet={mode:'only',values:[{source:'s',kind:'balance'},{source:'s',kind:'keyCap',key:'known'},{source:'s',kind:'keyCap',key:'extra'}]};
+  f.render();f.flights[0].resolve({keys:[f.key],meters:[]});await flush();const tree=f.render();
+  assert.ok(tree.some(n=>n.props.children===f.key.name),'a missing selected cap keeps its full name');
+  assert.ok(tree.some(n=>n.props.children===t('quota.unavailable')));
+  assert.ok(String(tree.find(n=>n.type==='popover')?.props.label).includes(t('money.selectedAllowances',{count:2})));
+  assert.equal(tree.filter(n=>n.type==='key').length,1,'only the evidenced cap gets a scale');
+});
+
+test('automatic wallet allowance count excludes an uncapped preview key',()=>{
+  const f=fixture(),known={...f.key,id:'known',name:'Known allowance'};
+  f.source.keys.push(known,f.key);f.source.meters.push({...f.cap,id:'key:known:cap'});
+  f.filters.wallet={mode:'auto',include:[],exclude:[]};const tree=f.render();
+  assert.ok(String(tree.find(n=>n.type==='popover')?.props.label).includes(t('money.selectedAllowances',{count:1})));
+  assert.equal(f.flights.length,0);
+});
+
+test('an explicit uncapped preview choice owns a named unavailable disclosure',()=>{
+  const f=fixture();f.source.keys.push(f.key);const tree=f.render();
+  assert.ok(tree.some(n=>n.props.children===f.key.name));assert.ok(tree.some(n=>n.props.children===t('quota.unavailable')));
+  assert.equal(f.flights.length,0,'a known preview key needs no extra lookup');
 });

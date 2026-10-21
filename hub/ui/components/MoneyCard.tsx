@@ -336,16 +336,18 @@ export function MoneyCard({
   tray?: boolean;
 }) {
   const context = useCurrencyContext(source.id);
-  const {keys, meters, error,loading,selected,selectedCount,retry} = useShownKeys(source, view, board);
-  return <MoneyValues source={source} keys={keys} meters={meters} error={error} loading={loading} selected={selected} selectedCount={selectedCount} retry={retry} compact={compact} tray={tray} context={context}/>;
+  const {keys, meters, allowances, error,loading,retry} = useShownKeys(source, view, board);
+  return <MoneyValues source={source} keys={keys} meters={meters} allowances={allowances} error={error} loading={loading} retry={retry} compact={compact} tray={tray} context={context}/>;
 }
 
 type MoneySource=Pick<Card,'id'|'provider'|'meters'|'currencyUnavailable'|'creditBalance'>;
-export function MoneyValues({source,keys,meters,error=null,loading=false,selected=false,selectedCount=keys.length,retry,compact=false,tray=false,context}:{source:MoneySource;keys:KeyPart[];meters:Meter[];error?:unknown;loading?:boolean;selected?:boolean;selectedCount?:number;retry?:()=>void;compact?:boolean;tray?:boolean;context:CurrencyContext}) {
+export function MoneyValues({source,keys,meters,allowances=keys.filter(key=>meters.some(m=>m.id===`key:${key.id}:cap`&&m.kind==='cap')).map(key=>key.id),error=null,loading=false,retry,compact=false,tray=false,context}:{source:MoneySource;keys:KeyPart[];meters:Meter[];allowances?:readonly string[];error?:unknown;loading?:boolean;retry?:()=>void;compact?:boolean;tray?:boolean;context:CurrencyContext}) {
   const filters=useDataFilters().current,moneyPrefs=usePref('money'),fundsPrefs=usePref('funds');
   const showBalance=!filters||matchesWallet(walletRule(filters,moneyPrefs.unit??undefined),{source:source.id,kind:'balance'},true);
-  const {remaining, limits} = budgetView(source, keys, meters, context),
+  const {remaining, limits} = budgetView(source, keys.filter(key=>allowances.includes(key.id)), meters, context),
     groups = remaining.values;
+  const selectedCount=allowances.length,selected=selectedCount>0;
+  const unavailable=allowances.filter(id=>!limits.some(limit=>limit.scope.id===id));
   const disclosureLabel=[t('money.breakdown'),selectedCount?t('money.selectedAllowances',{count:selectedCount}):null].filter(Boolean).join('\n');
   const credit=source.provider==='codex';
   const native=source.meters?.find(m=>m.id==='balance:credits'&&!m.conversion);
@@ -419,9 +421,9 @@ export function MoneyValues({source,keys,meters,error=null,loading=false,selecte
         </section>
       ))}
       {limits.length>0&&<section className="measurement-details">{limits.map(limit=><div key={limit.scope.id}><BudgetKeyMetrics limit={limit} context={context}/><small className="measurement-proof">{[money(capLeft(limit.native),limit.native.unit,true,context),t('money.of',{amount:money(limit.native.limit,limit.native.unit,true,context)}),t('source.measured',{at:stamp(limit.native.at)}),limit.native.resetAt!==null?stamp(limit.native.resetAt):null].filter(Boolean).join('\n')}</small></div>)}</section>}
+      {unavailable.length>0&&<section className="measurement-details">{unavailable.map(id=><div key={id}><span>{keyName(keys.find(key=>key.id===id)??{id,name:null})}</span><small className="measurement-proof">{t('quota.unavailable')}</small></div>)}</section>}
       <ErrorLine error={error}/>
       {loading&&<p>{t('period.loading')}</p>}
-      {selected&&!limits.length&&!loading&&!error&&<p>{t('quota.unavailable')}</p>}
       {!!error&&retry&&!(error instanceof ApiError&&error.code==='filters_limit')&&<button type="button" className="button" onClick={retry}>{t('period.retry')}</button>}
     </div>
   );
