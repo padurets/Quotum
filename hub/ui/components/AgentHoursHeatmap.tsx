@@ -1,8 +1,8 @@
 import {memo,useMemo,useLayoutEffect,useRef,useState,useSyncExternalStore,type CSSProperties,type KeyboardEvent,type RefObject} from 'react';
-import {createPortal} from 'react-dom';
+import {createPortal,flushSync} from 'react-dom';
 import {boardPeriod} from '../lib/period';
 import {CALENDAR_OPACITY,calendarLevel,exactAgentHours} from '../lib/workCalendar';
-import {heatmapLayout,heatCellAt,heatCellChangesAt,type HeatCell} from '../lib/heatmap';
+import {heatmapLayout,heatCellAt,heatCellChangesAt,type HeatCell,type HeatmapLayout} from '../lib/heatmap';
 import {useClock} from '../lib/clock';
 import {AGENT_HOURS_HEATMAP,withHidden,type Arrange} from '../lib/view';
 import {CATEGORY_COLORS} from '../lib/providers';
@@ -15,6 +15,8 @@ import {Segmented} from './Kit';
 import {useBubble} from './Tooltip';
 import {HistoryFailure} from './HistoryFailure';
 import {fillOf,pixels,same,useSizing} from './sizing';
+
+const EMPTY_LAYOUT:HeatmapLayout={cells:[],labels:[],height:0,naturalHeight:0,span:3_600_000,kind:'strip'};
 
 function Details({heading,label,interval,item}:{heading:boolean;label:string;interval:string;item:HeatCell}){
   return <>{heading&&<strong>{label}</strong>}{interval&&<p className="heatmap-interval">{interval}</p>}<p>{item.cell.agentMs===null?t('calendar.unavailable'):item.cell.agentMs===0?t('calendar.zero'):`${exactAgentHours(item.cell.agentMs,formatLocale())} ${t('calendar.hours')}`}</p>{item.partial&&<p>{t('calendar.partial')}</p>}</>;
@@ -56,16 +58,18 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
   const {value,loading,error,window}=reading,root=useRef<HTMLElement>(null),matrix=useRef<HTMLDivElement>(null),sizing=useSizing();
   const [focused,setFocused]=useState(''),[settings,setSettings]=useState(false),[width,setWidth]=useState(0),[height,setHeight]=useState(0);
   const focusRange=useRef<{from:number;to:number}|null>(null);
-  const layout=useMemo(()=>heatmapLayout(reading,width,view,formatLocale(),height),[reading,width,view,locale,height]);
+  const layout=useMemo(()=>width>0?heatmapLayout(reading,width,view,formatLocale(),height):EMPTY_LAYOUT,[reading,width,view,locale,height]);
   const measure=useRef(()=>{});
   measure.current=()=>{
-    const node=root.current,plot=matrix.current;if(!node||!plot)return;setWidth(plot.clientWidth);
+    const node=root.current,plot=matrix.current;if(!node||!plot)return;const nextWidth=plot.clientWidth;setWidth(nextWidth);
+    // Hidden panels keep their useful sizing until current cells can be measured again.
+    if(!nextWidth||!width)return;
     if(sizing){const shown=pixels(node.getBoundingClientRect().height-fillOf(node)),chrome=shown-plot.getBoundingClientRect().height,min=pixels(chrome+layout.naturalHeight);
       sizing.report({min,natural:min,shown});const next=sizing.manual?pixels(Math.max(layout.naturalHeight,sizing.allocated-chrome)):0;setHeight(was=>same(was,next)?was:next);
     }
   };
   useLayoutEffect(()=>measure.current(),[sizing?.manual,sizing?.allocated,sizing?.width,sizing?.report,loading,error,locale,layout.naturalHeight]);
-  useLayoutEffect(()=>{const node=root.current;if(!node)return;const observer=new ResizeObserver(()=>measure.current());observer.observe(node);return()=>observer.disconnect();},[]);
+  useLayoutEffect(()=>{const node=root.current;if(!node)return;const observer=new ResizeObserver(()=>flushSync(()=>measure.current()));observer.observe(node);return()=>observer.disconnect();},[]);
   useLayoutEffect(()=>()=>sizing?.report(null),[sizing?.report]);
   const tab=layout.cells.find(c=>c.key===focused)??layout.cells.reduce<HeatCell|undefined>((best,c)=>!best||Math.abs(c.from-Number(focused))<Math.abs(best.from-Number(focused))?c:best,undefined);
   const openRange=(range:{from:number;to:number})=>{focusRange.current=range;setFocused(String(range.from));setTimeRange(range);};
