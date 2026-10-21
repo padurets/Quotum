@@ -108,7 +108,12 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       const baseline=await sample();assert.ok(baseline.activity.known);assert.ok(baseline.tiles.length<=8);
       const selectedFilter=[...bodies.bodies].reverse().find(row=>row.body.workFilter)!.body.workFilter;assert.ok(selectedFilter);
       assert.equal(await cdp.evaluate('window.__quotumFixedActivity.status().members'),4,'emphasis adds no history reader');
-      const geometry=()=>cdp.evaluate<string>(`JSON.stringify([...document.querySelectorAll('.widgets>.widget,.panel[data-time="chart"] .chart,.activity-stack,[data-series] path,.plan-line,.forecast-line')].map(e=>{const b=e.getBoundingClientRect();return[b.x+scrollX,b.y+scrollY,b.width,b.height,e.getAttribute('d')];}))`);
+      // SVG viewport bounds lose float precision after native focus scrolls the page.
+      // Its own bounds and matrix stay exact; CSS boxes use document coordinates.
+      const geometry=()=>cdp.evaluate<string>(`JSON.stringify([...document.querySelectorAll('.widgets>.widget,.panel[data-time="chart"] .chart,.panel[data-time="chart"]>.legend,.activity-info,.panel[data-time="chart"] .plot-layer,.panel[data-time="chart"] .plot-move,.panel[data-time="chart"] .slides,.activity-stack,[data-series] path,.plan-line,.forecast-line')].map(e=>{
+        const svg=e instanceof SVGGraphicsElement,b=svg?e.getBBox():e.getBoundingClientRect(),m=svg?e.getCTM():null;
+        return[svg?'svg':'box',b.x+(svg?0:scrollX),b.y+(svg?0:scrollY),b.width,b.height,e.getAttribute('d'),e.getAttribute('transform'),e.style.transform,m&&[m.a,m.b,m.c,m.d,m.e,m.f]];
+      }))`);
       const beforeHover=await geometry(),hoverStart=bodies.bodies.length;
       await cdp.evaluate('window.__quotumFixedActivity.reset();__quotumBench.reset()');
       console.error(`bench: ${days}d emphasis matrix and native keys`);
