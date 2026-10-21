@@ -1704,9 +1704,11 @@ estimates retain a separate source-only work sweep from the same authorized read
 remain owner settings, while shared data controls are available to every reader. Each
 analytics panel uses the same heading and reader-error component. The selected
 period and its back/forward buttons appear together at the right end of the shared
-analytics controls. While a different range is loading
-or has failed, retained results name the interval they actually cover; this status
-disappears when the selected answer arrives. The
+analytics controls. Its caption stays on one line within the arrows' remaining
+width; the period menu exposes the complete range. Changing the range cannot grow
+the sticky controls or move the board. Pending reads, retained evidence dates and
+retry use the existing heading disclosure without adding a status row. Compatible
+values remain visible until their complete replacement is ready. The
 limit and budget tables share their column controls, cells and responsive renderer;
 when their selected columns no longer fit, both become labelled rows. Their own
 data models provide the values and column widths, including clock-driven cells.
