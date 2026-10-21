@@ -373,13 +373,13 @@ function ActivityReadout({history,by,hover,barMs,bar,parts,tipProps,subset,scope
 }
 
 /** The prepared stack paths remain unchanged while their parent moves or clips them. */
-const StackArtwork = memo(function StackArtwork({model,by}: {by:ActivityDimension;model: {
+const StackArtwork = memo(function StackArtwork({model,paint,by}: {by:ActivityDimension;paint:ReadonlyMap<string,string>;model: {
   groups: {group: PlotGroup; color: string}[];
   paths: string[];
 } | null}) {
   if (!model) return null;
   return <>{model.groups.map(({group, color}, i) => (
-    <path key={group.key} d={model.paths[i]} fill={color} className="activity-stack" style={seriesFocusStyle(mutedKey(by,group.key))} />
+    <path key={group.key} d={model.paths[i]} fill={paint?.get(group.key)??color} className="activity-stack" style={seriesFocusStyle(mutedKey(by,group.key))} />
   ))}</>;
 });
 
@@ -621,7 +621,7 @@ const Stacks = memo(function Stacks({
       <PlotLayer width={width} height={height} scale={scale} left={left} right={right} clipRef={bandClip} top={top} bottom={bottom}>
         <g clipPath={(strip || currentActivity) && !active ? `url(#${CSS.escape(innerClip)})` : undefined}>
           <g transform={`translate(${(left + (pathOrigin - basis.from) * perMs).toFixed(1)} 0)`}>
-            <StackArtwork model={model} by={by} />
+            <StackArtwork model={model} paint={paint} by={by} />
           </g>
         </g>
       </PlotLayer>
