@@ -52,7 +52,7 @@ test('the navigation registry keeps muted/offscreen seeds reserved, releases onl
 
 const view={version:5 as const,layout:{columns:6,places:{}},names:{},hidden:[],shown:[],windows:[],plans:{},unplanned:[],colors:{},columns:{},shownColumns:{}};
 const baseline=(extra:Partial<Snapshot>={}):Snapshot=>({board:{id:'board',name:'Board',personal:true},view,historyStart:0,workAuthority:'work',sources:[],sessions:{},cadence:{},refresh:{},forecast:{},mine:[],boards:[],resets:{resets:{},trackers:[],past:{}},...extra});
-const accept=(state:PageState,type:'snapshot'|'board'|'projectColors'|'history',data:unknown)=>reduce(state,{type:'hub',event:{type,data} as HubEvent});
+const accept=(state:PageState,type:'hello'|'snapshot'|'board'|'projectColors'|'history',data:unknown)=>reduce(state,{type:'hub',event:{type,data} as HubEvent});
 const envelope=(revision=1,authority='a'.repeat(43)):ProjectColorEnvelope=>({version:1,pins:[['A',C[0]]],revision,authority});
 
 test('only matching configuration becomes ready and colour-only adoption preserves data and work authority',()=>{
@@ -63,6 +63,7 @@ test('only matching configuration becomes ready and colour-only adoption preserv
   const ready=accept(first,'projectColors',e);assert.ok(projectColorsReady(ready.board));
   const expected=accept(ready,'board',{projectColorsRevision:2,projectColorsAuthority:e.authority});
   assert.equal(expected.board!.projectColors,ready.board!.projectColors,'a missing frame is not Auto');
+  assert.equal(projectColorsReady(expected.board),true,'an ordinary delta retains confirmed presentation');
   const changed=accept(expected,'projectColors',{...envelope(2),pins:[['A',C[1]]]});
   for(const key of ['cards','sessions','view','lineup','workAuthority'] as const)assert.equal(changed.board![key],ready.board![key]);
   assert.equal(accept(changed,'projectColors',e),changed);
@@ -72,12 +73,37 @@ test('only matching configuration becomes ready and colour-only adoption preserv
   assert.equal(projectColorsReady(accept(INITIAL,'snapshot',baseline({projectColorsRevision:1})).board),false,'partial refs are not legacy');
 });
 
+for(const revision of [1,2])test(`a reconnect requires matching configuration for revision ${revision} in its own generation`,()=>{
+  const e=envelope(),first=accept(INITIAL,'snapshot',baseline({projectColorsRevision:1,projectColorsAuthority:e.authority,projectColors:e}));
+  const hello=accept(first,'hello',{epoch:'next'}),authority='b'.repeat(43);
+  assert.equal(projectColorsReady(hello.board),false);
+  const reopened=accept(hello,'snapshot',baseline({projectColorsRevision:revision,projectColorsAuthority:authority}));
+  assert.equal(projectColorsReady(reopened.board),false);
+  assert.equal(reopened.board!.projectColors,first.board!.projectColors,'previous paint is retained without confirming the new baseline');
+  assert.equal(accept(reopened,'projectColors',e),reopened);
+  const lateResponse={type:'project-colors-response' as const,board:'board',generation:0,workAuthority:'work',expected:e,colors:envelope(revision,authority)};
+  assert.equal(reduce(reopened,lateResponse),reopened);
+  const matched=accept(reopened,'projectColors',envelope(revision,authority));
+  assert.equal(projectColorsReady(matched.board),true);
+  assert.equal(matched.board!.projectColors!.authority,authority);
+});
+
+test('even unchanged colour references need confirmation after a new hello',()=>{
+  const e=envelope(),first=accept(INITIAL,'snapshot',baseline({projectColorsRevision:1,projectColorsAuthority:e.authority,projectColors:e}));
+  const reopened=accept(accept(first,'hello',{epoch:'same'}),'snapshot',baseline({projectColorsRevision:1,projectColorsAuthority:e.authority}));
+  assert.equal(projectColorsReady(reopened.board),false);
+  const confirmed=accept(reopened,'projectColors',e);
+  assert.equal(confirmed.board!.projectColors,reopened.board!.projectColors);
+  assert.equal(projectColorsReady(confirmed.board),true);
+});
+
 test('HTTP colour responses adopt atomically and cannot roll back events or cross a board lifetime',()=>{
   const e=envelope(),first=accept(INITIAL,'snapshot',baseline({projectColorsRevision:1,projectColorsAuthority:e.authority,projectColors:e}));
   const response={type:'project-colors-response' as const,board:'board',generation:0,workAuthority:'work',expected:e,colors:{...e,revision:2,pins:[['A',C[1]]] as ProjectColorPins}};
   const saved=reduce(first,response);assert.equal(saved.board!.projectColors?.revision,2);assert.equal(saved.board!.cards,first.board!.cards);
   const olderSnapshot=accept(saved,'snapshot',baseline({projectColorsRevision:1,projectColorsAuthority:e.authority,projectColors:e}));
   assert.equal(olderSnapshot.board!.projectColors,saved.board!.projectColors);assert.equal(olderSnapshot.board!.projectColorsRevision,2);
+  assert.equal(projectColorsReady(olderSnapshot.board),true);
   const latest=accept(accept(saved,'board',{projectColorsRevision:3,projectColorsAuthority:'b'.repeat(43)}),'projectColors',envelope(3,'b'.repeat(43)));
   assert.equal(reduce(latest,response),latest);
   const revoked=accept(saved,'history',{sources:[],since:0,workAuthority:'revoked'});assert.equal(reduce(revoked,response),revoked);assert.equal(accept(revoked,'projectColors',e),revoked);

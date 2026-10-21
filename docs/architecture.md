@@ -1443,8 +1443,10 @@ Manage projects. The same popup edits the name and board colour with one Save.
 Readers share that colour, including on the local desktop board; the Activity menu
 opens the same project management. Names retain their personal scope and colours
 their board ownership. A combined edit commits both changes atomically.
-Repeated manual colours are allowed. The picker keeps a local draft until Save;
-resetting every colour, including dormant choices, requires confirmation.
+Repeated manual colours are allowed. The picker keeps a local draft with the resource
+version read when it opens. An unchanged draft sends no mutation; a rejected stale
+save requires reopening the editor with the current choices. Resetting every colour,
+including dormant choices, requires confirmation.
 
 Only admitted corrected project names appear in settings or colour projections.
 Dormant pins remain private in storage, and colour metadata grants no access.
@@ -2066,7 +2068,8 @@ pins reserve nothing; muted/offscreen registry entries retain their colours, and
 released slot does not promote surviving neutral groups. Current paint resolves after
 numeric preparation, so an in-flight drawing uses the latest accepted palette across
 interiors, edges, legends and readouts without rebuilding geometry. Resource series
-keep their card colours. Visible
+keep their card colours. Outside a navigation registry, a new numeric model assigns
+automatic colours by its current rank. Visible
 missing cells are read immediately in contiguous batches of at most eight tiles.
 The nearest unread edge comes first, without crossing fresh cells or another tile
 owner. Only a visible miss can add a nearby buffer in the direction of movement:

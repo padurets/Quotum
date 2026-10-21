@@ -35,6 +35,7 @@ export type ByeReason = 'unauthorized' | 'gone' | 'restart' | 'limit';
 
 /** An event as it goes out: its type, and its data already as JSON. */
 export type Frame = {type: string; data: string};
+export type PollAnswer = {lease:string;now:number;frames:Frame[]};
 
 /** Events as a text/event-stream carries them. */
 export const sse = (frames: Frame[]) => frames.map(f => `event: ${f.type}\ndata: ${f.data}\n\n`).join('');
@@ -117,6 +118,7 @@ type Lease = {
   stopExpiry: () => void;
   tomb: ByeReason | null;
 };
+type PollContext = {reader:Pick<Reader,'user'|'secret'|'board'>;financialKey:string;workKey:string;revision:number;authority:string;projects:string[]};
 
 /** The path of the page's entry script in the built client, as `index.html` loads it; null without a build. */
 export function clientScript(root = config.clientRoot): string | null {
@@ -128,6 +130,8 @@ export function clientScript(root = config.clientRoot): string | null {
 }
 
 export class Events implements Touches {
+  /** An HTTP response owns its captured authority only until that response is collected. */
+  private readonly pollContexts=new WeakMap<PollAnswer,PollContext>();
   /** The history cache hears every touch, also when no board is watched. */
   onClientHistory: ((user:string,since:number,device?:string)=>void) | null = null;
   onHistory: ((source: string, since: number, scopes?: readonly HistoryScope[], work?:boolean) => void) | null = null;
@@ -939,7 +943,7 @@ export class Events implements Touches {
    * what came since its last answer, or waits for it up to `pollMs`. An unknown lease (it
    * expired, fell behind, or the hub restarted) is a new one. 'limit' when there is no room.
    */
-  async poll(reader: Omit<Reader, 'kind' | 'send' | 'end'>, id: string | undefined): Promise<{lease: string; now: number; frames: Frame[]} | null | 'limit'> {
+  async poll(reader: Omit<Reader, 'kind' | 'send' | 'end'>, id: string | undefined): Promise<PollAnswer | null | 'limit'> {
     const known = id ? this.leases.get(id) : undefined;
     if (known && known.secret === reader.secret && known.board === reader.board && known.user === reader.user) {
       if (known.tomb) {
@@ -955,14 +959,14 @@ export class Events implements Touches {
       // One request waits at a time: an earlier one still waiting is answered empty.
       known.waiting?.([]);
       const pending = this.take(known);
-      const frames = pending.length
-        ? pending
-        : await new Promise<Frame[]>(resolve => {
+      const result = pending.length
+        ? this.pollAnswer(known,pending)
+        : await new Promise<PollAnswer>(resolve => {
             const stop = this.later(this.options.pollMs, () => answer(this.take(known)));
             const answer = (frames: Frame[]) => {
               stop();
               if (known.waiting === answer) known.waiting = null;
-              resolve(frames);
+              resolve(this.pollAnswer(known,frames));
             };
             known.waiting = answer;
           });
@@ -971,7 +975,7 @@ export class Events implements Touches {
         known.stopExpiry();
         known.stopExpiry = this.later(this.options.leaseMs, () => this.expire(known));
       }
-      return {lease: known.id, now: this.clock.now(), frames};
+      return result;
     }
 
     const lease: Lease = {...reader, id: randomBytes(16).toString('base64url'), subscriber: null, financialKey:this.parts.store.financialKey(reader.board),workKey:this.projection.workKey(reader.board,undefined,this.clock.now()), queue: [], bytes: 0, waiting: null, stopExpiry: () => {}, tomb: null};
@@ -1003,7 +1007,42 @@ export class Events implements Touches {
     lease.subscriber = opened.sub;
     this.leases.set(lease.id, lease);
     lease.stopExpiry = this.later(this.options.leaseMs, () => this.expire(lease));
-    return {lease: lease.id, now: this.clock.now(), frames: opened.frames};
+    return this.pollAnswer(lease,opened.frames);
+  }
+
+  private pollAnswer(reader:Pick<Lease,'id'|'user'|'secret'|'board'>,frames:Frame[]):PollAnswer {
+    const answer={lease:reader.id,now:this.clock.now(),frames};
+    const colors=this.projectColors.context(reader.board,undefined,answer.now).envelope;
+    this.pollContexts.set(answer,{reader:{user:reader.user,secret:reader.secret,board:reader.board},financialKey:this.parts.store.financialKey(reader.board),workKey:this.projection.workKey(reader.board,undefined,answer.now),revision:colors.revision,authority:colors.authority,projects:colors.pins.map(([name])=>name)});
+    return answer;
+  }
+
+  /** Recheck after asynchronous HTTP hooks and compression, before any bytes are disclosed. */
+  deliverPoll(answer:PollAnswer):PollAnswer {
+    const captured=this.pollContexts.get(answer);if(!captured)return answer;
+    const lease=this.leases.get(answer.lease),reason=this.gone(captured.reader),now=this.clock.now();
+    if(reason){if(lease)this.expire(lease);return {...answer,now,frames:[bye(reason)]};}
+    const financialKey=this.parts.store.financialKey(captured.reader.board),workKey=this.projection.workKey(captured.reader.board,undefined,now);
+    const context=this.projectColors.context(captured.reader.board,undefined,now),colors=context.envelope;
+    if(financialKey===captured.financialKey&&workKey===captured.workKey&&colors.revision===captured.revision&&colors.authority===captured.authority)return answer;
+    let frames:Frame[];
+    // Live-only admission may expire without changing the retained work ledger's key.
+    const retired=captured.projects.some(name=>!context.allowed(name));
+    const privateWork=answer.frames.some(packet=>packet.type==='snapshot'||packet.type==='sessions'||packet.type==='unattributedSessions');
+    if(financialKey!==captured.financialKey||workKey!==captured.workKey||retired&&privateWork){
+      const snapshot=this.projection.snapshot(captured.reader.user,captured.reader.board,now);
+      if(!snapshot){if(lease)this.expire(lease);return {...answer,now,frames:[bye('gone')]};}
+      frames=[...answer.frames.filter(packet=>packet.type==='hello'),...this.snapshotFrames(snapshot,captured.reader.board)];
+      // The replacement includes every queued change up to this synchronous projection.
+      if(lease){lease.financialKey=financialKey;lease.workKey=workKey;lease.queue=[];lease.bytes=0;}
+    }else{
+      frames=this.colorDelivery(answer.frames,false,captured.reader.board);
+      if(!frames.some(packet=>packet.type==='projectColors'))frames=[...frames,frame('board',{projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority}),frame('projectColors',colors)];
+      if(!frames.some(packet=>packet.type==='snapshot')&&Math.max(Buffer.byteLength(sse(frames)),Buffer.byteLength(polled(frames)))>this.options.bufferBytes){
+        if(lease)this.expire(lease);return {...answer,now,frames:[bye('limit')]};
+      }
+    }
+    return {...answer,now,frames};
   }
 
   private take(lease: Lease): Frame[] {

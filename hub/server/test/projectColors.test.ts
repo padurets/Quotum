@@ -318,3 +318,69 @@ for(const encoding of ['identity','gzip'])test(`the combined catalogue retires f
   assert.ok(JSON.parse(body).projects.some((row:{name:string;canRename:boolean})=>row.name==='foreign-canary-0'&&!row.canRename));
   retire=true;const retired=await read();assert.equal(retired.statusCode,409);assert.equal(retired.headers['content-encoding'],undefined);assert.ok(!retired.body.includes('foreign-canary'));
 });
+
+for(const encoding of ['identity','gzip'])test(`a stale catalogue cursor retires private conflict pins before ${encoding} delivery`,async t=>{
+  const f=await fixture(),other=f.directory.saveDevice({userId:f.reader.id,machine:{id:'conflict-private-machine',name:'Other',os:'linux',arch:'x86_64'},agent:'fixture',tokenId:null},at);
+  const names=Array.from({length:51},(_,i)=>'conflict-private-canary-'+String(i).padStart(2,'0'));
+  f.credit(names,other.id);
+  const url='/api/projects?board='+f.board,headers={cookie:'quotum_session='+f.sessionSecret,'accept-encoding':encoding};
+  const first=(await f.app.inject({url,headers:{cookie:headers.cookie}})).json();
+  assert.equal(first.projects.length,50);assert.ok(first.nextCursor);assert.ok(first.projects.every((row:{canRename:boolean})=>!row.canRename));
+  saveProjectColors(f.store.db,f.board,names.map(name=>[name,CATEGORY_COLORS[0]]),f.owner.id,at);
+  await f.app.close();let retire=false,compressed=false;
+  const app=await buildApp(f.hub,app=>{app.addHook('onSend',async(request,reply,payload)=>{
+    if(request.url.startsWith('/api/projects?')&&request.url.includes('&cursor=')){
+      if(reply.getHeader('content-encoding')==='gzip')compressed=true;
+      if(retire){retire=false;const policy=f.store.sessionDevices(f.board,f.reader.id).find(device=>device.id===other.id)!;f.store.setDeviceSessions(f.board,other.id,f.reader.id,false,policy.revision,Date.now());}
+    }
+    return payload;
+  });});
+  t.after(async()=>{await app.close();f.store.close();});
+  const read=()=>app.inject({url:url+'&cursor='+encodeURIComponent(first.nextCursor),headers});
+  const before=await read();assert.equal(before.statusCode,409);
+  const beforeBody=before.headers['content-encoding']==='gzip'?(await import('node:zlib')).gunzipSync(before.rawPayload).toString():before.body;
+  assert.equal(JSON.parse(beforeBody).pins.length,51);
+  retire=true;const retired=await read();assert.equal(retired.statusCode,409);
+  const body=retired.headers['content-encoding']==='gzip'?(await import('node:zlib')).gunzipSync(retired.rawPayload).toString():retired.body;
+  const conflict=JSON.parse(body);assert.equal(conflict.error,'project_colors_context_changed');assert.deepEqual(conflict.pins,[]);
+  assert.ok(!body.includes('conflict-private-canary'));assert.equal(retired.headers['content-encoding'],undefined);
+  assert.equal(compressed,encoding==='gzip','exercise the prepared compression stream before the delivery recheck');
+  assert.equal(readProjectColors(f.store.db,f.board).pins.length,51,'retirement keeps the private assignments');
+});
+
+test('choices retire the cursor when unpinned live-only names expire before delivery',async t=>{
+  const f=await fixture();let now=Date.now();t.mock.method(Date,'now',()=>now);
+  const token=newSecret('qt_m');f.directory.createToken(token,'fixture',f.reader.id,'fixture',now);
+  const credential=f.hub.ingest.authenticate('Bearer '+token);assert.ok(credential&&credential!=='revoked');
+  const names=Array.from({length:51},(_,i)=>'live-private-canary-'+String(i).padStart(2,'0'));
+  f.hub.ingest.sessions(credential,{version:1,agent:'fixture',machine:{id:'choices-private-machine',name:'Other',os:'linux',arch:'x86_64'},sentAt:new Date(now).toISOString(),sessions:[],
+    clientSessions:names.map((project,i)=>({clientId:'opencode',sessionId:i.toString(16).padStart(32,'0'),source:null,origin:'terminal',project,startedAt:new Date(now).toISOString(),working:false}))},now);
+  await f.app.close();let retire=false;
+  const app=await buildApp(f.hub,app=>{app.addHook('onSend',async(request,_reply,payload)=>{
+    if(retire&&request.url.endsWith('/project-colors/choices')){retire=false;now+=KEEP_MS+1;}
+    return payload;
+  });});
+  t.after(async()=>{await app.close();f.store.close();});
+  const read=()=>app.inject({url:`/api/boards/${f.board}/project-colors/choices`,headers:{cookie:'quotum_session='+f.sessionSecret}});
+  const before=(await read()).json();assert.deepEqual(before.projects,names.slice(0,50));assert.ok(before.nextCursor);
+  assert.equal(JSON.parse(Buffer.from(before.nextCursor.split('.')[0],'base64url').toString())[3],names[49]);
+  retire=true;const retired=await read();assert.equal(retired.statusCode,409);
+  const conflict=retired.json();assert.equal(conflict.error,'project_colors_context_changed');assert.deepEqual(conflict.pins,[]);
+  assert.equal(conflict.nextCursor,undefined);assert.ok(!retired.body.includes('live-private-canary'));
+  assert.equal(f.hub.projectColors!.context(f.board).envelope.authority,before.authority,'unpinned live expiry does not change the resource authority');
+});
+
+test('the combined editor keeps exact rename and merge targets without changing legacy alias trimming',async t=>{
+  const f=await fixture();t.after(async()=>{await f.app.close();f.store.close();});f.credit(['A','B ']);
+  await f.pin('A',CATEGORY_COLORS[0]);await f.pin('B ',CATEGORY_COLORS[1]);
+  const before=await f.get(),raw=readProjectColors(f.store.db,f.board);
+  const merged=await f.request('PUT','',{version:1,authority:before.authority,project:'A',name:'B '},before.revision);
+  assert.equal(merged.statusCode,200);assert.equal(f.store.projectNames(f.owner.id).get('A'),'B ');
+  assert.deepEqual(merged.json().pins,[['B ',CATEGORY_COLORS[1]]]);assert.deepEqual(readProjectColors(f.store.db,f.board),raw,'the target wins and the source pin stays dormant');
+  const current=await f.get(),target='\n  New project \t';
+  const renamed=await f.request('PUT','',{version:1,authority:current.authority,project:'B ',name:target},current.revision);
+  assert.equal(renamed.statusCode,200);assert.deepEqual(renamed.json().pins,[[target,CATEGORY_COLORS[1]]]);
+  assert.equal(f.store.projectNames(f.owner.id).get('A'),target);assert.equal(f.store.projectNames(f.owner.id).get('B '),target);
+  assert.equal((await f.aliases('',{groups:['unused'],name:'  Legacy  '})).statusCode,200);
+  assert.equal(f.store.projectNames(f.owner.id).get('unused'),'Legacy');
+});

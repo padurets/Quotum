@@ -77,7 +77,8 @@ export function Projects({board=null}:{board?:Board|null}) {
   const edit=async(group:ProjectGroup,name:string,color:CategoryColor|null)=>{
     if(writes.current)return;writes.current=true;setBusy(true);setError(null);setLanding(null);
     const expected=saved,where=access;
-    const target=name===group.name?name:name.trim(),rename=target!==group.name,changedColor=color!==(new Map(saved?.pins??[]).get(group.name!)??null);
+    const exact=board?.role==='owner'&&group.colorAllowed&&!!expected;
+    const target=name===group.name||exact?name:name.trim(),rename=target!==group.name,changedColor=color!==(new Map(saved?.pins??[]).get(group.name!)??null);
     try{
       if(board&&board.role==='owner'&&group.colorAllowed&&expected&&(rename||changedColor)){
         const answer=await call('PUT','/api/boards/'+board.id+'/project-colors',{version:1,authority:expected.authority,project:group.name,...(rename?{name:target}:{}),...(changedColor?{color}:{})},12000,undefined,{'If-Match':'"'+expected.revision+'"'});
@@ -212,17 +213,19 @@ const colorName=(color:CategoryColor|null)=>color===null?t('projectColors.auto')
 export function ProjectEditor({project,color,board,canColor,disabled,focus=0,save}:{project:ProjectGroup;color:CategoryColor|null;board:Board|null;canColor:boolean;disabled:boolean;focus?:number;save:(name:string,color:CategoryColor|null)=>Promise<void>}) {
   const [open,setOpen]=useState(false),[name,setName]=useState(project.name!),[draft,setDraft]=useState(color),[error,setError]=useState<unknown>(null),[busy,setBusy]=useState(false);
   const root=useRef<HTMLSpanElement>(null),landing=useRef(false),visible=useRef(open);visible.current=open;
+  // The writer captures the same resource version as the draft, until it is opened anew.
+  const intent=useRef(save);
   const radio=useId();
   useLayoutEffect(()=>{if(!open&&!busy&&!disabled&&landing.current){landing.current=false;root.current?.querySelector('button')?.focus({preventScroll:true});}},[open,busy,disabled]);
   useEffect(()=>{if(focus)root.current?.querySelector('button')?.focus({preventScroll:true});},[focus]);
-  const change=(next:boolean)=>{if(next){setName(project.name!);setDraft(color);setError(null);}setOpen(next);};
+  const change=(next:boolean)=>{if(next){intent.current=save;setName(project.name!);setDraft(color);setError(null);}setOpen(next);};
   const submit=async(event:FormEvent)=>{
     event.preventDefault();if(busy)return;setBusy(true);setError(null);
-    try{await save(name,draft);landing.current=visible.current;setOpen(false);}catch(failure){setError(failure);}finally{setBusy(false);}
+    try{await intent.current(name,draft);landing.current=visible.current;setOpen(false);}catch(failure){setError(failure);}finally{setBusy(false);}
   };
   return <span ref={root} className="project-editor"><Popover label={t('projects.edit',{name:project.name!})} trigger={<>{color&&<i className="activity-swatch" style={{background:color}}/>}<b>{project.name}</b><Pencil size={13} aria-hidden="true"/></>} triggerClass="text-button project-edit-trigger" buttonProps={{disabled}} width={320} align="left" portal={root.current?.closest<HTMLElement>('.dialog,.settings-content')} open={open} onOpenChange={change}>
     <form onSubmit={submit}>
-      <div className="popover-pad"><Field label={t('projects.nameLabel')} value={name} maxLength={240} required disabled={busy} readOnly={project.canRename===false} onChange={event=>setName([...event.target.value].slice(0,120).join(''))}/>
+      <div className="popover-pad"><Field label={t('projects.nameLabel')} value={name} maxLength={240} required={name!==project.name} disabled={busy} readOnly={project.canRename===false} onChange={event=>setName([...event.target.value].slice(0,120).join(''))}/>
         {project.canRename===false&&<p className="dialog-text">{t('projects.nameReadOnly')}</p>}
       </div>
       {board&&<fieldset className="project-color-options" disabled={busy||!canColor}>
@@ -235,7 +238,7 @@ export function ProjectEditor({project,color,board,canColor,disabled,focus=0,sav
       {board&&!canColor&&<p className="popover-pad dialog-text">{t(board.role==='owner'?'projects.colourUnavailable':'projectColors.readOnly')}</p>}
       <div className="popover-pad"><ErrorLine error={error}/><div className="button-row">
         <button type="button" className="button" onClick={()=>change(false)}>{t('common.cancel')}</button>
-        <button className="button" disabled={busy||disabled||!name.trim()||project.canRename===false&&!canColor}>{t('account.save')}</button>
+        <button className="button" disabled={busy||disabled||!name||!canColor&&name!==project.name&&!name.trim()||project.canRename===false&&!canColor}>{t('account.save')}</button>
       </div></div>
     </form>
   </Popover></span>;

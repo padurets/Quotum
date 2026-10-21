@@ -198,7 +198,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const {history,drawing,loading,error,presentation:authority} = useHistory(true);
   const strip = useHistoryPlot(true);
   const pins=useProjectColorPins(),colorsReady=useProjectColorsReady();
-  const registry = useRef<{authority: number; token: number; range:string|undefined; by: ActivityDimension; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
+  const registry = useRef<{authority: number; token: number; range:string|undefined; by: ActivityDimension; basis:ActivityGroup[]; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
   if (registry.current?.authority !== authority) registry.current = null;
   const panel = useRef<HTMLElement>(null);
   // Made taller by its owner, the widget gives the room to the stacks, as the chart does.
@@ -243,12 +243,12 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
       for (const row of strip.activityCells.values()) for (const [key, part] of row.parts[by]) {found.set(key, {key, name: part.name}); yield;}
     }
     const seed = groups.map((group, i) => ({key: group.key, name: group.name, color: colors[i]}));
-    if (!strip) return {identities: seed, shown, strip, registry: by==='project'?{authority,token:-1,range:drawing?.range,by,seed,groups:seed}:null};
+    if (!strip) return {identities: seed, shown, strip, registry: by==='project'?{authority,token:-1,range:drawing?.range,by,basis:groups,seed,groups:seed}:null};
     const previous = registry.current?.authority === authority && registry.current.token === strip.token && registry.current.by === by ? registry.current : {authority, token: strip.token,range:drawing?.range, by, seed, groups: seed};
     const identities = groupRegistry(previous.seed, previous.groups, [...found.values()], by === 'source' ? key => key==='unknown'||key==='notProvided'?'var(--other)' : colorOf(arrange.view, key, titles[key]?.provider ?? '') : undefined);
     const plotted: {group: PlotGroup; color: string; name: string}[] = [];
     for (const identity of identities) {if (!groupMuted(identity.key)) plotted.push({group: data.get(identity.key) ?? {key: identity.key, name: identity.name, cells: EMPTY_CELLS}, color: identity.color, name: groupName(identity, by, titles)}); yield;}
-    return {identities, shown: plotted, strip, registry: {authority, token: strip.token,range:drawing?.range, by, seed: previous.seed, groups: identities}};
+    return {identities, shown: plotted, strip, registry: {authority, token: strip.token,range:drawing?.range, by,basis:groups, seed: previous.seed, groups: identities}};
   }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted, locale], `${authority}:${history?.board}:${by}`,by!=='project'||colorsReady);
   const geometry = by==='project'&&!colorsReady?null:prepared.value;
   const identities=useMemo(()=>{
@@ -256,8 +256,11 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     if(by!=='project')return geometry.identities;
     const previous=registry.current;
     const token=geometry.strip?.token??-1;
+    // Ordinary answers allocate by rank again; metadata keeps the same numeric basis.
+    const sameRegistry=previous?.token===token&&(token!==-1||previous.basis===geometry.registry?.basis);
+    const enteringStrip=previous?.token===-1&&token!==-1;
     const surviving=previous?.authority===authority&&previous.by===by&&
-      (previous.token===token&&previous.range===drawing?.range||previous.token===-1&&previous.range===drawing?.range)?previous.groups:[];
+      previous.range===drawing?.range&&(sameRegistry||enteringStrip)?previous.groups:[];
     return resolveProjectColors(geometry.identities,pins,surviving);
   },[geometry,pins,by,authority,drawing?.range]);
   const paint=useMemo(()=>new Map(identities.map(identity=>[identity.key,identity.color])),[identities]);

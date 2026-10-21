@@ -19,8 +19,8 @@ export function projectColorRoutes(app:FastifyInstance,hub:Hub,guards:Guards) {
     if(!data.authority)return done(null,payload);
     const current=colors.context(board);
     if(Array.isArray(data.projects)){
-      if(data.authority!==current.envelope.authority){reply.code(409);return send({error:'project_colors_context_changed',...current.envelope});}
-      return send({...data,projects:data.projects.filter((name:string)=>current.allowed(name))});
+      if(data.authority!==current.envelope.authority||data.projects.some((name:string)=>!current.allowed(name))){reply.code(409);return send({error:'project_colors_context_changed',...current.envelope});}
+      return send(data);
     }
     return send({...current.envelope,...(data.error?{error:data.error}:{})});
   };
@@ -59,9 +59,7 @@ export function projectColorRoutes(app:FastifyInstance,hub:Hub,guards:Guards) {
           let project=patch.project;
           if(patch.name!==undefined&&patch.name!==project){
             if(!hub.store.projectsOf(access.user.id,Date.now()-config.retention.sampleDays*86_400_000).some(group=>group.name===project))return reply.code(403).send({error:'forbidden'});
-            const name=patch.name.trim();
-            if(!name)return reply.code(400).send({error:'invalid_project_name'});
-            hub.store.nameProjects(access.user.id,[project],name);project=name;
+            hub.store.nameProjects(access.user.id,[project],patch.name);project=patch.name;
             pins=new Map(readProjectColors(hub.store.db,board).pins);
           }
           if('color' in patch){

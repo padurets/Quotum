@@ -37,6 +37,23 @@ function fixture(file='Projects',component='Projects'){
   return {page,board,requests,render,resolveListing,editor:context.exports.ProjectEditor};
 }
 
+const palette=(f:ReturnType<typeof fixture>,colors:model.ProjectColorEnvelope)=>{
+  f.page.dispatch({type:'hub',event:{type:'board',data:{projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority}}});
+  f.page.dispatch({type:'hub',event:{type:'projectColors',data:colors}});
+};
+
+async function openDraft(){
+  const f=fixture(),before={...initial,revision:1,pins:[['A',category.CATEGORY_COLORS[7]]] as model.ProjectColorPins};
+  palette(f,before);f.render();await f.resolveListing();
+  const row=f.render().find(node=>node.type===f.editor)!,popup=fixture('Projects','ProjectEditor');
+  let tree=popup.render(row.props);tree.find(node=>node.type==='Popover')!.props.onOpenChange(true);popup.render(row.props);
+  const newer={...before,revision:2,pins:[['A',category.CATEGORY_COLORS[1]]] as model.ProjectColorPins};
+  palette(f,newer);
+  const props=f.render().find(node=>node.type===f.editor)!.props;
+  tree=popup.render(props);
+  return {f,popup,props,tree,newer};
+}
+
 test('the existing project list saves name and colour in one request and serializes writes',async()=>{
   const f=fixture();f.render();assert.ok(f.requests[0].url.startsWith('/api/projects?board=board'));await f.resolveListing();
   const editor=f.render().find(node=>node.type===f.editor)!;
@@ -55,6 +72,54 @@ test('one popup contains the name and ten native colour choices and saves only o
   const radios=tree.filter(node=>node.type==='input'&&node.props.type==='radio');assert.equal(radios.length,10);radios[8].props.onChange();
   assert.equal(calls.length,0);tree=f.render(props);await tree.find(node=>node.type==='form')!.props.onSubmit({preventDefault(){}});
   assert.deepEqual(calls,[['Renamed',category.CATEGORY_COLORS[7]]]);assert.equal(f.render(props).filter(node=>node.type==='Popover').length,1);
+});
+
+test('saving an unchanged open draft preserves a colour changed elsewhere',async()=>{
+  const {f,tree,newer}=await openDraft();
+  const submit=tree.find(node=>node.type==='form')!.props.onSubmit({preventDefault(){}});await flush();
+  assert.equal(f.requests[1].method,'GET');assert.equal(f.requests.filter(request=>request.method==='PUT').length,0);
+  await f.resolveListing();await submit;
+  assert.deepEqual(f.page.get().board!.projectColors!.pins,newer.pins);
+});
+
+test('a name-only open draft retains its original CAS instead of adopting an event revision',async()=>{
+  const {f,popup,props,tree,newer}=await openDraft();
+  tree.find(node=>node.type==='Field')!.props.onChange({target:{value:'B'}});
+  const submit=popup.render(props).find(node=>node.type==='form')!.props.onSubmit({preventDefault(){}});await flush();
+  const request=f.requests[1];assert.equal(request.method,'PUT');assert.equal(request.headers['If-Match'],'"1"');
+  assert.deepEqual(JSON.parse(JSON.stringify(request.body)),{version:1,authority:initial.authority,project:'A',name:'B'});
+  request.reject(new ApiError(409,'project_colors_conflict',{error:'project_colors_conflict',...newer}));await submit;
+  assert.ok(popup.render(props).some(node=>node.type==='ErrorLine'&&node.props.error instanceof ApiError));
+  assert.deepEqual(f.page.get().board!.projectColors!.pins,newer.pins);
+  popup.render(props).find(node=>node.type==='Popover')!.props.onOpenChange(false);
+  popup.render(props).find(node=>node.type==='Popover')!.props.onOpenChange(true);
+  popup.render(props).find(node=>node.type==='Field')!.props.onChange({target:{value:'B'}});
+  const retry=popup.render(props).find(node=>node.type==='form')!.props.onSubmit({preventDefault(){}});await flush();
+  assert.equal(f.requests[2].headers['If-Match'],'"2"');
+  assert.equal(f.requests[2].body.color,undefined);
+  f.requests[2].resolve({...newer,revision:3,pins:[['B',category.CATEGORY_COLORS[1]]]});await flush();
+  await f.resolveListing([{...project,name:'B'}]);await retry;
+});
+
+test('the combined project writer preserves an exact ending-space target',async()=>{
+  const f=fixture();f.render();await f.resolveListing();
+  const row=f.render().find(node=>node.type===f.editor)!;
+  const save=row.props.save('B ',null);
+  assert.equal(f.requests[1].method,'PUT');assert.equal(f.requests[1].body.name,'B ');
+  f.requests[1].resolve(initial);await flush();await f.resolveListing([{...project,name:'B '}]);await save;
+});
+
+test('an existing whitespace-only name permits a colour-only save',async()=>{
+  for(const name of [' ','\n']){
+    const f=fixture('Projects','ProjectEditor'),calls:any[]=[];
+    const props={project:{...project,name},color:null,canColor:true,disabled:false,save:async(...values:unknown[])=>{calls.push(values);}};
+    let tree=f.render(props);tree.find(node=>node.type==='Popover')!.props.onOpenChange(true);tree=f.render(props);
+    assert.equal(tree.find(node=>node.type==='button'&&node.props.children==='account.save')!.props.disabled,false);
+    assert.equal(tree.find(node=>node.type==='Field')!.props.required,false,'an unchanged newline must not fail native text-input validation');
+    tree.find(node=>node.type==='input'&&node.props.value===category.CATEGORY_COLORS[0])!.props.onChange();
+    await f.render(props).find(node=>node.type==='form')!.props.onSubmit({preventDefault(){}});
+    assert.deepEqual(calls,[[name,category.CATEGORY_COLORS[0]]]);
+  }
 });
 
 test('the combined editor respects independent name and board-colour permissions',()=>{

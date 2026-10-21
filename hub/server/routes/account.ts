@@ -477,12 +477,13 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   });
 
   // The projects of one's machines, and the names one gives them: see domain/projects.ts.
-  const projectReads=new WeakMap<FastifyRequest,{user:string;board:string;authority:string;rows:{name:string;own:boolean}[]}>();
+  const projectReads=new WeakMap<FastifyRequest,{user:string;board:string;authority:string;rows:{name:string;own:boolean}[]|null}>();
   app.get<{Querystring:{board?:string;query?:string;cursor?:string}}>('/api/projects',{onSend(request,reply,payload,done){
     const captured=projectReads.get(request);if(!captured)return done(null,payload);
     const user=currentUser(request,directory),member=user?.id===captured.user&&directory.membership(captured.board,user.id);
     const context=member?projectColorsOf(hub).context(captured.board):null;
-    if(context&&context.envelope.authority===captured.authority&&captured.rows.every(row=>row.own||context.allowed(row.name)))return done(null,payload);
+    // Conflict envelopes carry private pins and always need a fresh projection.
+    if(context&&context.envelope.authority===captured.authority&&captured.rows?.every(row=>row.own||context.allowed(row.name)))return done(null,payload);
     if(payload instanceof Readable)payload.destroy();reply.removeHeader('content-encoding').removeHeader('content-length');
     if(!user){reply.code(401);return done(null,JSON.stringify({error:'unauthorized'}));}
     if(!member){reply.code(404);return done(null,JSON.stringify({error:'board_not_found'}));}
@@ -499,8 +500,8 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     const colors=projectColorsOf(hub),context=colors.context(access.board.id);
     try{
       const result=colors.choices(access.board.id,query,cursor,Date.now(),{user:user.id,names:own.flatMap(group=>group.name===null?[]:[group.name])});
+      projectReads.set(request,{user:user.id,board:access.board.id,authority:result.changed?result.envelope.authority:result.authority,rows:result.changed?null:result.projects.map(name=>({name,own:own.some(group=>group.name===name)}))});
       if(result.changed)return reply.code(409).send({error:'project_colors_context_changed',...result.envelope});
-      projectReads.set(request,{user:user.id,board:access.board.id,authority:result.authority,rows:result.projects.map(name=>({name,own:own.some(group=>group.name===name)}))});
       return {keptDays,authority:result.authority,nextCursor:result.nextCursor,projects:result.projects.map(name=>{
         const group=own.find(group=>group.name===name);
         return {...(group??{name,lastAt:null,machines:[],reported:[]}),canRename:!!group,colorAllowed:context.allowed(name)};
