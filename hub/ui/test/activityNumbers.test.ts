@@ -95,6 +95,31 @@ for(const periodName of ['1h','30d'])test(`${periodName}: PageClock updates fina
   } finally {readers.forEach(reader=>reader.close());d.close();await h.close();}
 });
 
+for(const lang of ['en','ru'] as const)test(`${lang}: all four Activity metrics survive a soft work refresh and its failure until retry replaces them`,async test=>{
+  test.mock.method(Date,'now',()=>NOW);setLocale(lang);
+  const h=await fixture({initialFilters:defaultFilters(),creditFrom:NOW-4*M,creditTo:NOW-2*M}),d=await drawings(h);
+  const clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}});
+  const props={history:d.renderActivity().drawing,by:'project',muted:{},since:null},totals=consumer('Totals',clock,h.period,props);
+  const held=h.hold();
+  try{
+    const first=totals.render();assert.equal((first.match(/<b>/g)??[]).length,4);
+    h.credit(NOW-2*M,NOW-M);h.events.flush();await flush();
+    assert.ok(h.requests.some(request=>request.sessions),'the replacement work response is still held');
+    assert.equal(totals.update({...props,history:d.renderActivity().drawing}),first);
+    held.reject(new Error('held work read failed'));await flush();
+    const failed=d.renderActivity();assert.equal(failed.error,'history_failed');
+    assert.equal(totals.update({...props,history:failed.drawing}),first);
+    const activity=failed.history.activity,group=activity.by.project[0],hover=activity.cells.find((cell:number[])=>cell[2]>0)![0];
+    const readout=consumer('ActivityReadout',clock,h.period,{history:failed.drawing,by:'project',hover,barMs:activity.barMs,bar:[hover,M,M,1],parts:[{key:group.key,name:'Work project',color:'red',ms:2*M}],tipProps:{}});
+    try{const detail=readout.render();assert.ok(detail.includes('>'+workHours(M)+'</strong>'));assert.ok(!detail.includes('>'+workHours(2*M)+'</strong>'),'a retained tooltip reads its bar, never the whole-period total');}finally{readout.close();}
+    h.period.retry();d.loader.retry();await flush();
+    const ready=d.renderActivity();assert.equal(ready.error,undefined);
+    assert.equal(ready.history.activity.agentMs,3*M);
+    const replaced=totals.update({...props,history:ready.drawing});
+    assert.equal((replaced.match(/<b>/g)??[]).length,4);assert.notEqual(replaced,first);
+  }finally{held.release();totals.close();d.close();await h.close();}
+});
+
 test('numerical labels freeze during a gesture and retire on an authority replacement',async test=>{
   test.mock.method(Date,'now',()=>NOW);const h=await fixture(),d=await drawings(h);let now=NOW,panning:number|null=1;
   const timers=new Set<object>();const clock=new PageClock({now:()=>now,visible:()=>true,setTimeout:()=>{const token={};timers.add(token);return token;},clearTimeout:token=>{timers.delete(token as object);}});
@@ -159,9 +184,9 @@ test('the Activity clock advances the plot without invalidating unchanged numeri
   test.mock.method(Date,'now',()=>NOW);const h=await fixture(),d=await drawings(h),hooks=preparationFixture();
   let now=NOW,shown={...d.render(),presentation:0};
   const prefs={range:'1h',activityBy:'project',muted:{}},titles={},view=h.page.get().board!.view;
-  const context:any={chartSeriesMuted,ACTIVITY,exports:{},require,memo:(value:any)=>value,...hooks,
+  const context:any={activityMutedKeys:()=>[],chartSeriesMuted,ACTIVITY,exports:{},require,memo:(value:any)=>value,...hooks,
     useMemo:(read:any,deps:any[])=>{const box=hooks.useRef(null) as any;if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;},
-    useActivitySubset:()=>({}),useHistory:()=>shown,useHistoryPlot:()=>null,usePlot:()=>({}),useLineup:()=>[],usePersonalBoard:()=>false,useTitles:()=>titles,
+    useActivitySubset:()=>({}),useActivityHistory:()=>shown,useHistoryPlot:()=>null,usePlot:()=>({}),useLineup:()=>[],usePersonalBoard:()=>false,useTitles:()=>titles,
     useChartMuted:()=>prefs.muted,usePref:(key:keyof typeof prefs)=>prefs[key],useSeriesFocus:()=>{},useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=>h.board,useClock:()=>now,usePanning:()=>null,useHistoryBegins:()=>0,
     axisNavigation:()=>({context:h.board,range:'1h'}),frameOf:()=>({from:now-H,to:now}),measuredTo:()=>now,
     activityEmpty,groupColors,groupName:(group:any)=>group.name,mutedKey,stamp,t,useLayoutEffect:hooks.useLayoutEffect,

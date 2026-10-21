@@ -12,17 +12,17 @@ import {StackPaths} from '../lib/stackPaths';
 import {groupRegistry} from '../lib/plotRegistry';
 import {cellStart} from '../../server/domain/history';
 import {niceTicks} from '../lib/periods';
-import {navigationKey} from '../lib/axisNavigation';
+import {navigationAt,navigationKey} from '../lib/axisNavigation';
 import {preparationFixture} from './preparationFixture';
 
 test('the actual activity edge painter advances clipped bars without preparing the interior again', () => {
   const source = readFileSync(new URL('../components/Activity.tsx', import.meta.url), 'utf8');
-  const start = source.indexOf('  const paintEdges = () => {');
+  const start = source.indexOf('  const paintEdges = (');
   const region = source.slice(start, source.indexOf('  // Input uses the committed groups', start));
   const attributes = new Map<string, string>(), path = new Map<string, string>();
   const clips: number[][] = []; let draft: {token: number} | null = null;
   const node = (values: Map<string, string>) => ({getAttribute: (name: string) => values.get(name), setAttribute: (name: string, value: string) => values.set(name, value)});
-  const context = {heights:new Map(),paintValue:()=>{},bandClip: {current: {}}, mask: {current: node(attributes)}, edges: {current: {querySelectorAll: () => [node(path)]}},
+  const context = {navigationAt,navigationKey,navigation:{context:'test',range:'live'},timeRange:()=>null,valueContext:'',valuePin:{current:null},activityScale,heights:new Map(),paintValue:()=>{},bandClip: {current: {}}, mask: {current: node(attributes)}, edges: {current: {querySelectorAll: () => [node(path)]}},
     currentActivity: {}, activity: {by: {source: [{key: 's', cells: [[0, 25_000], [60_000, 60_000], [120_000, 5_000]]}]}},
     strip: null, groups: [{group: {key: 's'}}], from: 15_000, to: 135_000, by: 'source', barMs: 60_000, vertical: {max: 60_000}, height: 100, perMs: 0.001,
     left: 0, right: 0, width: 120, scale: 1, x: (at: number) => at / 1000, y: (ms: number) => 100 - ms / 1000,
@@ -70,7 +70,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
     groupMuted:()=>false,groupRegistry, groupName: (group: {key: string}) => group.key, mutedKey: (_by: string, key: string) => key,
     plotGroupsPrepared: function* (...args: Parameters<typeof plotGroupsPrepared>) {aggregates++; return yield* plotGroupsPrepared(...args);},
     StackPaths: CountedPaths, stacksHeight: () => 160, activityScale, niceTicks: (...args: Parameters<typeof niceTicks>) => {tickFrame = [args[0], args[1]]; return niceTicks(...args);}, cellStart,plotBar,targetOf, MINUTE: 60_000,
-    CSS: {escape: (id: string) => id}, pan: {active: () => 1, subscribe: () => () => {}}, useLocale: () => 'en',
+    CSS: {escape: (id: string) => id}, pan: {active: () => 1, subscribe: () => () => {},onStop:()=>()=>{}}, useLocale: () => 'en',
     useTimeAxis: () => axis,
     useTip: () => ({tip: {current: null}, style: {}}), PlotLayer: () => null, PlotOverlay: () => null, Tooltip: () => null,
     clock: () => '', shortDay: () => '', workHours: () => '', stamp: () => '', t: (key: string) => key,
@@ -115,14 +115,14 @@ test('actual Activity generators hold one coherent model and produce exact stack
 
 test('native Activity value projection excludes a departed peak before release and survives the typed handoff',async()=>{
   const {workHours}=await import('../lib/format');const H=3_600_000,M=60000;
-  let queries=0,draft:{length:number}|null=null,visualFrom=0;
+  let queries=0,draft:{length:number}|null=null,visualFrom=0,selected:{from:number;to:number}|null=null;
   const element=()=>{const attrs=new Map<string,string>();return {style:{display:''},textContent:'',getAttribute:(name:string)=>attrs.get(name)??null,setAttribute:(name:string,value:string)=>attrs.set(name,value),hasAttribute:(name:string)=>attrs.has(name),removeAttribute:(name:string)=>attrs.delete(name)};};
   const rows=Array.from({length:4},()=>{const line=element(),text=element();return {...element(),line,text,querySelector:(name:string)=>{queries++;return name==='line'?line:text;}};});
   const band=element(),edges={...element(),querySelectorAll:()=>[]},axis={held:false,visualGeometry:()=>({from:visualFrom}),screenX:(at:number)=>at/M};
-  const context={activityScale,workHours,valueBand:{current:band},valueAxis:{current:{children:rows}},paintedValue:{current:''},vertical:{max:12*H},height:300,top:12,bottom:28,
+  const context={navigationAt,navigationKey,navigation:{context:'test',range:'live'},timeRange:()=>selected,valueContext:'',valuePin:{current:null as {context:string;range:string;maximum:number}|null},activityScale,workHours,valueBand:{current:band},valueAxis:{current:{children:rows}},paintedValue:{current:''},vertical:{max:12*H},height:300,top:12,bottom:28,
     heights:new Map([[0,12*H],[M,H],[-M,100*H]]),bandClip:{current:{}},mask:{current:element()},edges:{current:edges},pan:{get:()=>draft},axis,strip:null,
     groups:[{group:{key:'s'}}],activity:{by:{source:[]}},currentActivity:{},from:0,to:2*M,barMs:M,by:'source',left:0,right:0,width:120,scale:1,perMs:1/M,x:(at:number)=>at/M,y:(value:number)=>272-value/(12*H)*260,
-    cellStart,plotBar,targetOf,clipPlot:()=>{},painted:{current:''},paint:null as unknown as ()=>void};
+    cellStart,plotBar,targetOf,clipPlot:()=>{},painted:{current:''},paint:null as unknown as (range?:{from:number;to:number},pin?:boolean)=>void};
   const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8'),start=source.indexOf('  const paintValue=');
   const body=source.slice(start,source.indexOf('  // Input uses the committed groups',start));
   runInNewContext(ts.transpileModule(body+'\nglobalThis.paint=paintEdges;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
@@ -131,7 +131,13 @@ test('native Activity value projection excludes a departed peak before release a
   const projected=(base:number)=>{const ratio=Number(band.getAttribute('transform')?.match(/scale\(1 ([^)]+)\)/)?.[1]??1);return 272+(272-H/base*260-272)*ratio;};
   const lastInput=projected(12*H),labels=rows.map(row=>row.text.textContent);
   const reads=queries;for(let i=0;i<100;i++)context.paint();assert.equal(queries,reads,'an unchanged native scale neither traverses nor rewrites the axis');
-  draft=null;axis.held=true;context.paint();assert.equal(projected(12*H),lastInput);assert.deepEqual(rows.map(row=>row.text.textContent),labels);
+  draft=null;axis.held=true;selected={from:M,to:3*M};context.paint(selected,true);assert.equal(projected(12*H),lastInput);assert.deepEqual(rows.map(row=>row.text.textContent),labels);
   context.vertical.max=H;context.from=M;context.to=3*M;axis.held=false;context.paintedValue.current='';context.paint();
   assert.equal(band.getAttribute('transform'),null);assert.ok(Math.abs(projected(H)-lastInput)<1e-9,'prepared paths adopt the displayed value projection without a release zoom');assert.deepEqual(rows.map(row=>row.text.textContent),labels);
+  context.heights.set(M,.6*H);context.paint();
+  assert.equal(band.getAttribute('transform'),null,'an exactly clipped replacement edge cannot shrink the positioned value scale');assert.deepEqual(rows.map(row=>row.text.textContent),labels);
+  context.heights.set(M,3*H);context.paint();
+  assert.match(band.getAttribute('transform')!,/scale\(1 0.3333333333333333\)/,'newly read higher work still fits instead of being clipped');
+  selected={from:2*M,to:4*M};context.from=2*M;context.to=4*M;context.paint();
+  assert.equal(context.valuePin.current,null,'explicit navigation retires the prior value projection');
 });

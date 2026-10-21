@@ -221,7 +221,7 @@ test('committed axis ticks reuse shaped widths across frames and measure only ch
   const {tickPresentation}=await import('../lib/axisTicks');let reads=0;
   const tick=(text:string,x:number)=>({textContent:text,x,style:{visibility:'',transform:''},getAttribute:()=>String(x),getComputedTextLength:()=>{reads++;return 44;}});
   const ticks=[tick('14 Oct',60),tick('15 Oct',200)];
-  const context={box:{current:{querySelectorAll:()=>ticks}},tickWidths:{current:new WeakMap()},paintTicks:{current:()=>{}},pose:{current:{a:1,b:0,offset:0}},scale:.73,left:48,right:12,width:920,tickPresentation,
+  const context={box:{current:{querySelectorAll:()=>ticks}},tickWidths:{current:new Map()},paintTicks:{current:()=>{}},pose:{current:{a:1,b:0,offset:0}},scale:.73,left:48,right:12,width:920,tickPresentation,
     useLayoutEffect:(run:()=>void)=>run(),measure:null as unknown as ()=>void};
   const source=readFileSync(new URL('../components/timeAxis.ts',import.meta.url),'utf8'),start=source.indexOf('  useLayoutEffect(() => {\n    // Measure only after DOM commit.');
   const body=source.slice(start,source.indexOf('\n  return {box, svg',start));
@@ -230,5 +230,8 @@ test('committed axis ticks reuse shaped widths across frames and measure only ch
   for(let i=0;i<100;i++){context.pose.current.offset=i*.01;context.paintTicks.current();context.measure();}
   assert.equal(reads,2,'input and ordinary commits never force text layout for retained labels');
   ticks[0].textContent='16 Oct';context.measure();assert.equal(reads,3);
-  context.tickWidths.current=new WeakMap();context.measure();assert.equal(reads,5,'a font change retires the shaped widths');
+  ticks[0]=tick('16 Oct',60);ticks[1]=tick('15 Oct',200);context.measure();assert.equal(reads,3,'rebuilt strips reuse glyph widths without another forced layout');
+  context.tickWidths.current.clear();context.measure();assert.equal(reads,5,'a font change retires the shaped widths');
+  for(let i=0;i<200;i++){ticks[0].textContent='day '+i;context.measure();}
+  assert.equal(context.tickWidths.current.size,128,'long navigation keeps the glyph cache bounded');
 });

@@ -10,13 +10,13 @@ import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks, periodOf} fro
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
 import {page, usePersonalBoard, useBoardId, useLineup, useTitles} from '../lib/board';
 import {useClock,hubNow} from '../lib/clock';
-import {quotaHistory, useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
+import {quotaHistory, useActivityHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {boardPeriod} from '../lib/period';
 import {workChange} from '../lib/workChanges';
 import type {History} from '../../server/domain/history';
 import {plotBar, plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
 import {usePrepared, usePreparationBasis} from './prepared';
-import {axisNavigation, navigationKey, type AxisNavigation} from '../lib/axisNavigation';
+import {axisNavigation, navigationAt, navigationKey, type AxisNavigation} from '../lib/axisNavigation';
 import {groupRegistry, type GroupIdentity} from '../lib/plotRegistry';
 import {StackPaths} from '../lib/stackPaths';
 import {pan, usePanning} from '../lib/pan';
@@ -90,8 +90,8 @@ const metricsText = (value: {agentMs:number;activeMs:number;agents:number}) => [
 /** Small numerical consumers follow formatted changes, independently of the drawing grid. */
 function useActivityNumbers(history:History|null,by:ActivityDimension,read:(activity:ActivityData)=>string,enabled=true,bar?:number,key?:string) {
   const panning=usePanning();
-  const at=(now:number)=>history?boardPeriod.activityAt(history,by,now,bar,key):null;
-  const now=useClock(now=>history&&enabled&&panning===null?boardPeriod.activityChangesAt(history,by,now,at=>read(boardPeriod.activityAt(history,by,at,bar,key)),key):null);
+  const at=(now:number)=>history?boardPeriod.activityAt(history,by,now,bar,key,!boardPeriod.activityProjectionState(history).ready):null;
+  const now=useClock(now=>history&&enabled&&panning===null&&boardPeriod.activityProjectionState(history).ready?boardPeriod.activityChangesAt(history,by,now,time=>read(at(time)!),key):null);
   return panning===null&&enabled?at(now):bar===undefined?history?.activity??null:null;
 }
 
@@ -202,7 +202,7 @@ const Totals=memo(function Totals({history,by,subset,scoped,allOff,since,focus,g
  * render it. The unknown part of the period is hatched rather than drawn as idle.
  */
 export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
-  const {history,drawing,loading,error,presentation:authority} = useHistory(true);
+  const {history,drawing,loading,error,presentation:authority} = useActivityHistory();
   const strip = useHistoryPlot(true);
   const registry = useRef<{authority: number; token: number; by: ActivityDimension; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
   if (registry.current?.authority !== authority) registry.current = null;
@@ -279,7 +279,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const emptyFrame = answered && panning === null && !strip ? empty : null;
 
   return (
-    <AnalyticsPanel ref={panel} className="activity" title={t('activity.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
+    <AnalyticsPanel ref={panel} className="activity" title={t('activity.title')} chart history={history} loading={loading} error={error} retry={()=>{boardPeriod.retry();quotaHistory.retry();}}
       settings={<ActivitySettings arrange={arrange} since={since}/>}
     >
       <Totals history={drawing} by={by} subset={subset} scoped={scoped} allOff={allOff} since={since} focus={focus} groups={currentGroups}/>
@@ -303,6 +303,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             authority={authority}
             navigation={navigation}
             by={by}
+            valueContext={JSON.stringify(activityMutedKeys(prefs.muted,by))}
             allMuted={!emptyFrame && presentation.identities.length > 0 && presentation.shown.length === 0}
             empty={!history ? empty : emptyFrame}
           />
@@ -365,6 +366,7 @@ const Stacks = memo(function Stacks({
   authority,
   navigation,
   by,
+  valueContext='',
   allMuted,
   empty,
 }: {
@@ -390,6 +392,7 @@ const Stacks = memo(function Stacks({
   authority: number;
   navigation: AxisNavigation;
   by: ActivityDimension;
+  valueContext?:string;
   allMuted: boolean;
   empty: string | null;
 }) {
@@ -466,7 +469,8 @@ const Stacks = memo(function Stacks({
   const edges = useRef<SVGGElement>(null);
   const valueBand=useRef<SVGGElement>(null),valueAxis=useRef<SVGGElement>(null);
   const paintedValue=useRef('');
-  const edgePaint = useRef(() => {});
+  const valuePin=useRef<{context:string;range:string;maximum:number}|null>(null);
+  const edgePaint = useRef<(range?:TimeRange,pin?:boolean)=>void>(() => {});
   const painted = useRef('');
   // The prepared paths own their numeric basis. The native painter owns the
   // visible value projection, just as timeAxis owns their horizontal projection.
@@ -489,17 +493,23 @@ const Stacks = memo(function Stacks({
       if(label){const text=value?workHours(value):'0';if(label.textContent!==text)label.textContent=text;if(label.getAttribute('y')!==String(at+4))label.setAttribute('y',String(at+4));}
     });
   };
-  const paintEdges = () => {
+  const paintEdges = (forced?:TimeRange,pin=false) => {
     if (!bandClip.current) return;
     const draft = pan.get();
     const visual = axis.visualGeometry();
-    const range = draft || axis.held ? {from: visual.from, to: visual.from + (draft?.length ?? strip?.length ?? to-from)} : {from, to};
+    const range = forced??(draft || axis.held ? {from: visual.from, to: visual.from + (draft?.length ?? strip?.length ?? to-from)} : {from, to});
     const target = strip ? targetOf(strip.length, draft?.now ?? to, 'edge', range) : null;
     let maximum=0;
     for(const [at,value] of heights)if(strip?at>=range.from&&at+barMs<=range.to:at<range.to&&at+barMs>range.from)maximum=Math.max(maximum,value);
     if(strip&&target)for(const at of new Set([cellStart(range.from,barMs),cellStart(range.to-1,barMs)])){
       const bar=plotBar(strip,at,target,by);
       if(bar)maximum=Math.max(maximum,[...bar.groups].reduce((sum,[key,part])=>sum+(groups.some(row=>row.group.key===key)?part.ms:0),0));
+    }
+    if(pin||!draft){
+      const context=`${navigation.context}:${width}:${height}:${valueContext}`,projectionKey=navigationKey(navigationAt(navigation,forced??timeRange()));
+      if(pin)valuePin.current={context,range:projectionKey,maximum:activityScale(maximum).max};
+      if(valuePin.current?.context!==context||valuePin.current.range!==projectionKey)valuePin.current=null;
+      if(valuePin.current){valuePin.current.maximum=Math.max(activityScale(maximum).max,valuePin.current.maximum);maximum=valuePin.current.maximum;}
     }
     paintValue(maximum);
     // Until a gesture has a strip, the retained answer moves as a whole. Its
@@ -546,6 +556,11 @@ const Stacks = memo(function Stacks({
   // Input uses the committed groups while React prepares their replacement.
   useLayoutEffect(() => {edgePaint.current = paintEdges; painted.current = '';paintedValue.current=''; paintEdges();});
   useLayoutEffect(() => pan.subscribe(() => edgePaint.current()), []);
+  useLayoutEffect(()=>pan.onStop(stop=>{
+    if(stop.canceled||!stop.changed)return;
+    if(stop.range)edgePaint.current(stop.range,true);
+    else valuePin.current=null;
+  }),[]);
   useEffect(() => {if (!strip) painted.current = '';}, [strip]);
 
   const partialBar = strip && hover !== null ? plotBar(strip, hover, targetOf(strip.length, to, 'hover', {from, to}), by) : null;

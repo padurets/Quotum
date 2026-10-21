@@ -2042,6 +2042,15 @@ interval and exact boundary bars, excluding its overscan and unread cells.
 The same native painter updates that value projection with the time position, using
 the committed height index. Prepared paths retain their numeric basis; a matching
 replacement adopts the displayed value projection without changing it on release.
+The final historical value scale is also retained through exact edge replacement:
+a smaller partial boundary bar cannot enlarge all the unchanged interior stacks.
+Higher newly read work can expand that scale; another navigation, legend selection,
+authority or explicit geometry change establishes a new value projection.
+Activity publishes a replacement only when its selected work and native drawing
+are both ready. A quota answer arriving first cannot publish its pending-work
+placeholder as an empty Activity chart. The previous complete work frame and its
+numbers remain visible until replacement or error; hard work retirement clears
+them immediately, independently of native quota readiness.
 A temporary shared registry keeps plot interiors, edge bars, legend markers and readouts
 consistent in colour and dash, adding new groups with a pending total. Surviving groups
 keep their colours through rank changes and reversal; new projects and machines take

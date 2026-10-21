@@ -1309,6 +1309,10 @@ After a historical gesture, completion adopts its final time-to-pixel projection
 without refitting the range or removing the carried future margin. Two fixed times
 therefore keep their screen positions through pending and complete states. Presets,
 Back, horizon changes and authority changes explicitly establish a new projection.
+Activity also keeps its final value scale through an exact boundary replacement;
+newly read higher work can expand it. A new navigation, legend selection, authority
+or explicit geometry change establishes its next value projection. Native quota
+readiness alone cannot publish an empty pending-work Activity replacement.
 Readiness, errors, empty results and filters never change a widget's shell, plot,
 table viewport or neighbouring placement; evidence and retry use existing disclosures.
 Ordinary clock movement reprojects that ready drawing without rebuilding unchanged
