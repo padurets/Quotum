@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {crossingAt,forecastComparator,nextForecastSort,readForecastSort,sortValue,visibleForecastSort,type ForecastSort,type SortRow} from '../lib/forecastSort';
+import {crossingAt,forecastComparator,nextForecastSort,readForecastSort,sortValue,visibleForecastSort,SORT_COLUMNS,type ForecastSort,type SortRow} from '../lib/forecastSort';
 import type {Line} from '../lib/lines';
 import {PeriodAccounting} from '../lib/periodAccounting';
 import {packSamples,type PeriodTape} from '../../server/domain/periodTape';
@@ -40,4 +40,24 @@ test('rolling union and agent-hour slopes use retained accounting and equality/i
   assert.equal(crossingAt(linear(true),now,now+160_000),now+5000);assert.equal(crossingAt([{value:155_000,slope:-1},{value:155_000,slope:0}],now+5000,now+160_000),now+5001);
   assert.equal(crossingAt(linear(false),now,now+100_000),now+52_500);
   assert.equal(crossingAt([{value:1,slope:1},{value:2,slope:0},{value:3,slope:-1}],0,100),1,'adjacent equality catches intermediate permutations');
+});
+
+test('sorting reads only needed work while preserving selected keys, fallback order and forecast deadlines',()=>{
+  const work={from:0,ms:H,agentMs:2*H,coveredMs:H,consumed:10,duringWork:8};
+  const rows=[row('A',20,{work}),row('B',10,{work:{...work,consumed:0.01}}),row('Series 2',50),row('Series 10',0),row('Unknown',null),row('Cap',0,{capCells:[]})];
+  rows[0].line.name='Same';rows[1].line.name='same';rows[5].validUntil=4*H;
+  for(const fixed of [false,true])for(const locale of ['en','ru'])for(const now of [3*H,4*H,10*H])for(const selection of [null,...SORT_COLUMNS.flatMap(column=>[false,true].map(descending=>({column,descending})))]){
+    const compare=forecastComparator(selection,fixed,locale),full=rows.map(r=>sortValue(r,r.line,now,fixed)),selected=rows.map(r=>sortValue(r,r.line,now,fixed,selection?.column??'name'));
+    selected.forEach((value,i)=>{
+      assert.equal(value.current,full[i].current);assert.deepEqual(value.said,full[i].said);
+      if(fixed)assert.equal(value.spent,full[i].spent,'fixed spending still breaks equal primary keys');
+      if(selection&&selection.column!=='name')assert.deepEqual(value.keys[selection.column],full[i].keys[selection.column]);
+    });
+    assert.deepEqual(selected.sort(compare).map(v=>v.row.line.key),full.sort(compare).map(v=>v.row.line.key));
+  }
+  const tracked=row('Tracked',20,{work});let reads=0;
+  Object.defineProperty(tracked.line,'work',{get:()=>{reads++;return work;}});
+  sortValue(tracked,tracked.line,3*H,false);assert.ok(reads>0,'the full-key control reaches the work model');
+  reads=0;sortValue(tracked,tracked.line,3*H,false,'name');assert.equal(reads,0,'default and name order need no work keys');
+  sortValue(tracked,tracked.line,3*H,false,'workleft');assert.ok(reads>0,'work ordering still reads its full numeric or bounded key');
 });
