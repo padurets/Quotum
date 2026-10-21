@@ -16,7 +16,7 @@ export function lineRegistry(seed: readonly PlotLine[], previous: readonly PlotL
   return result;
 }
 
-export type GroupIdentity = Pick<PlotGroup, 'key' | 'name'> & {color: string};
+export type GroupIdentity = Pick<PlotGroup, 'key' | 'name'> & {color: string;manual?:boolean};
 export function groupRegistry(seed: readonly GroupIdentity[], previous: readonly GroupIdentity[], candidates: readonly Pick<PlotGroup, 'key' | 'name'>[], sourceColor?: (key: string) => string): GroupIdentity[] {
   const original = new Set(seed.map(group => group.key));
   const current = new Map(candidates.map(group => [group.key, group]));

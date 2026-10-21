@@ -1,5 +1,6 @@
 import {matchesSource,matchesSelection} from './domain/dataFilters.js';
 import {filterContext,filterEnvelope} from './dataFilters.js';
+import {projectColorsOf,type ProjectColors} from './projectColors.js';
 import {level, sameWindow, type AttentionState, type Candidate} from './domain/attention.js';
 import {sourceHidden, titled} from './domain/presentation.js';
 import {balanceDescriptor, catalogue, monetaryOf, providerOf} from './domain/providers.js';
@@ -44,7 +45,7 @@ export type Card = SourceState & {usageWork?:UsageWork[];budget?:BudgetAccess;ow
 /** When a source is measured next and why, while its holder follows the hub's pace. */
 export type Cadence = {by?:'hub';next: number; why: Why} | null;
 
-export type BoardPart = {board: {id: string; name: string; personal: boolean}; view: View; viewRevision: number;filtersRevision?:number;filtersAuthority?:string; lineup: string[]};
+export type BoardPart = {board: {id: string; name: string; personal: boolean}; view: View; viewRevision: number;filtersRevision?:number;filtersAuthority?:string;projectColorsRevision?:number;projectColorsAuthority?:string; lineup: string[]};
 export type SourcePart = {card: Card; sessions: BoardSession[]; cadence: Cadence; refresh: Refresh};
 /** Where the recent pace of a source's weekly windows leads, by window id (server/forecasts.ts). */
 export type ForecastPart = Record<string, WindowForecast>;
@@ -82,7 +83,8 @@ export function publicSourceState(state: SourceState, financial=true): SourceSta
 }
 
 export class Projection {
-  constructor(private readonly hub: {store: Store; directory: Directory; ingest: Ingest; resets: ResetFeed;credentials?:Credentials;hubSources?:HubSources}) {}
+  readonly projectColors:ProjectColors;
+  constructor(private readonly hub: {store: Store; directory: Directory; ingest: Ingest; resets: ResetFeed;credentials?:Credentials;hubSources?:HubSources;projectColors?:ProjectColors}) {this.projectColors=projectColorsOf(hub);}
 
   /** The sources a board shows, in order, with whose they are. */
   lineup(board: string): BoardSource[] {
@@ -95,7 +97,8 @@ export class Projection {
     if (!found) return null;
     const {view, revision} = this.hub.directory.viewState(board);
     const filters=this.filtersPart(board,roster);
-    return {board: found, view, viewRevision: revision,filtersRevision:filters.revision,filtersAuthority:filters.authority, lineup: lineup.map(s => s.id)};
+    const colors=this.projectColors.context(board,roster).envelope;
+    return {board: found, view, viewRevision: revision,filtersRevision:filters.revision,filtersAuthority:filters.authority,projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority, lineup: lineup.map(s => s.id)};
   }
 
   filtersPart(board:string,roster?:ReturnType<Projection['roster']>){return filterEnvelope(this.hub.directory,this.hub.store,board,filterContext(this.hub.store,board,this.hub.ingest,roster?.access,roster));}
@@ -237,9 +240,9 @@ export class Projection {
   roster(board:string,now:number) {const access=this.hub.store.workAccess(board,now);return {...this.hub.ingest.live.board(access,now),access};}
 
   /** The board as the reader sees it now; null once it is gone. */
-  snapshot(user: string, board: string, now: number): Snapshot | null {
+  snapshot(user: string, board: string, now: number,capturedRoster?:ReturnType<Projection['roster']>): Snapshot | null {
     const lineup = this.lineup(board);
-    const roster=this.roster(board,now);
+    const roster=capturedRoster??this.roster(board,now);
     const part = this.boardPart(board, lineup,roster);
     if (!part) return null;
     const members = this.members(board);
@@ -252,6 +255,7 @@ export class Projection {
       view: part.view,
       viewRevision: part.viewRevision,
       filtersRevision:part.filtersRevision,filtersAuthority:part.filtersAuthority,
+      projectColorsRevision:part.projectColorsRevision,projectColorsAuthority:part.projectColorsAuthority,
       historyStart: this.hub.store.historyStart(now),
       workAuthority: this.workKey(board,roster.access),
       sources: sources.map(s => s.card),

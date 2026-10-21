@@ -379,6 +379,13 @@ scene a run, the list is printed). Set `QUOTUM_PORT` if 8080 is taken. After cha
 the UI, `npm run build` and reload the page; after changing the server, `npm run build`
 and start the demo again.
 
+`DEV_SET=project-colors DEV_STILL=true make dev` (or `npm run demo -- project-colors --still`)
+shows repeated manual project colours, automatic displacement, neutral overflow,
+retained out-of-period pins and merged names. Its capacity and dormant-reset boards
+exercise the 89-assignment bound and the owner's explicit reset without exposing
+unavailable names. Check owner and reader views, both languages and the combined name/colour popup
+in Manage projects at narrow widths.
+
 `npm run demo -- links --still` opens the client-link scenarios. For the synthetic
 month history comparison, archive the control revision into a separate temporary
 directory, install its hub dependencies, then run

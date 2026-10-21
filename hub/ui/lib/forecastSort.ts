@@ -23,16 +23,16 @@ export type SortValue={row:SortRow;current:number|null;spent:number|null;said:Ou
 const workKey=(cell:WorkCell|undefined,bound:number|null):Scalar=>!cell||'none' in cell?null:'usedUp' in cell?[0,0]:'value' in cell?[0,cell.value]:[1,'outlasts' in cell?cell.windowMs:bound??Infinity];
 const forecastKey=(said:Outlook):Scalar=>said.key==='usedUp'?[0]:said.key==='runsOut'||said.key==='pastZero'?[1,said.at]:said.key==='pace'?[2]:said.key==='left'?[3,said.left]:null;
 /** Numeric keys use the same models and exact period line as their cells. */
-export function sortValue(row:SortRow,line:Line,now:number,fixed:boolean):SortValue {
+export function sortValue(row:SortRow,line:Line,now:number,fixed:boolean,column?:SortColumn):SortValue {
   const {live,measuredAt,ahead,context,plan}=row;
   const expired=!fixed&&(live?.resetAt!=null&&live.resetAt<=now||row.validUntil!==undefined&&row.validUntil<=now);
   const current=expired?null:line.current;
   const said=outlook(live,measuredAt,now,ahead,context);
-  const spent=line.capCells?null:spentOf(line),spentValue=spent===null||spent.key==='unknown'?null:spent.key==='unused'?0:spent.value;
-  const work=line.capCells?null:lineWork(line,fixed,live?.resetAt??null,now);
+  const spent=line.capCells||!fixed&&column!==undefined&&column!=='spent'?null:spentOf(line),spentValue=spent===null||spent.key==='unknown'?null:spent.key==='unused'?0:spent.value;
+  const work=line.capCells||column!==undefined&&!['work','agenthours','perwork','during','workleft'].includes(column)?null:lineWork(line,fixed,live?.resetAt??null,now);
   const scalar=(value:number|null|undefined):Scalar=>value==null?null:[value];
   return {row,current,spent:spentValue,said,keys:{now:scalar(current),start:scalar(line.remainingAtStart),end:scalar(line.remainingAtEnd),spent:scalar(spentValue),
-    plan:line.capCells?null:scalar(planCell(live,measuredAt,now,plan)?.remaining),pace:line.capCells||line.coveredMs<600_000?null:[line.consumed/(line.coveredMs/3_600_000)],
+    plan:line.capCells||column!==undefined&&column!=='plan'?null:scalar(planCell(live,measuredAt,now,plan)?.remaining),pace:line.capCells||line.coveredMs<600_000?null:[line.consumed/(line.coveredMs/3_600_000)],
     work:workKey(work?.work,null),agenthours:workKey(work?.agenthours,null),perwork:workKey(work?.perwork,null),during:workKey(work?.during,null),
     workleft:workKey(work?.workleft,fixed?null:live?.resetAt==null?null:live.resetAt-now),forecast:line.capCells?null:forecastKey(said)}};
 }

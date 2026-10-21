@@ -168,3 +168,36 @@ test('a time said in another language in a zone not named yet is said there, and
     assert.equal(stamp(spring), '11 апреля 00:30', 'back: not the one made in Cairo');
   });
 });
+
+test('native zone confirmation avoids new formatters while changes and unsupported browsers keep their cadence', t => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'Temporal');
+  let native = 'UTC';
+  Object.defineProperty(globalThis, 'Temporal', {configurable: true, value: {Now: {timeZoneId: () => native}}});
+  t.after(() => {if (descriptor) Object.defineProperty(globalThis, 'Temporal', descriptor); else Reflect.deleteProperty(globalThis, 'Temporal');});
+  const Original = Intl.DateTimeFormat;
+  let constructions = 0;
+  t.mock.method(Intl, 'DateTimeFormat', function(...args: ConstructorParameters<typeof Intl.DateTimeFormat>) {
+    if (!args.length) constructions++;
+    return new Original(...args);
+  });
+  travelling(t, moveTo => {
+    moveTo('UTC');
+    assert.equal(stamp(spring), '10 April 21:30');
+    const warm = constructions;
+    for (let i = 0; i < 5; i++) {t.mock.timers.tick(1000); assert.equal(stamp(spring), '10 April 21:30');}
+    assert.equal(constructions, warm, 'the same native zone avoids repeated default formatter construction');
+    native = 'Etc/UTC'; t.mock.timers.tick(1000);
+    assert.equal(stamp(spring), '10 April 21:30');
+    assert.equal(constructions, warm + 1, 'an alias still uses the Intl identifier');
+    native = 'Europe/Athens'; moveTo(native);
+    assert.equal(stamp(spring), '11 April 00:30');
+    native = 'Africa/Cairo'; moveTo(native);
+    assert.equal(stamp(spring), '11 April 00:30');
+    t.mock.timers.tick(999); assert.equal(stamp(spring), '11 April 00:30');
+    t.mock.timers.tick(1); assert.equal(stamp(spring), '10 April 23:30');
+    Object.defineProperty(globalThis, 'Temporal', {configurable: true, value: undefined});
+    const before = constructions;
+    t.mock.timers.tick(1000); assert.equal(stamp(spring), '10 April 23:30');
+    assert.equal(constructions, before + 1, 'an unsupported browser keeps the existing check');
+  });
+});

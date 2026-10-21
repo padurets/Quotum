@@ -1,3 +1,4 @@
+import {projectColorBindings} from './projectColorBindings';
 import {ACTIVITY} from '../../server/domain/widgets';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -26,7 +27,7 @@ function consumer(h: ReturnType<typeof harness>) {
   const titles={removed:{provider:'codex',title:'Removed'},kept:{provider:'codex',title:'Kept'}};
   let panning:number|null=null;
   const prefs={range:'1h',activityBy:'project'};
-  const context={ACTIVITY,
+  const context={...projectColorBindings(h.page),ACTIVITY,
     exports:{} as any,React,...parent,memo:(f:any)=>f,useMemo:(f:any,deps:any[])=>{const slot=parent.useRef(null) as any;if(!slot.current||deps.some((v,i)=>!Object.is(v,slot.current.deps[i])))slot.current={deps,value:f()};return slot.current.value;},
     useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useActivityHistory:()=>h.render(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
     useLineup:()=>h.page.get().board!.lineup,usePersonalBoard:()=>false,useTitles:()=>titles,

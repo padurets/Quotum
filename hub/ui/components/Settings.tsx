@@ -136,7 +136,7 @@ export function Settings({user, board, boards, local, trustedKeys, refresh, onAp
       section === 'links' ? <ClientLinks key={user.id} userId={user.id} /> :
       section === 'connections' ? <ConnectionsPage key={entry+':'+(new URLSearchParams(address.split('?')[1]??'').get('source')??'')} userId={user.id} boards={boards} trustedKeys={trustedKeys} local={local} /> :
       section === 'currencies' ? <CurrencySettings key={user.id} /> :
-      section === 'projects' ? <Projects /> : section === 'interface' ? <><p className="dialog-text">{t('settings.browserScope')}</p><Browser title={t('settings.interface')} /></> :
+      section === 'projects' ? <Projects board={board} /> : section === 'interface' ? <><p className="dialog-text">{t('settings.browserScope')}</p><Browser title={t('settings.interface')} /></> :
       section === 'application' && appState ? <>{capabilities.includes('measuring') && <Measuring state={appState} onState={onAppState} />}{capabilities.includes('app') && <AppSection state={appState} onState={onAppState} />}</> : null}
   </SettingsFrame>;
 }

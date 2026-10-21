@@ -20,7 +20,7 @@ test('filters are a separate ordered configuration frame and an unrelated layout
   const reader={user:owner.id,board,secret:'synthetic-filters'},frames:Frame[]=[];
   const initial=events.open({...reader,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});
   assert.ok(initial&&initial!=='limit');
-  assert.deepEqual(initial.frames.map(frame=>frame.type),['hello','snapshot','filters']);
+  assert.deepEqual(initial.frames.map(frame=>frame.type),['hello','snapshot','filters','projectColors']);
   const snapshot=JSON.parse(initial.frames[1].data),saved=JSON.parse(initial.frames[2].data) as FilterEnvelope;
   assert.equal(snapshot.filtersRevision,saved.revision);assert.equal(snapshot.filtersAuthority,saved.authority);assert.equal(snapshot.filters,undefined);
   const filters=defaultFilters();filters.clients={mode:'include',values:['codex']};
@@ -32,6 +32,6 @@ test('filters are a separate ordered configuration frame and an unrelated layout
   directory.saveView(board,{...directory.view(board),hidden:['agents']},owner.id,now);events.flush();
   assert.equal(frames.some(frame=>frame.type==='filters'),false);
   const poll=await events.poll(reader,undefined);assert.ok(poll&&poll!=='limit');
-  assert.deepEqual(poll.frames.map(frame=>frame.type),['hello','snapshot','filters']);
+  assert.deepEqual(poll.frames.map(frame=>frame.type),['hello','snapshot','filters','projectColors']);
   assert.deepEqual(JSON.parse(poll.frames[2].data).filters.clients,filters.clients);
 });

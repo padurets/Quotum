@@ -12,6 +12,7 @@ import type {Card, LiveSession, Pace, Refresh, SourceForecast, View} from './typ
 import type {SourceAccess} from '../../server/secrets/credentials';
 import {providerOf,moneyFamily,supportsQuota,quotaMeter,type MoneyFamily} from '../../server/domain/providers';
 import {quotaPeriods} from './subscription';
+import {parseProjectColorEnvelope,type ProjectColorEnvelope,type ProjectColorPins} from '../../server/domain/projectColors';
 
 /**
  * The page's state, and the one way it changes: events. What the hub pushes
@@ -35,6 +36,7 @@ export type Snapshot = {
   view: View;
   viewRevision?: number;
   filtersRevision?:number;filtersAuthority?:string;filters?:FilterEnvelope;
+  projectColorsRevision?:number;projectColorsAuthority?:string;projectColors?:ProjectColorEnvelope;
   connectionsRevision?: number;
   historyStart: number;
   workAuthority?: string;
@@ -55,7 +57,8 @@ export type HubEvent =
   | {type: 'devices'; data: Record<string, never>}
   | {type: 'hello'; data: {epoch: string}}
   | {type: 'snapshot'; data: Snapshot}
-  | {type: 'board'; data: {board: BoardMeta}}
+  | {type: 'board'; data: {board?: BoardMeta;projectColorsRevision?:number;projectColorsAuthority?:string}}
+  | {type:'projectColors';data:ProjectColorEnvelope}
   | {type:'filters';data:FilterEnvelope}
   | {type: 'view'; data: {view: View; revision?: number}}
   | {type: 'connections'; data: {revision: number}}
@@ -85,6 +88,9 @@ export type BoardState = {
   view: View;
   viewRevision?: number;
   filtersRevision?:number;filtersAuthority?:string;filters?:FilterEnvelope;
+  projectColorsRevision?:number;projectColorsAuthority?:string;projectColors?:ProjectColorEnvelope;
+  /** A matching configuration has confirmed this connection's baseline. Deltas keep its paint until replacement. */
+  projectColorsBaselineReady?:boolean;
   connectionsRevision?: number;
   historyStart: number;
   workAuthority?: string;
@@ -99,6 +105,7 @@ export type BoardState = {
 };
 
 export type PageState = {
+  projectColorsGeneration?:number;
   deviceContacts?: Record<string,number|null>;
   /** Owner-device invalidation; snapshots also refresh a disclosure after reconnecting. */
   devicesRevision?: number;
@@ -112,6 +119,7 @@ export type PageState = {
 };
 
 export type PageEvent =
+  | {type:'project-colors-response';board:string;generation:number;workAuthority:string|undefined;expected:{revision:number;authority:string};colors:ProjectColorEnvelope}
   | {type: 'hub'; event: HubEvent}
   | {type: 'connection'; status: ConnectionStatus; lostAt: number | null}
   /** Every session the page takes: its boards. */
@@ -173,6 +181,8 @@ function boundedContacts(contacts:Record<string,number|null>) {
 }
 function snapshot(state: PageState, data: Snapshot): PageState {
   const old = state.board?.id === data.board.id ? state.board : null;
+  const sameWork=typeof data.workAuthority==='string'&&old?.workAuthority===data.workAuthority;
+  const newerColors=sameWork&&Number.isSafeInteger(data.projectColorsRevision)&&(old?.projectColorsRevision??0)>Number(data.projectColorsRevision);
   const board: BoardState = {
     presenceConfirmed: true,
     id: data.board.id,
@@ -182,6 +192,8 @@ function snapshot(state: PageState, data: Snapshot): PageState {
     connectionsRevision: Math.max(old?.connectionsRevision ?? 0, data.connectionsRevision ?? 0),
     historyStart: data.historyStart,
     filtersRevision:data.filtersRevision,filtersAuthority:data.filtersAuthority,filters:old?.filters&&old.filters.revision===data.filtersRevision&&old.filters.authority===data.filtersAuthority?old.filters:undefined,
+    projectColorsRevision:newerColors?old?.projectColorsRevision:data.projectColorsRevision,projectColorsAuthority:newerColors?old?.projectColorsAuthority:data.projectColorsAuthority,
+    projectColors:sameWork?old?.projectColors:undefined,
     workAuthority: typeof data.workAuthority === 'string' && data.workAuthority ? data.workAuthority : undefined,
     lineup: keep(
       old?.lineup,
@@ -197,6 +209,10 @@ function snapshot(state: PageState, data: Snapshot): PageState {
     sourceAccess:keepEach(old?.sourceAccess,data.sourceAccess??{}),
     currencies:keepCurrencyContext(old?.currencies,data.currencies??defaultCurrencyContext),
   };
+  if(!newerColors&&data.projectColors&&data.projectColors.revision===data.projectColorsRevision&&data.projectColors.authority===data.projectColorsAuthority)board.projectColors=parseProjectColorEnvelope(data.projectColors)??undefined;
+  if(data.projectColorsRevision===undefined&&data.projectColorsAuthority===undefined)board.projectColors=undefined;
+  const matching=board.projectColors?.revision===board.projectColorsRevision&&board.projectColors?.authority===board.projectColorsAuthority;
+  board.projectColorsBaselineReady=!!board.projectColors&&matching&&(!!old?.projectColorsBaselineReady||board.projectColors!==old?.projectColors);
   return {
     ...state,
     devicesRevision: (state.devicesRevision ?? 0)+1,
@@ -229,13 +245,26 @@ function hub(state: PageState, event: HubEvent): PageState {
       return changed ? {...state,deviceContacts:boundedContacts(contacts)} : state;
     }
     case 'hello':
-      return patch(state, board => board.presenceConfirmed ? {...board, presenceConfirmed: false} : board);
+      return {...patch(state, board => ({...board,presenceConfirmed:false,projectColorsBaselineReady:false})),projectColorsGeneration:(state.projectColorsGeneration??0)+1};
     case 'devices':
       return {...state, devicesRevision: (state.devicesRevision ?? 0)+1};
     case 'snapshot':
       return snapshot(state, event.data);
     case 'board':
-      return patch(state, board => (sameJson(board.meta, event.data.board) ? board : {...board, meta: event.data.board}));
+      return patch(state, board => {
+        const next={...board,...(event.data.board?{meta:keep(board.meta,event.data.board)}:{})};
+        if('projectColorsRevision' in event.data||'projectColorsAuthority' in event.data){
+          if((event.data.projectColorsRevision??-1)<(board.projectColorsRevision??-1))return board;
+          next.projectColorsRevision=event.data.projectColorsRevision;next.projectColorsAuthority=event.data.projectColorsAuthority;
+        }
+        return shallowEqual(next,board)?board:next;
+      });
+    case 'projectColors':
+      return patch(state,board=>{
+        const colors=parseProjectColorEnvelope(event.data);
+        if(!colors||colors.revision!==board.projectColorsRevision||colors.authority!==board.projectColorsAuthority||colors.revision<(board.projectColors?.revision??0))return board;
+        const saved=keep(board.projectColors,colors);return saved===board.projectColors&&board.projectColorsBaselineReady?board:{...board,projectColors:saved,projectColorsBaselineReady:true};
+      });
     case 'view':
       return patch(state, board => {
         const revision = event.data.revision ?? 0;
@@ -289,12 +318,20 @@ function hub(state: PageState, event: HubEvent): PageState {
     case 'resets':
       return {...state, resets: withResets(state.resets, event.data)};
     case 'history':
-      return patch(state, board => event.data.workAuthority && event.data.workAuthority !== board.workAuthority ? {...board, workAuthority: event.data.workAuthority} : board);
+      return patch(state, board => event.data.workAuthority && event.data.workAuthority !== board.workAuthority ? {...board, workAuthority: event.data.workAuthority,projectColors:undefined,projectColorsAuthority:undefined,projectColorsBaselineReady:false} : board);
   }
 }
 
 export function reduce(state: PageState, event: PageEvent): PageState {
   switch (event.type) {
+    case 'project-colors-response': {
+      const board=state.board,colors=parseProjectColorEnvelope(event.colors);
+      if(!board||board.id!==event.board||(state.projectColorsGeneration??0)!==event.generation||board.workAuthority!==event.workAuthority||!colors||colors.revision<(board.projectColorsRevision??0))return state;
+      const unchanged=board.projectColorsRevision===event.expected.revision&&board.projectColorsAuthority===event.expected.authority;
+      const matching=board.projectColorsRevision===colors.revision&&board.projectColorsAuthority===colors.authority;
+      if(!unchanged&&!matching)return state;
+      return patch(state,current=>({...current,projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority,projectColors:keep(current.projectColors,colors),projectColorsBaselineReady:true}));
+    }
     case 'hub':
       return hub(state, event.event);
     case 'connection': {
@@ -308,9 +345,9 @@ export function reduce(state: PageState, event: PageEvent): PageState {
       return boards === state.boards ? state : {...state, boards};
     }
     case 'board-open':
-      return state.board === null ? state : {...state, board: null};
+      return {...state,board:null,projectColorsGeneration:(state.projectColorsGeneration??0)+1};
     case 'board-close':
-      return state.board === null && state.connection === INITIAL.connection ? state : {...state, board: null, connection: INITIAL.connection};
+      return state.board === null && state.connection === INITIAL.connection ? state : {...state, board: null, connection: INITIAL.connection,projectColorsGeneration:(state.projectColorsGeneration??0)+1};
     case 'board-gone':
       return {...state, boards: state.boards?.filter(b => b.id !== event.id) ?? null, board: state.board?.id === event.id ? null : state.board};
     case 'board-created':
@@ -338,6 +375,14 @@ export const useBoardMeta = (board: string) => usePage(s => metaOf(s, board));
 export const useRole = () => usePage(s => s.boards?.find(b => b.id === s.board?.id)?.role ?? null);
 export const useServerView = () => usePage(s => s.board?.view ?? null);
 export const useViewRevision = () => usePage(s => s.board?.viewRevision ?? 0);
+const NO_PROJECT_PINS:ProjectColorPins=[];
+export const useProjectColorPins=()=>usePage(s=>s.board?.projectColors?.pins??NO_PROJECT_PINS);
+export const useProjectColorEnvelope=()=>usePage(s=>s.board?.projectColors??null);
+export const useWorkAuthority=()=>usePage(s=>s.board?.workAuthority);
+export const useProjectColorGeneration=()=>usePage(s=>s.projectColorsGeneration??0);
+export const projectColorsReady=(board:BoardState|null)=>!!board&&(board.projectColorsRevision===undefined&&board.projectColorsAuthority===undefined||
+  Number.isSafeInteger(board.projectColorsRevision)&&Number(board.projectColorsRevision)>=0&&typeof board.projectColorsAuthority==='string'&&/^[A-Za-z0-9_-]{43}$/.test(board.projectColorsAuthority)&&!!board.projectColors&&board.projectColorsBaselineReady===true);
+export const useProjectColorsReady=()=>usePage(s=>projectColorsReady(s.board));
 export const useConnectionsRevision = () => usePage(s => s.board?.connectionsRevision ?? 0);
 export const useDevicesRevision = () => usePage(s => s.devicesRevision ?? 0);
 export const useDeviceContact = (device: string, baseline: number | null) => usePage(s => Math.max(s.deviceContacts?.[device] ?? 0,baseline ?? 0) || null);

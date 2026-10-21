@@ -1,6 +1,7 @@
 import type {FastifyInstance, FastifyReply, FastifyRequest} from 'fastify';
+import {Readable} from 'node:stream';
 import type {Guards} from '../api.js';
-import {polled, sse, type ByeReason, type Events, type Frame} from '../events.js';
+import {pollBody, sse, type ByeReason, type Events, type Frame,type PollAnswer} from '../events.js';
 import type {Directory} from '../store/directory.js';
 import {CSP, sameSite, sessionSecret} from '../session.js';
 
@@ -17,7 +18,15 @@ export function eventRoutes(app: FastifyInstance, directory: Directory, events: 
     return stream === '1' && (!origin || sameSite(origin, request)) && (!site || site === 'same-origin');
   };
 
-  app.get<{Querystring: {board?: string; mode?: string; lease?: string; desktop?: string}}>('/api/events', {exposeHeadRoute: false}, async (request, reply) => {
+  const pending=new WeakMap<FastifyRequest,PollAnswer>();
+  app.get<{Querystring: {board?: string; mode?: string; lease?: string; desktop?: string}}>('/api/events', {exposeHeadRoute: false,onSend(request,reply,payload,done){
+    const captured=pending.get(request);if(!captured)return done(null,payload);
+    const answer=events.deliverPoll(captured);if(answer===captured)return done(null,payload);
+    if(payload instanceof Readable)payload.destroy();
+    reply.removeHeader('content-encoding').removeHeader('content-length');
+    if(answer.frames.some(packet=>packet.type==='bye'&&packet.data.includes('"restart"')))reply.header('Connection','close');
+    return done(null,pollBody(answer));
+  }}, async (request, reply) => {
     const user = guards.user(request, reply);
     if (!user) return reply;
     if (!ownPage(request)) return reply.code(403).send({error: 'forbidden_origin'});
@@ -32,8 +41,9 @@ export function eventRoutes(app: FastifyInstance, directory: Directory, events: 
       const answer = await events.poll(reader, request.query.lease);
       if (answer === 'limit') return reply.code(429).send({error: 'too_many_streams'});
       if (answer === null) return reply.code(404).send({error: 'board_not_found'});
+      pending.set(request,answer);
       if (answer.frames.some(f => f.type === 'bye' && f.data.includes('"restart"'))) reply.header('Connection', 'close');
-      return reply.type('application/json').send(`{"lease":${JSON.stringify(answer.lease)},"now":${answer.now},"events":${polled(answer.frames)}}`);
+      return reply.type('application/json').send(pollBody(answer));
     }
     return stream(reply, events, reader);
   });

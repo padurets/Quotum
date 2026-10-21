@@ -1,4 +1,5 @@
-import type {FastifyInstance, FastifyReply} from 'fastify';
+import type {FastifyInstance, FastifyReply,FastifyRequest} from 'fastify';
+import {Readable} from 'node:stream';
 import {config, version} from '../config.js';
 import {
   hashPassword,
@@ -22,6 +23,7 @@ import {AdditionError} from '../additions.js';
 import {OPERATION_ID, participation} from '../domain/measurementPolicy.js';
 import {PolicyError} from '../store/measurementPolicies.js';
 import type {ClientProvider} from '../domain/providers.js';
+import {projectColorsOf} from '../projectColors.js';
 
 type Body = Record<string, unknown>;
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
@@ -475,11 +477,37 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   });
 
   // The projects of one's machines, and the names one gives them: see domain/projects.ts.
-  app.get('/api/projects', (request, reply) => {
+  const projectReads=new WeakMap<FastifyRequest,{user:string;board:string;authority:string;rows:{name:string;own:boolean}[]|null}>();
+  app.get<{Querystring:{board?:string;query?:string;cursor?:string}}>('/api/projects',{onSend(request,reply,payload,done){
+    const captured=projectReads.get(request);if(!captured)return done(null,payload);
+    const user=currentUser(request,directory),member=user?.id===captured.user&&directory.membership(captured.board,user.id);
+    const context=member?projectColorsOf(hub).context(captured.board):null;
+    // Conflict envelopes carry private pins and always need a fresh projection.
+    if(context&&context.envelope.authority===captured.authority&&captured.rows?.every(row=>row.own||context.allowed(row.name)))return done(null,payload);
+    if(payload instanceof Readable)payload.destroy();reply.removeHeader('content-encoding').removeHeader('content-length');
+    if(!user){reply.code(401);return done(null,JSON.stringify({error:'unauthorized'}));}
+    if(!member){reply.code(404);return done(null,JSON.stringify({error:'board_not_found'}));}
+    reply.code(409);return done(null,JSON.stringify({error:'project_colors_context_changed',...context!.envelope}));
+  }}, (request, reply) => {
     const user = guards.user(request, reply);
     if (!user) return reply;
     const keptDays = config.retention.sampleDays;
-    return {keptDays, projects: store.projectsOf(user.id, Date.now() - keptDays * 86_400_000)};
+    const since=Date.now()-keptDays*86_400_000;
+    if(!request.query.board)return {keptDays,projects:store.projectsOf(user.id,since)};
+    const access=guards.board(request,reply,request.query.board);if(!access)return reply;
+    const {query='',cursor}=request.query;
+    if(typeof query!=='string'||[...query].length>120||cursor!==undefined&&(typeof cursor!=='string'||cursor.length>3000))return reply.code(400).send({error:'invalid_request'});
+    const colors=projectColorsOf(hub),context=colors.context(access.board.id);
+    try{
+      const result=colors.choices(access.board.id,query,cursor,Date.now(),{user:user.id,since});
+      const own=result.changed?[]:store.projectsOf(user.id,since,result.projects);
+      projectReads.set(request,{user:user.id,board:access.board.id,authority:result.changed?result.envelope.authority:result.authority,rows:result.changed?null:result.projects.map(name=>({name,own:own.some(group=>group.name===name)}))});
+      if(result.changed)return reply.code(409).send({error:'project_colors_context_changed',...result.envelope});
+      return {keptDays,authority:result.authority,nextCursor:result.nextCursor,projects:result.projects.map(name=>{
+        const group=own.find(group=>group.name===name);
+        return {...(group??{name,lastAt:null,machines:[],reported:[]}),canRename:!!group,colorAllowed:context.allowed(name)};
+      })};
+    }catch(error){if(error instanceof Error&&error.message==='invalid_cursor')return reply.code(400).send({error:'invalid_request'});throw error;}
   });
 
   // A hundred names at their longest, escaped in JSON.

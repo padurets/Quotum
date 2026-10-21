@@ -1,5 +1,7 @@
 import {ONBOARDING} from './onboarding.js';
 import {SESSION_ANALYTICS} from './sessionAnalytics.js';
+import {PROJECT_COLORS} from './projectColors.js';
+export {PROJECT_COLOR_SCENES} from './projectColors.js';
 import {MEASURE_INTERVAL} from '../server/domain/frequency.js';
 import {
   agentsWork,
@@ -1738,4 +1740,4 @@ const calendar:DemoSet={id:'calendar',about:'Selected-period agent-hours with da
   {kind:'board',id:'empty',name:'Empty project selection',owner:'ana',members:[],filterProjects:{mode:'include',values:[]},expect:[{state:'widgets'}]},
   {kind:'board',id:'unavailable',name:'No available work history',owner:'boris',members:[],expect:[{state:'widgets'}]},
 ]};
-export const SETS: DemoSet[] = [all, showcase, activity,dataFilters,SESSION_ANALYTICS,money,quotas,analytics, machineClients,linkedClients,measurementDevices, ONBOARDING,calendar];
+export const SETS: DemoSet[] = [all, showcase, activity,dataFilters,SESSION_ANALYTICS,PROJECT_COLORS,money,quotas,analytics, machineClients,linkedClients,measurementDevices, ONBOARDING,calendar];

@@ -62,7 +62,7 @@ function fixture(t: TestContext, enabled = true) {
 
 const changes = (frames: Frame[]) => frames.flatMap(f => f.type === 'history' ? (JSON.parse(f.data) as {changes: HistoryChange[]}).changes : []);
 function replacement(frames: Frame[]): Snapshot {
-  assert.deepEqual(frames.map(f => f.type), ['snapshot','filters']);
+  assert.deepEqual(frames.filter(f=>f.type!=='history').map(f => f.type), ['snapshot','filters','projectColors']);
   return JSON.parse(frames[0].data) as Snapshot;
 }
 
@@ -77,6 +77,8 @@ for (const flush of [false, true]) test(`a financial revoke replaces an undelive
   assert.equal(snapshot.currencies.sources[h.source], undefined);
   assert.equal(snapshot.sources[0].windows[0].id, 'weekly');
   assert.equal(polled(answer.frames).includes('991123'), false);
+  assert.ok(changes(answer.frames).length>0,'independent quota history survives the replacement');
+  assert.ok(changes(answer.frames).every(change=>change.source===h.source&&change.scope==='quota'),'revoked financial history is discarded');
 });
 
 test('disable and re-enable replace the old lease generation and its private bindings', async t => {
@@ -148,6 +150,8 @@ test('SSE rechecks authority between preparing a batch and sending it to each re
   assert.equal(snapshot.sources[0].meters, undefined);
   assert.equal(snapshot.currencies.sources[h.source], undefined);
   assert.equal(sse(later).includes('991123'), false);
+  assert.ok(changes(later).some(change=>change.source===h.source&&change.scope==='quota'),'independent quota news reaches the later reader');
+  assert.ok(changes(later).every(change=>change.source===h.source&&change.scope==='quota'),'the revoked budget supplies no history news');
 });
 
 test('a coalesced financial invalidation starts at the new grant admission, while wallet history stays unrestricted', t => {

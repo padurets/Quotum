@@ -1,4 +1,5 @@
 import {workChange} from '../lib/workChanges';
+import {projectColorBindings} from './projectColorBindings';
 import * as periodValueClockBindings from '../../server/domain/periodValues';
 import {WorkCalendar} from '../lib/workCalendar';
 import {AGENT_HOURS_HEATMAP} from '../../server/domain/widgets';
@@ -140,7 +141,7 @@ export function consumer(h: any) {
   const titles=Object.fromEntries(Object.values(h.page.get().board!.cards).map((c:any)=>[c.id,{provider:c.provider,title:'Shared source'}]));
   let panning:number|null=null;
   const prefs={range:'1h',activityBy:'project'};
-  const context={ACTIVITY,
+  const context={...projectColorBindings(h.page),ACTIVITY,
     exports:{} as any,React,...parent,memo:(f:any)=>f,useMemo:(f:any,deps:any[])=>{const slot=parent.useRef(null) as any;if(!slot.current||deps.some((v,i)=>!Object.is(v,slot.current.deps[i])))slot.current={deps,value:f()};return slot.current.value;},
     useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useActivityHistory:()=>h.renderActivity(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
     useLineup:()=>h.page.get().board!.lineup,usePersonalBoard:()=>false,useTitles:()=>titles,
