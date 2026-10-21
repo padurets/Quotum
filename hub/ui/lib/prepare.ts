@@ -43,9 +43,9 @@ export class Preparations {
       if (!job.valid()) this.cancel(owner);
       else {
         const deadline = this.env.now() + this.quantum;
-        let step: IteratorResult<void, unknown> | undefined;
+        let step: IteratorResult<void|16, unknown> | undefined;
         do {
-          for (let n = 0; n < 16; n++) {step = job.work.next(); if (step.done) break;}
+          for (let units = 0; units < 16;) {step = job.work.next(); if (step.done) break; units += step.value === 16 ? 16 : 1;}
         } while (!step!.done && this.env.now() < deadline);
         if (this.jobs.get(owner) === job) {
           if (step!.done) {

@@ -24,12 +24,12 @@ test('asynchronous preparation settles cancellation before and after its first s
   const rejected=assert.rejects(failed,/broken/);h.finish();await rejected;assert.equal(h.scheduler.size,0);
 });
 
-test('actual default slices release the UI after one millisecond of primitive work and complete identically', () => {
+for (const batch of [1, 16] as const) test(`actual default slices bound ${batch}-unit preparation to one millisecond of primitive work`, () => {
   let clock = 0, advances = 0, published: number | null = null;
   const tasks: (() => void)[] = [], spans: number[] = [];
   const source = function* (cost: () => void): Preparation<number> {
     let sum = 0;
-    for (let i = 0; i < 256; i++) {sum += i; cost(); yield;}
+    for (let i = 0; i < 256; i++) {sum += i; cost(); if ((i + 1) % batch === 0) yield batch === 16 ? 16 : undefined;}
     return sum;
   };
   const expected = drain(source(() => {}));

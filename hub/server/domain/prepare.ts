@@ -1,5 +1,5 @@
-/** A yield is one bounded unit of numeric preparation, shared by sync and UI readers. */
-export type Preparation<T> = Generator<void, T, void>;
+/** A plain yield counts as one preparation unit; 16 establishes a full-block boundary. */
+export type Preparation<T> = Generator<void|16, T, void>;
 
 export function drain<T>(work: Preparation<T>): T {
   let step = work.next();

@@ -10,6 +10,7 @@ import type {PeriodTape} from '../../server/domain/periodTape';
 import {moneyWorkValues} from '../lib/moneyTable';
 import type {MeterHistory} from '../lib/moneyView';
 import {lineWork} from '../lib/work';
+import {Preparations} from '../lib/prepare';
 const M=60_000,H=60*M;
 const trace=(spans:WorkTrace['spans']):WorkTrace=>({anchor:0,knownFrom:0,cut:2*H,refs:['A','B','C'].map(project=>({ref:project,source:'s',clientId:'codex',device:{id:'d',name:'Device'},origin:'terminal',project,folder:null,startedAt:0})),spans});
 
@@ -150,12 +151,26 @@ test('quota retirement keeps selected work separate from supplier curves through
   const tails=new Map<PeriodTape['quota'][number],QuotaTail>();
   const retained=drain(retainTapeWithTails(tape,M+1,()=>{},(before,after)=>{tails.set(after,{before,after,removed:1});}));
   assert.equal(tails.size,2,'the real producer retires one observation from both windows');
-  const fresh=drain(PeriodAccounting.prepare(retained,selected,curves,undefined,undefined,undefined,source));
+  const ordinary=PeriodAccounting.prepare(retained,selected,curves,undefined,undefined,undefined,source);
+  let next=ordinary.next();while(!next.done){assert.equal(next.value,undefined,'ordinary preparation retains plain units');next=ordinary.next();}
+  const fresh=next.value;
   const prepare=PeriodAccounting.prepare.bind(PeriodAccounting),rebuilt:string[][]=[];
   t.mock.method(PeriodAccounting,'prepare',(...args:Parameters<typeof prepare>)=>{
     rebuilt.push(args[0].quota.map(row=>row.window));return prepare(...args);
   });
-  const retired=drain(PeriodAccounting.prepareRetirement(retained,selected,curves,prior,new Set<string>(),undefined,tails,source));
+  const samples=retained.quota.find(row=>row.window==='rebuilt')!.samples;assert.ok('columns' in samples);
+  const used=samples.columns[1],descriptor=Object.getOwnPropertyDescriptor(samples.columns,'1')!;
+  const tasks:(()=>void)[]=[];let clock=0,reads=0,checked=0,maximum=0,retired!:PeriodAccounting;
+  const scheduler=new Preparations({now:()=>{maximum=Math.max(maximum,reads-checked);checked=reads;return clock;},post:run=>tasks.push(run)});
+  try{
+    Object.defineProperty(samples.columns,'1',{configurable:true,enumerable:true,get(){reads++;clock+=1/16;return used;}});
+    scheduler.replace({},PeriodAccounting.prepareRetirement(retained,selected,curves,prior,new Set<string>(),undefined,tails,source),()=>true,value=>{retired=value;});
+    for(let i=0;tasks.length;i++){assert.ok(i<10_000);tasks.shift()!();}
+    assert.ok(retired);assert.equal(reads,count-1,'the meter observes every retained quota sample');
+    assert.ok(maximum<=16,'retirement checks its deadline after at most 16 quota observations');
+    assert.equal(checked,reads,'the last partial block checks time before packing and completion');
+    assert.equal(scheduler.size,0);
+  }finally{scheduler.dispose();Object.defineProperty(samples.columns,'1',descriptor);}
   for(const window of ['copied','rebuilt']){
     const value=retired.quotaSummary('s',window,range)!;
     assert.equal(value.selectedWork.ms,30*M);assert.equal(value.selectedWork.agentMs,30*M);

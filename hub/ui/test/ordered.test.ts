@@ -9,7 +9,7 @@ test('delegated sorting keeps bounded step results and comparisons while preserv
   const work = function* (): Preparation<typeof input> {
     return yield* ordered(input, (a, b) => {comparisons++; return a.key - b.key;});
   }();
-  const pending = new Set<IteratorYieldResult<void>>();
+  const pending = new Set<IteratorYieldResult<void|16>>();
   let steps = 0;
   for (;;) {
     const count = comparisons, step = work.next();

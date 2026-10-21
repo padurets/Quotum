@@ -105,8 +105,8 @@ class QuotaIndex {
     this.times=prior?.series===series?prior.times:'columns' in series.samples?series.samples.columns[0]:new Float64Array(count);
     if(!deferred)drain(QuotaIndex.build(()=>this,prior));
   }
-  static prepare(series:PeriodTape['quota'][number],activity:WorkTimeline|undefined,known:number,prior?:QuotaIndex):Preparation<QuotaIndex>{return QuotaIndex.build(()=>new QuotaIndex(series,activity,known,true,prior),prior);}
-  private static *build(create:()=>QuotaIndex,prior?:QuotaIndex):Preparation<QuotaIndex>{
+  static prepare(series:PeriodTape['quota'][number],activity:WorkTimeline|undefined,known:number,prior?:QuotaIndex,batchQuota=false):Preparation<QuotaIndex>{return QuotaIndex.build(()=>new QuotaIndex(series,activity,known,true,prior),prior,batchQuota);}
+  private static *build(create:()=>QuotaIndex,prior?:QuotaIndex,batchQuota=false):Preparation<QuotaIndex>{
     const value=create();
     const series=value.series,{known}=value,activity=known===Infinity?undefined:value.activity,count=sampleCount(series.samples);
     // Work retirement can leave quota observations untouched. Keep their exact prefixes.
@@ -114,8 +114,10 @@ class QuotaIndex {
     const deadlines=reuse?null:new Float64Array(count),spent=reuse?null:new Float64Array(count),covered=reuse?null:new Float64Array(count),worked=activity?new Float64Array(count):null,during=activity?new Float64Array(count):null;
     let previous:ReturnType<typeof sampleAt>,orderedDeadlines=true;
     // Decode each observation once; unavailable work keeps constant zero prefixes.
+    // Retirement groups avoid resuming every delegation layer per observation.
+    // Explicit units preserve the UI's deadline checks across these larger yields.
     for(let i=0;i<count&&(!reuse||activity);i++) {
-      yield;
+      if(!batchQuota)yield;else if((i&15)===0)yield 16;
       const sample=sampleAt(series.samples,i)!;
       if(!reuse&&value.times instanceof Float64Array)value.times[i]=sample.at;
       if(deadlines){
@@ -134,6 +136,8 @@ class QuotaIndex {
       }
       previous=sample;
     }
+    // End the grouped region before ordinary packing resumes.
+    if(batchQuota&&count>0&&(!reuse||activity))yield 16;
     if(reuse){value.deadlines=prior.deadlines;value.spent=prior.spent;value.covered=prior.covered;}
     else if(deadlines&&spent&&covered){
       const sorted=orderedDeadlines?deadlines:yield*sortedNumbers(deadlines);value.deadlines=yield*numberColumn(sorted.length,i=>sorted[i]);
@@ -441,8 +445,8 @@ export class PeriodAccounting {
   private readonly money=new Map<string,MoneyIndex>();
   private readonly sampleTimes=new Map<string,Numbers>();
   constructor(readonly tape:PeriodTape,work:WorkTrace|null,curves?:PeriodCurves,deferred=false) {if(!deferred)drain(PeriodAccounting.build(()=>this,work,curves));}
-  static prepare(tape:PeriodTape,work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void,sourceWide?:SourceWorkCurves):Preparation<PeriodAccounting>{return PeriodAccounting.build(()=>new PeriodAccounting(tape,work,curves,true),work,curves,prior,changedWork,progress,sourceWide);}
-  private static *build(create:()=>PeriodAccounting,work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void,sourceWide?:SourceWorkCurves):Preparation<PeriodAccounting>{
+  static prepare(tape:PeriodTape,work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void,sourceWide?:SourceWorkCurves,batchQuota=false):Preparation<PeriodAccounting>{return PeriodAccounting.build(()=>new PeriodAccounting(tape,work,curves,true),work,curves,prior,changedWork,progress,sourceWide,batchQuota);}
+  private static *build(create:()=>PeriodAccounting,work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void,sourceWide?:SourceWorkCurves,batchQuota=false):Preparation<PeriodAccounting>{
     const value=create();
     const tape=value.tape;
     if(tape.fixed){if(prior?.tape.fixed&&JSON.stringify(prior.tape.fixed.money)===JSON.stringify(tape.fixed.money)&&JSON.stringify(prior.tape.fixed.range)===JSON.stringify(tape.fixed.range))value.financialAuthority=prior.financialAuthority;return value;}
@@ -453,7 +457,7 @@ export class PeriodAccounting {
       const activity=workCurves?.groups.source.get(series.source);
       const key=series.source+'\n'+series.window,old=prior?.quota.get(key),reuse=old?.series===series&&!changedWork.has(series.source);
       if(!reuse)progress?.(preparedBytes+sampleCount(series.samples)*88+1024);
-      const index=reuse?old!:yield*QuotaIndex.prepare(series,activity,series.workFrom===null?Infinity:Math.max(known,series.workFrom??0),old?.series===series?old:undefined);
+      const index=reuse?old!:yield*QuotaIndex.prepare(series,activity,series.workFrom===null?Infinity:Math.max(known,series.workFrom??0),old?.series===series?old:undefined,batchQuota);
       if(!reuse){preparedBytes+=index.bytes;progress?.(preparedBytes);}
       value.quota.set(key,index);value.sampleTimes.set(key,index.times);
     }
@@ -499,7 +503,7 @@ export class PeriodAccounting {
         rows.push({key,index});yield;
       }
       for(const group of tape.money){if(group.workCounter)meta+=256;meta+=4*(group.source.length+group.meter.length+(group.displayUnit??group.readings[0]?.unit??'undefined').length+2);charge();yield;}
-      partial=yield*PeriodAccounting.prepare({...tape,quota:fallback},work,selectedCurves,prior,changedWork,bytes=>{scratch=bytes;charge();},sourceWide);
+      partial=yield*PeriodAccounting.prepare({...tape,quota:fallback},work,selectedCurves,prior,changedWork,bytes=>{scratch=bytes;charge();},sourceWide,true);
       const value=new PeriodAccounting(tape,work,selectedCurves,true);
       value.selectedCurves=partial.selectedCurves;value.selectedKnown=partial.selectedKnown;
       for(const row of rows){const index=row.index??partial.quota.get(row.key)!;value.quota.set(row.key,index);value.sampleTimes.set(row.key,index.times);yield;}
