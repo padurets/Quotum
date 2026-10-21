@@ -870,18 +870,12 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
 .device-name .icon-button { opacity: 0; }
 tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { opacity: 1; }
 @media (hover: none) { .device-name .icon-button { opacity: 1; } }
-.inline-rename { display: flex; flex-wrap: wrap; gap: 6px; }
-.inline-rename input { flex: 1; min-width: 0; padding: 5px 9px; }
-.inline-rename .form-error { flex-basis: 100%; }
 .projects-bar { display: flex; margin-top: 14px; }
 .projects-bar .picker { margin-left: 0; }
 .projects-table td:last-child { text-align: left; }
 .projects-table input[type=checkbox] { accent-color: var(--accent); margin: 0; }
 .projects-table th:first-child, .projects-table td:first-child { width: 1px; padding-right: 0; }
 .project-none { color: var(--text-3); }
-/* A project's name is as long as a folder's: cut, the whole of it in the tooltip. */
-.projects-table .device-name { max-width: min(34ch, 42vw); }
-.projects-table .device-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A project many machines worked on lists them over lines, so when it last worked stays in view. */
 .projects-table td:nth-child(3) { white-space: normal; overflow-wrap: anywhere; min-width: 12ch; }
 /* What a project gathers wraps, each name cut to the width of the project's own. */
@@ -922,7 +916,6 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   .projects-table th:nth-child(3), .projects-table td:nth-child(3) { display: table-cell; }
   .projects-table th:nth-child(4), .projects-table td:nth-child(4) { display: none; }
   .projects-table td { white-space: normal; overflow-wrap: anywhere; }
-  .projects-table .inline-rename { max-width: min(34ch, 42vw); }
   .brand span { display: none; }
   .status { gap: 10px; font-size: 12px; }
   main { padding: 16px 16px 32px; gap: 16px; }
@@ -1305,3 +1298,21 @@ summary.filter-group-heading::-webkit-details-marker { display: none; }
 
 .popover-anchor { position:absolute; margin-left:0; pointer-events:none; z-index:8; }
 .popover-anchor > .popover { pointer-events:auto; }
+
+/* Project names and board colours share the existing project editor. */
+.project-editor { display:inline-block; max-width:min(34ch,42vw); }
+.project-edit-trigger { display:inline-flex; align-items:center; gap:8px; max-width:100%; text-align:left; }
+.project-edit-trigger b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.project-edit-trigger > svg,.project-edit-trigger .activity-swatch { flex-shrink:0; }
+.project-edit-trigger .activity-swatch { border:1px solid var(--text-3); }
+.project-color-options { border:0; padding:8px; margin:0; min-width:0; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:4px; }
+.project-color-options legend { max-width:100%; overflow-wrap:anywhere; }
+.project-color-option { position:relative; min-height:40px; display:grid; place-items:center; cursor:pointer; }
+.project-color-option input { position:absolute; opacity:0; width:1px; height:1px; }
+.project-color-option:has(input:checked) { outline:1px solid var(--text-2); outline-offset:-2px; }
+.project-color-option:has(input:focus-visible) { outline:2px solid var(--text); outline-offset:-2px; }
+.project-color-option .activity-swatch { width:24px; height:24px; border-radius:50%; }
+.project-color-options:disabled { opacity:.6; }
+.project-search { display:flex; align-items:center; gap:12px; margin-bottom:16px; }
+.project-search input { flex:1; min-width:0; }
+.project-pages { margin:16px 0; }

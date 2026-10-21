@@ -321,7 +321,7 @@ for (const legacy of [false, true])
     h.ingest.forget([holder], now);
     events.flush();
     const sent = frames.slice(before);
-    assert.deepEqual(sent.map(f => f.type), ['snapshot','filters']);
+    assert.deepEqual(sent.map(f => f.type), ['snapshot','filters','projectColors']);
     const snapshot = JSON.parse(sent[0].data);
     assert.notEqual(snapshot.workAuthority, authority, 'the unused revoked device leaves admission');
     assert.equal(snapshot.connectionsRevision, h.directory.connectionsRevision(h.user.id));
@@ -351,7 +351,7 @@ test('revoking a device with no sessions tells the boards at once', t => {
   h.ingest.forget([h.device()], now);
   events.flush();
   const sent = frames.slice(before);
-  assert.deepEqual(sent.map(f => f.type), ['snapshot','filters']);
+  assert.deepEqual(sent.map(f => f.type), ['snapshot','filters','projectColors']);
   const snapshot = JSON.parse(sent[0].data);
   assert.notEqual(snapshot.workAuthority, authority);
   assert.equal(snapshot.connectionsRevision, h.directory.connectionsRevision(h.user.id));

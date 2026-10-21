@@ -4,6 +4,12 @@ import {matchesSelection,workFilter,type FilterEnvelope} from '../../server/doma
 import {sourceWorkCurves} from '../../server/domain/periodCurves.js';
 import {currentCohort,capturedCohort} from './sessionOracle.js';
 import {seedSessionClients} from '../sessionClients.js';
+import {seedProjectColors,PROJECT_COLOR_SCENES} from '../projectColors.js';
+import type {ProjectColorEnvelope} from '../../server/domain/projectColors.js';
+import {readProjectColors} from '../../server/store/projectColors.js';
+import {CATEGORY_COLORS} from '../../server/domain/categoryColors.js';
+import {widgetVisible} from '../../server/domain/widgets.js';
+import {resolveProjectColors,OTHER_COLOR} from '../../ui/lib/projectColors.js';
 import type {PeriodReply} from '../../server/domain/periodRead.js';
 import {expandPeriod,type PeriodWireReply} from '../../server/domain/periodWire.js';
 import {workedSessions} from '../../server/domain/periodWork.js';
@@ -474,7 +480,8 @@ async function bringUp(t: TestContext, set: DemoSet, start: number) {
   const stand = await setUp(hub.base, set, start, SETUP, () => Date.now());
   seedWork(hub.store, stand);
   if(set.id==='calendar')seedCalendar(hub.store,new Directory(hub.store.db),stand);
-  if(set.id==='sessions')await seedSessionClients(hub.store,new Directory(hub.store.db),stand);
+  if(set.id==='sessions'||set.id==='project-colors')await seedSessionClients(hub.store,new Directory(hub.store.db),stand);
+  if(set.id==='project-colors')seedProjectColors(hub.store,new Directory(hub.store.db),stand);
   return {stand, trackers, hub};
 }
 
@@ -1035,4 +1042,31 @@ test('session review starts with populated 24h comparisons and retained-context 
   const empty=await read({mode:'range',from:start-4*HOUR,to:start-2*HOUR});assert.equal(empty.rows.length,0);assert.ok(empty.summary('project').known);
   const unknown=await read({mode:'range',from:start-9*24*HOUR,to:start-8*24*HOUR});assert.equal(unknown.summary('project').known,null);
   assert.deepEqual(SESSION_ACTIVITY_SCENES.find(scene=>scene.id==='review')!.expect,['populated-24h','paged-comparison','height-fit-pages','narrow-sort-menu','header-sort-reset','retained-pagination','rich-breakdowns']);
+});
+
+test('project colour scenes retain shared pins, automatic allocation and privacy-safe capacity recovery', {timeout:60_000},async t=>{
+  const set=setOf('project-colors'),start=Math.floor(Date.now()/MIN)*MIN;
+  const {stand,hub}=await bringUp(t,set,start),owner=stand.people.get('ana')!,reader=stand.people.get('boris')!;
+  const board=(name:string)=>stand.boards.get('colors-'+name)!;
+  const palette=(name:string,as=owner)=>as.get<ProjectColorEnvelope>('/api/boards/'+board(name)+'/project-colors');
+  for(const scene of PROJECT_COLOR_SCENES){
+    const snapshot=await owner.get<Snapshot>('/api/overview?board='+board(scene.id));
+    assert.ok(widgetVisible(snapshot.view,ACTIVITY,0));
+  }
+  const pinned=await palette('pinned'),other=await palette('pinned',reader);
+  assert.deepEqual(pinned,other);
+  const pins=new Map(pinned.pins),seen=new Set<string>();
+  assert.equal(pins.get('migration-41'),CATEGORY_COLORS[0]);seen.add('project-color-pinned');
+  assert.equal(pins.get('quotum'),pins.get('checkout'));seen.add('project-color-manual-repeat');
+  const groups=['atlas','quotum','checkout','migration-41'].map(name=>({key:JSON.stringify(name),name}));
+  const before=resolveProjectColors(groups,[]),after=resolveProjectColors(groups,pinned.pins,before);
+  assert.notEqual(after[0].color,CATEGORY_COLORS[0]);seen.add('project-color-auto-displaced');
+  assert.ok(pins.has('older-project'));assert.equal(resolveProjectColors([groups[0]],[['older-project',CATEGORY_COLORS[0]]])[0].color,CATEGORY_COLORS[0]);seen.add('project-color-absent-reservation');
+  const reserved=await palette('reserved'),manual=reserved.pins.map(([name])=>({key:JSON.stringify(name),name}));
+  assert.equal(resolveProjectColors([...manual,groups[0]],reserved.pins).at(-1)!.color,OTHER_COLOR);seen.add('project-color-overflow');
+  const merged=await palette('renamed');assert.equal(new Map(merged.pins).get('web-dashboard'),CATEGORY_COLORS[2]);
+  assert.ok(!new Map(merged.pins).has('docs'));assert.ok(new Map(readProjectColors(hub.store.db,board('renamed')).pins).has('docs'));seen.add('project-color-rename-merged');
+  assert.equal(readProjectColors(hub.store.db,board('capacity')).pins.length,89);assert.deepEqual((await palette('capacity')).pins,[['quotum',CATEGORY_COLORS[8]]]);seen.add('project-color-capacity');
+  assert.equal(readProjectColors(hub.store.db,board('dormant')).pins.length,89);assert.deepEqual((await palette('dormant')).pins,[]);seen.add('project-color-dormant-reset');
+  assert.deepEqual([...seen].sort(),PROJECT_COLOR_SCENES.flatMap(scene=>[...scene.expect]).sort());
 });

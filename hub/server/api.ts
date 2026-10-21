@@ -3,6 +3,7 @@ import {PeriodReader,periodRoutes} from './periodRead.js';
 import {Attention} from './attention.js';
 import {STATUS_CODES} from 'node:http';
 import type {Socket} from 'node:net';
+import {Readable} from 'node:stream';
 import Fastify, {type FastifyInstance, type FastifyReply, type FastifyRequest} from 'fastify';
 import staticFiles from '@fastify/static';
 import {config, serviceName, version} from './config.js';
@@ -31,12 +32,14 @@ import {BoardAdditions} from './additions.js';
 import {additionRoutes} from './routes/additions.js';
 import {DeviceOnboarding} from './deviceOnboarding.js';
 import {responseCompression} from './compression.js';
+import {projectColorsOf,type ProjectColors} from './projectColors.js';
+import {projectColorRoutes} from './routes/projectColors.js';
 
 /**
  * `local`: the desktop app's hub, with the key its window enters with (see local.ts); null
  * on a server. `events`: what open dashboards hear, made here when not given.
  */
-export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup; local: {key: string} | null; events?: Events; credentials?: Credentials; additions?:BoardAdditions; deviceOnboarding?:DeviceOnboarding; hubSources?:HubSources; secretSnapshot?: Pick<SecretInputs, 'storageAtStart' | 'wasFileAtStart'>};
+export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup; local: {key: string} | null; events?: Events; projectColors?:ProjectColors; credentials?: Credentials; additions?:BoardAdditions; deviceOnboarding?:DeviceOnboarding; hubSources?:HubSources; secretSnapshot?: Pick<SecretInputs, 'storageAtStart' | 'wasFileAtStart'>};
 
 /** Route helpers shared by the route modules. */
 export type Guards = {
@@ -49,7 +52,7 @@ export type ExtendHub = (app: FastifyInstance, hub: Hub, guards: Guards) => void
 
 /** Errors of the framework itself (malformed JSON, a body too large…) in the hub's `{error}` shape. */
 function errorCode(status: number, path: string): string {
-  if (status === 413) return /\/filters(?:\?|$)/.test(path) ? 'filters_limit' : /\/period\/sessions(?:\?|$)/.test(path) ? 'history_limit' : 'too_large';
+  if (status === 413) return /\/project-colors(?:\/reset)?(?:\?|$)/.test(path) ? 'project_colors_limit' : /\/filters(?:\?|$)/.test(path) ? 'filters_limit' : /\/period\/sessions(?:\?|$)/.test(path) ? 'history_limit' : 'too_large';
   if (status >= 500) return 'internal_error';
   return path.startsWith('/v1/ingest') ? 'invalid_batch' : path.startsWith('/v1/activity') ? 'invalid_activity' : 'invalid_request';
 }
@@ -85,6 +88,7 @@ function clientError(error: NodeJS.ErrnoException, socket: Socket & {_httpMessag
  * at `/local`, and what is about accounts, sharing and connecting is not there.
  */
 export async function buildApp(hub: Hub, extend?: ExtendHub) {
+  hub.projectColors??=hub.events?.projectColors??projectColorsOf(hub);
   hub = {...hub, credentials: hub.credentials ?? new Credentials(hub.store, null, startSecrets(hub.store.db, {current: null, previous: null, reset: null, storageAtStart: null, wasFileAtStart: false}))};
   const {store, directory} = hub;
   const projection = new Projection(hub);
@@ -172,10 +176,27 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
 
   // The board as a stream's `snapshot` gives it (spec/dashboard-v1.md), once: for whatever
   // reads a board at a moment rather than following it.
-  app.get<{Querystring: {board?: string}}>('/api/overview', (request, reply) => {
+  const pendingOverviews=new WeakMap<FastifyRequest,{user:string;board:string;work:string;revision:number;authority:string}>();
+  const readOverview=(user:string,board:string)=>{
+    const now=Date.now(),roster=projection.roster(board,now),snapshot=projection.snapshot(user,board,now,roster);
+    return snapshot?{...snapshot,projectColors:hub.projectColors!.context(board,roster,now).envelope}:null;
+  };
+  app.get<{Querystring: {board?: string}}>('/api/overview',{onSend(request,reply,payload,done){
+    const captured=pendingOverviews.get(request);if(!captured)return done(null,payload);
+    const user=currentUser(request,directory),member=user?.id===captured.user&&directory.membership(captured.board,user.id);
+    const current=member?hub.projectColors!.context(captured.board).envelope:null;
+    if(member&&current!.revision===captured.revision&&current!.authority===captured.authority&&store.workKey(captured.board)===captured.work)return done(null,payload);
+    // Compression may have prepared a stream, but no response bytes have left yet.
+    if(payload instanceof Readable)payload.destroy();
+    reply.removeHeader('content-encoding').removeHeader('content-length');
+    if(!user){reply.code(401);return done(null,JSON.stringify({error:'unauthorized'}));}
+    if(!member){reply.code(404);return done(null,JSON.stringify({error:'board_not_found'}));}
+    return done(null,JSON.stringify(readOverview(user.id,captured.board)));
+  }}, (request, reply) => {
     const access = guards.board(request, reply, request.query.board);
     if (!access) return reply;
-    const snapshot = projection.snapshot(access.user.id, access.board.id, Date.now());
+    const snapshot = readOverview(access.user.id,access.board.id);
+    if(snapshot)pendingOverviews.set(request,{user:access.user.id,board:access.board.id,work:snapshot.workAuthority,revision:snapshot.projectColors.revision,authority:snapshot.projectColors.authority});
     hub.ingest.forecasts.save();
     return snapshot;
   });
@@ -199,6 +220,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
   periodRoutes(app,guards,periods);
   accountRoutes(app, hub, guards);
   dataFilterRoutes(app,hub,guards);
+  projectColorRoutes(app,hub,guards);
   sourceKeyRoutes(app,hub,guards);
   currencyRoutes(app,hub,guards);
   linkRoutes(app,hub,guards);

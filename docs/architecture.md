@@ -1436,6 +1436,41 @@ and its limits.
   names the cards the way the team calls them, and everyone sees the same board. Nothing
   in the view changes what is measured or stored.
 
+Project colours are a separate board presentation resource in
+`board_project_colors`, outside the layout and filter documents. Owners choose Auto
+or one of the nine shared Nord Warm swatches in the existing project editor under
+Manage projects. The same popup edits the name and board colour with one Save.
+Readers share that colour, including on the local desktop board; the Activity menu
+opens the same project management. Names retain their personal scope and colours
+their board ownership. A combined edit commits both changes atomically.
+Repeated manual colours are allowed. The picker keeps a local draft with the resource
+version read when it opens. An unchanged draft sends no mutation; a rejected stale
+save requires reopening the editor with the current choices. Resetting every colour,
+including dormant choices, requires confirmation.
+
+Only admitted corrected project names appear in settings or colour projections.
+Dormant pins remain private in storage, and colour metadata grants no access.
+Owner patches use independent revision and process-private HMAC authority checks;
+old layout writers cannot erase them. Storage reserves each of its 89 slots for a
+maximum escaped name within 64 KiB, so later aliases always fit. A whole-group
+unambiguous rename to a fresh name transfers the pin atomically on every affected
+board. A target's dormant choice wins; a merge keeps the target, including Auto,
+and retains source settings dormant for a later split. Another participant remaining
+under the old name prevents transfer. These decisions use admitted live/retained raw
+owner/name membership, independent of time range, filters, funding and card visibility.
+
+Browser snapshots carry colour references and a separate bounded configuration frame;
+HTTP overview also includes the authorized map. The native background reader omits
+all colour fields and frames to preserve its 320 KiB decoder boundary. The desktop
+window gets ordinary browser presentation. The configuration is its own browser
+metadata slice: colour-only updates neither invalidate evidence nor read history.
+Queued poll batches retain their producing authority and live-session deadline.
+Expired or withdrawn work is replaced before configuration is refreshed or a
+prepared response is delivered. Replacements preserve pending history invalidations
+under current permissions, so cached cells remain current even when the work
+authority stays the same. Incremental delivery coalesces colour metadata before
+its final serialized size check. The physical queue retains its own memory limit.
+
 Secrets (sessions, tokens, codes, invites) are random, prefixed by kind (`qt_s_`,
 `qt_m_`, `qt_d_`, `qt_c_`, `qt_i_`) and stored only as SHA-256 hashes; passwords as
 scrypt hashes. Changes made with a session cookie are accepted only from the hub's own
@@ -2060,8 +2095,16 @@ transform fallback. Ordinary 220 ms navigation slides still animate inside SVG.
 A temporary shared registry keeps plot interiors, edge bars, legend markers and readouts
 consistent in colour and dash, adding new groups with a pending total. Surviving groups
 keep their colours through rank changes and reversal; new projects and machines take
-the next free Nord Warm colour, or neutral when all nine are in use. Muting a group
-does not release its colour. Resource series keep their card colours. Visible
+the next free Nord Warm colour, or neutral when all nine are in use. Present manual
+project pins reserve their distinct swatches first, including low-ranked groups and
+repeated choices. A reservation displaces only conflicting automatic groups. Absent
+pins reserve nothing; muted/offscreen registry entries retain their colours, and a
+released slot does not promote surviving neutral groups. Current paint resolves after
+numeric preparation over both current and still displayed groups, so an in-flight
+drawing uses the latest accepted palette across interiors, edges, legends and
+readouts without rebuilding geometry. Resource series
+keep their card colours. Outside a navigation registry, a new numeric model assigns
+automatic colours by its current rank. Visible
 missing cells are read immediately in contiguous batches of at most eight tiles.
 The nearest unread edge comes first, without crossing fresh cells or another tile
 owner. Only a visible miss can add a nearby buffer in the direction of movement:

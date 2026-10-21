@@ -7,7 +7,7 @@ import {ACTIVITY_BY, setMuted, setPrefs, usePref, useChartMuted, chartMuteKey, c
 import {setTimeRange, timeRangeKey, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks, periodOf} from '../lib/periods';
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
-import {page, usePersonalBoard, useBoardId, useLineup, useTitles} from '../lib/board';
+import {page, usePersonalBoard, useBoardId, useLineup, useTitles,useProjectColorPins,useProjectColorsReady} from '../lib/board';
 import {useClock,hubNow} from '../lib/clock';
 import {quotaHistory, useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {boardPeriod} from '../lib/period';
@@ -16,6 +16,7 @@ import {plotBar, plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../l
 import {usePrepared, usePreparationBasis} from './prepared';
 import {axisNavigation, navigationKey, type AxisNavigation} from '../lib/axisNavigation';
 import {groupRegistry, type GroupIdentity} from '../lib/plotRegistry';
+import {resolveProjectColors} from '../lib/projectColors';
 import {StackPaths} from '../lib/stackPaths';
 import {pan, usePanning} from '../lib/pan';
 import {targetOf, cellStart} from '../../server/domain/history';
@@ -187,6 +188,8 @@ const Totals=memo(function Totals({history,by,subset,scoped,allOff,since,focus,g
   </div>;
 });
 
+type ActivityRegistry={authority:number;token:number;range:string|undefined;by:ActivityDimension;basis:ActivityGroup[];seed:GroupIdentity[];groups:GroupIdentity[]};
+
 /**
  * Agent-hours on the analytics' time axis, stacked by subscription, project or machine.
  * The legend adds up to the total; active time and distinct agents are told separately.
@@ -196,7 +199,8 @@ const Totals=memo(function Totals({history,by,subset,scoped,allOff,since,focus,g
 export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const {history,drawing,loading,error,presentation:authority} = useHistory(true);
   const strip = useHistoryPlot(true);
-  const registry = useRef<{authority: number; token: number; by: ActivityDimension; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
+  const pins=useProjectColorPins(),colorsReady=useProjectColorsReady();
+  const registry = useRef<ActivityRegistry|null>(null);
   if (registry.current?.authority !== authority) registry.current = null;
   const panel = useRef<HTMLElement>(null);
   // Made taller by its owner, the widget gives the room to the stacks, as the chart does.
@@ -241,15 +245,42 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
       for (const row of strip.activityCells.values()) for (const [key, part] of row.parts[by]) {found.set(key, {key, name: part.name}); yield;}
     }
     const seed = groups.map((group, i) => ({key: group.key, name: group.name, color: colors[i]}));
-    if (!strip) return {identities: seed, shown, strip, registry: null};
-    const previous = registry.current?.authority === authority && registry.current.token === strip.token && registry.current.by === by ? registry.current : {authority, token: strip.token, by, seed, groups: seed};
+    if (!strip) return {identities: seed, shown, strip, registry: by==='project'?{authority,token:-1,range:drawing?.range,by,basis:groups,seed,groups:seed}:null};
+    const previous = registry.current?.authority === authority && registry.current.token === strip.token && registry.current.by === by ? registry.current : {authority, token: strip.token,range:drawing?.range, by, seed, groups: seed};
     const identities = groupRegistry(previous.seed, previous.groups, [...found.values()], by === 'source' ? key => key==='unknown'||key==='notProvided'?'var(--other)' : colorOf(arrange.view, key, titles[key]?.provider ?? '') : undefined);
     const plotted: {group: PlotGroup; color: string; name: string}[] = [];
     for (const identity of identities) {if (!groupMuted(identity.key)) plotted.push({group: data.get(identity.key) ?? {key: identity.key, name: identity.name, cells: EMPTY_CELLS}, color: identity.color, name: groupName(identity, by, titles)}); yield;}
-    return {identities, shown: plotted, strip, registry: {authority, token: strip.token, by, seed: previous.seed, groups: identities}};
-  }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted, locale], `${authority}:${history?.board}:${by}`);
-  const presentation = prepared.value ?? {identities: [], shown: [], strip: null};
-  useLayoutEffect(() => {if (prepared.value) registry.current = prepared.value.registry;}, [prepared.value]);
+    return {identities, shown: plotted, strip, registry: {authority, token: strip.token,range:drawing?.range, by,basis:groups, seed: previous.seed, groups: identities}};
+  }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted, locale], `${authority}:${history?.board}:${by}`,by!=='project'||colorsReady);
+  const geometry = by==='project'&&!colorsReady?null:prepared.value;
+  const [displayed,setDisplayed]=useState<ActivityRegistry|null>(null);
+  const paintRegistry=useRef<ActivityRegistry|null>(null);
+  const retained=displayed?.authority===authority&&displayed.by===by?displayed:null;
+  const paintBasis=retained??geometry?.registry??null;
+  const painted=useMemo(()=>{
+    const current=geometry?.identities??[];
+    if(by!=='project')return current;
+    if(!paintBasis)return [];
+    // The previous stacks remain visible until their numeric replacement commits.
+    const keys=new Set(current.map(group=>group.key));
+    const members=[...current,...(retained?.groups??[]).filter(group=>!keys.has(group.key))];
+    const previous=paintRegistry.current;
+    const token=paintBasis.token;
+    // Ordinary answers allocate by rank again; metadata keeps the same numeric basis.
+    const sameRegistry=previous?.token===token&&(token!==-1||previous.basis===paintBasis.basis);
+    const enteringStrip=previous?.token===-1&&token!==-1;
+    const surviving=previous?.authority===authority&&previous.by===by&&
+      previous.range===paintBasis.range&&(sameRegistry||enteringStrip)?previous.groups:[];
+    return resolveProjectColors(members,pins,surviving);
+  },[geometry,pins,by,authority,retained,paintBasis]);
+  const resolved=useMemo(()=>new Map(painted.map(identity=>[identity.key,identity])),[painted]);
+  const identities=useMemo(()=>(geometry?.identities??[]).map(identity=>resolved.get(identity.key)??identity),[geometry,resolved]);
+  const paint=useMemo(()=>new Map(painted.map(identity=>[identity.key,identity.color])),[painted]);
+  const presentation={identities,shown:geometry?.shown??[],strip:geometry?.strip??null,registry:geometry?.registry??null,onDrawing:setDisplayed};
+  useLayoutEffect(() => {
+    if (geometry) registry.current = geometry.registry?{...geometry.registry,groups:identities}:null;
+    paintRegistry.current=paintBasis?{...paintBasis,groups:painted}:null;
+  }, [geometry,identities,paintBasis,painted]);
   // Numerical consumers keep the evidence basis and own their exact clock wakes.
   const currentGroups=drawnActivity?.by[by]??[];
   const shownSources = lineup.filter(id => titles[id] && !isHidden(arrange.view, cardId(id)));
@@ -284,6 +315,9 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             currentActivity={activity ?? EMPTY_ACTIVITY}
             origin={drawing?.since ?? from}
             groups={emptyFrame ? [] : presentation.shown}
+            paint={paint}
+            registry={presentation.registry}
+            onDrawing={presentation.onDrawing}
             from={from}
             to={to}
             unknownTo={since}
@@ -357,6 +391,9 @@ const Stacks = memo(function Stacks({
   currentActivity,
   origin: incomingOrigin,
   groups: incomingGroups,
+  paint,
+  registry: incomingRegistry,
+  onDrawing,
   from,
   to,
   unknownTo: incomingUnknownTo,
@@ -381,6 +418,9 @@ const Stacks = memo(function Stacks({
   origin: number;
   /** The groups switched on in the legend, bottom to top, each with its colour and name. */
   groups: {group: PlotGroup; color: string; name: string}[];
+  paint:ReadonlyMap<string,string>;
+  registry?:ActivityRegistry|null;
+  onDrawing?:(registry:ActivityRegistry|null)=>void;
   from: number;
   to: number;
   /** Where what is known of the period begins, when after its start: the part before is marked. */
@@ -407,7 +447,7 @@ const Stacks = memo(function Stacks({
   const top = 12, bottom = 28;
   const cache = useRef({authority, maximum: 0, paths: new StackPaths()});
   if (cache.current.authority !== authority) cache.current = {authority, maximum: 0, paths: new StackPaths()};
-  const inputs = [incomingGroups, incomingStrip, incomingActivity, incomingOrigin, incomingUnknownTo, by, width, height, navigationKey(navigation)];
+  const inputs = [incomingGroups, incomingStrip, incomingActivity, incomingOrigin, incomingUnknownTo, incomingRegistry, by, width, height, navigationKey(navigation)];
   const requested = usePreparationBasis(axis.basis, inputs, active, incomingReady, authority);
   const prepared = usePrepared(function* () {
     const basis = {from: requested.from, to: requested.to, end: requested.end};
@@ -439,11 +479,13 @@ const Stacks = memo(function Stacks({
       drawn.push({...row, group: {...row.group, cells}}); yield;
     }
     const paths = yield* cache.current.paths.drawPrepared(incomingStrip ? incomingGroups : drawn, pathOrigin, perMs, barMs, height, vertical.max);
-    return {basis, barMs, heights, maximum, vertical, perMs, pathOrigin, paths, groups: incomingGroups, strip: incomingStrip, activity: incomingActivity, originUnknownTo: incomingUnknownTo};
+    return {basis, barMs, heights, maximum, vertical, perMs, pathOrigin, paths, groups: incomingGroups, strip: incomingStrip, activity: incomingActivity, originUnknownTo: incomingUnknownTo, registry:incomingRegistry};
   }, [...inputs, requested.from, requested.to, requested.end], `${authority}:${by}:${width}:${height}`, incomingReady);
   const model = prepared.value;
+  useLayoutEffect(()=>{onDrawing?.(model?.registry??null);},[model?.registry,onDrawing]);
   const basis = model?.basis ?? axis.basis;
-  const groups = model?.groups ?? [], strip = model?.strip ?? null, activity = currentActivity ?? model?.activity ?? incomingActivity;
+  const groups = useMemo(()=>(model?.groups??[]).map(row=>({...row,color:paint.get(row.group.key)??row.color})),[model?.groups,paint]);
+  const strip = model?.strip ?? null, activity = currentActivity ?? model?.activity ?? incomingActivity;
   const barMs = model?.barMs ?? incomingActivity.barMs;
   const vertical = model?.vertical ?? activityScale(0);
   const perMs = model?.perMs ?? (width - left - right) / Math.max(MINUTE, basis.to - basis.from), pathOrigin = model?.pathOrigin ?? basis.from;

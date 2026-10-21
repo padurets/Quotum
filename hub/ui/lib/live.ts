@@ -1,4 +1,5 @@
 import type {ConnectionStatus, HubEvent, PageEvent, Snapshot} from './board';
+import {PROJECT_COLOR_FRAME_BYTES} from '../../server/domain/projectColors';
 
 /**
  * The page's connection to the hub's events (spec/dashboard-v1.md): one board at a time, a
@@ -72,8 +73,10 @@ export function sseParser(onEvent: (type: string, data: string) => void) {
   let type = '';
   let data: string[] = [];
   let skipLF = false;
+  const check=(value:string,slack=0)=>{if(type==='projectColors'&&new TextEncoder().encode(value).byteLength>PROJECT_COLOR_FRAME_BYTES+slack)throw new Error('project_colors_frame_limit');};
   const line = (text: string) => {
     if (!text) {
+      check(data.join('\n'));
       if(type==='filters'&&new TextEncoder().encode(data.join('\n')).byteLength>272*1024)throw new Error('filters_frame_limit');
       if (data.length) onEvent(type || 'message', data.join('\n'));
       type = '';
@@ -85,7 +88,7 @@ export function sseParser(onEvent: (type: string, data: string) => void) {
     const field = colon < 0 ? text : text.slice(0, colon);
     const value = colon < 0 ? '' : text.slice(colon + (text[colon + 1] === ' ' ? 2 : 1));
     if (field === 'event') type = value;
-    else if (field === 'data') {if(type==='filters'&&new TextEncoder().encode([...data,value].join('\n')).byteLength>272*1024)throw new Error('filters_frame_limit');data.push(value);}
+    else if (field === 'data') {check([...data,value].join('\n'));if(type==='filters'&&new TextEncoder().encode([...data,value].join('\n')).byteLength>272*1024)throw new Error('filters_frame_limit');data.push(value);}
   };
   return (chunk: string) => {
     // A CR that ended the last chunk and an LF that starts this one are one end of line.
@@ -103,6 +106,7 @@ export function sseParser(onEvent: (type: string, data: string) => void) {
       start = i + 1;
     }
     buffer = buffer.slice(start);
+    check(buffer,128);
     if(type==='filters'&&new TextEncoder().encode(buffer).byteLength>272*1024+128)throw new Error('filters_frame_limit');
   };
 }
@@ -512,6 +516,7 @@ export class Live {
       if (!current()) return;
       if (typeof answer?.lease !== 'string' || !Array.isArray(answer.events)) throw new Error('format');
       if(answer.events.some(({type,data}:{type:string;data:unknown})=>type==='filters'&&new TextEncoder().encode(JSON.stringify(data)).byteLength>272*1024))throw new Error('filters_frame_limit');
+      if(answer.events.some(({type,data}:{type:string;data:unknown})=>type==='projectColors'&&new TextEncoder().encode(JSON.stringify(data)).byteLength>PROJECT_COLOR_FRAME_BYTES))throw new Error('project_colors_frame_limit');
     } catch {
       if (current()) this.retry();
       return;

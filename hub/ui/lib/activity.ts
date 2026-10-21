@@ -5,6 +5,8 @@ import {num,stamp} from './format';
 import {sourceLabel} from './quota';
 import type {Title} from './board';
 import {t} from '../i18n';
+import {OTHER_COLOR,resolveProjectColors} from './projectColors';
+import type {ProjectColorPins} from '../../server/domain/projectColors';
 
 /** Chart and comparison table name the same authorized group. */
 export function activityGroupName(group:Pick<ActivityGroup,'key'|'name'>,by:ActivityDimension,titles:Record<string,Title>){
@@ -20,7 +22,7 @@ export function activityCoverage(activity:History['activity']|null,from:number){
 const MINUTE = 60_000;
 
 /** The colour of projects and machines beyond the first few: a neutral of its own. */
-export const OTHER_COLOR = 'var(--other)';
+export {OTHER_COLOR} from './projectColors';
 
 /**
  * The colour of each group of a stack: a subscription has its card's, as on the chart;
@@ -28,7 +30,8 @@ export const OTHER_COLOR = 'var(--other)';
  * colour when the period does. Past the palette, the rest share a neutral: each is
  * still a group of its own, named in the tooltip and switched off and on in the legend.
  */
-export function groupColors(groups: ActivityGroup[], by: ActivityDimension, view: View, providerOf: (source: string) => string): string[] {
+export function groupColors(groups: ActivityGroup[], by: ActivityDimension, view: View, providerOf: (source: string) => string,pins:ProjectColorPins=[]): string[] {
+  if(by==='project')return resolveProjectColors(groups,pins).map(group=>group.color);
   return groups.map((group, rank) => (by === 'source' ? group.key==='unknown'||group.key==='notProvided'?OTHER_COLOR : colorOf(view, group.key, providerOf(group.key)) : (CATEGORY_COLORS[rank] ?? OTHER_COLOR)));
 }
 
