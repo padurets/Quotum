@@ -68,7 +68,7 @@ const SortedForecast=memo(function SortedForecast({rows,models,columns,fixed,ran
   const [watch]=useState(()=>clock.watch()),cached=useRef<AnalyticsRow<ForecastColumn>[]>([]);
   const evaluate=useCallback(()=>{
     const {rows,models,active,fixed,rangeKey,locale}=current.current,now=hubNow();
-    const values=models.map(model=>sortValue(model,fixed||model.line.capCells||!active||active.column==='name'?model.line:boardPeriod.quotaAt(model.line,now,rangeKey),now,fixed)).sort(forecastComparator(active,fixed,locale));
+    const values=models.map(model=>sortValue(model,fixed||model.line.capCells||!active||active.column==='name'?model.line:boardPeriod.quotaAt(model.line,now,rangeKey),now,fixed,active?.column??'name')).sort(forecastComparator(active,fixed,locale));
     let next=Infinity;
     const linear:{value:number;slope:number}[]=[];
     if(!fixed)for(const value of values){
