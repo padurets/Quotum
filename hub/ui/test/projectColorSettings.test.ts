@@ -23,18 +23,29 @@ const project={name:'A',reported:['A'],machines:[],lastAt:1,canRename:true,color
 
 function fixture(file='Projects',component='Projects'){
   const hooks=preparationFixture(),page=createStore(reduce,INITIAL),requests:any[]=[];
+  class FocusElement {
+    constructor(private project:string|null=null){}
+    closest(){return this.project===null?null:this;}
+    getAttribute(){return this.project;}
+  }
+  const listeners=new Map<string,Set<(event:{target:FocusElement;key?:string})=>void>>();
+  const document={body:new FocusElement(),documentElement:new FocusElement(),
+    addEventListener:(type:string,listen:(event:{target:FocusElement;key?:string})=>void)=>{let set=listeners.get(type);if(!set)listeners.set(type,set=new Set());set.add(listen);},
+    removeEventListener:(type:string,listen:(event:{target:FocusElement;key?:string})=>void)=>listeners.get(type)?.delete(listen),
+  };
   page.dispatch({type:'hub',event:{type:'snapshot',data:snapshot}});
   const modules:Record<string,any>={react:{...hooks,useEffect:hooks.useLayoutEffect,useId:()=> 'radio',useCallback:(fn:unknown,deps:unknown[])=>hooks.useMemo(()=>fn,deps)},'react/jsx-runtime':jsx,
     '../../server/domain/categoryColors':category,'../../server/domain/projectColors':model,'../lib/projectColors':{projectColorReply},'../lib/projects':projectRules,
     '../lib/board':{page,useProjectColorEnvelope:()=>page.get().board?.projectColors??null,useProjectColorGeneration:()=>page.get().projectColorsGeneration??0,useWorkAuthority:()=>page.get().board?.workAuthority},
     '../lib/http':{ApiError,call:(method:string,url:string,body:unknown,_timeout:number,signal:AbortSignal,headers:unknown)=>new Promise((resolve,reject)=>requests.push({method,url,body,signal,headers,resolve,reject}))},
     '../i18n':{t:(key:string)=>key},'../lib/session':{boardTitle:()=> 'Board'},'../lib/format':{stamp:()=> 'time'},'lucide-react':{Pencil:'Pencil'},'./Time':{Ago:'Ago'},'./Kit':{ErrorLine:'ErrorLine',Field:'Field',Modal:'Modal'},'./Popover':{Popover:'Popover'},};
-  const context={AbortController,URLSearchParams,exports:{} as any,require:(name:string)=>{if(!(name in modules))throw new Error(name);return modules[name];}};
+  const context={AbortController,URLSearchParams,document,Element:FocusElement,exports:{} as any,require:(name:string)=>{if(!(name in modules))throw new Error(name);return modules[name];}};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/'+file+'.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   const board={id:'board',name:'Board',personal:true,role:'owner'};
   const render=(props:Record<string,unknown>={})=>{hooks.begin();const tree=context.exports[component]({board,...props});hooks.commit();return nodes(tree);};
   const resolveListing=async(projects=[project])=>{requests.at(-1)!.resolve({projects,authority:page.get().board!.projectColors!.authority,keptDays:30});await flush();};
-  return {page,board,requests,render,resolveListing,editor:context.exports.ProjectEditor};
+  const native=(type:string,target=document.body,key?:string)=>{for(const listen of [...listeners.get(type)??[]])listen({target,key});};
+  return {page,board,requests,render,resolveListing,editor:context.exports.ProjectEditor,native,element:(project:string|null=null)=>new FocusElement(project)};
 }
 
 const palette=(f:ReturnType<typeof fixture>,colors:model.ProjectColorEnvelope)=>{
@@ -152,7 +163,7 @@ test('a rename outside the current query returns focus to search without stealin
   const field=f.render().find(node=>node.type==='input'&&node.props['aria-label']==='projectColors.search')!;
   if(field.props.ref)field.props.ref.current={focus:()=>{searches++;}};
   const save=f.render().find(node=>node.type===f.editor)!.props.save('B',null);
-  f.requests.at(-1)!.resolve({...initial,revision:1});await flush();await f.resolveListing([]);await save;f.render();
+  f.requests.at(-1)!.resolve({...initial,revision:1});await flush();await f.resolveListing([]);await save;f.render();f.render();
   assert.equal(searches,1,'a filtered-out rename returns the keyboard to the current search');
   searchFor(f,'B');await f.resolveListing([{...project,name:'B'}]);
   assert.equal(f.render().find(node=>node.type===f.editor)!.props.focus,0,'the completed save cannot focus a result of a later independent search');
@@ -174,6 +185,76 @@ test('a visible renamed row retains its explicit post-save keyboard focus',async
   searchFor(f,'A');await f.resolveListing([]);
   searchFor(f,'B');await f.resolveListing([{...project,name:'B'}]);
   assert.equal(f.render().find(node=>node.type===f.editor)!.props.focus,0,'an applied focus token cannot be replayed when a later search remounts the row');
+});
+
+test('a replaced post-save reload cannot consume keyboard focus using the previous rows',async()=>{
+  const f=fixture();f.render();await f.resolveListing();
+  let searches=0;
+  f.render().find(node=>node.type==='input'&&node.props['aria-label']==='projectColors.search')!.props.ref.current={focus:()=>{searches++;}};
+  const save=f.render().find(node=>node.type===f.editor)!.props.save('B',category.CATEGORY_COLORS[1]);
+  f.requests.at(-1)!.resolve({...initial,authority:'b'.repeat(43),revision:1,pins:[['B',category.CATEGORY_COLORS[1]]]});await flush();
+  const replaced=f.requests.at(-1)!;
+  f.render();f.render();assert.equal(replaced.signal.aborted,true,'adopting the renamed colour authority replaces the awaited loader');
+  replaced.reject(new Error('aborted'));await save;f.render();
+  assert.equal(searches,0,'an aborted reload cannot treat the old row list as a missing rename target');
+  await f.resolveListing([{...project,name:'B'}]);f.render();
+  assert.ok(f.render().find(node=>node.type===f.editor)!.props.focus>0,'only the successful current loader lands the rename');
+});
+
+const renamedSnapshot=(f:ReturnType<typeof fixture>,workAuthority='after-own-rename')=>{
+  const colors=f.page.get().board!.projectColors!;
+  f.page.dispatch({type:'hub',event:{type:'snapshot',data:{...snapshot,workAuthority,projectColors:undefined,projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority}}});
+  f.page.dispatch({type:'hub',event:{type:'projectColors',data:colors}});
+  f.render();f.render();
+};
+
+test('a late own-rename work snapshot preserves the landed keyboard context through row replacement',async()=>{
+  const f=fixture();f.render();await f.resolveListing();searchFor(f,'');await f.resolveListing();
+  const save=f.render().find(node=>node.type===f.editor)!.props.save('B',null);
+  f.requests.at(-1)!.resolve({...initial,revision:1});await flush();await f.resolveListing([{...project,name:'B'}]);await save;f.render();
+  assert.ok(f.render().find(node=>node.type===f.editor)!.props.focus>0);
+  f.native('focusin',f.element('B'));
+  renamedSnapshot(f);
+  assert.equal(f.render().filter(node=>node.type===f.editor).length,0,'the previous access projection is retired');
+  await f.resolveListing([{...project,name:'B'}]);
+  assert.ok(f.render().find(node=>node.type===f.editor)!.props.focus>0,'the replacement row retains the same keyboard owner');
+});
+
+test('a filtered-out save keeps search focus through its late own-rename snapshot until focus moves elsewhere',async()=>{
+  const f=fixture();f.render();await f.resolveListing();searchFor(f,'A');await f.resolveListing();
+  let searches=0;
+  const control=Object.assign(f.element(),{focus:()=>{searches++;f.native('focusin',control);}});
+  f.render().find(node=>node.type==='input'&&node.props['aria-label']==='projectColors.search')!.props.ref.current=control;
+  const save=f.render().find(node=>node.type===f.editor)!.props.save('B',null);
+  f.requests.at(-1)!.resolve({...initial,revision:1});await flush();await f.resolveListing([]);await save;f.render();f.render();
+  assert.equal(searches,1);
+  renamedSnapshot(f);await f.resolveListing([]);f.render();f.render();
+  assert.equal(searches,2,'a replaced search input retains its keyboard ownership');
+  assert.equal(f.render().find(node=>node.type==='input'&&node.props['aria-label']==='projectColors.search')!.props.value,'A');
+  f.native('focusin',f.element());f.render();
+  renamedSnapshot(f,'later-work');await f.resolveListing([]);f.render();f.render();
+  assert.equal(searches,2,'moving to another control retires the fallback owner too');
+});
+
+test('new keyboard, pointer or focus ownership prevents a landed save from reclaiming another control',async()=>{
+  for(const input of ['keydown','pointerdown','focusin']){
+    const f=fixture();f.render();await f.resolveListing();
+    const save=f.render().find(node=>node.type===f.editor)!.props.save('B',null);
+    f.requests.at(-1)!.resolve({...initial,revision:1});await flush();await f.resolveListing([{...project,name:'B'}]);await save;f.render();
+    assert.ok(f.render().find(node=>node.type===f.editor)!.props.focus>0);
+    f.native(input,f.element(),'Tab');f.render();renamedSnapshot(f);await f.resolveListing([{...project,name:'B'}]);
+    assert.equal(f.render().find(node=>node.type===f.editor)!.props.focus,0,input+' gives the keyboard context to the reader');
+  }
+});
+
+test('new keyboard or pointer input also retires the focus intent of an unfinished save',async()=>{
+  for(const input of ['keydown','pointerdown']){
+    const f=fixture();f.render();await f.resolveListing();
+    const save=f.render().find(node=>node.type===f.editor)!.props.save('B',null);
+    f.native(input,f.element(),'Tab');
+    f.requests.at(-1)!.resolve({...initial,revision:1});await flush();await f.resolveListing([{...project,name:'B'}]);await save;f.render();
+    assert.equal(f.render().find(node=>node.type===f.editor)!.props.focus,0,input+' during the write retires its later landing');
+  }
 });
 
 test('an existing whitespace-only name permits a colour-only save',async()=>{

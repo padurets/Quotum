@@ -26,6 +26,7 @@ export function Projects({board=null}:{board?:Board|null}) {
   const cursors=useRef<(string|undefined)[]>([undefined]),pending=useRef<AbortController|null>(null);
   const cursorAuthority=useRef<string|undefined>(undefined);
   const currentLoad=useRef<(()=>Promise<ProjectList|null>)|null>(null);
+  const completedLoad=useRef<(()=>Promise<ProjectList|null>)|null>(null);
   const focusScope=useRef(0),searchField=useRef<HTMLInputElement>(null);
   const writes=useRef(false);
   const chosenRows=useRef(new Map<string,ProjectGroup>()),focusAfterSave=useRef<{board:string|undefined;name:string}|null>(null);
@@ -34,13 +35,14 @@ export function Projects({board=null}:{board?:Board|null}) {
   const [selected, setSelected] = useState<string[]>([]);
   const [merge, setMerge] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  // The row a rename led to, chosen in the list that came after it: the keyboard goes there,
-  // each time anew (a new number), though it was the same row the time before.
-  const [landing, setLanding] = useState<{name: string; n: number} | null>(null);
-  const retireFocus=()=>{focusScope.current++;focusAfterSave.current=null;setLanding(null);};
+  // A save lands in its returned row or the search field. Its keyboard owner survives
+  // a metadata reload until the reader moves elsewhere.
+  const [landing, setLanding] = useState<{name:string;n:number;search?:boolean}|null>(null);
+  const retireFocus=useCallback(()=>{focusScope.current++;focusAfterSave.current=null;setLanding(null);},[]);
   const load=useCallback(async():Promise<ProjectList|null>=>{
     if(currentLoad.current!==load)return null;
     const controller=new AbortController();pending.current?.abort();pending.current=controller;
+    completedLoad.current=null;
     try{
       if(cursorAuthority.current!==saved?.authority){cursors.current=[undefined];cursorAuthority.current=saved?.authority;}
       let answer:ProjectList|undefined;
@@ -52,21 +54,35 @@ export function Projects({board=null}:{board?:Board|null}) {
         cursors.current[at+1]=answer.nextCursor;
         if(at<index&&!answer.nextCursor){setIndex(at);return null;}
       }
-      setLoadedAccess(access);setList(answer!);return answer!;
+      completedLoad.current=load;setLoadedAccess(access);setList(answer!);return answer!;
     }catch(failure){if(!controller.signal.aborted&&currentLoad.current===load){setError(failure);if(failure instanceof ApiError&&failure.status===409){cursors.current=[undefined];setIndex(0);}}return null;}
   },[board?.id,query,index,access,saved?.authority]);
   currentLoad.current=load;
-  useEffect(()=>{setList(null);setSelected([]);chosenRows.current.clear();setError(null);setLanding(null);cursors.current=[undefined];setIndex(0);},[access,query]);
+  useEffect(()=>{setList(null);setSelected([]);chosenRows.current.clear();setError(null);cursors.current=[undefined];setIndex(0);},[access,query]);
   useEffect(()=>{currentLoad.current=load;void load();return()=>{pending.current?.abort();if(currentLoad.current===load)currentLoad.current=null;};},[load]);
-  useEffect(()=>{focusScope.current++;focusAfterSave.current=null;},[board?.id,board?.role,generation]);
+  useEffect(()=>{retireFocus();},[board?.id,board?.role,generation,retireFocus]);
+  useEffect(()=>{
+    // A metadata reload may replace the focused row. Only the reader's next action
+    // or a move to another control gives up that keyboard context.
+    const moved=(event:FocusEvent)=>{
+      const target=event.target instanceof Element?event.target:null;
+      const owned=landing?.search?target===searchField.current:target?.closest('.project-editor')?.getAttribute('data-project-name')===landing?.name;
+      if(landing&&target&&target!==document.body&&target!==document.documentElement&&!owned)retireFocus();
+    };
+    document.addEventListener('pointerdown',retireFocus,true);
+    document.addEventListener('keydown',retireFocus,true);
+    document.addEventListener('focusin',moved,true);
+    return()=>{document.removeEventListener('pointerdown',retireFocus,true);document.removeEventListener('keydown',retireFocus,true);document.removeEventListener('focusin',moved,true);};
+  },[landing,retireFocus]);
   useEffect(()=>{
     const target=focusAfterSave.current;
-    if(!busy&&target&&target.board===board?.id&&loadedAccess===access&&list){
-      focusAfterSave.current=null;
-      if(list.projects.some(row=>row.name===target.name))setLanding(before=>({name:target.name,n:(before?.n??0)+1}));
-      else searchField.current?.focus({preventScroll:true});
+    if(!busy&&loadedAccess===access&&list&&completedLoad.current===load){
+      if(target&&target.board===board?.id){
+        focusAfterSave.current=null;
+        setLanding(before=>({name:target.name,n:(before?.n??0)+1,...(!list.projects.some(row=>row.name===target.name)?{search:true}:{})}));
+      }else if(landing?.search)searchField.current?.focus({preventScroll:true});
     }
-  },[list,busy,access,loadedAccess,board?.id]);
+  },[list,busy,access,loadedAccess,board?.id,load,landing]);
 
   /** A change, then the list anew (another tab may have changed it too), which it gives back. */
   const change = async (url: string, body: object) => {
@@ -159,7 +175,7 @@ export function Projects({board=null}:{board?:Board|null}) {
                         color={pins.get(group.name)??null}
                         canColor={board?.role==='owner'&&!!group.colorAllowed}
                         disabled={busy}
-                        focus={landing?.name === group.name ? landing.n : 0}
+                        focus={!landing?.search&&landing?.name === group.name ? landing.n : 0}
                         save={(name,color) => edit(group,name,color)}
                       />
                     )}
@@ -233,7 +249,7 @@ export function ProjectEditor({project,color,board,canColor,disabled,focus=0,sav
     event.preventDefault();if(busy)return;setBusy(true);setError(null);
     try{await intent.current(name,draft);landing.current=visible.current;setOpen(false);}catch(failure){setError(failure);}finally{setBusy(false);}
   };
-  return <span ref={root} className="project-editor"><Popover label={t('projects.edit',{name:project.name!})} trigger={<>{color&&<i className="activity-swatch" style={{background:color}}/>}<b>{project.name}</b><Pencil size={13} aria-hidden="true"/></>} triggerClass="text-button project-edit-trigger" buttonProps={{disabled}} width={320} align="left" portal={root.current?.closest<HTMLElement>('.dialog,.settings-content')} open={open} onOpenChange={change}>
+  return <span ref={root} className="project-editor" data-project-name={project.name}><Popover label={t('projects.edit',{name:project.name!})} trigger={<>{color&&<i className="activity-swatch" style={{background:color}}/>}<b>{project.name}</b><Pencil size={13} aria-hidden="true"/></>} triggerClass="text-button project-edit-trigger" buttonProps={{disabled}} width={320} align="left" portal={root.current?.closest<HTMLElement>('.dialog,.settings-content')} open={open} onOpenChange={change}>
     <form onSubmit={submit}>
       <div className="popover-pad"><Field label={t('projects.nameLabel')} value={name} maxLength={240} required={name!==project.name} disabled={busy} readOnly={project.canRename===false} onChange={event=>setName([...event.target.value].slice(0,120).join(''))}/>
         {project.canRename===false&&<p className="dialog-text">{t('projects.nameReadOnly')}</p>}
