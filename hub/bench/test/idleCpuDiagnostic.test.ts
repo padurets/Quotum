@@ -316,7 +316,7 @@ class NativeCdpFake extends CurrentCdpFake {
     signal?.throwIfAborted();
     if(method==='Page.getFrameTree'){this.commands.push(method);return {frameTree:{frame:{id:'own-frame',loaderId:this.loader}}} as T;}
     if(method==='Tracing.start'){
-      this.commands.push(method);assert.equal((params as {categories:string}).categories,'toplevel,v8,blink,devtools.timeline,disabled-by-default-devtools.timeline');
+      this.commands.push(method);assert.equal((params as {categories:string}).categories,'toplevel,v8,blink,cc,devtools.timeline,disabled-by-default-devtools.timeline');
       if(!this.skipMetadata)this.emit('Tracing.dataCollected',{value:[nativeMetadata(),{name:'thread_name',ph:'M',pid:101,tid:101,args:{name:'CrRendererMain'}}]});
       return {} as T;
     }
@@ -458,9 +458,9 @@ test('native rejections keep only the first eight numeric fixed classifications 
   assert.deepEqual(rejected[0],{name:'Layout',kind:'known',phase:'X',pid:101,tid:101,ts:2_000_000,frame:1,reason:'duration'});
   assert.doesNotMatch(JSON.stringify(safeEvidence(receipt)),/private-rejected-canary/);
 });
-test('only fixed rendering and lifecycle envelopes join the existing native whitelist',async()=>{
-  const names=['PrePaint','Paint','Layerize','CompositeLayers','LocalFrameView::WillStartLifecycleUpdate',
-    'LocalFrameView::UpdateLifecyclePhases - start of lifecycle tasks','LocalFrameView::RunStyleAndLayoutLifecyclePhases'];
+test('only fixed rendering, animation, lifecycle and commit-wait envelopes join the native whitelist',async()=>{
+  const names=['PrePaint','Paint','Layerize','CompositeLayers','PageAnimator::serviceScriptedAnimations',
+    'WebFrameWidgetImpl::UpdateLifecycle','LayerTreeHost::WaitForCommitCompletion'];
   const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:[...names,'private-extra-canary'].map(name=>({name,ph:'X',ts:2_000_000,dur:20,pid:101,tid:101}))}));
   for(const name of names)assert.equal((receipt.events as any[]).filter(row=>row.name===name).length,1);
   assert.doesNotMatch(JSON.stringify(receipt),/private-extra-canary/);assert.equal(receipt.status,'unqualified');
