@@ -164,7 +164,8 @@ test('historical card consumers accept the recorded Codex conversion through the
     budgetVisible,subscriptionFundsVisible,historicalCurrencyContext,MeasurementClock:{Provider:'clock'},CardTray:'tray',MoneyValues:'money',
     quotaPeriods,primaryQuotaPeriods,hasSubscriptionCaps,isWindowHidden:()=>false,planOf:()=>null,providerOf,Limit:'limit',PeriodStatus:'status'};
   const footer=component('../components/SourceCard.tsx','CardFooter','function CardFooter(',undefined,bindings);
-  const measurements=component('../components/SourceCard.tsx','CardMeasurements','function CardMeasurements(','/** Historical funds',bindings);
+  const MoneyCard=component('../components/MoneyCard.tsx','MoneyCard','export function MoneyCard(','type MoneySource=',{...bindings,useShownKeys:()=>({keys:[],meters:[],allowances:[]})});
+  const measurements=component('../components/SourceCard.tsx','CardMeasurements','function CardMeasurements(','/** Historical funds',{...bindings,MoneyCard});
   const props={source:h.page.get().board!.cards[h.source],arrange:{view:EMPTY_VIEW},boardId:h.board};
   const funds=(footer(props)!.props.funds as Node).props.children as Node;
   const measured=nodes(measurements({...props,source:{...props.source,provider:'deepseek'}})).find(node=>node.type==='money')!;

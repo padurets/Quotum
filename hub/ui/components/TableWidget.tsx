@@ -37,13 +37,14 @@ export function TablePages({page,pages,onPage,range,body,reserve=false}:{page:nu
 
 export type TableMetric={id:string;column?:string;label:string;compactLabel?:string;cell:Cell|TimedCell};
 function TableFooter({table,count,metrics=[],columns,still=false,single=false,body}:{table:TableWidget;count:number;metrics?:readonly TableMetric[];columns?:readonly string[];still?:boolean;single?:boolean;body?:RefObject<HTMLElement|null>}){
-  const aligned=table.layout==='table'&&!!columns;
-  const shown=aligned?metrics.filter(metric=>columns!.includes(metric.column??metric.id)):metrics;
+  // Grouping can remove a row column without removing its complete-period total.
+  const aligned=table.layout==='table'&&!!columns&&metrics.every(metric=>columns.includes(metric.column??metric.id));
+  const shown=metrics;
   // The table reaches the panel edges; the footer's last column ends at its inner padding.
   const gridColumns=aligned?`minmax(0, 1fr) ${table.columnWidths.map((width,index)=>index===table.columnWidths.length-1?`calc(${width}px - var(--panel-pad))`:width+'px').join(' ')}`:undefined;
   return <footer ref={body} className={`table-footer${table.layout==='list'?' is-list':''}`} style={{'--metric-rows':Math.ceil(table.footerMetrics/2)} as CSSProperties} aria-label={t('table.summary')}>
     {shown.length>0&&<div className={`table-summary${aligned?' is-aligned':''}`} style={gridColumns?{gridTemplateColumns:gridColumns}:undefined}><div className="table-summary-heading" title={t('table.summaryHint')}>{t('table.summary')}</div>
-      {shown.length>0&&<dl>{shown.map(metric=><div key={metric.id} style={aligned?{gridColumn:columns!.indexOf(metric.column??metric.id)+1,gridRow:1}:undefined}><dt className={aligned?'sr-only':undefined} title={metric.label}>{table.layout==='list'?metric.compactLabel??metric.label:metric.label}</dt>{tableCell(metric.id,metric.cell,(cell,time)=><dd data-time={time} data-table-metric={metric.id} className={cell.className} title={cell.title}>{cell.content}</dd>,still)}</div>)}</dl>}
+      {shown.length>0&&<dl>{shown.map(metric=><div key={metric.id} style={aligned?{gridColumn:columns!.indexOf(metric.column??metric.id)+1,gridRow:1}:undefined}><dt className={aligned?'sr-only':undefined} title={metric.label}>{!aligned?metric.compactLabel??metric.label:metric.label}</dt>{tableCell(metric.id,metric.cell,(cell,time)=><dd data-time={time} data-table-metric={metric.id} className={cell.className} title={cell.title}>{cell.content}</dd>,still)}</div>)}</dl>}
     </div>}
     <div className="table-footer-pages"><small title={t('table.summaryHint')}>{t('table.rows',{count})}</small>{!single&&<TablePages page={still?0:table.page} pages={still?2:table.pages} onPage={table.onPage} reserve range={`${table.from+1}–${table.to} / ${count}`}/>}</div>
   </footer>;

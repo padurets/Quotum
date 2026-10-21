@@ -510,9 +510,8 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
 function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;boardId:string}) {
   const filters=useDataFilters().current,moneyPrefs=usePref('money');
   const allowances=selectedAllowanceIds(source,arrange.view,moneyPrefs.unit??undefined,filters);
-  const reading=usePeriodValues(source.id),selected=useTimeRange(),context=useCurrencyContext(source.id);
+  const reading=usePeriodValues(source.id),selected=useTimeRange();
   const historical=!!selected,value=historical?reading.value:null;
-  const historicalContext=value?historicalCurrencyContext(context,source.id,value.meters):context;
   const windows=historical?value?.windows??[]:source.windows;
   const periods=quotaPeriods({provider:source.provider,windows}),shownPeriods=periods.filter(w=>!isWindowHidden(arrange.view,source.id,w.id));
   const visible=windows.filter(w=>!isWindowHidden(arrange.view,source.id,w.id)),weekly=planOf(arrange.view,source.id),caps=hasSubscriptionCaps(source.provider);
@@ -521,9 +520,7 @@ function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;
   const noEvidence=historical&&!!value&&!reading.loading&&!reading.error&&!windows.length&&!value.meters.length&&value.creditBalance?.status!=='unlimited'&&!allowances.length;
   return <MeasurementClock.Provider value={historical?reading.basis?.range.to??selected.to:null}>
     <div className={`limits card-primary${wallet?' is-wallet':''}`}>
-      {historical?<>
-        {!caps&&wallet&&value&&(value.meters.length>0||allowances.length>0)&&<MoneyValues source={value} keys={[...value.keys,...(source.keys??[]).filter(key=>!value.keys.some(part=>part.id===key.id))]} meters={value.meters} allowances={allowances} context={historicalContext}/>}
-      </>:budgetVisible(source)&&wallet&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
+      {!caps&&wallet&&budgetVisible(source)&&<MoneyCard source={source} board={boardId} view={arrange.view} measurement={historical?value:undefined}/>}
       {primary.map(period=>{const w=visible.find(w=>w.id===period.id),measurement=historical?value:source;return w?<Limit key={w.id} w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={weekly}/>:caps&&measurement?<QuotaCard key={period.id} source={measurement} ids={[period.id]}/>:null;})}
       {noEvidence&&<div className="card-empty">{t('period.noEvidence')}</div>}
       {!historical&&!caps&&!source.windows.length&&!budgetVisible(source)&&!source.meters&&<div className="card-empty">{errorText(source.error??'waiting')}</div>}

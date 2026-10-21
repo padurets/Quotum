@@ -1651,6 +1651,9 @@ Its translucent surface remains distinct from the page background. On wide scree
 the backing shares the content's 1240 px maximum width and 28 px inner side spacing,
 with rounded lower corners. Hiding filters reduces that same surface to the header.
 Narrow screens keep edge-to-edge bars.
+Viewing controls use a viewport-based grid. Filter counts and reset actions cannot
+wrap the shared bar onto another row; narrow controls retain their full accessible
+names when their visible labels need an ellipsis.
 The row also owns data selection for Resources, Projects, Devices and Clients.
 Provided-data authority, these predicates and layout visibility are independent.
 The v1 defaults live in `board_filters`, with their own revision and an opaque
@@ -1786,7 +1789,10 @@ with fifty candidates and expands to the fitting page and its next row, without 
 subscriptions. A separate footer puts the whole-selection summary on the left and
 the matching row count beside the compact pager on a separate line below it.
 Wide totals align with their table columns, using the same widths and showing only
-values under the dividing rule; column headings are not repeated. A narrow list uses
+values under the dividing rule; column headings are not repeated. When session
+grouping has no matching row columns, its whole-period totals use one labelled line
+of the same height. The owner's metric switches select those totals independently
+of grouping, including None. A narrow list uses
 a fixed two-column metric grid above the count and pager. Tables without aggregate
 metrics show only the count and pager.
 Each value names its metric and scope. The sessions table shows whole-period work and

@@ -1,5 +1,5 @@
 import {useEffect,useState,useSyncExternalStore} from 'react';
-import {Save,RotateCcw,Unlink} from 'lucide-react';
+import {Save,RotateCcw,Unlink,TriangleAlert} from 'lucide-react';
 import {dataFilters,useDataFilters} from '../lib/dataFilters';
 import {useBoardId,useNamed,useRole,type Named} from '../lib/board';
 import {setPrefs,usePref} from '../lib/prefs';
@@ -16,6 +16,8 @@ import {executableWorkFilters,fundsRule,matchesSelection,matchesSource,type Data
 import {moneyFamily,providerOf} from '../../server/domain/providers';
 import {FilterGroup,FilterOptions,FilterPopover,FilterRow,FilterSearch} from './Filters';
 import {ErrorLine} from './Kit';
+import {Popover} from './Popover';
+import {messageOf} from '../lib/http';
 import {KeyMoneySettings} from './MoneySettings';
 import {logoOf} from './logos';
 
@@ -78,8 +80,9 @@ export function DataFilterControls(){
 }
 export function FilterSaveActions(){
   const state=useDataFilters(),owner=useRole()==='owner';
-  return <><div className="filter-save-actions">
+  return <div className="filter-save-actions">
     <button className="icon-button" title={t('filters.restore')} aria-label={t('filters.restore')} disabled={!state.saved||!state.dirty} onClick={()=>dataFilters.restore()}><RotateCcw size={16}/></button>
     {owner&&<button className="icon-button" title={t(state.saving?'filters.saving':'filters.save')} aria-label={t(state.saving?'filters.saving':'filters.save')} aria-busy={state.saving} disabled={!state.saved||!state.current||!executableWorkFilters(state.current)||state.saving||!state.dirty&&state.saved.revision>0} onClick={()=>void dataFilters.save()}>{state.saving?<span className="spinner" aria-hidden="true"/>:<Save size={16}/>}</button>}
-  </div><ErrorLine error={state.error}/></>;
+    {!!state.error&&<span className="reader-state is-warn"><Popover label={messageOf(state.error)} icon={<TriangleAlert size={16}/>}><div className="popover-body"><ErrorLine error={state.error}/>{owner&&<button type="button" className="button" disabled={!state.saved||!state.current||!executableWorkFilters(state.current)||state.saving} onClick={()=>void dataFilters.save()}>{t('filters.save')}</button>}</div></Popover></span>}
+  </div>;
 }

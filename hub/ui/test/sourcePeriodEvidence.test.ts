@@ -17,6 +17,7 @@ import * as money from '../lib/money';
 import {quotaPeriods,primaryQuotaPeriods} from '../lib/subscription';
 import {hasSubscriptionCaps} from '../lib/providers';
 import {t,setLocale} from '../i18n';
+import type {Card} from '../lib/types';
 
 type Node={type:unknown;props:Record<string,unknown>};
 const jsx=(type:unknown,props:Record<string,unknown>):Node=>({type,props});
@@ -90,16 +91,17 @@ test('historical wallet disclosures keep the current selected scope before, betw
     };
     record(at,[],[]);record(at+10*M,['aaaaaaaaaaaa'],['aaaaaaaaaaaa']);record(at+20*M,['aaaaaaaaaaaa','bbbbbbbbbbbb'],['aaaaaaaaaaaa','bbbbbbbbbbbb']);record(at+30*M,['aaaaaaaaaaaa','bbbbbbbbbbbb'],['aaaaaaaaaaaa'],['bbbbbbbbbbbb']);
     const read=(to:number)=>periodValues(store,store.sources(directory.boards(user.id)[0].id),user.id,to,()=>{},now)[0];
-    const source={...read(at+31*M),windows:[],successAt:at+30*M};
+    const source:Card={...read(at+31*M),windows:[],successAt:at+30*M,plan:'',error:null,stale:false,owners:[],staleAfterMs:H,measureIntervalMs:null,resets:null};
     const filters=filterModel.defaultFilters();filters.wallet={mode:'only',values:[{source:id,kind:'balance'},{source:id,kind:'keyCap',key:'aaaaaaaaaaaa'},{source:id,kind:'keyCap',key:'bbbbbbbbbbbb'}]};
     let selected={from:at-H,to:at+M},reading={value:read(selected.to),basis:{range:selected},loading:false,error:null};
     const context={...money,...filterModel,selectedAllowanceIds,usePref:()=>({unit:'USD'}),useDataFilters:()=>({current:filters}),exports:{} as Record<string,(props:unknown)=>Node>,require:()=>runtime,t,currencySymbol,
       usePeriodValues:()=>reading,useTimeRange:()=>selected,useCurrencyContext:()=>defaultCurrencyContext,quotaPeriods,primaryQuotaPeriods,hasSubscriptionCaps,providerOf,
       isWindowHidden:()=>false,planOf:()=>null,MeasurementClock:{Provider:'clock'},QuotaCard:'quota',Limit:'limit',AllHidden:'hidden',
-      MoneyValues:undefined as unknown,Popover:'popover',CreditBalanceValue:({children}:{children:unknown})=>children,ErrorLine:'error',BudgetKeyMetrics:'key',stamp:String,day:String,ApiError,
+      MoneyValues:undefined as unknown,MoneyCard:undefined as unknown,useShownKeys:()=>({keys:source.keys,meters:source.meters,allowances:selectedAllowanceIds(source,EMPTY_VIEW,'USD',filters)}),Popover:'popover',CreditBalanceValue:({children}:{children:unknown})=>children,ErrorLine:'error',BudgetKeyMetrics:'key',stamp:String,day:String,ApiError,
     };
     const run=(body:string)=>runInNewContext('(function(){'+ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText+'})()',context);
     const funds=code('../components/MoneyCard.tsx');run(funds.slice(funds.indexOf('export function MoneyValues('),funds.indexOf('/** Subscription funds')));context.MoneyValues=context.exports.MoneyValues;
+    run(funds.slice(funds.indexOf('export function MoneyCard('),funds.indexOf('type MoneySource=')));context.MoneyCard=context.exports.MoneyCard;
     const card=code('../components/SourceCard.tsx'),start=card.indexOf('function CardMeasurements(');run(card.slice(start,card.indexOf('/** Every reader',start))+'\nexports.CardMeasurements=CardMeasurements;');
     for(const locale of ['en','ru'] as const){setLocale(locale);for(const [to,known]of [[at-1,0],[at+M,0],[at+11*M,1],[at+31*M,1]]){
       selected={from:at-H,to};reading={value:read(to),basis:{range:selected},loading:false,error:null};

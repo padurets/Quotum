@@ -608,16 +608,17 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   const single = agentsBy === 'none';
   const structural=AGENTS_BY.map(by=>columnsOf(by).rest.filter(column=>columnShown(view,AGENTS,column)));
   const structure=Array.from({length:Math.max(...structural.map(columns=>columns.length))},(_,i)=>Math.max(...structural.map(columns=>AGENT_WIDTHS[columns[i]]??0)));
-  const footerMetrics=Math.max(...structural.map((columns,i)=>(AGENTS_BY[i]==='none'||columns.includes('agents')?1:0)+['worked','active','concurrency'].filter(column=>columns.includes(column as AgentColumn)).length));
+  const summaryColumns=(['agents','worked','active','concurrency'] as const).filter(column=>columnShown(view,AGENTS,column));
+  const footerMetrics=summaryColumns.length;
   const table=useTableWidget(panel,columns.map(column=>AGENT_WIDTHS[column]),NAME_WIDTH,ordered.map(group=>group.key),JSON.stringify([agentsBy,active,selected?timeRangeKey(selected):range]),0,structure,footerMetrics);
   const layout=table.layout;
   const refs=rows.flatMap(row=>row.session.ref?[row.session.ref]:[]);
   const worked=rows.some(row=>row.session.workedMs===null)?null:rows.reduce((sum,row)=>sum+row.session.workedMs!,0);
   const workedText=(now:number)=>!boardPeriod.activitySummaryAt(activityDimension(by),now)?.known||worked===null?'—':workHours(boardPeriod.workedAt(refs,worked,now)!);
   const metrics:TableMetric[]=[
-    ...(single||columns.includes('agents')?[{id:'sessions',column:'agents',label:t('activity.agents'),cell:{time:'session-count',changesAt:(now:number)=>boardPeriod.activityCoverageChangesAt(now),at:(now:number)=>({content:boardPeriod.activitySummaryAt(activityDimension(by),now)?.known?agentCount(rows):'—',title:t('activity.agentsHint')})}}]:[]),
-    ...(columns.includes('worked')?[{id:'worked',label:t('agents.worked'),cell:{time:'worked',changesAt:(now:number)=>withCoverage(now,worked===null?null:boardPeriod.workedChangesAt(refs,now,workedText)),at:(now:number)=>({content:workedText(now),title:t('agents.workedHint')})}}]:[]),
-    ...(['active','concurrency'] as const).filter(column=>columns.includes(column)).map(column=>({id:column,label:t(COLUMNS[column].title),compactLabel:column==='concurrency'?t('activity.atOnce'):undefined,cell:activityCell(by,column)})),
+    ...(summaryColumns.includes('agents')?[{id:'sessions',column:'agents',label:t('activity.agents'),cell:{time:'session-count',changesAt:(now:number)=>boardPeriod.activityCoverageChangesAt(now),at:(now:number)=>({content:boardPeriod.activitySummaryAt(activityDimension(by),now)?.known?agentCount(rows):'—',title:t('activity.agentsHint')})}}]:[]),
+    ...(summaryColumns.includes('worked')?[{id:'worked',label:t('agents.worked'),cell:{time:'worked',changesAt:(now:number)=>withCoverage(now,worked===null?null:boardPeriod.workedChangesAt(refs,now,workedText)),at:(now:number)=>({content:workedText(now),title:t('agents.workedHint')})}}]:[]),
+    ...(['active','concurrency'] as const).filter(column=>summaryColumns.includes(column)).map(column=>({id:column,label:t(COLUMNS[column].title),compactLabel:column==='concurrency'?t('activity.atOnce'):undefined,cell:activityCell(by,column)})),
   ];
   const workingSummary:TimedCell={time:'working-count',changesAt:now=>boardPeriod.activityCoverageChangesAt(now),at:now=>{
     const known=boardPeriod.activitySummaryAt(activityDimension(by),now)?.known;

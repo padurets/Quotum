@@ -14,6 +14,7 @@ import {
   budgetVisible,
   balanceGroups,
   balanceRoleLabel,
+  historicalCurrencyContext,
   money,
   keyName,
   capLeft,
@@ -328,20 +329,24 @@ export function MoneyCard({
   view,
   compact = false,
   tray = false,
+  measurement,
 }: {
   source: Card;
   board: string;
   view?: View;
   compact?: boolean;
   tray?: boolean;
+  measurement?: (MoneySource & {keys:KeyPart[];meters:Meter[]}) | null;
 }) {
   const context = useCurrencyContext(source.id);
   const {keys, meters, allowances, error,loading,retry} = useShownKeys(source, view, board);
-  return <MoneyValues source={source} keys={keys} meters={meters} allowances={allowances} error={error} loading={loading} retry={retry} compact={compact} tray={tray} context={context}/>;
+  // Time navigation keeps the selected-key metadata owner, but never borrows its amounts.
+  if(measurement===null||measurement&&!measurement.meters.length&&!allowances.length)return null;
+  return <MoneyValues source={measurement??source} keys={measurement?.keys??keys} names={keys} meters={measurement?.meters??meters} allowances={allowances} error={error} loading={loading} retry={retry} compact={compact} tray={tray} context={measurement?historicalCurrencyContext(context,source.id,measurement.meters):context}/>;
 }
 
 type MoneySource=Pick<Card,'id'|'provider'|'meters'|'currencyUnavailable'|'creditBalance'>;
-export function MoneyValues({source,keys,meters,allowances=keys.filter(key=>meters.some(m=>m.id===`key:${key.id}:cap`&&m.kind==='cap')).map(key=>key.id),error=null,loading=false,retry,compact=false,tray=false,context}:{source:MoneySource;keys:KeyPart[];meters:Meter[];allowances?:readonly string[];error?:unknown;loading?:boolean;retry?:()=>void;compact?:boolean;tray?:boolean;context:CurrencyContext}) {
+export function MoneyValues({source,keys,names=keys,meters,allowances=keys.filter(key=>meters.some(m=>m.id===`key:${key.id}:cap`&&m.kind==='cap')).map(key=>key.id),error=null,loading=false,retry,compact=false,tray=false,context}:{source:MoneySource;keys:KeyPart[];names?:readonly Pick<KeyPart,'id'|'name'>[];meters:Meter[];allowances?:readonly string[];error?:unknown;loading?:boolean;retry?:()=>void;compact?:boolean;tray?:boolean;context:CurrencyContext}) {
   const filters=useDataFilters().current,moneyPrefs=usePref('money'),fundsPrefs=usePref('funds');
   const showBalance=!filters||matchesWallet(walletRule(filters,moneyPrefs.unit??undefined),{source:source.id,kind:'balance'},true);
   const {remaining, limits} = budgetView(source, keys.filter(key=>allowances.includes(key.id)), meters, context),
@@ -421,7 +426,7 @@ export function MoneyValues({source,keys,meters,allowances=keys.filter(key=>mete
         </section>
       ))}
       {limits.length>0&&<section className="measurement-details">{limits.map(limit=><div key={limit.scope.id}><BudgetKeyMetrics limit={limit} context={context}/><small className="measurement-proof">{[money(capLeft(limit.native),limit.native.unit,true,context),t('money.of',{amount:money(limit.native.limit,limit.native.unit,true,context)}),t('source.measured',{at:stamp(limit.native.at)}),limit.native.resetAt!==null?stamp(limit.native.resetAt):null].filter(Boolean).join('\n')}</small></div>)}</section>}
-      {unavailable.length>0&&<section className="measurement-details">{unavailable.map(id=><div key={id}><span>{keyName(keys.find(key=>key.id===id)??{id,name:null})}</span><small className="measurement-proof">{t('quota.unavailable')}</small></div>)}</section>}
+      {unavailable.length>0&&<section className="measurement-details">{unavailable.map(id=><div key={id}><span>{keyName(keys.find(key=>key.id===id)??names.find(key=>key.id===id)??{id,name:null})}</span><small className="measurement-proof">{t('quota.unavailable')}</small></div>)}</section>}
       <ErrorLine error={error}/>
       {loading&&<p>{t('period.loading')}</p>}
       {!!error&&retry&&!(error instanceof ApiError&&error.code==='filters_limit')&&<button type="button" className="button" onClick={retry}>{t('period.retry')}</button>}
