@@ -23,7 +23,7 @@ test('default session disclosure columns fit the shared wide dialog and stay com
 
 /** Commit the real hook against measured rows, without a browser or a second React runtime. */
 function widgetFixture(border=0,manual=true){
-  let cursor=0,changed=false,key='period-a',updates=0,rowReads=0,layoutReads=0,shell=140,keys=Array.from({length:57},(_,i)=>'row-'+i),displayed=true,givenWidth=1200;
+  let cursor=0,changed=false,key='period-a',updates=0,rowReads=0,layoutReads=0,shell=140,keys=Array.from({length:57},(_,i)=>'row-'+i),displayed=true,givenWidth=1200,measuring=false;
   const slots:any[]=[],effects:(()=>void)[]=[],reports:{min:number;natural:number;shown:number}[]=[];
   const observers:{callback:(entries:{target:unknown}[])=>void;targets:Set<unknown>;initial:Set<unknown>}[]=[],rowHeights=new Map<string,number>();
   const sizing={manual,allocated:560,width:'wide',report:(value:any)=>{if(value)reports.push(value);}};
@@ -36,10 +36,11 @@ function widgetFixture(border=0,manual=true){
     useMemo:(read:()=>unknown,deps:unknown[])=>{const at=cursor++;if(!slots[at]||!sameDeps(slots[at].deps,deps))slots[at]={deps,value:read()};return slots[at].value;},
     useLayoutEffect:(effect:()=>void|(()=>void),deps?:unknown[])=>{const at=cursor++;if(!slots[at]||!sameDeps(slots[at].deps,deps)){const previous=slots[at];slots[at]={deps};effects.push(()=>{previous?.cleanup?.();slots[at].cleanup=effect();});}},
   };
-  const modules:Record<string,unknown>={react:hooks,'react-dom':{flushSync:(callback:()=>void)=>callback()},'react/jsx-runtime':{},'../lib/table':tables,'../i18n':{useLocale:()=> 'en'},'./Popover':{},'./sizing':{
+  const element=(type:unknown,props:unknown)=>({type,props});
+  const modules:Record<string,unknown>={react:hooks,'react-dom':{flushSync:(callback:()=>void)=>callback()},'react/jsx-runtime':{jsx:element,jsxs:element},'../lib/table':tables,'../i18n':{useLocale:()=> 'en'},'./Popover':{},'./sizing':{
     useSizing:()=>sizing,fillOf:()=>root.fill,pixels:(n:number)=>Math.round(n*64)/64,same:(a:number|undefined,b:number|undefined)=>a===b||a!==undefined&&b!==undefined&&Math.abs(a-b)<1,
   }};
-  const context={exports:{} as {useTableWidget:typeof import('../components/TableWidget').useTableWidget},require:(name:string)=>modules[name],
+  const context={exports:{} as Pick<typeof import('../components/TableWidget'),'useTableWidget'|'TableMeasure'>,require:(name:string)=>modules[name],
     getComputedStyle:()=>({paddingLeft:'22',paddingRight:'22',borderBottomWidth:String(border*2)}),ResizeObserver:class {
       record:{callback:(entries:{target:unknown}[])=>void;targets:Set<unknown>;initial:Set<unknown>};constructor(callback:(entries:{target:unknown}[])=>void){this.record={callback,targets:new Set(),initial:new Set()};observers.push(this.record);}
       observe(target:unknown){this.record.targets.add(target);this.record.initial.add(target);}disconnect(){this.record.targets.clear();this.record.initial.clear();}
@@ -51,20 +52,22 @@ function widgetFixture(border=0,manual=true){
     const nodes=new Map<string,any>(),box={ids:[] as string[],children:[] as any[],getBoundingClientRect:()=>({height:displayed?box.ids.reduce((sum,id)=>sum+height(id),0):0})};
     return {box,update:(ids:string[])=>{box.ids=ids;box.children=ids.map(id=>{if(!nodes.has(id))nodes.set(id,{rowId:id,firstElementChild:{},hasAttribute:()=>false,getBoundingClientRect:()=>{rowReads++;if(!displayed)return {top:0,bottom:0,height:0,width:0};const top=100+box.ids.slice(0,box.ids.indexOf(id)).reduce((sum,key)=>sum+height(key),0),h=height(id);return {top,bottom:top+h,height:h,width:root.clientWidth-44};}});return nodes.get(id);});return box;}};
   };
-  const liveBody=body(),measuredBody=body();
+  const liveBody=body();let measuredBody:ReturnType<typeof body>|null=null;
   const render=()=>{
     let widget:TableWidget;
     for(let i=0;i<20;i++){
       changed=false;cursor=0;effects.length=0;
       widget=context.exports.useTableWidget(panel,[120,120,180,180],180,keys,key);
+      measuring=context.exports.TableMeasure({table:widget,children:null})!==null;
+      measuredBody=measuring?measuredBody??body():null;
       const current=keys.slice(widget.from,widget.to),footer=widget.pages>1?80:46;
       const natural=shell+current.reduce((sum,id)=>sum+height(id),0)+footer;
       root.height=Math.max(sizing.allocated,natural);root.fill=displayed?root.height-natural:0;
       widget.live.current=liveBody.update(current) as unknown as HTMLElement;
-      widget.measured.current=measuredBody.update(keys.slice(widget.measureFrom,widget.measureTo)) as unknown as HTMLElement;
+      widget.measured.current=measuredBody?measuredBody.update(keys.slice(widget.measureFrom,widget.measureTo)) as unknown as HTMLElement:null;
       widget.footer.current={getBoundingClientRect:()=>({height:displayed?footer:0})} as HTMLElement;
-      widget.measuredFooter.current={getBoundingClientRect:()=>({height:displayed?80:0})} as HTMLElement;
-      widget.measuredSingleFooter.current={getBoundingClientRect:()=>({height:displayed?46:0})} as HTMLElement;
+      widget.measuredFooter.current=measuring?{getBoundingClientRect:()=>({height:displayed?80:0})} as HTMLElement:null;
+      widget.measuredSingleFooter.current=measuring?{getBoundingClientRect:()=>({height:displayed?46:0})} as HTMLElement:null;
       for(const effect of effects)effect();
       if(!changed)for(const observer of observers){
         const entries=[...observer.initial].map(target=>({target,borderBoxSize:target===root?[{inlineSize:root.clientWidth,blockSize:displayed?root.height:0}]:(target as {rowId?:string}).rowId?[{inlineSize:displayed?root.clientWidth-44:0,blockSize:displayed?height((target as {rowId:string}).rowId):0}]:undefined}));
@@ -75,7 +78,7 @@ function widgetFixture(border=0,manual=true){
     throw new Error('the shared table did not settle before paint');
   };
   const original=keys;
-  return {render,reports,keys:()=>keys,shown:(widget:TableWidget)=>keys.slice(widget.from,widget.to),resize:(height:number)=>{sizing.allocated=height;},narrow:()=>{root.clientWidth=350;sizing.width='narrow';},reset:(next='period-b')=>{key=next;},clear:()=>{keys=[];},limit:(n:number)=>{keys=original.slice(0,n);},height:()=>root.height,rowReads:()=>rowReads,layoutReads:()=>layoutReads,updates:()=>updates,
+  return {render,reports,keys:()=>keys,shown:(widget:TableWidget)=>keys.slice(widget.from,widget.to),resize:(height:number)=>{sizing.allocated=height;},narrow:()=>{root.clientWidth=350;sizing.width='narrow';},reset:(next='period-b')=>{key=next;},clear:()=>{keys=[];},limit:(n:number)=>{keys=original.slice(0,n);},height:()=>root.height,rowReads:()=>rowReads,layoutReads:()=>layoutReads,updates:()=>updates,measuring:()=>measuring,
     display:(show:boolean,boxes=true,deliver=true)=>{displayed=show;if(!deliver)return;for(const observer of observers)if(observer.targets.has(root))observer.callback([{target:root,...(boxes?{borderBoxSize:[{inlineSize:root.clientWidth,blockSize:show?root.height:0}]}:{})}] as any);},
     reverse:()=>{keys=[...keys].reverse();},
     rowHeights:(changes:Record<string,number>)=>{for(const [id,height]of Object.entries(changes))rowHeights.set(id,height);},
@@ -83,6 +86,25 @@ function widgetFixture(border=0,manual=true){
     notifyRows:(ids?:string[],boxes=true)=>{let delivered=0;for(const observer of observers){const entries=[...observer.targets].filter(target=>{const id=(target as {rowId?:string}).rowId;return id!==undefined&&(!ids||ids.includes(id));}).map(target=>({target,...(boxes?{borderBoxSize:[{inlineSize:root.clientWidth-44,blockSize:height((target as {rowId:string}).rowId)}]}:{})}));if(entries.length){delivered+=entries.length;observer.callback(entries);}}return delivered;},
     fill:()=>{root.height+=48;root.fill+=48;for(const observer of observers)if(observer.targets.has(root))observer.callback([{target:root}]);}};
 }
+
+test('hidden tables remove their measurement tree and observe new rows when shown',()=>{
+  for(const narrow of [false,true]){
+    const f=widgetFixture();if(narrow)f.narrow();let widget=f.render();
+    assert.equal(f.measuring(),true);assert.ok(f.notifyRows()>0);
+    widget.onPage(3);f.render();const reads=f.rowReads();
+    f.display(false);f.render();
+    assert.equal(f.measuring(),false,'a zero-width table has no measurement subtree');
+    assert.equal(widget.measured.current,null);assert.equal(f.notifyRows(),0);
+    f.reverse();f.reset();widget=f.render();
+    assert.equal(widget.count,57);assert.equal(widget.page,0);assert.equal(f.rowReads(),reads);
+    f.rowHeights({'row-56':220});f.display(true);widget=f.render();
+    assert.equal(f.measuring(),true);assert.equal(f.shown(widget)[0],'row-56');
+    assert.ok(f.notifyRows(['row-56'])>0,'the replacement measurement row is observed');
+    const min=f.reports.at(-1)!.min;
+    f.rowHeights({'row-56':250});f.render();f.notifyRows(['row-56']);widget=f.render();
+    assert.equal(f.reports.at(-1)!.min,min+30);assert.equal(f.height(),560);assert.ok(widget.to<57);
+  }
+});
 
 test('a hidden table keeps its measured geometry while data and page ownership advance',()=>{
   const f=widgetFixture();let widget=f.render();widget.onPage(3);f.render();

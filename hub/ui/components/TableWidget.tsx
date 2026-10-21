@@ -72,6 +72,7 @@ export function useTableLayout(box:RefObject<HTMLElement|null>,columns:readonly 
 export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonly number[],nameWidth:number,keys:readonly string[],resetKey:string,edges?:number){
   useLocale();
   const sizing=useSizing(),{layout,width}=useTableLayout(panel,columns,nameWidth,edges,sizing?.width);
+  const measurable=width>0;
   const live=useRef<HTMLElement>(null),measured=useRef<HTMLElement>(null),footer=useRef<HTMLElement>(null),measuredFooter=useRef<HTMLElement>(null),measuredSingleFooter=useRef<HTMLElement>(null);
   const scope=JSON.stringify([layout,width,columns,nameWidth,edges]);
   const [measurement,setMeasurement]=useState<Measurement|null>(null),[position,setPosition]=useState({key:resetKey,page:0});
@@ -159,13 +160,14 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     for(const element of [panel.current,live.current,measured.current,footer.current,measuredFooter.current,measuredSingleFooter.current])if(element)observer.observe(element);
     for(const row of rows)observer.observe(row,{box:'border-box'});
     return ()=>observer.disconnect();
-  },[panel,layout,!!keys.length,keysKey,from,to,sizing?.manual]);
+  },[panel,layout,measurable,!!keys.length,keysKey,from,to,sizing?.manual]);
   const report=sizing?.report;useLayoutEffect(()=>()=>report?.(null),[report]);
-  return useMemo(()=>({layout,columnWidths:columns,from,to,page,count:keys.length,pages:starts.length,onPage:(page:number)=>setPosition({key:resetKey,page}),live,measured,footer,measuredFooter,measuredSingleFooter,
-    measureFrom:from,measureTo:sizing?.manual?Math.min(keys.length,Math.max(from+TABLE_MEASURE_MIN_ROWS,to+1)):from}),[layout,columnsKey,from,to,page,starts.length,resetKey,sizing?.manual,keys.length]);
+  return useMemo(()=>({layout,measurable,columnWidths:columns,from,to,page,count:keys.length,pages:starts.length,onPage:(page:number)=>setPosition({key:resetKey,page}),live,measured,footer,measuredFooter,measuredSingleFooter,
+    measureFrom:from,measureTo:sizing?.manual?Math.min(keys.length,Math.max(from+TABLE_MEASURE_MIN_ROWS,to+1)):from}),[layout,measurable,columnsKey,from,to,page,starts.length,resetKey,sizing?.manual,keys.length]);
 }
 export type TableWidget=ReturnType<typeof useTableWidget>;
 export function TableMeasure({table,children,metrics,columns}:{table:TableWidget;children:ReactNode;metrics?:readonly TableMetric[];columns?:readonly string[]}){
+  if(!table.measurable)return null;
   return <div className="table-measure" aria-hidden="true" inert>{children}<TableFooter table={table} count={table.count} metrics={metrics} columns={columns} still body={table.measuredFooter}/><TableFooter table={table} count={table.count} metrics={metrics} columns={columns} still single body={table.measuredSingleFooter}/></div>;
 }
 export function WidgetPages({table,count,metrics,columns}:{table:TableWidget;count:number;metrics?:readonly TableMetric[];columns?:readonly string[]}){
