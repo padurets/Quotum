@@ -6,6 +6,7 @@ import {expandPeriod} from '../server/domain/periodWire.js';
 import {cellOf,cellStart} from '../server/domain/history.js';
 import type {History} from '../server/domain/history.js';
 import type {PeriodRequest,PeriodReply} from '../server/domain/periodRead.js';
+import {defaultFilters} from '../server/domain/dataFilters.js';
 import {ObservedWork} from './observed.js';
 import {openTab,type Browser,type Cdp} from './cdp.js';
 import {historyPoolReceiptScript} from './historyPoolReceipt.js';
@@ -73,6 +74,9 @@ function traffic(cdp:Cdp){
 /** Actual mounted widget and shared work filters, including late work and retired responses. */
 export async function fixedActivity(browser:Browser,stand:Stand){
   const owner=stand.people.get(people(stand.set)[0].id)!,card=cards(stand.set).find(card=>card.id==='antigravity')!,reports:Record<string,unknown>[]=[];
+  // Earlier money scenarios save a one-account selection. This scenario needs
+  // the stand's full resource cohort before applying its own project filter.
+  await owner.saveFilters(owner.personalBoard,defaultFilters());
   for(const days of [1,30]){
     const actor=await ObservedWork.open(owner,card),tab=await openTab(browser),{cdp}=tab;
     const bodies=traffic(cdp),selection={mode:'range' as const,from:actor.floorAt+1000-days*DAY+123,to:actor.floorAt+1000};
@@ -101,9 +105,12 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       const beforeHover=await geometry(),hoverStart=bodies.bodies.length;
       await cdp.evaluate('window.__quotumFixedActivity.reset();__quotumBench.reset()');
       const emphasis=await cdp.evaluate<{name:string;matrix:number[][]}[]>(`(async()=>{
-        const reports=[],pause=()=>new Promise(r=>setTimeout(r,180));
+        const reports=[],pause=async()=>{
+          await new Promise(requestAnimationFrame);
+          await Promise.all([...document.querySelectorAll('.legend-item')].flatMap(button=>button.getAnimations()).map(animation=>animation.finished.catch(()=>{})));
+        };
         for(const panel of document.querySelectorAll('.panel[data-time="chart"]')){
-          const buttons=[...panel.querySelectorAll('.legend-item')];if(buttons.length<3)throw Error('emphasis fixture needs three series in every chart');
+          const buttons=[...panel.querySelectorAll('.legend-item')];if(buttons.length<3)throw Error('emphasis fixture needs three series in '+panel.querySelector('h2').textContent+': '+buttons.length);
           const matrix=[],read=()=>buttons.slice(0,3).map(button=>Number(getComputedStyle(button).opacity));
           const assert=(expected)=>{const got=read();if(got.some((value,i)=>Math.abs(value-expected[i])>.001))throw Error('emphasis matrix '+JSON.stringify({got,expected}));matrix.push(got);};
           const hover=button=>button.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));
