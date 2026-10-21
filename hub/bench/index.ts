@@ -6,6 +6,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {mkdirSync,realpathSync,writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {MONEY_KEY} from '../demo/money.js';
+import {moneyHistoryReady} from './moneyHistory.js';
 import type {Credential} from '../server/store/credentials.js';
 import type {Meter} from '../server/domain/meters.js';
 import type {CurrencyDefinition,CurrencyManagement,RateSnapshot} from '../server/domain/currency.js';
@@ -708,8 +709,9 @@ async function currencyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cd
   const observation=(await owner.get<Snapshot>('/api/overview?board='+owner.personalBoard)).sources.find(row=>row.id===source)!.successAt!;
   await cdp.evaluate(`(async () => {
     const end = Date.now() + ${SHOWN_WITHIN};
-    while (document.querySelector('.history.is-loading') || document.querySelector('.history .chart > svg')?.dataset.drawReady !== 'true' || document.querySelector(${JSON.stringify('[data-series="'+source+' balance"]')})?.getAttribute('data-last') !== ${JSON.stringify(cellStart(observation,cellOf(86_400_000))+':112800000')}) {
-      if (Date.now() > end) throw new Error('personal currency history did not recover');
+    const ready=${moneyHistoryReady.toString()},last=()=>document.querySelector(${JSON.stringify('[data-series="'+source+' balance"]')})?.getAttribute('data-last');
+    while (document.querySelector('.history.is-loading') || document.querySelector('.history .chart > svg')?.dataset.drawReady !== 'true' || !ready(last(),'112800000',${observation},${cellOf(86_400_000)})) {
+      if (Date.now() > end) throw new Error('personal currency history did not recover: '+JSON.stringify({last:last(),observedAt:${observation},now:Date.now(),quotaReady:document.querySelector('.history .chart > svg')?.dataset.drawReady,loading:!!document.querySelector('.history.is-loading')}));
       await new Promise(requestAnimationFrame);
     }
   })()`);
