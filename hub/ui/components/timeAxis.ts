@@ -7,7 +7,7 @@ import {periodOf} from '../lib/periods';
 import {useHistoryBegins} from '../lib/history';
 import {useSizing} from './sizing';
 import {axisNavigation, navigationAt, navigationKey, type AxisNavigation} from '../lib/axisNavigation';
-import {tickPresentation} from '../lib/axisTicks';
+import {tickPresentation,tickVisible} from '../lib/axisTicks';
 
 /** How long a finger rests on a chart before it starts a range. */
 const HOLD_MS = 450;
@@ -516,12 +516,11 @@ export function useTimeAxis({
       const changed=glyphScale!==pose.current.a;
       glyphScale=pose.current.a;
       for(const {element,x,length} of ticks){
-        const view=tickPresentation(x,length,pose.current,scale,left,width-right);
-        const visibility=view.visible?'':'hidden';
+        const visibility=tickVisible(x,length,pose.current,scale,left,width-right)?'':'hidden';
         if(element.style.visibility!==visibility)element.style.visibility=visibility;
         // CSS rounds fractional transforms; comparing its serialization would
         // parse the same glyph transform again on every translated frame.
-        if(changed)element.style.transform=view.transform;
+        if(changed)element.style.transform=tickPresentation(x,length,pose.current,scale,left,width-right).transform;
       }
     };
     paintTicks.current();
