@@ -179,7 +179,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         }
         return current;
       };
-      const phase=async(name:string,run:()=>Promise<void>,expected:number|null)=>{
+      const phase=async(name:string,run:()=>Promise<void>,expected:number|null,superseded=false)=>{
         const start=bodies.bodies.length;await cdp.evaluate('window.__quotumFixedActivity.reset()');const at=Date.now();
         referenceReceipt={requests:0,requestBytes:0,decodedBytes:0,encodedBytes:0};
         const metrics=async()=>{const {metrics}=await cdp.send<{metrics:{name:string;value:number}[]}>('Performance.getMetrics');return Object.fromEntries(metrics.map(metric=>[metric.name,metric.value]));};
@@ -192,10 +192,18 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         const after=await metrics();assert.deepEqual(bodies.errors,[],'every completed response must remain accounted');
         assert.ok(Number.isFinite(after.ScriptDuration-before.ScriptDuration)&&Number.isFinite(after.TaskDuration-before.TaskDuration));
         const decoded=reads.reduce((n,row)=>n+row.decoded,0);
-        const preparationLimit=FIXED_ACTIVITY_BUDGET.advancesPerUpdate*Math.max(1,reads.length);
-        const report={days,name,excluded,requests:reads.length,preparationLimit,requestBytes:reads.reduce((n,row)=>n+row.requestBytes,0),decoded,encoded:reads.reduce((n,row)=>n+row.encoded,0),cancelled:reads.filter(row=>row.cancelled).length,coherentMs:coherentAt-at,verificationMs:Date.now()-coherentAt,reference:referenceReceipt,scriptMs:(after.ScriptDuration-before.ScriptDuration)*1000,taskMs:(after.TaskDuration-before.TaskDuration)*1000,...current,numbers:current.numbers,activity:undefined,tiles:undefined};
+        const cancelled=reads.filter(row=>row.cancelled).length;
+        const preparationLimit=FIXED_ACTIVITY_BUDGET.advancesPerUpdate*Math.max(1,expected??reads.length);
+        const attempts=reads.map(row=>({sections:(['quota','budget','funds','sessions','values','facets','calendar','sourceWork'] as const).filter(section=>row.body[section]),cancelled:row.cancelled,decoded:row.decoded}));
+        const report={days,name,excluded,requests:reads.length,preparationLimit,requestBytes:reads.reduce((n,row)=>n+row.requestBytes,0),decoded,encoded:reads.reduce((n,row)=>n+row.encoded,0),cancelled,attempts,coherentMs:coherentAt-at,verificationMs:Date.now()-coherentAt,reference:referenceReceipt,scriptMs:(after.ScriptDuration-before.ScriptDuration)*1000,taskMs:(after.TaskDuration-before.TaskDuration)*1000,...current,numbers:current.numbers,activity:undefined,tiles:undefined};
         reports.push(report);console.error('bench: fixed Activity '+JSON.stringify(report));
-        if(expected!==null)assert.equal(reads.length,expected,name+' shared requests; no legend allowance');
+        if(expected!==null){
+          if(superseded){
+            // Two work updates may cancel their first shared native request.
+            // Charge that attempt, without granting another completed read or preparation budget.
+            assert.ok(cancelled<=1&&reads.length>=expected&&reads.length<=expected+cancelled,name+' counts at most one superseded attempt');
+          }else assert.equal(reads.length,expected,name+' shared requests; no legend allowance');
+        }
         assert.ok(current.flights<=2&&current.bytes<=FIXED_ACTIVITY_BUDGET.pool&&!current.failedReservations&&current.tiles.length<=8);
         assert.ok(current.advances<=preparationLimit);
         if(expected&&expected>0)assert.ok(current.advances>0,'real shared preparation must be observed');
@@ -246,7 +254,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       const during=await phase('news during response',()=>intercepted(async()=>{await actor.through(actor.floorAt+500);},async()=>{
         await actor.through(actor.floorAt+600);await pause(350);
         assert.equal(await cdp.evaluate('document.querySelector(".activity-totals").outerHTML'),retainedSummary,'held work answers preserve the complete previous cohort, including all four metrics');
-      },true),2);
+      },true),2,true);
       assert.ok(during.current.flights<=2);
       const generations=await phase('cancelled A to B to A',()=>intercepted(async()=>{await actor.through(actor.floorAt+700);},async()=>{
         const before=await cdp.evaluate('JSON.stringify(window.__quotumFixedActivity.reader().intent().request.workFilter)');
