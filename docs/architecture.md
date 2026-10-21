@@ -2039,6 +2039,9 @@ a cell only translates the prepared artwork
 and updates its clip. A historical completed drawing adopts the held SVG projection
 without a release-time zoom. Activity's vertical scale uses the selected visible
 interval and exact boundary bars, excluding its overscan and unread cells.
+The same native painter updates that value projection with the time position, using
+the committed height index. Prepared paths retain their numeric basis; a matching
+replacement adopts the displayed value projection without changing it on release.
 A temporary shared registry keeps plot interiors, edge bars, legend markers and readouts
 consistent in colour and dash, adding new groups with a pending total. Surviving groups
 keep their colours through rank changes and reversal; new projects and machines take

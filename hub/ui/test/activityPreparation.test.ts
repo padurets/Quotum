@@ -22,7 +22,7 @@ test('the actual activity edge painter advances clipped bars without preparing t
   const attributes = new Map<string, string>(), path = new Map<string, string>();
   const clips: number[][] = []; let draft: {token: number} | null = null;
   const node = (values: Map<string, string>) => ({getAttribute: (name: string) => values.get(name), setAttribute: (name: string, value: string) => values.set(name, value)});
-  const context = {bandClip: {current: {}}, mask: {current: node(attributes)}, edges: {current: {querySelectorAll: () => [node(path)]}},
+  const context = {heights:new Map(),paintValue:()=>{},bandClip: {current: {}}, mask: {current: node(attributes)}, edges: {current: {querySelectorAll: () => [node(path)]}},
     currentActivity: {}, activity: {by: {source: [{key: 's', cells: [[0, 25_000], [60_000, 60_000], [120_000, 5_000]]}]}},
     strip: null, groups: [{group: {key: 's'}}], from: 15_000, to: 135_000, by: 'source', barMs: 60_000, vertical: {max: 60_000}, height: 100, perMs: 0.001,
     left: 0, right: 0, width: 120, scale: 1, x: (at: number) => at / 1000, y: (ms: number) => 100 - ms / 1000,
@@ -111,4 +111,27 @@ test('actual Activity generators hold one coherent model and produce exact stack
   props.from += 60_000; props.to += 60_000; axis.basis = {from: props.from, to: props.to, end: props.to};
   renderChild(); child.commit(); child.finish();
   assert.equal(draws, 3); assert.deepEqual(tickFrame, [props.from, props.to], 'new clock ticks enter the current axis without redrawing its retained stacks');
+});
+
+test('native Activity value projection excludes a departed peak before release and survives the typed handoff',async()=>{
+  const {workHours}=await import('../lib/format');const H=3_600_000,M=60000;
+  let queries=0,draft:{length:number}|null=null,visualFrom=0;
+  const element=()=>{const attrs=new Map<string,string>();return {style:{display:''},textContent:'',getAttribute:(name:string)=>attrs.get(name)??null,setAttribute:(name:string,value:string)=>attrs.set(name,value),hasAttribute:(name:string)=>attrs.has(name),removeAttribute:(name:string)=>attrs.delete(name)};};
+  const rows=Array.from({length:4},()=>{const line=element(),text=element();return {...element(),line,text,querySelector:(name:string)=>{queries++;return name==='line'?line:text;}};});
+  const band=element(),edges={...element(),querySelectorAll:()=>[]},axis={held:false,visualGeometry:()=>({from:visualFrom}),screenX:(at:number)=>at/M};
+  const context={activityScale,workHours,valueBand:{current:band},valueAxis:{current:{children:rows}},paintedValue:{current:''},vertical:{max:12*H},height:300,top:12,bottom:28,
+    heights:new Map([[0,12*H],[M,H],[-M,100*H]]),bandClip:{current:{}},mask:{current:element()},edges:{current:edges},pan:{get:()=>draft},axis,strip:null,
+    groups:[{group:{key:'s'}}],activity:{by:{source:[]}},currentActivity:{},from:0,to:2*M,barMs:M,by:'source',left:0,right:0,width:120,scale:1,perMs:1/M,x:(at:number)=>at/M,y:(value:number)=>272-value/(12*H)*260,
+    cellStart,plotBar,targetOf,clipPlot:()=>{},painted:{current:''},paint:null as unknown as ()=>void};
+  const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8'),start=source.indexOf('  const paintValue=');
+  const body=source.slice(start,source.indexOf('  // Input uses the committed groups',start));
+  runInNewContext(ts.transpileModule(body+'\nglobalThis.paint=paintEdges;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+  context.paint();assert.equal(band.getAttribute('transform'),null,'an overscan peak cannot enlarge the visible scale');
+  visualFrom=M;draft={length:2*M};context.paint();assert.match(band.getAttribute('transform')!,/scale\(1 12\)/);
+  const projected=(base:number)=>{const ratio=Number(band.getAttribute('transform')?.match(/scale\(1 ([^)]+)\)/)?.[1]??1);return 272+(272-H/base*260-272)*ratio;};
+  const lastInput=projected(12*H),labels=rows.map(row=>row.text.textContent);
+  const reads=queries;for(let i=0;i<100;i++)context.paint();assert.equal(queries,reads,'an unchanged native scale neither traverses nor rewrites the axis');
+  draft=null;axis.held=true;context.paint();assert.equal(projected(12*H),lastInput);assert.deepEqual(rows.map(row=>row.text.textContent),labels);
+  context.vertical.max=H;context.from=M;context.to=3*M;axis.held=false;context.paintedValue.current='';context.paint();
+  assert.equal(band.getAttribute('transform'),null);assert.ok(Math.abs(projected(H)-lastInput)<1e-9,'prepared paths adopt the displayed value projection without a release zoom');assert.deepEqual(rows.map(row=>row.text.textContent),labels);
 });

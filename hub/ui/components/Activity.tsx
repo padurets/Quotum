@@ -447,6 +447,7 @@ const Stacks = memo(function Stacks({
   const groups = model?.groups ?? [], strip = model?.strip ?? null, activity = currentActivity ?? model?.activity ?? incomingActivity;
   const barMs = model?.barMs ?? incomingActivity.barMs;
   const vertical = model?.vertical ?? activityScale(0);
+  const heights=model?.heights??new Map<number,number>();
   const paths = model?.paths ?? [], perMs = model?.perMs ?? (width - left - right) / Math.max(MINUTE, basis.to - basis.from), pathOrigin = model?.pathOrigin ?? basis.from;
   const hatchFrom = strip?.from ?? basis.from;
   const knownFrom = strip?.knownFrom ?? model?.originUnknownTo ?? incomingUnknownTo;
@@ -463,20 +464,50 @@ const Stacks = memo(function Stacks({
   const bandClip = useRef<HTMLDivElement>(null);
   const mask = useRef<SVGRectElement>(null);
   const edges = useRef<SVGGElement>(null);
+  const valueBand=useRef<SVGGElement>(null),valueAxis=useRef<SVGGElement>(null);
+  const paintedValue=useRef('');
   const edgePaint = useRef(() => {});
   const painted = useRef('');
+  // The prepared paths own their numeric basis. The native painter owns the
+  // visible value projection, just as timeAxis owns their horizontal projection.
+  const paintValue=(maximum:number)=>{
+    const projection=activityScale(maximum),ratio=vertical.max/projection.max,baseline=height-bottom;
+    const key=`${projection.max}:${vertical.max}:${height}`;
+    if(paintedValue.current===key)return;
+    paintedValue.current=key;
+    const transform=ratio===1?'':`translate(0 ${baseline}) scale(1 ${ratio}) translate(0 ${-baseline})`;
+    for(const node of [valueBand.current,edges.current])if(node){
+      if(transform){if(node.getAttribute('transform')!==transform)node.setAttribute('transform',transform);}
+      else if(node.hasAttribute('transform'))node.removeAttribute('transform');
+    }
+    [...(valueAxis.current?.children??[])].forEach((row,index)=>{
+      const node=row as SVGGElement,value=projection.ticks[index],hidden=value===undefined;
+      if(node.style.display!==(hidden?'none':''))node.style.display=hidden?'none':'';
+      if(hidden)return;
+      const at=top+(1-value/projection.max)*(height-top-bottom),line=node.querySelector('line'),label=node.querySelector('text');
+      for(const name of ['y1','y2'])if(line?.getAttribute(name)!==String(at))line?.setAttribute(name,String(at));
+      if(label){const text=value?workHours(value):'0';if(label.textContent!==text)label.textContent=text;if(label.getAttribute('y')!==String(at+4))label.setAttribute('y',String(at+4));}
+    });
+  };
   const paintEdges = () => {
     if (!bandClip.current) return;
     const draft = pan.get();
+    const visual = axis.visualGeometry();
+    const range = draft || axis.held ? {from: visual.from, to: visual.from + (draft?.length ?? strip?.length ?? to-from)} : {from, to};
+    const target = strip ? targetOf(strip.length, draft?.now ?? to, 'edge', range) : null;
+    let maximum=0;
+    for(const [at,value] of heights)if(strip?at>=range.from&&at+barMs<=range.to:at<range.to&&at+barMs>range.from)maximum=Math.max(maximum,value);
+    if(strip&&target)for(const at of new Set([cellStart(range.from,barMs),cellStart(range.to-1,barMs)])){
+      const bar=plotBar(strip,at,target,by);
+      if(bar)maximum=Math.max(maximum,[...bar.groups].reduce((sum,[key,part])=>sum+(groups.some(row=>row.group.key===key)?part.ms:0),0));
+    }
+    paintValue(maximum);
     // Until a gesture has a strip, the retained answer moves as a whole. Its
     // old accounting endpoints cannot clip the newly exposed viewport.
     if ((!strip && (!currentActivity || draft || axis.held)) || !mask.current || !edges.current) {
       clipPlot(bandClip.current, left * scale, (width - right) * scale, width * scale);
       return;
     }
-    const visual = axis.visualGeometry();
-    const range = strip && (draft || axis.held) ? {from: visual.from, to: visual.from + (draft?.length ?? strip.length)} : {from, to};
-    const target = strip ? targetOf(strip.length, draft?.now ?? to, 'edge', range) : null;
     const start = strip && target ? target.k0 * strip.cell : from, end = strip && target ? (target.k1 + 1) * strip.cell : to;
     const firstFull = Math.ceil(start / barMs) * barMs, lastFull = Math.floor(end / barMs) * barMs;
     if (draft || axis.held) {
@@ -513,7 +544,7 @@ const Stacks = memo(function Stacks({
     edges.current.querySelectorAll('path').forEach((path, i) => {if (path.getAttribute('d') !== paths[i]) path.setAttribute('d', paths[i]);});
   };
   // Input uses the committed groups while React prepares their replacement.
-  useLayoutEffect(() => {edgePaint.current = paintEdges; painted.current = ''; paintEdges();});
+  useLayoutEffect(() => {edgePaint.current = paintEdges; painted.current = '';paintedValue.current=''; paintEdges();});
   useLayoutEffect(() => pan.subscribe(() => edgePaint.current()), []);
   useEffect(() => {if (!strip) painted.current = '';}, [strip]);
 
@@ -545,14 +576,14 @@ const Stacks = memo(function Stacks({
             <line x1="0" x2="0" y1="0" y2="6" className="activity-hatch" />
           </pattern>
         </defs>
-        {vertical.ticks.map(value => (
-          <g key={value}>
+        <g ref={valueAxis} className="activity-value-axis">{[0,1,2,3].map(index=>{const value=vertical.ticks[index]??0;return (
+          <g key={index} style={index>=vertical.ticks.length?{display:'none'}:undefined}>
             <line x1={left} x2={width - right} y1={y(value)} y2={y(value)} className={value === 0 ? 'axis-line' : 'grid'} />
             <text x={left - 8} y={y(value) + 4} textAnchor="end" className="tick">
               {value ? workHours(value) : '0'}
             </text>
           </g>
-        ))}
+        );})}</g>
       </svg>
       <PlotLayer width={width} height={height} scale={scale} left={left} right={right} main>
         {ticks.map(tick => (
@@ -579,11 +610,11 @@ const Stacks = memo(function Stacks({
       </PlotLayer>
       <PlotLayer width={width} height={height} scale={scale} left={left} right={right} clipRef={bandClip} top={top} bottom={bottom}>
         <g clipPath={(strip || currentActivity) && !active ? `url(#${CSS.escape(innerClip)})` : undefined}>
-          <g transform={`translate(${(left + (pathOrigin - basis.from) * perMs).toFixed(1)} 0)`}>
+          <g ref={valueBand}><g transform={`translate(${(left + (pathOrigin - basis.from) * perMs).toFixed(1)} 0)`}>
             {groups.map(({group, color}, i) => (
               <path key={group.key} d={paths[i]} fill={color} className="activity-stack" style={seriesFocusStyle(mutedKey(by, group.key))}/>
             ))}
-          </g>
+          </g></g>
         </g>
       </PlotLayer>
       {(strip || currentActivity) && (
