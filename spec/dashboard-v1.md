@@ -425,6 +425,106 @@ hub reads no `Last-Event-ID`. Lines end with `\n`; a reader splits them at `\r\n
 or `\r` only, as text/event-stream says, never at U+2028 or U+2029, which JSON leaves in
 names as they are.
 
+## Project colours
+
+Project colours are a board presentation resource, independent of the v5 view and
+saved data filters. A project is its exact corrected display name across admitted
+participants; null is never a named project. This resource supplies no data access.
+The existing project editor edits the name and colour in one popup under Manage
+projects, also reachable from Activity settings. Personal, shared and local desktop
+boards use the same editor and API. There is no separate colour settings page.
+
+`GET /api/boards/:board/project-colors` requires membership and returns
+`{version: 1, pins: [[project, color], ...], revision, authority}` with no caching.
+Pins have distinct exact project names in Unicode codepoint order. Repeated colours
+are allowed. The nine values are `#bf616a`, `#d08770`, `#ebcb8b`, `#a3be8c`,
+`#8fbcbb`, `#88c0d0`, `#81a1c1`, `#5e81ac`, `#b48ead`. Missing pins mean Auto.
+Names contain 1–120 Unicode codepoints in well-formed Unicode strings, including
+supported control characters, NUL and ending spaces, without trimming or
+normalization. Unpaired UTF-16 surrogates are rejected.
+
+Owner-only `PUT` to that URL takes quoted integer `If-Match` and exactly
+`{version: 1, authority, project, color?, name?}`, with at least one changed field.
+`color: null` removes that one pin. An optional nonempty `name` corrects only the
+caller’s own project group. A combined edit commits aliases and colour atomically,
+including rollback on capacity or stale preconditions, with one colour revision.
+Omitting `color` preserves the rename/merge lifecycle choice. Explicit colour applies
+to the resulting name; it must still be admitted to the board.
+The project must currently be admitted. Other entries, including private dormant
+entries, survive this patch. An unchanged value is a no-op. An accepted change
+increments the persistent revision once. Old layout writers cannot erase pins.
+
+Owner-only `POST /api/boards/:board/project-colors/reset` takes quoted integer
+`If-Match` and exactly `{version: 1, authority}`. After explicit confirmation it
+clears every pin on this board, including dormant entries, without exposing their
+names or count. A nonempty resource increments revision once; an empty resource is
+a no-op. A conflict requires a new confirmation. Reset affects no aliases, work,
+filters, layout or other board, and removed pins do not return after regrant.
+
+Missing preconditions return `428 project_colors_reload_required`; malformed input
+or an inadmissible project returns `400 invalid_request`; nonowners receive
+`403 forbidden`. Stale revision returns `409 project_colors_conflict`; changed
+context returns `409 project_colors_context_changed`. Both conflicts contain only
+the current authorized envelope. Capacity returns `413 project_colors_limit`.
+Mutation bodies fit 4 KiB. Canonical storage fits 64 KiB and at most 89 pins,
+including dormant entries. Each accepted slot reserves a maximum escaped name, so
+valid aliases never fail because their replacement names need more bytes.
+
+Authority is a domain-separated HMAC-SHA256 over the board, its filter context and
+the availability of saved pin names, using one server-private 32-byte process key.
+Readers cannot use public filter hashes to test guessed dormant names offline.
+Restart preserves pins and revision while retiring old authorities and cursors.
+Neither the key nor unavailable names enter responses, conflicts or events.
+
+`GET /api/boards/:board/project-colors/choices?query=...&cursor=...` returns
+`{projects, nextCursor?, authority}`. It pages fifty admitted live/retained corrected
+names in the same order, independently of range, filters, legend mutes, funding and
+card visibility. Search is a literal substring of at most 120 codepoints. The
+signed cursor binds board, query and authority; changed context returns the same
+sanitized context conflict. There is no snapshot total or background catalogue poll.
+
+`GET /api/projects?board=...&query=...&cursor=...` supplies the existing project
+manager with a single paged union of the caller’s own project groups (including
+unused aliases) and admitted board projects. Rows retain their available own
+reported-name, device and last-work details, with `canRename` and `colorAllowed`.
+The cursor additionally binds the caller. Own aliases outside board admission can
+be renamed but cannot receive a board colour. Plain `GET /api/projects` retains its
+personal catalogue contract. Pending board projections recheck admission at delivery.
+
+Browser snapshots and board configuration updates carry only
+`projectColorsRevision` and `projectColorsAuthority`. Initial order is
+`snapshot`, `filters`, `projectColors`; the latter carries the full authorized
+envelope separately within 68 KiB including SSE framing. It shares the existing
+640 KiB incremental backlog. A queued answer carries one current colour envelope
+and matching references; its transformed SSE and poll representations must fit the
+incremental bound. Snapshot replacement preserves independently authorized history
+invalidations, including pending work changes under the same work authority.
+`GET /api/overview` additionally includes the full
+`projectColors` envelope. A configuration matches only when both references match
+within the current connection and board. Missing configuration is not Auto; only a
+legacy baseline omitting both references means Auto. Access/work changes retire old
+private metadata, and pending delivery and HTTP adoption recheck their authority.
+
+The native background reader (`desktop=1`) receives neither colour references nor
+a `projectColors` frame on initial, reconnect, replacement or delta paths. Its
+320 KiB decoder bound stays unchanged. The desktop window uses ordinary browser
+configuration. Colour-only changes emit presentation metadata without history reads,
+work-authority changes, geometry preparation, time navigation or notification news.
+
+For each chart registry, present manual groups reserve their distinct colours first.
+Surviving Auto groups keep their slots, including neutral overflow. A new reservation
+moves only conflicting Auto groups to the first free slot or neutral; new groups use
+remaining slots in existing order. Absent pins reserve nothing; muted and offscreen
+registry groups retain their slots. Releasing a slot does not promote survivors.
+Every Activity paint layer, legend and readout uses the same resolution.
+
+Aliases reconcile pins atomically on every affected board using admitted raw
+owner/reported-name membership, including retained device-only work. A whole-group
+bijection to a fresh name transfers its pin unless the target has a dormant choice.
+A merge keeps the target's setting, including Auto, and retains source pins dormant.
+A partial rename or split uses each name's own setting or Auto. Other participants
+remaining under the old name prevent transfer. Empty evidence proves no rename.
+
 ## Events
 
 Every connection starts with `hello`, then `snapshot`, then the changes. Nothing is kept
@@ -436,7 +536,8 @@ change as it was.
 |---|---|---|
 | `hello` | `{epoch, now, client, heartbeatMs}` | First. `epoch`: when this start of the hub began, base 36. `now`: the hub's clock. `client`: the path of the page's entry script the hub serves (`/assets/index-<hash>.js`), null without a build. `heartbeatMs`: 25000. |
 | `snapshot` | `{providers, sourceAccess, board, view, viewRevision, connectionsRevision, deviceContacts?, historyStart, workAuthority, sources, sessions, unattributedSessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
-| `board` | `{board: {id, name, personal}}` | The board was renamed. |
+| `board` | `{board?: {id, name, personal}, projectColorsRevision?, projectColorsAuthority?}` | Board name or project-colour references changed. |
+| `projectColors` | `{version: 1, pins, revision, authority}` | Matching authorized browser project colours; omitted for the native background reader. |
 | `view` | `{view, revision}` | The board's view was saved. The monotonic revision belongs to this board. |
 | `connections` | `{revision}` | Only this reader's connection structure or access health changed; no private IDs or labels. Successful measurements and unchanged device heartbeats do not increment it. |
 | `deviceContacts` | `{devices: [{deviceId, lastSeenAt}]}` | Coalesced contact timestamps for this reader's live devices only; update the small contact row without refetching Devices or rerendering board cards. |

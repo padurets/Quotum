@@ -37,4 +37,4 @@ export const DASHES = ['', '7 5', '2 4', '10 3 2 3'];
  * values and series highlighting. Each keeps 3:1 contrast with the surface; groups past
  * the nine colours use the neutral --other in style.css.
  */
-export const CATEGORY_COLORS = ['#bf616a', '#d08770', '#ebcb8b', '#a3be8c', '#8fbcbb', '#88c0d0', '#81a1c1', '#5e81ac', '#b48ead'];
+export {CATEGORY_COLORS} from '../../server/domain/categoryColors';

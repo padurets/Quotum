@@ -14,6 +14,11 @@ export function preparationFixture() {
     if (!(at in slots)) slots[at] = typeof value==='function'?value():value;
     return [slots[at], (next: unknown) => {slots[at] = typeof next === 'function' ? next(slots[at]) : next;}];
   };
+  const useMemo=<T>(read:()=>T,deps:readonly unknown[]):T=>{
+    const slot=useRef(null) as {current:{deps:readonly unknown[];value:T}|null};
+    if(!slot.current||deps.length!==slot.current.deps.length||deps.some((value,i)=>!Object.is(value,slot.current!.deps[i])))slot.current={deps,value:read()};
+    return slot.current.value;
+  };
   const useLayoutEffect = (effect: () => void | (() => void), deps?: readonly unknown[]) => {
     const at = index++, old = slots[at] as {deps?: readonly unknown[]; cleanup?: () => void} | undefined;
     if (deps && old?.deps && deps.length === old.deps.length && deps.every((v, i) => Object.is(v, old.deps![i]))) return;
@@ -21,7 +26,7 @@ export function preparationFixture() {
   };
   const context = {exports: {} as {usePreparationBasis: (value: {from: number; to: number; end: number}, deps: readonly unknown[], captured: boolean, enabled?: boolean, context?: unknown) => {from: number; to: number; end: number}; usePrepared: <T>(work: () => Preparation<T>, deps: readonly unknown[], context?: unknown, enabled?: boolean) => {value: T | null; ready: boolean}}, require: (name: string) => name === 'react' ? {useRef, useState, useLayoutEffect} : {prepare: <T>(owner: object, work: Preparation<T>, valid: () => boolean, ready: (v: T) => void) => prepare(owner, work, valid, ready, scheduler), preparations: () => scheduler}};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/prepared.ts', import.meta.url), 'utf8'), {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS}}).outputText, context);
-  return {useRef, useState, useLayoutEffect, usePrepared: context.exports.usePrepared, usePreparationBasis: context.exports.usePreparationBasis,
+  return {useRef, useState,useMemo, useLayoutEffect, usePrepared: context.exports.usePrepared, usePreparationBasis: context.exports.usePreparationBasis,
     begin: () => {index = 0; effects.length = 0;},
     commit: () => {effects.splice(0).forEach(effect => effect());},
     tick: () => tasks.shift()?.(),

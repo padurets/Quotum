@@ -487,6 +487,16 @@ export const STEPS = [
     DELETE FROM board_filters WHERE board_id=OLD.id;
   END;
   `,
+  // 34 — private board project colours are independent of layout writers.
+  `
+  CREATE TABLE board_project_colors (
+    board_id TEXT PRIMARY KEY,payload TEXT NOT NULL,revision INTEGER NOT NULL,
+    updated_by TEXT NOT NULL,updated_at INTEGER NOT NULL
+  );
+  CREATE TRIGGER project_colors_board_removed AFTER DELETE ON boards BEGIN
+    DELETE FROM board_project_colors WHERE board_id=OLD.id;
+  END;
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

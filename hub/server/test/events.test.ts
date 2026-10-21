@@ -28,7 +28,8 @@ const ACCOUNT = 'a1b2c3d4e5f6a1b2c3d4e5f6';
 const STREAM = {'quotum-stream': '1'};
 /** Device controls have a separate private-event suite; these assertions track board data. */
 // Configuration ordering and contents have their own data-filter stream tests.
-const boardTypes=(frames:Frame[])=>frames.filter(frame=>frame.type!=='deviceContacts'&&frame.type!=='filters').map(frame=>frame.type);
+const isConfiguration=(frame:Frame|{type:string;data:any})=>frame.type==='filters'||frame.type==='projectColors'||frame.type==='board'&&!(typeof frame.data==='string'?JSON.parse(frame.data):frame.data).board;
+const boardTypes=(frames:Frame[])=>frames.filter(frame=>frame.type!=='deviceContacts'&&!isConfiguration(frame)).map(frame=>frame.type);
 
 test('every subscription of one reader receives the same currency change',t=>{
   const at=Date.now(),store=new Store(':memory:',at),directory=new Directory(store.db);
@@ -127,7 +128,7 @@ async function open(base: string, cookie: string | undefined, board?: string, he
     for (;;) {
       while (read < events.length) {
         const event = events[read++];
-        if (event.type !== 'ping'&&(configuration||event.type!=='filters')) return event;
+        if (event.type !== 'ping'&&(configuration||!isConfiguration(event))) return event;
       }
       if (ended) throw new Error('the stream ended');
       const left = until - Date.now();
@@ -243,8 +244,9 @@ async function reading(h: Awaited<ReturnType<typeof hub>>, as: string, board?: s
   assert.equal(s.status, 200, JSON.stringify(s.body));
   const hello = await s.next();
   const snapshot = await s.next();
-  const filters=await s.next(2000,true);
-  assert.deepEqual([hello.type, snapshot.type,filters.type], ['hello', 'snapshot','filters']);
+  const filters=await s.next(2000,true),colors=await s.next(2000,true);
+  assert.deepEqual([hello.type, snapshot.type,filters.type,colors.type], ['hello', 'snapshot','filters','projectColors']);
+  assert.equal(colors.data.revision,snapshot.data.projectColorsRevision);assert.equal(colors.data.authority,snapshot.data.projectColorsAuthority);
   assert.equal(filters.data.revision,snapshot.data.filtersRevision);
   assert.equal(filters.data.authority,snapshot.data.filtersAuthority);
   return Object.assign(s, {hello: hello.data, snapshot: snapshot.data});
@@ -264,7 +266,8 @@ test('a stream starts with hello and the board as the reader sees it, the same a
   assert.ok(Math.abs(s.hello.now - Date.now()) < 5 * S);
   const alice = h.directory.credentials('alice@example.com')!.user.id;
   assert.deepEqual(s.snapshot, JSON.parse(JSON.stringify(new Projection(h).snapshot(alice, board, Date.now()))));
-  assert.deepEqual(s.snapshot, (await h.call('GET', `/api/overview?board=${board}`, {as: 'alice'})).body);
+  const {projectColors,...overview}=(await h.call('GET', `/api/overview?board=${board}`, {as: 'alice'})).body;
+  assert.deepEqual(s.snapshot,overview);assert.equal(projectColors.authority,s.snapshot.projectColorsAuthority);
   assert.equal(s.snapshot.sources.length, 1);
   for (const header of ['cache-control', 'x-accel-buffering', 'content-security-policy', 'referrer-policy', 'x-content-type-options'])
     assert.ok(s.headers.get(header), header);
@@ -976,7 +979,7 @@ test('long polls carry the same events: a lease starts with hello and snapshot, 
   const first = await poll();
   assert.deepEqual(
     first.events.map((e: Event) => e.type),
-    ['hello', 'snapshot','filters'],
+    ['hello', 'snapshot','filters','projectColors'],
   );
   const started = Date.now();
   const empty = await poll(first.lease);
@@ -997,7 +1000,7 @@ test('long polls carry the same events: a lease starts with hello and snapshot, 
   assert.notEqual(expired.lease, first.lease, 'forgotten a while after its last answer');
   assert.deepEqual(
     expired.events.map((e: Event) => e.type),
-    ['hello', 'snapshot','filters'],
+    ['hello', 'snapshot','filters','projectColors'],
   );
   await h.call('POST', '/api/auth/login', {as: 'alice2', body: {email: 'alice@example.com', password: 'correct horse'}});
   assert.notEqual((await poll(expired.lease, 'alice2')).lease, expired.lease, "another session's lease is not this one's");
@@ -1022,7 +1025,7 @@ test('a lease is of its board, and holds no more than a reader may fall behind: 
   assert.notEqual(behind.lease, other.lease);
   assert.deepEqual(
     behind.events.map((e: Event) => e.type),
-    ['hello', 'snapshot','filters'],
+    ['hello', 'snapshot','filters','projectColors'],
   );
   assert.equal(behind.events[1].data.board.name, 'Gang');
 });
@@ -1045,7 +1048,7 @@ test('a lease let go for a newer reader says so once, then is forgotten', async 
   assert.deepEqual((await poll(idle.lease)).events, [{type: 'bye', data: {reason: 'limit'}}], 'a lease asked on later hears it once');
   assert.deepEqual(
     (await poll(idle.lease)).events.map((e: Event) => e.type),
-    ['hello', 'snapshot','filters'],
+    ['hello', 'snapshot','filters','projectColors'],
   );
 });
 

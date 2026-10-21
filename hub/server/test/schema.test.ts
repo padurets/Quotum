@@ -200,7 +200,7 @@ test('board additions append to the integrated currency layout while analytics m
     const view=decodeView(JSON.parse(String(saved.payload)))!; assert.equal(view.version,5);
     assert.deepEqual(view.names,{legacy:'Kept'});
     assert.deepEqual(view.hidden,['source:deepseek:123456789abc']);
-    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,33);
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,34);
   }finally{db.close();}
 });
 

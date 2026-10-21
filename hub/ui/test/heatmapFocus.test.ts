@@ -17,7 +17,7 @@ test('cold heatmap preparation leaves render cheap, retains compatible cells and
   const hooks=preparationFixture(),jsx=(type:unknown,props:Record<string,unknown>)=>({type,props}),from=Date.UTC(2034,5,10,5),window=calendarWindow(from+86_400_000,'UTC',{mode:'range',from,to:from+86_400_000});
   let reading:CalendarReading={window,value:{zone:'UTC',edges:window.edges,cursor:'test',availableFrom:from,retainedFrom:from,cells:window.edges.slice(0,-1).map((at,i)=>({agentMs:Math.max(0,Math.min(window.edges[i+1],window.range.to)-Math.max(at,from)),from:Math.max(at,from),to:Math.max(Math.max(at,from),Math.min(window.edges[i+1],window.range.to)),validUntil:null}))},basis:null,loading:false,error:null},authority='a';
   const plot={clientWidth:1200,querySelector:()=>null},root={};let resize=()=>{};
-  const context={exports:{} as any,require:()=>({jsx,jsxs:jsx}),memo:(f:unknown)=>f,useMemo:(read:()=>unknown)=>read(),...hooks,
+  const context={exports:{} as any,require:()=>({jsx,jsxs:jsx}),memo:(f:unknown)=>f,...hooks,
     useSyncExternalStore:(_subscribe:unknown,read:()=>unknown)=>read(),usePref:()=> 'matrix',useLocale:()=> 'en',formatLocale:()=> 'en',useTimeRange:()=>null,useSizing:()=>null,
     heatmapLayout,heatmapLayoutPrepared,HEATMAP_MIN:160,HEATMAP_NATURAL:300,boardPeriod:{calendar:{subscribe:()=>()=>{},get:()=>reading,presentationKey:()=>authority}},t:(key:string)=>key,num:String,CATEGORY_COLORS:['blue'],CALENDAR_OPACITY:[0,.2,.4,.6,.8,1],
     ResizeObserver:class{constructor(read:()=>void){resize=read;}observe(){}disconnect(){}},Popover:'popover',Segmented:'segmented',SlidersIcon:'icon',ReadState:'state',
@@ -52,7 +52,7 @@ test('heatmap rows follow physical order and an explicit drill focuses the new g
   const hooks=preparationFixture(),jsx=(type:unknown,props:Record<string,unknown>)=>({type,props});
   let selection:{from:number;to:number}|null=null,reading:CalendarReading={window:calendarWindow(Date.UTC(2026,9,20,15,41),'UTC',{mode:'live',periodMs:30*86_400_000}),value:null,basis:null,loading:false,error:null};
   const focused:string[]=[],plot={clientWidth:1200,querySelector:(selector:string)=>({focus:()=>focused.push(selector)})},root={};
-  const context={exports:{} as any,require:()=>({jsx,jsxs:jsx}),memo:(f:unknown)=>f,useMemo:(read:()=>unknown)=>read(),...hooks,
+  const context={exports:{} as any,require:()=>({jsx,jsxs:jsx}),...hooks,memo:(f:unknown)=>f,
     useSyncExternalStore:(_subscribe:unknown,read:()=>unknown)=>read(),usePref:()=> 'matrix',useLocale:()=> 'en',formatLocale:()=> 'en',useTimeRange:()=>selection,useSizing:()=>null,
     heatmapLayout,heatmapLayoutPrepared,HEATMAP_MIN:160,HEATMAP_NATURAL:300,boardPeriod:{calendar:{subscribe:()=>()=>{},get:()=>reading,presentationKey:()=> 'fixture'}},t:(key:string)=>key,num:String,CATEGORY_COLORS:['blue'],CALENDAR_OPACITY:[0,.2,.4,.6,.8,1],
     setTimeRange:(range:{from:number;to:number})=>{selection=range;},ResizeObserver:class{observe(){}disconnect(){}},Popover:'popover',Segmented:'segmented',SlidersIcon:'icon',ReadState:'state',

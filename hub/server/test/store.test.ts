@@ -267,7 +267,7 @@ test('a database of a development version before 0.2 is refused, not misread', (
 test('the names a board’s history is keyed by are found by project, not by reading every session of a machine', t => {
   // Read with every answer of history and every look at a watched board: without the index a person with many sessions stalls the hub for each.
   const store = fresh();
-  const prepare=store.db.prepare.bind(store.db);let query='';t.mock.method(store.db,'prepare',(sql:string)=>{if(sql.startsWith('SELECT user_id,reported,name FROM project_names'))query=sql;return prepare(sql);});store.workKey(BOARD);assert.ok(query,'the production authority query is exercised');
+  const prepare=store.db.prepare.bind(store.db);let query='';t.mock.method(store.db,'prepare',(sql:string)=>{if(/\bFROM project_names n\b/.test(sql)&&/\bagent_sessions\b/.test(sql))query=sql;return prepare(sql);});store.workKey(BOARD);assert.ok(query,'the production authority query is exercised');
   const plan = (prepare(`EXPLAIN QUERY PLAN ${query}`).all('[]','[]') as {detail: string}[]).map(row => row.detail);
   assert.ok(!plan.some(detail=>/^SCAN n\b/.test(detail)),plan.join('\n'));
   assert.ok(

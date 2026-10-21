@@ -171,7 +171,12 @@ const named = (name: string, now: number) => (zone = {name, offset: new Date(now
 
 function timeZone() {
   const now = Date.now();
-  if (new Date(now).getTimezoneOffset() !== zone.offset || now - zone.at >= 1000 || now < zone.at) named(new Intl.DateTimeFormat().resolvedOptions().timeZone, now);
+  if (new Date(now).getTimezoneOffset() !== zone.offset || now - zone.at >= 1000 || now < zone.at) {
+    // An unchanged native identifier needs no new formatter. A changed or aliased
+    // identifier still goes through Intl, as does a browser without Temporal.
+    const native = (globalThis as typeof globalThis & {Temporal?: {Now?: {timeZoneId?(): string}}}).Temporal?.Now?.timeZoneId?.();
+    named(native === zone.name ? native : new Intl.DateTimeFormat().resolvedOptions().timeZone, now);
+  }
   return zone.name;
 }
 

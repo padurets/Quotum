@@ -10,7 +10,7 @@ import type {WorkFilter} from './domain/dataFilters.js';
 import type {WorkChoices} from './domain/periodRead.js';
 
 /** Explicit project choices use the same admitted history as saved projections. */
-function projectAuthority(store:Store,access:WorkAccess,liveProjects:ReadonlySet<string|null>,reserve:(bytes:number)=>void=()=>{}) {
+export function projectAuthority(store:Store,access:WorkAccess,liveProjects:ReadonlySet<string|null>,reserve:(bytes:number)=>void=()=>{}) {
   let bytes=512;for(const id of access.devices.keys())bytes+=256+id.length*4;reserve(bytes);
   const deviceFrom=JSON.stringify(Object.fromEntries([...access.devices].map(([id,scope])=>[id,scope.from]))),projects=new Map<string,boolean>();
   const project=store.db.prepare("SELECT 1 FROM agent_sessions s JOIN devices d ON d.id=s.device_id LEFT JOIN project_names n ON n.user_id=d.user_id AND n.reported=s.project JOIN json_each(?) j ON j.key=s.device_id WHERE COALESCE(n.name,NULLIF(s.project,''))=? AND EXISTS(SELECT 1 FROM agent_work w WHERE w.session_id=s.id AND w.to_at>CAST(j.value AS INTEGER)) LIMIT 1");
@@ -42,10 +42,10 @@ export function retainedWorkChoices(store:Store,access:WorkAccess,ingest:Ingest,
 }
 
 /** Capture access once; saved intent never supplies permissions. */
-export function filterContext(store:Store,board:string,ingest?:Ingest,capturedAccess?:ReturnType<Store['workAccess']>,capturedRoster?:ReturnType<Ingest['live']['board']>) {
+export function filterContext(store:Store,board:string,ingest?:Ingest,capturedAccess?:ReturnType<Store['workAccess']>,capturedRoster?:ReturnType<Ingest['live']['board']>,now=Date.now()) {
   const sources=store.sources(board),bySource=new Map(sources.map(source=>[source.id,source]));
-  const access=capturedAccess??store.workAccess(board),devices=JSON.stringify([...access.devices.keys()]);
-  const liveProjects=capturedRoster?new Set([...[...capturedRoster.sessions.values()].flat(),...capturedRoster.unattributedSessions].map(row=>row.project)):ingest?.live.projects(access,Date.now())??new Set();
+  const access=capturedAccess??store.workAccess(board,now),devices=JSON.stringify([...access.devices.keys()]);
+  const liveProjects=capturedRoster?new Set([...[...capturedRoster.sessions.values()].flat(),...capturedRoster.unattributedSessions].map(row=>row.project)):ingest?.live.projects(access,now)??new Set();
   const projectAllowed=projectAuthority(store,access,liveProjects);
   const allowed:FilterAuthority=(family,ref)=>{
     if(family==='sources')return ref!==null&&typeof ref==='object'&&!Array.isArray(ref)&&('status' in ref||'source' in ref&&bySource.has(ref.source));
@@ -58,7 +58,7 @@ export function filterContext(store:Store,board:string,ingest?:Ingest,capturedAc
     if(typeof ref!=='string')return false;
     return projectAllowed(ref);
   };
-  const names=store.db.prepare('SELECT n.user_id,n.reported,n.name FROM project_names n WHERE n.user_id IN (SELECT user_id FROM devices WHERE id IN (SELECT value FROM json_each(?))) ORDER BY n.user_id,n.reported').all(devices);
+  const names=store.db.prepare('SELECT n.user_id,CAST(n.reported AS BLOB) AS reported,CAST(n.name AS BLOB) AS name FROM project_names n WHERE n.user_id IN (SELECT user_id FROM devices WHERE id IN (SELECT value FROM json_each(?))) ORDER BY n.user_id,n.reported').iterate(devices);
   const labels=store.db.prepare('SELECT id,COALESCE(label,name) AS name FROM devices WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id').all(devices);
   const raw=store.db.prepare('SELECT payload FROM board_filters WHERE board_id=?').get(board);
   const stored=raw?parseStoredFilters(JSON.parse(String(raw.payload))):null;
@@ -66,8 +66,12 @@ export function filterContext(store:Store,board:string,ingest?:Ingest,capturedAc
   // Ordinary work credits and samples do not change this projection precondition.
   // Availability of saved dormant decisions does: a newly visible rule must not
   // disappear in a replacement based on the earlier projection.
-  const authority=createHash('sha256').update(JSON.stringify([store.db.prepare("SELECT value FROM meta WHERE key='activityHubId'").get()?.value,board,
-    sources.map(source=>[source.id,source.budget,source.holders]),[...access.sources].map(([id,scope])=>[id,scope.since]),[...access.devices],names,labels,explicitProjects.map(ref=>[ref,allowed('projects',ref)])])).digest('base64url');
+  const hash=createHash('sha256').update(JSON.stringify([store.db.prepare("SELECT value FROM meta WHERE key='activityHubId'").get()?.value,board,
+    sources.map(source=>[source.id,source.budget,source.holders]),[...access.sources].map(([id,scope])=>[id,scope.since]),[...access.devices]]).slice(0,-1));
+  // Stream exact aliases so a catalogue page never materializes every correction.
+  hash.update(',[');let first=true;
+  for(const row of names){row.reported=Buffer.from(row.reported as Uint8Array).toString();row.name=Buffer.from(row.name as Uint8Array).toString();if(!first)hash.update(',');hash.update(JSON.stringify(row));first=false;}
+  const authority=hash.update('],').update(JSON.stringify([labels,explicitProjects.map(ref=>[ref,allowed('projects',ref)])]).slice(1)).digest('base64url');
   const automatic=(ref:MoneyRef)=>ref.kind==='balance'||store.state(ref.source).keys?.slice(0,5).some(key=>key.id===ref.key)===true;
   return {allowed,authority,automatic};
 }

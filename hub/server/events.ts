@@ -13,6 +13,8 @@ import {earliest, Projection, type HubPart, type Snapshot} from './projection.js
 import type {Directory} from './store/directory.js';
 import type {BoardSource, Store} from './store/store.js';
 import {trouble, type Touches} from './touches.js';
+import type {ProjectColors} from './projectColors.js';
+import type {ProjectColorEnvelope} from './domain/projectColors.js';
 
 /**
  * What open dashboards hear (spec/dashboard-v1.md): every reader of a board gets its
@@ -34,12 +36,14 @@ export type ByeReason = 'unauthorized' | 'gone' | 'restart' | 'limit';
 
 /** An event as it goes out: its type, and its data already as JSON. */
 export type Frame = {type: string; data: string};
+export type PollAnswer = {lease:string;now:number;frames:Frame[]};
 
 /** Events as a text/event-stream carries them. */
 export const sse = (frames: Frame[]) => frames.map(f => `event: ${f.type}\ndata: ${f.data}\n\n`).join('');
 
 /** Events as a long poll answers them: `{type, data}` each. */
 export const polled = (frames: Frame[]) => `[${frames.map(f => `{"type":${JSON.stringify(f.type)},"data":${f.data}}`).join(',')}]`;
+export const pollBody=(answer:PollAnswer)=>`{"lease":${JSON.stringify(answer.lease)},"now":${answer.now},"events":${polled(answer.frames)}}`;
 
 const frame = (type: string, data: unknown): Frame => ({type, data: JSON.stringify(data)});
 const bye = (reason: ByeReason) => frame('bye', {reason});
@@ -73,7 +77,7 @@ export type Reader = {
   kind: 'stream' | 'lease';
   desktop?: boolean;
   /** Hands events over. */
-  send(frames: Frame[]): void;
+  send(frames: Frame[],context?:DeliveryContext): void;
   /** How much of what was handed over has not gone out yet: a reader too far behind is let go. */
   backlog?(): number;
   /** Hands over the last event, `bye`, and lets the reader go. */
@@ -94,6 +98,7 @@ type Watched = {
   changes: Map<string, number>;
   /** Whose agents' work its history shows and under which names (Projection.workKey), as last worked out; null before. */
   work: string | null;
+  context:DeliveryContext|null;
   deadline: {at: number; cancel: () => void} | null;
   stopRecheck: () => void;
 };
@@ -108,7 +113,8 @@ type Lease = {
   /** Financial authority when this lease's last snapshot or delta was delivered. */
   financialKey:string;
   workKey:string;
-  queue: Frame[];
+  queue: {frames:Frame[];context:DeliveryContext|null}[];
+  answerChangesAt:number|null;
   bytes: number;
   /** The request held until events come. */
   waiting: ((frames: Frame[]) => void) | null;
@@ -116,6 +122,9 @@ type Lease = {
   stopExpiry: () => void;
   tomb: ByeReason | null;
 };
+type DeliveryContext = {financialKey:string;workKey:string;colors:ProjectColorEnvelope;changesAt:number|null};
+type PollContext = DeliveryContext&{reader:Pick<Reader,'user'|'secret'|'board'>;initial:boolean};
+type HistoryNotice = {sources:string[];since:number;changes?:HistoryChange[];workSince?:number;workAuthority?:string};
 
 /** The path of the page's entry script in the built client, as `index.html` loads it; null without a build. */
 export function clientScript(root = config.clientRoot): string | null {
@@ -127,6 +136,8 @@ export function clientScript(root = config.clientRoot): string | null {
 }
 
 export class Events implements Touches {
+  /** An HTTP response owns its captured authority only until that response is collected. */
+  private readonly pollContexts=new WeakMap<PollAnswer,PollContext>();
   /** The history cache hears every touch, also when no board is watched. */
   onClientHistory: ((user:string,since:number,device?:string)=>void) | null = null;
   onHistory: ((source: string, since: number, scopes?: readonly HistoryScope[], work?:boolean) => void) | null = null;
@@ -134,6 +145,7 @@ export class Events implements Touches {
   readonly epoch: string;
   readonly client: string | null;
   private readonly projection: Projection;
+  readonly projectColors:ProjectColors;
   private readonly watched = new Map<string, Watched>();
   /** Every reader, oldest first. */
   private readonly subscribers = new Map<number, Subscriber>();
@@ -166,12 +178,13 @@ export class Events implements Touches {
   private stopHubRecheck: (() => void) | null = null;
 
   constructor(
-    private readonly parts: {store: Store; directory: Directory; ingest: Ingest; resets: ResetFeed;credentials?:Credentials;hubSources?:HubSources},
+    private readonly parts: {store: Store; directory: Directory; ingest: Ingest; resets: ResetFeed;credentials?:Credentials;hubSources?:HubSources;projectColors?:ProjectColors},
     private readonly options: EventsOptions = config.events,
     private readonly clock: Clock = realClock,
     client = clientScript(),
   ) {
     this.projection = new Projection(parts);
+    this.projectColors=this.projection.projectColors;
     this.epoch = clock.now().toString(36);
     this.client = client;
   }
@@ -511,18 +524,20 @@ export class Events implements Touches {
           ...(devices.get(sub.user) && !deviceFramesByUser.get(sub.user)?.length ? [frame('devices',{})] : []), ...(privateContacts.length ? [frame('deviceContacts',{devices:privateContacts})] : []), ...historyFrames, ...news];
         if (sub.fresh) continue;
         if(!frames.length&&!sub.desktop)continue;
+        let context=watched.context??undefined;
         try {
           const replacement=this.financialSnapshot(sub,financialKey,sub.workKey);
-          if(replacement)frames=this.snapshotFrames(replacement.snapshot,sub.board);
+          if(replacement){frames=this.replacementFrames(replacement,frames,sub.board,sub.workKey,sub.desktop);context=replacement.context;}
           sub.workKey=this.projection.workKey(sub.board,undefined,this.clock.now());
         }catch(error){trouble(error);this.end(sub,'restart');continue;}
+        frames=this.colorDelivery(frames,!!sub.desktop,sub.board);
         if (sub.desktop && (sources.has(watched.id) || whole.has(watched.id) || frames.length || sub.pending.length || sub.invalidations.size || sub.rebaseline)) {
           const attention = this.attentionFrames(sub, sub.rebaseline, now);
           frames.unshift(...attention.before);
           frames.push(...attention.after);
         }
         if (!frames.length) continue;
-        sub.send(frames);
+        sub.send(frames,context);
         if ((sub.backlog?.() ?? 0) > this.options.bufferBytes) this.end(sub, 'limit');
       }
     }
@@ -568,7 +583,7 @@ export class Events implements Touches {
     let computed = touched.has('__sessions')?lineup:lineup.filter(s=>touched.has(s.id));
     let ids: string[] | null = null;
     if (whole) {
-      const part = projection.boardPart(watched.id, lineup);
+      const part = projection.boardPart(watched.id, lineup,roster);
       if (!part) {
         for (const sub of [...watched.subscribers]) this.end(sub, 'gone');
         return null;
@@ -622,8 +637,18 @@ export class Events implements Touches {
       const sources = this.changed(base, 'lineup', ids);
       if (sources !== null) frames.push({type: 'lineup', data: `{"sources":${sources}}`});
     }
-    const filters=this.changed(base,'filters',projection.filtersPart(watched.id));
+    const filters=this.changed(base,'filters',projection.filtersPart(watched.id,roster));
     if(filters!==null)frames.push({type:'filters',data:filters});
+    const colors=this.projectColors.context(watched.id,roster,now).envelope;
+    const colorChange=this.changed(base,'projectColors',colors);
+    if(colorChange!==null){
+      frames.push(frame('board',{projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority}));
+      frames.push({type:'projectColors',data:colorChange});
+    }
+    // Reuse the confirmed envelope: repeated session deltas do not retain another map.
+    const financialKey=JSON.stringify(lineup.filter(source=>source.provider==='codex').map(source=>[source.id,source.budget])),previous=watched.context;
+    const context={financialKey:previous?.financialKey===financialKey?previous.financialKey:financialKey,workKey:work,colors:base.get('projectColors')!.value as ProjectColorEnvelope,changesAt:roster.changesAt};
+    watched.context=previous&&previous.financialKey===context.financialKey&&previous.workKey===context.workKey&&previous.colors===context.colors&&previous.changesAt===context.changesAt?previous:context;
     this.arm(watched, now);
     return frames;
   }
@@ -779,7 +804,7 @@ export class Events implements Touches {
     return {frames: opened.frames, close: () => this.unsubscribe(opened.sub)};
   }
 
-  private subscribe(reader: Reader): {sub: Subscriber; frames: Frame[]} | null | 'limit' {
+  private subscribe(reader: Reader): {sub: Subscriber; frames: Frame[];context:DeliveryContext} | null | 'limit' {
     const evicted = this.room(reader);
     if (evicted === 'refuse') return 'limit';
     if (evicted) this.end(evicted, 'limit');
@@ -794,6 +819,7 @@ export class Events implements Touches {
         lineup: [],
         changes: new Map(),
         work: null,
+        context:null,
         deadline: null,
         stopRecheck: this.every(this.options.recheckMs, () => this.touchBoards([id])),
       };
@@ -811,6 +837,7 @@ export class Events implements Touches {
     this.dirtyHub = true;
     const now = this.clock.now();
     let snapshot;
+    let context:DeliveryContext;
     try {
       const failed = this.flush();
       // The snapshot would miss a part: the reader is refused, as for a board that failed.
@@ -820,6 +847,8 @@ export class Events implements Touches {
         return null;
       }
       if(watched.work===null)throw new Error('the board work context was not computed');
+      if(watched.context===null)throw new Error('the board delivery context was not computed');
+      context=watched.context;
       const value = (key: string) => watched.base.get(key)?.value;
       this.connections.set(reader.user, this.parts.directory.connectionsRevision(reader.user));
       snapshot = {
@@ -844,7 +873,7 @@ export class Events implements Touches {
         resets: this.hub?.value,
       };
       const replacement=this.financialSnapshot(sub,financialKey,sub.workKey);
-      if(replacement)snapshot=replacement.snapshot;
+      if(replacement){snapshot=replacement.snapshot;context=replacement.context;}
       sub.workKey=this.projection.workKey(sub.board,undefined,this.clock.now());
     } catch (error) {
       // Refused with an error, and nothing of it is left behind.
@@ -854,12 +883,12 @@ export class Events implements Touches {
     sub.fresh = false;
     if (sub.kind === 'stream') sub.stopPing = this.every(this.options.heartbeatMs, () => this.ping(sub));
     const hello = {epoch: this.epoch, now, client: this.client, heartbeatMs: this.options.heartbeatMs};
-    const frames = [frame('hello', hello), ...this.snapshotFrames(snapshot as Snapshot,reader.board)];
+    const frames = [frame('hello', hello), ...this.snapshotFrames(snapshot as Snapshot,reader.board,reader.desktop)];
     if (sub.desktop) {
       const attention = this.attentionFrames(sub, true, now);
       frames.push(...attention.before, ...attention.after);
     }
-    return {sub, frames};
+    return {sub, frames,context};
   }
 
   /** Whether a new reader fits: the oldest to let go for it where it hits a limit, or 'refuse'. */
@@ -929,7 +958,7 @@ export class Events implements Touches {
    * what came since its last answer, or waits for it up to `pollMs`. An unknown lease (it
    * expired, fell behind, or the hub restarted) is a new one. 'limit' when there is no room.
    */
-  async poll(reader: Omit<Reader, 'kind' | 'send' | 'end'>, id: string | undefined): Promise<{lease: string; now: number; frames: Frame[]} | null | 'limit'> {
+  async poll(reader: Omit<Reader, 'kind' | 'send' | 'end'>, id: string | undefined): Promise<PollAnswer | null | 'limit'> {
     const known = id ? this.leases.get(id) : undefined;
     if (known && known.secret === reader.secret && known.board === reader.board && known.user === reader.user) {
       if (known.tomb) {
@@ -945,14 +974,14 @@ export class Events implements Touches {
       // One request waits at a time: an earlier one still waiting is answered empty.
       known.waiting?.([]);
       const pending = this.take(known);
-      const frames = pending.length
-        ? pending
-        : await new Promise<Frame[]>(resolve => {
+      const result = pending.length
+        ? this.pollAnswer(known,pending)
+        : await new Promise<PollAnswer>(resolve => {
             const stop = this.later(this.options.pollMs, () => answer(this.take(known)));
             const answer = (frames: Frame[]) => {
               stop();
               if (known.waiting === answer) known.waiting = null;
-              resolve(frames);
+              resolve(this.pollAnswer(known,frames));
             };
             known.waiting = answer;
           });
@@ -961,15 +990,15 @@ export class Events implements Touches {
         known.stopExpiry();
         known.stopExpiry = this.later(this.options.leaseMs, () => this.expire(known));
       }
-      return {lease: known.id, now: this.clock.now(), frames};
+      return result;
     }
 
-    const lease: Lease = {...reader, id: randomBytes(16).toString('base64url'), subscriber: null, financialKey:this.parts.store.financialKey(reader.board),workKey:this.projection.workKey(reader.board,undefined,this.clock.now()), queue: [], bytes: 0, waiting: null, stopExpiry: () => {}, tomb: null};
+    const lease: Lease = {...reader, id: randomBytes(16).toString('base64url'), subscriber: null, financialKey:this.parts.store.financialKey(reader.board),workKey:this.projection.workKey(reader.board,undefined,this.clock.now()), queue: [],answerChangesAt:null, bytes: 0, waiting: null, stopExpiry: () => {}, tomb: null};
     const opened = this.subscribe({
       ...reader,
       kind: 'lease',
-      send: frames => {
-        lease.queue.push(...frames);
+      send: (frames,context) => {
+        lease.queue.push({frames,context:context??null});
         lease.bytes += Math.max(Buffer.byteLength(sse(frames)),Buffer.byteLength(polled(frames)));
         // Too far behind: dropped, and the next request starts over with a snapshot.
         if (lease.bytes > this.options.bufferBytes) {
@@ -993,21 +1022,75 @@ export class Events implements Touches {
     lease.subscriber = opened.sub;
     this.leases.set(lease.id, lease);
     lease.stopExpiry = this.later(this.options.leaseMs, () => this.expire(lease));
-    return {lease: lease.id, now: this.clock.now(), frames: opened.frames};
+    return this.pollAnswer(lease,opened.frames,opened.context,true);
+  }
+
+  private pollAnswer(reader:Pick<Lease,'id'|'user'|'secret'|'board'|'answerChangesAt'>,frames:Frame[],producer?:DeliveryContext,initial=false):PollAnswer {
+    const answer=this.finishPoll({lease:reader.id,now:this.clock.now(),frames},frames,initial,reader.board);
+    if(answer.frames.some(packet=>packet.type==='bye'))return answer;
+    const context=producer??{financialKey:this.parts.store.financialKey(reader.board),workKey:this.projection.workKey(reader.board,undefined,answer.now),colors:this.projectColors.context(reader.board,undefined,answer.now).envelope,changesAt:reader.answerChangesAt};
+    this.pollContexts.set(answer,{...context,reader:{user:reader.user,secret:reader.secret,board:reader.board},initial});
+    return answer;
+  }
+
+  /** The initial browser baseline has its established exception; every later answer uses the wire budget. */
+  private finishPoll(answer:PollAnswer,frames:Frame[],initial=false,board?:string):PollAnswer {
+    frames=this.colorDelivery(frames,false,board);
+    const result=frames===answer.frames?answer:{...answer,now:this.clock.now(),frames};
+    if(!initial&&Math.max(Buffer.byteLength(sse(frames)),Buffer.byteLength(pollBody(result)))>this.options.bufferBytes){
+      const lease=this.leases.get(answer.lease);if(lease)this.expire(lease);return {...answer,now:this.clock.now(),frames:[bye('limit')]};
+    }
+    if(result===answer)return answer;
+    const context=this.pollContexts.get(answer);
+    if(context)this.pollContexts.set(result,context);
+    return result;
+  }
+
+  /** Recheck after asynchronous HTTP hooks and compression, before any bytes are disclosed. */
+  deliverPoll(answer:PollAnswer):PollAnswer {
+    const captured=this.pollContexts.get(answer);if(!captured)return this.finishPoll(answer,answer.frames);
+    const lease=this.leases.get(answer.lease),reason=this.gone(captured.reader),now=this.clock.now();
+    if(reason){if(lease)this.expire(lease);return this.finishPoll(answer,[bye(reason)]);}
+    const financialKey=this.parts.store.financialKey(captured.reader.board),workKey=this.projection.workKey(captured.reader.board,undefined,now);
+    const context=this.projectColors.context(captured.reader.board,undefined,now),colors=context.envelope;
+    const privateWork=answer.frames.some(packet=>packet.type==='snapshot'||packet.type==='sessions'||packet.type==='unattributedSessions');
+    const expired=privateWork&&captured.changesAt!==null&&now>=captured.changesAt;
+    if(financialKey===captured.financialKey&&workKey===captured.workKey&&colors.revision===captured.colors.revision&&colors.authority===captured.colors.authority&&!expired)return this.finishPoll(answer,answer.frames,captured.initial,captured.reader.board);
+    let frames:Frame[];
+    const retired=captured.colors.pins.some(([name])=>!context.allowed(name));
+    if(financialKey!==captured.financialKey||workKey!==captured.workKey||retired&&privateWork||expired){
+      const replacement=this.replacementSnapshot(captured.reader,now);
+      const pending=[...answer.frames,...(lease?.queue.flatMap(batch=>batch.frames)??[])];
+      frames=[...answer.frames.filter(packet=>packet.type==='hello'),...this.replacementFrames(replacement,pending,captured.reader.board,captured.workKey)];
+      // The replacement includes every queued change up to this synchronous projection.
+      if(lease){lease.financialKey=financialKey;lease.workKey=workKey;lease.queue=[];lease.bytes=0;lease.answerChangesAt=replacement.context.changesAt;}
+    }else{
+      frames=this.colorDelivery(answer.frames,false,captured.reader.board);
+      if(!frames.some(packet=>packet.type==='projectColors'))frames=[...frames,frame('board',{projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority}),frame('projectColors',colors)];
+    }
+    return this.finishPoll(answer,frames,captured.initial,captured.reader.board);
   }
 
   private take(lease: Lease): Frame[] {
-    const frames = lease.queue;
+    const batches=lease.queue,frames=batches.flatMap(batch=>batch.frames),now=this.clock.now();
     lease.queue = [];
     lease.bytes = 0;
     const reason=this.gone(lease);
     if(reason){this.expire(lease);return [bye(reason)];}
     try {
-      const replacement=this.financialSnapshot(lease,lease.financialKey,lease.workKey);
-      if(replacement){lease.financialKey=replacement.key;lease.workKey=replacement.workKey;return this.snapshotFrames(replacement.snapshot,lease.board);}
+      let replacement=this.financialSnapshot(lease,lease.financialKey,lease.workKey);
+      if(!replacement){
+        const context=this.projectColors.context(lease.board,undefined,now),financialKey=this.parts.store.financialKey(lease.board),workKey=this.projection.workKey(lease.board,undefined,now);
+        // Validate the producer baseline before rewriting configuration or signing an HTTP answer.
+        const privateBatches=batches.filter(batch=>batch.frames.some(packet=>packet.type==='snapshot'||packet.type==='sessions'||packet.type==='unattributedSessions'));
+        const retired=privateBatches.some(({context:producer})=>!producer||producer.financialKey!==financialKey||producer.workKey!==workKey||producer.changesAt!==null&&now>=producer.changesAt||producer.colors.pins.some(([name])=>!context.allowed(name)));
+        if(retired)replacement=this.replacementSnapshot(lease,now);
+        else lease.answerChangesAt=earliest(...privateBatches.map(batch=>batch.context?.changesAt??null));
+      }
+      if(replacement){const priorWork=lease.workKey;lease.financialKey=replacement.key;lease.workKey=replacement.workKey;lease.answerChangesAt=replacement.context.changesAt;return this.replacementFrames(replacement,frames,lease.board,priorWork);}
     }catch(error){trouble(error);this.expire(lease);return [bye('restart')];}
     lease.workKey=this.projection.workKey(lease.board,undefined,this.clock.now());
-    return frames.flatMap(packet=>{
+    return this.colorDelivery(frames,false,lease.board).flatMap(packet=>{
       if(packet.type==='snapshot') {
         const snapshot=JSON.parse(packet.data) as Snapshot;
         if(!snapshot.deviceContacts)return [packet];
@@ -1021,18 +1104,83 @@ export class Events implements Touches {
     });
   }
 
-  private snapshotFrames(snapshot:Snapshot,board:string):Frame[]{
-    const filters=this.projection.filtersPart(board);
-    return [frame('snapshot',{...snapshot,filtersRevision:filters.revision,filtersAuthority:filters.authority}),frame('filters',filters)];
+  private snapshotFrames(snapshot:Snapshot,board:string,desktop=false):Frame[]{
+    const now=this.clock.now(),roster=this.projection.roster(board,now);
+    const filters=this.projection.filtersPart(board,roster);
+    const colors=this.projectColors.context(board,roster,now).envelope;
+    return this.colorDelivery([frame('snapshot',{...snapshot,filtersRevision:filters.revision,filtersAuthority:filters.authority,projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority}),frame('filters',filters),frame('projectColors',colors)],desktop);
+  }
+
+  /** The native background reader's byte-bounded baseline contains no UI colour metadata. */
+  private colorDelivery(frames:Frame[],desktop:boolean,board?:string):Frame[] {
+    if(!desktop){
+      let last=-1;for(let i=frames.length-1;i>=0;i--)if(frames[i].type==='projectColors'){last=i;break;}if(last<0)return frames;
+      const colors=board?this.projectColors.context(board,undefined,this.clock.now()).envelope:JSON.parse(frames[last].data) as ProjectColorEnvelope;
+      const references={projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority},baseline=frames.some(packet=>packet.type==='snapshot'),result:Frame[]=[];
+      for(let i=0;i<frames.length;i++){
+        const packet=frames[i];
+        if(packet.type==='snapshot')result.push(frame(packet.type,{...JSON.parse(packet.data),...references}));
+        else if(packet.type==='board'){
+          const {projectColorsRevision:_revision,projectColorsAuthority:_authority,...data}=JSON.parse(packet.data);
+          if(Object.keys(data).length)result.push(frame(packet.type,data));
+        }else if(packet.type!=='projectColors')result.push(packet);
+        if(i===last){if(!baseline)result.push(frame('board',references));result.push(frame('projectColors',colors));}
+      }
+      return result.length===frames.length&&result.every((packet,index)=>packet.type===frames[index].type&&packet.data===frames[index].data)?frames:result;
+    }
+    return frames.flatMap(packet=>{
+      if(packet.type==='projectColors')return [];
+      if(packet.type!=='snapshot'&&packet.type!=='board')return [packet];
+      const {projectColorsRevision:_revision,projectColorsAuthority:_authority,...data}=JSON.parse(packet.data);
+      return Object.keys(data).length?[frame(packet.type,data)]:[];
+    });
+  }
+
+  /** A snapshot replaces projections, but independent history still has to dirty the reader's cached cells. */
+  private replacementFrames(replacement:ReturnType<Events['replacementSnapshot']>,pending:Frame[],board:string,previousWork:string,desktop=false):Frame[] {
+    return [...this.snapshotFrames(replacement.snapshot,board,desktop),...this.historyDelivery(board,pending,replacement.workKey,previousWork)];
+  }
+
+  private historyDelivery(board:string,frames:Frame[],workKey:string,previousWork:string):Frame[] {
+    const resources=new Map(this.projection.lineup(board).map(source=>[source.id,source])),changes=new Map<string,HistoryChange>();
+    let workSince=Infinity;
+    for(const packet of frames){
+      if(packet.type!=='history')continue;
+      const notice=JSON.parse(packet.data) as HistoryNotice,sameWork=notice.workAuthority===workKey&&previousWork===workKey;
+      if(sameWork&&notice.workSince!==undefined)workSince=Math.min(workSince,notice.workSince);
+      const scoped:HistoryChange[]=notice.changes??notice.sources.map(source=>({source,scope:'quota',since:notice.since}));
+      for(const original of scoped){
+        const source=resources.get(original.source);if(!source)continue;
+        const workOnly=original.workSince!==undefined&&original.since>=original.workSince;
+        if(!sameWork&&workOnly)continue;
+        let since=original.since,from=sameWork?original.workSince:undefined;
+        if(original.scope==='budget'){
+          if(source.budget?.enabled===false||source.provider==='codex'&&source.budget?.anchor==null)continue;
+          const anchor=source.provider==='codex'?source.budget?.anchor??0:0;
+          since=Math.max(since,anchor);if(from!==undefined)from=Math.max(from,anchor);
+        }
+        // Keep supplier data distinct from work-only news when several batches collapse.
+        const key=JSON.stringify([original.source,original.scope,workOnly]),old=changes.get(key);
+        changes.set(key,{source:original.source,scope:original.scope,since:Math.min(since,old?.since??Infinity),...(from===undefined&&old?.workSince===undefined?{}:{workSince:Math.min(from??Infinity,old?.workSince??Infinity)})});
+      }
+    }
+    if(!changes.size&&!Number.isFinite(workSince))return [];
+    const values=[...changes.values()],since=values.reduce((earliest,change)=>Math.min(earliest,change.since),workSince);
+    return [frame('history',{sources:[...new Set(values.map(change=>change.source))],since,changes:values,...(Number.isFinite(workSince)?{workSince}:{}),workAuthority:workKey})];
   }
 
   /** Prepared frames are not yet disclosed: replace their dataset and private bindings together. */
   private financialSnapshot(reader: Pick<Reader,'user'|'board'>, previous:string,previousWork:string) {
     const key=this.parts.store.financialKey(reader.board),workKey=this.projection.workKey(reader.board,undefined,this.clock.now());
     if(key===previous&&workKey===previousWork)return null;
-    const snapshot=this.projection.snapshot(reader.user,reader.board,this.clock.now());
+    return this.replacementSnapshot(reader);
+  }
+
+  private replacementSnapshot(reader:Pick<Reader,'user'|'board'>,now=this.clock.now()) {
+    const roster=this.projection.roster(reader.board,now),snapshot=this.projection.snapshot(reader.user,reader.board,now,roster);
     if(!snapshot)throw new Error('the board could not be worked out');
-    return {key,workKey,snapshot};
+    const key=this.parts.store.financialKey(reader.board),workKey=this.projection.workKey(reader.board,roster.access,now),colors=this.projectColors.context(reader.board,roster,now).envelope;
+    return {key,workKey,snapshot,context:{financialKey:key,workKey,colors,changesAt:roster.changesAt}};
   }
 
   /** A lease nobody asked on for `leaseMs`, or too far behind: its reader is gone. */

@@ -12,9 +12,11 @@ export type ProjectGroup = {
   lastAt: number | null;
   machines: {id: string; name: string}[];
   reported: string[];
+  canRename?:boolean;
+  colorAllowed?:boolean;
 };
 
-export type Projects = {keptDays: number; projects: ProjectGroup[]};
+export type Projects = {keptDays: number; projects: ProjectGroup[];authority?:string;nextCursor?:string};
 
 /** What `POST /api/projects` takes: the groups and the name they go under (empty: each its own). */
 export type Naming = {groups: string[]; name: string};
