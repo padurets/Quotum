@@ -137,7 +137,8 @@ notifications also stay live, independently of the board's historical range.
   range. Five-hour limits, weekly limits, budget balances each
   have their own chart and table. The common **Resources** filter selects windows,
   balances and key caps across cards, charts and tables. Each chart's
-  legend controls its visibility independently of table columns.
+  legend independently emphasizes several series; shared filters choose the data,
+  and table columns have their own settings.
 - **Charts of weekly and 5-hour windows** over the last hour up to the last 30
   days. Ahead of now they show forecasts and the next resets, as far as you choose.
   The weekly chart also draws the spending plan, nearly flat over the hours when the
@@ -164,8 +165,8 @@ notifications also stay live, independently of the board's historical range.
   make 4 agent-hours: the legend adds up to the total. Active time (at least one agent
   working), recorded sessions and the average at once are in the totals and
   tooltips. It zooms and moves through time as the chart does.
-  Its totals and bar values follow the enabled legend series as well as the board's
-  filters. Point to a legend entry or focus it with the keyboard to inspect its totals.
+  Its totals and bar values always describe the data selected by the board's filters.
+  Point to a legend entry or focus it with the keyboard to temporarily inspect its metrics.
 - **Activity heatmap:** recorded agent-hours over the board's selected period, as a
   day-by-hour matrix or compact calendar. It follows project, device and client filters;
   open a cell to inspect that interval. No recorded work and unavailable history stay
@@ -446,8 +447,8 @@ mark. Temporary read failures are amber.
 Five-hour and weekly subscription limits each have their own chart and table.
 Budget balances have their own chart and table.
 The common **Resources** filter selects the data for budget cards, charts and tables: an account selects its total,
-and a key selects its reported remaining limit. Table columns and each
-chart's legend visibility remain independent display settings.
+and a key selects its reported remaining limit. Table columns have their own settings;
+each chart's legend independently emphasizes several series.
 Account balances are selected by default; at most 32 metrics are selected, with
 visible overflow. The chart uses
 one unit per axis and keeps the same time range and gestures as subscription history.
