@@ -14,6 +14,7 @@ import type {Directory} from './store/directory.js';
 import type {BoardSource, Store} from './store/store.js';
 import {trouble, type Touches} from './touches.js';
 import type {ProjectColors} from './projectColors.js';
+import type {ProjectColorEnvelope} from './domain/projectColors.js';
 
 /**
  * What open dashboards hear (spec/dashboard-v1.md): every reader of a board gets its
@@ -75,7 +76,7 @@ export type Reader = {
   kind: 'stream' | 'lease';
   desktop?: boolean;
   /** Hands events over. */
-  send(frames: Frame[]): void;
+  send(frames: Frame[],context?:DeliveryContext): void;
   /** How much of what was handed over has not gone out yet: a reader too far behind is let go. */
   backlog?(): number;
   /** Hands over the last event, `bye`, and lets the reader go. */
@@ -96,6 +97,7 @@ type Watched = {
   changes: Map<string, number>;
   /** Whose agents' work its history shows and under which names (Projection.workKey), as last worked out; null before. */
   work: string | null;
+  context:DeliveryContext|null;
   deadline: {at: number; cancel: () => void} | null;
   stopRecheck: () => void;
 };
@@ -110,7 +112,8 @@ type Lease = {
   /** Financial authority when this lease's last snapshot or delta was delivered. */
   financialKey:string;
   workKey:string;
-  queue: Frame[];
+  queue: {frames:Frame[];context:DeliveryContext|null}[];
+  answerChangesAt:number|null;
   bytes: number;
   /** The request held until events come. */
   waiting: ((frames: Frame[]) => void) | null;
@@ -118,7 +121,8 @@ type Lease = {
   stopExpiry: () => void;
   tomb: ByeReason | null;
 };
-type PollContext = {reader:Pick<Reader,'user'|'secret'|'board'>;financialKey:string;workKey:string;revision:number;authority:string;projects:string[]};
+type DeliveryContext = {financialKey:string;workKey:string;colors:ProjectColorEnvelope;changesAt:number|null};
+type PollContext = DeliveryContext&{reader:Pick<Reader,'user'|'secret'|'board'>};
 
 /** The path of the page's entry script in the built client, as `index.html` loads it; null without a build. */
 export function clientScript(root = config.clientRoot): string | null {
@@ -518,9 +522,10 @@ export class Events implements Touches {
           ...(devices.get(sub.user) && !deviceFramesByUser.get(sub.user)?.length ? [frame('devices',{})] : []), ...(privateContacts.length ? [frame('deviceContacts',{devices:privateContacts})] : []), ...historyFrames, ...news];
         if (sub.fresh) continue;
         if(!frames.length&&!sub.desktop)continue;
+        let context=watched.context??undefined;
         try {
           const replacement=this.financialSnapshot(sub,financialKey,sub.workKey);
-          if(replacement)frames=this.snapshotFrames(replacement.snapshot,sub.board,sub.desktop);
+          if(replacement){frames=this.snapshotFrames(replacement.snapshot,sub.board,sub.desktop);context=replacement.context;}
           sub.workKey=this.projection.workKey(sub.board,undefined,this.clock.now());
         }catch(error){trouble(error);this.end(sub,'restart');continue;}
         frames=this.colorDelivery(frames,!!sub.desktop,sub.board);
@@ -530,7 +535,7 @@ export class Events implements Touches {
           frames.push(...attention.after);
         }
         if (!frames.length) continue;
-        sub.send(frames);
+        sub.send(frames,context);
         if ((sub.backlog?.() ?? 0) > this.options.bufferBytes) this.end(sub, 'limit');
       }
     }
@@ -638,6 +643,10 @@ export class Events implements Touches {
       frames.push(frame('board',{projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority}));
       frames.push({type:'projectColors',data:colorChange});
     }
+    // Reuse the confirmed envelope: repeated session deltas do not retain another map.
+    const financialKey=JSON.stringify(lineup.filter(source=>source.provider==='codex').map(source=>[source.id,source.budget])),previous=watched.context;
+    const context={financialKey:previous?.financialKey===financialKey?previous.financialKey:financialKey,workKey:work,colors:base.get('projectColors')!.value as ProjectColorEnvelope,changesAt:roster.changesAt};
+    watched.context=previous&&previous.financialKey===context.financialKey&&previous.workKey===context.workKey&&previous.colors===context.colors&&previous.changesAt===context.changesAt?previous:context;
     this.arm(watched, now);
     return frames;
   }
@@ -793,7 +802,7 @@ export class Events implements Touches {
     return {frames: opened.frames, close: () => this.unsubscribe(opened.sub)};
   }
 
-  private subscribe(reader: Reader): {sub: Subscriber; frames: Frame[]} | null | 'limit' {
+  private subscribe(reader: Reader): {sub: Subscriber; frames: Frame[];context:DeliveryContext} | null | 'limit' {
     const evicted = this.room(reader);
     if (evicted === 'refuse') return 'limit';
     if (evicted) this.end(evicted, 'limit');
@@ -808,6 +817,7 @@ export class Events implements Touches {
         lineup: [],
         changes: new Map(),
         work: null,
+        context:null,
         deadline: null,
         stopRecheck: this.every(this.options.recheckMs, () => this.touchBoards([id])),
       };
@@ -825,6 +835,7 @@ export class Events implements Touches {
     this.dirtyHub = true;
     const now = this.clock.now();
     let snapshot;
+    let context:DeliveryContext;
     try {
       const failed = this.flush();
       // The snapshot would miss a part: the reader is refused, as for a board that failed.
@@ -834,6 +845,8 @@ export class Events implements Touches {
         return null;
       }
       if(watched.work===null)throw new Error('the board work context was not computed');
+      if(watched.context===null)throw new Error('the board delivery context was not computed');
+      context=watched.context;
       const value = (key: string) => watched.base.get(key)?.value;
       this.connections.set(reader.user, this.parts.directory.connectionsRevision(reader.user));
       snapshot = {
@@ -858,7 +871,7 @@ export class Events implements Touches {
         resets: this.hub?.value,
       };
       const replacement=this.financialSnapshot(sub,financialKey,sub.workKey);
-      if(replacement)snapshot=replacement.snapshot;
+      if(replacement){snapshot=replacement.snapshot;context=replacement.context;}
       sub.workKey=this.projection.workKey(sub.board,undefined,this.clock.now());
     } catch (error) {
       // Refused with an error, and nothing of it is left behind.
@@ -873,7 +886,7 @@ export class Events implements Touches {
       const attention = this.attentionFrames(sub, true, now);
       frames.push(...attention.before, ...attention.after);
     }
-    return {sub, frames};
+    return {sub, frames,context};
   }
 
   /** Whether a new reader fits: the oldest to let go for it where it hits a limit, or 'refuse'. */
@@ -978,12 +991,12 @@ export class Events implements Touches {
       return result;
     }
 
-    const lease: Lease = {...reader, id: randomBytes(16).toString('base64url'), subscriber: null, financialKey:this.parts.store.financialKey(reader.board),workKey:this.projection.workKey(reader.board,undefined,this.clock.now()), queue: [], bytes: 0, waiting: null, stopExpiry: () => {}, tomb: null};
+    const lease: Lease = {...reader, id: randomBytes(16).toString('base64url'), subscriber: null, financialKey:this.parts.store.financialKey(reader.board),workKey:this.projection.workKey(reader.board,undefined,this.clock.now()), queue: [],answerChangesAt:null, bytes: 0, waiting: null, stopExpiry: () => {}, tomb: null};
     const opened = this.subscribe({
       ...reader,
       kind: 'lease',
-      send: frames => {
-        lease.queue.push(...frames);
+      send: (frames,context) => {
+        lease.queue.push({frames,context:context??null});
         lease.bytes += Math.max(Buffer.byteLength(sse(frames)),Buffer.byteLength(polled(frames)));
         // Too far behind: dropped, and the next request starts over with a snapshot.
         if (lease.bytes > this.options.bufferBytes) {
@@ -1007,13 +1020,13 @@ export class Events implements Touches {
     lease.subscriber = opened.sub;
     this.leases.set(lease.id, lease);
     lease.stopExpiry = this.later(this.options.leaseMs, () => this.expire(lease));
-    return this.pollAnswer(lease,opened.frames);
+    return this.pollAnswer(lease,opened.frames,opened.context);
   }
 
-  private pollAnswer(reader:Pick<Lease,'id'|'user'|'secret'|'board'>,frames:Frame[]):PollAnswer {
+  private pollAnswer(reader:Pick<Lease,'id'|'user'|'secret'|'board'|'answerChangesAt'>,frames:Frame[],producer?:DeliveryContext):PollAnswer {
     const answer={lease:reader.id,now:this.clock.now(),frames};
-    const colors=this.projectColors.context(reader.board,undefined,answer.now).envelope;
-    this.pollContexts.set(answer,{reader:{user:reader.user,secret:reader.secret,board:reader.board},financialKey:this.parts.store.financialKey(reader.board),workKey:this.projection.workKey(reader.board,undefined,answer.now),revision:colors.revision,authority:colors.authority,projects:colors.pins.map(([name])=>name)});
+    const context=producer??{financialKey:this.parts.store.financialKey(reader.board),workKey:this.projection.workKey(reader.board,undefined,answer.now),colors:this.projectColors.context(reader.board,undefined,answer.now).envelope,changesAt:reader.answerChangesAt};
+    this.pollContexts.set(answer,{...context,reader:{user:reader.user,secret:reader.secret,board:reader.board}});
     return answer;
   }
 
@@ -1024,17 +1037,16 @@ export class Events implements Touches {
     if(reason){if(lease)this.expire(lease);return {...answer,now,frames:[bye(reason)]};}
     const financialKey=this.parts.store.financialKey(captured.reader.board),workKey=this.projection.workKey(captured.reader.board,undefined,now);
     const context=this.projectColors.context(captured.reader.board,undefined,now),colors=context.envelope;
-    if(financialKey===captured.financialKey&&workKey===captured.workKey&&colors.revision===captured.revision&&colors.authority===captured.authority)return answer;
-    let frames:Frame[];
-    // Live-only admission may expire without changing the retained work ledger's key.
-    const retired=captured.projects.some(name=>!context.allowed(name));
     const privateWork=answer.frames.some(packet=>packet.type==='snapshot'||packet.type==='sessions'||packet.type==='unattributedSessions');
-    if(financialKey!==captured.financialKey||workKey!==captured.workKey||retired&&privateWork){
-      const snapshot=this.projection.snapshot(captured.reader.user,captured.reader.board,now);
-      if(!snapshot){if(lease)this.expire(lease);return {...answer,now,frames:[bye('gone')]};}
-      frames=[...answer.frames.filter(packet=>packet.type==='hello'),...this.snapshotFrames(snapshot,captured.reader.board)];
+    const expired=privateWork&&captured.changesAt!==null&&now>=captured.changesAt;
+    if(financialKey===captured.financialKey&&workKey===captured.workKey&&colors.revision===captured.colors.revision&&colors.authority===captured.colors.authority&&!expired)return answer;
+    let frames:Frame[];
+    const retired=captured.colors.pins.some(([name])=>!context.allowed(name));
+    if(financialKey!==captured.financialKey||workKey!==captured.workKey||retired&&privateWork||expired){
+      const replacement=this.replacementSnapshot(captured.reader,now);
+      frames=[...answer.frames.filter(packet=>packet.type==='hello'),...this.snapshotFrames(replacement.snapshot,captured.reader.board)];
       // The replacement includes every queued change up to this synchronous projection.
-      if(lease){lease.financialKey=financialKey;lease.workKey=workKey;lease.queue=[];lease.bytes=0;}
+      if(lease){lease.financialKey=financialKey;lease.workKey=workKey;lease.queue=[];lease.bytes=0;lease.answerChangesAt=replacement.context.changesAt;}
     }else{
       frames=this.colorDelivery(answer.frames,false,captured.reader.board);
       if(!frames.some(packet=>packet.type==='projectColors'))frames=[...frames,frame('board',{projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority}),frame('projectColors',colors)];
@@ -1046,14 +1058,22 @@ export class Events implements Touches {
   }
 
   private take(lease: Lease): Frame[] {
-    const frames = lease.queue;
+    const batches=lease.queue,frames=batches.flatMap(batch=>batch.frames),now=this.clock.now();
     lease.queue = [];
     lease.bytes = 0;
     const reason=this.gone(lease);
     if(reason){this.expire(lease);return [bye(reason)];}
     try {
-      const replacement=this.financialSnapshot(lease,lease.financialKey,lease.workKey);
-      if(replacement){lease.financialKey=replacement.key;lease.workKey=replacement.workKey;return this.snapshotFrames(replacement.snapshot,lease.board);}
+      let replacement=this.financialSnapshot(lease,lease.financialKey,lease.workKey);
+      if(!replacement){
+        const context=this.projectColors.context(lease.board,undefined,now),financialKey=this.parts.store.financialKey(lease.board),workKey=this.projection.workKey(lease.board,undefined,now);
+        // Validate the producer baseline before rewriting configuration or signing an HTTP answer.
+        const privateBatches=batches.filter(batch=>batch.frames.some(packet=>packet.type==='snapshot'||packet.type==='sessions'||packet.type==='unattributedSessions'));
+        const retired=privateBatches.some(({context:producer})=>!producer||producer.financialKey!==financialKey||producer.workKey!==workKey||producer.changesAt!==null&&now>=producer.changesAt||producer.colors.pins.some(([name])=>!context.allowed(name)));
+        if(retired)replacement=this.replacementSnapshot(lease,now);
+        else lease.answerChangesAt=earliest(...privateBatches.map(batch=>batch.context?.changesAt??null));
+      }
+      if(replacement){lease.financialKey=replacement.key;lease.workKey=replacement.workKey;lease.answerChangesAt=replacement.context.changesAt;return this.snapshotFrames(replacement.snapshot,lease.board);}
     }catch(error){trouble(error);this.expire(lease);return [bye('restart')];}
     lease.workKey=this.projection.workKey(lease.board,undefined,this.clock.now());
     return this.colorDelivery(frames,false,lease.board).flatMap(packet=>{
@@ -1101,9 +1121,14 @@ export class Events implements Touches {
   private financialSnapshot(reader: Pick<Reader,'user'|'board'>, previous:string,previousWork:string) {
     const key=this.parts.store.financialKey(reader.board),workKey=this.projection.workKey(reader.board,undefined,this.clock.now());
     if(key===previous&&workKey===previousWork)return null;
-    const snapshot=this.projection.snapshot(reader.user,reader.board,this.clock.now());
+    return this.replacementSnapshot(reader);
+  }
+
+  private replacementSnapshot(reader:Pick<Reader,'user'|'board'>,now=this.clock.now()) {
+    const roster=this.projection.roster(reader.board,now),snapshot=this.projection.snapshot(reader.user,reader.board,now,roster);
     if(!snapshot)throw new Error('the board could not be worked out');
-    return {key,workKey,snapshot};
+    const key=this.parts.store.financialKey(reader.board),workKey=this.projection.workKey(reader.board,roster.access,now),colors=this.projectColors.context(reader.board,roster,now).envelope;
+    return {key,workKey,snapshot,context:{financialKey:key,workKey,colors,changesAt:roster.changesAt}};
   }
 
   /** A lease nobody asked on for `leaseMs`, or too far behind: its reader is gone. */

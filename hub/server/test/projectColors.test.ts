@@ -17,6 +17,7 @@ import {Events,sse,type Frame} from '../events.js';
 import {Projection} from '../projection.js';
 import {buildApp} from '../api.js';
 import {KEEP_MS} from '../sessions.js';
+import {filterContext} from '../dataFilters.js';
 
 const M=60_000;
 async function fixture(){
@@ -39,6 +40,8 @@ test('exact names and repeated swatches share one bounded canonical codec',()=>{
   assert.deepEqual(parseProjectColors({version:1,pins:names.map(name=>[name,CATEGORY_COLORS[0]])})?.pins.map(([name])=>name).sort(),names.sort());
   for(const pins of [[['A',CATEGORY_COLORS[0]],['A',CATEGORY_COLORS[1]]],[[null,CATEGORY_COLORS[0]]],[['A','#ffffff']],[['A'.repeat(121),CATEGORY_COLORS[0]]]])assert.equal(parseProjectColors({version:1,pins}),null);
   assert.equal(parseProjectColors({version:1,pins:[],extra:1}),null);
+  assert.ok(parseProjectColors({version:1,pins:[['😀'.repeat(120),CATEGORY_COLORS[0]],['NUL\0control\u0001 ',CATEGORY_COLORS[1]]]}));
+  for(const name of ['B\ud800C','B\udc00C'])assert.equal(parseProjectColors({version:1,pins:[[name,CATEGORY_COLORS[0]]]}),null);
   const pins=Array.from({length:89},(_,i)=>[String.fromCharCode(i+1)+'\u0001'.repeat(119),CATEGORY_COLORS[0]]);
   assert.ok(parseProjectColors({version:1,pins}));
   assert.ok(Buffer.byteLength(JSON.stringify({version:1,pins}))<=PROJECT_COLOR_BYTES);
@@ -383,4 +386,104 @@ test('the combined editor keeps exact rename and merge targets without changing 
   assert.equal(f.store.projectNames(f.owner.id).get('A'),target);assert.equal(f.store.projectNames(f.owner.id).get('B '),target);
   assert.equal((await f.aliases('',{groups:['unused'],name:'  Legacy  '})).statusCode,200);
   assert.equal(f.store.projectNames(f.owner.id).get('unused'),'Legacy');
+});
+
+test('malformed project cursors with multibyte signatures return a public validation error',async t=>{
+  const f=await fixture();t.after(async()=>{await f.app.close();f.store.close();});
+  for(const cursor of ['a.'+'é'.repeat(43),'a.'+'!'.repeat(43),'é.'+'a'.repeat(43)])for(const url of [`/api/boards/${f.board}/project-colors/choices?cursor=`,`/api/projects?board=${f.board}&cursor=`]){
+    const reply=await f.app.inject({url:url+encodeURIComponent(cursor),headers:{cookie:'quotum_session='+f.sessionSecret}});
+    assert.equal(reply.statusCode,400);assert.deepEqual(reply.json(),{error:'invalid_request'});
+  }
+});
+
+test('ill-formed Unicode project names fail before a full resource or its aliases change',async t=>{
+  const f=await fixture();t.after(async()=>{await f.app.close();f.store.close();});f.credit(['A','B�C']);
+  saveProjectColors(f.store.db,f.board,[['A',CATEGORY_COLORS[0]],...Array.from({length:88},(_,i):[string,typeof CATEGORY_COLORS[0]]=>['dormant-'+i,CATEGORY_COLORS[0]])],f.owner.id,at);
+  const before=await f.get(),raw=readProjectColors(f.store.db,f.board);
+  for(const invalid of ['B\ud800C','B\udc00C'])for(const field of ['name','project']){
+    const reply=await f.request('PUT','',{version:1,authority:before.authority,project:'A',[field]:invalid,color:CATEGORY_COLORS[1]},before.revision);
+    assert.equal(reply.statusCode,400);assert.deepEqual(reply.json(),{error:'invalid_request'});
+    assert.deepEqual(readProjectColors(f.store.db,f.board),raw);assert.equal(f.store.projectNames(f.owner.id).size,0);
+  }
+  const name='😀'.repeat(120),valid=await f.request('PUT','',{version:1,authority:before.authority,project:'A',name,color:CATEGORY_COLORS[1]},before.revision);
+  assert.equal(valid.statusCode,200);assert.deepEqual(valid.json().pins,[[name,CATEGORY_COLORS[1]]]);assert.equal(readProjectColors(f.store.db,f.board).pins.length,89);
+});
+
+for(const capacity of [1,89])test(`an exact NUL rename and colour share one pin at ${capacity} assignments`,async t=>{
+  const f=await fixture();t.after(async()=>{await f.app.close();f.store.close();});f.credit(['A']);
+  const pins:[string,typeof CATEGORY_COLORS[0]][]=[['A',CATEGORY_COLORS[0]],...Array.from({length:capacity-1},(_,i):[string,typeof CATEGORY_COLORS[0]]=>['dormant-'+i,CATEGORY_COLORS[0]])];
+  saveProjectColors(f.store.db,f.board,pins,f.owner.id,at);
+  const before=await f.get(),name='B\0C';
+  const reply=await f.request('PUT','',{version:1,authority:before.authority,project:'A',name,color:CATEGORY_COLORS[1]},before.revision);
+  assert.equal(reply.statusCode,200);assert.deepEqual(reply.json().pins,[[name,CATEGORY_COLORS[1]]]);assert.equal(reply.json().revision,before.revision+1);
+  const raw=readProjectColors(f.store.db,f.board);assert.equal(raw.pins.length,capacity);assert.equal(new Map(raw.pins).get(name),CATEGORY_COLORS[1]);assert.ok(!new Map(raw.pins).has('B'));
+  assert.equal(f.store.projectNames(f.owner.id).get('A'),name);
+  assert.deepEqual((await f.request('GET','/choices?query='+encodeURIComponent('\0C'))).json().projects,[name]);
+  const catalogue=(await f.app.inject({url:`/api/projects?board=${f.board}&query=`+encodeURIComponent('\0C'),headers:{cookie:'quotum_session='+f.sessionSecret}})).json();
+  assert.deepEqual(catalogue.projects.map((group:{name:string;reported:string[]})=>[group.name,group.reported]),[[name,['A']]]);
+  assert.deepEqual(f.store.agentWork(at,at+M).map(row=>row.project),[name]);
+  assert.equal((await f.aliases('/restore',{reported:['A']})).statusCode,200);
+  assert.deepEqual((await f.get()).pins,[['A',CATEGORY_COLORS[1]]]);assert.equal(readProjectColors(f.store.db,f.board).pins.length,capacity);
+});
+
+test('reported NUL names retain separate membership through rename and restore',async t=>{
+  const f=await fixture();t.after(async()=>{await f.app.close();f.store.close();});
+  const first='Raw\0A',second='Raw\0B',target='Shown\0C';f.credit([first,second]);
+  await f.pin(first,CATEGORY_COLORS[0]);await f.pin(second,CATEGORY_COLORS[1]);
+  assert.equal((await f.aliases('',{groups:[first],name:target})).statusCode,200);
+  assert.deepEqual((await f.get()).pins,[[second,CATEGORY_COLORS[1]],[target,CATEGORY_COLORS[0]]]);
+  const groups=f.store.projectsOf(f.owner.id,0);assert.deepEqual(groups.map(group=>group.name).sort(),[second,target].sort());
+  assert.deepEqual(groups.find(group=>group.name===target)!.reported,[first]);
+  assert.equal((await f.aliases('/restore',{reported:[first]})).statusCode,200);
+  assert.deepEqual((await f.get()).pins,[[first,CATEGORY_COLORS[0]],[second,CATEGORY_COLORS[1]]]);
+});
+
+test('live-only NUL aliases keep exact admission, choices and colour transfer',async t=>{
+  const f=await fixture();t.after(async()=>{await f.app.close();f.store.close();});const now=Date.now();
+  const token=newSecret('qt_m');f.directory.createToken(token,'fixture',f.owner.id,'fixture',now);
+  const credential=f.hub.ingest.authenticate('Bearer '+token);assert.ok(credential&&credential!=='revoked');
+  const raw='Live\0A',target='Shown\0C';
+  f.hub.ingest.sessions(credential,{version:1,agent:'fixture',machine:{id:'machine-0123456789',name:'Laptop',os:'linux',arch:'x86_64'},sentAt:new Date(now).toISOString(),sessions:[],
+    clientSessions:[{clientId:'opencode',sessionId:'a'.repeat(32),source:null,origin:'terminal',project:raw,startedAt:new Date(now).toISOString(),working:false}]},now);
+  assert.equal((await f.pin(raw,CATEGORY_COLORS[0])).statusCode,200);
+  assert.equal((await f.aliases('',{groups:[raw],name:target})).statusCode,200);
+  assert.deepEqual((await f.get()).pins,[[target,CATEGORY_COLORS[0]]]);
+  assert.deepEqual((await f.request('GET','/choices?query='+encodeURIComponent('\0C'))).json().projects,[target]);
+  const access=f.store.workAccess(f.board,now);
+  assert.deepEqual([...f.hub.ingest.live.projects(access,now,new Set([target]))],[target]);
+  assert.deepEqual(f.hub.ingest.live.board(access,now).unattributedSessions.map(row=>row.project),[target]);
+});
+
+test('project authorities distinguish alias changes beyond a NUL',async t=>{
+  const f=await fixture();t.after(async()=>{await f.app.close();f.store.close();});const raw='Raw\0A';f.credit([raw]);
+  const update=f.store.db.prepare('INSERT INTO project_names VALUES (?,?,?) ON CONFLICT(user_id,reported) DO UPDATE SET name=excluded.name');
+  update.run(f.owner.id,raw,'Shown\0C');const work=f.store.workKey(f.board),filters=filterContext(f.store,f.board,f.hub.ingest).authority;
+  update.run(f.owner.id,raw,'Shown\0D');
+  assert.notEqual(f.store.workKey(f.board),work);assert.notEqual(filterContext(f.store,f.board,f.hub.ingest).authority,filters);
+});
+
+test('the paged catalogue loads only selected own details from five thousand corrections',async t=>{
+  const f=await fixture();t.after(async()=>{await f.app.close();f.store.close();});
+  const add=f.store.db.prepare('INSERT INTO project_names VALUES (?,?,?)');
+  f.directory.transaction(()=>{for(let i=0;i<5000;i++){const key=String(i).padStart(5,'0');add.run(f.owner.id,'raw-'+key,'Shown '+key);}});
+  f.credit(['raw-04998']);
+  const other=f.directory.saveDevice({userId:f.reader.id,machine:{id:'bounded-foreign-machine',name:'Other',os:'linux',arch:'x86_64'},agent:'fixture',tokenId:null},at);f.credit(['A foreign'],other.id);
+  const now=Date.now(),token=newSecret('qt_m');f.directory.createToken(token,'fixture',f.owner.id,'fixture',now);
+  const credential=f.hub.ingest.authenticate('Bearer '+token);assert.ok(credential&&credential!=='revoked');
+  f.hub.ingest.sessions(credential,{version:1,agent:'fixture',machine:{id:'machine-0123456789',name:'Laptop',os:'linux',arch:'x86_64'},sentAt:new Date(now).toISOString(),sessions:[],
+    clientSessions:[{clientId:'opencode',sessionId:'b'.repeat(32),source:null,origin:'terminal',project:'raw-04999',startedAt:new Date(now).toISOString(),working:false}]},now);
+  const original=f.store.projectsOf.bind(f.store),details:{selected:readonly string[]|undefined;count:number}[]=[],originalNames=f.store.projectNames.bind(f.store);let unboundedAliases=0;
+  t.mock.method(f.store,'projectsOf',(...args:Parameters<Store['projectsOf']>)=>{const groups=original(...args);details.push({selected:args[2],count:groups.length});return groups;});
+  t.mock.method(f.store,'projectNames',(...args:Parameters<Store['projectNames']>)=>{const names=originalNames(...args);if(args[1]===undefined)unboundedAliases+=names.size;return names;});
+  const get=(query='')=>f.app.inject({url:`/api/projects?board=${f.board}`+query,headers:{cookie:'quotum_session='+f.sessionSecret}});
+  assert.deepEqual((await get('&query=absent')).json().projects,[]);
+  const first=(await get()).json();assert.equal(first.projects.length,50);assert.ok(first.nextCursor);
+  assert.equal(first.projects[0].name,'A foreign');assert.equal(first.projects[0].canRename,false);
+  const second=(await get('&cursor='+encodeURIComponent(first.nextCursor))).json();assert.equal(second.projects.length,50);assert.equal(second.projects[0].name,'Shown 00049');
+  const retained=(await get('&query='+encodeURIComponent('Shown 04998'))).json().projects[0];
+  assert.deepEqual(retained.reported,['raw-04998']);assert.equal(retained.machines[0].id,f.device.id);assert.equal(retained.lastAt,at+M);
+  const live=(await get('&query='+encodeURIComponent('Shown 04999'))).json().projects[0];assert.equal(live.canRename,true);assert.equal(live.colorAllowed,true);
+  assert.ok(details.every(read=>read.selected!==undefined&&read.selected.length<=50&&read.count<=50),JSON.stringify(details));
+  assert.equal(unboundedAliases,0,'live admission and page details never load every own correction');
+  const plain=await f.app.inject({url:'/api/projects',headers:{cookie:'quotum_session='+f.sessionSecret}});assert.equal(plain.json().projects.length,5000,'the legacy personal catalogue remains complete');
 });

@@ -18,7 +18,12 @@ export function exactOrder(a:string,b:string):number {
   for(let i=0;i<Math.min(left.length,right.length);i++){const difference=left[i].codePointAt(0)!-right[i].codePointAt(0)!;if(difference)return difference;}
   return left.length-right.length;
 }
-export const validProjectName=(value:unknown):value is string=>typeof value==='string'&&value.length>0&&[...value].length<=PROJECT_NAME_CHARS;
+export function validProjectName(value:unknown):value is string {
+  if(typeof value!=='string'||!value.length)return false;
+  const points=[...value];
+  // SQLite stores UTF-8: reject unpaired surrogates rather than changing their identity.
+  return points.length<=PROJECT_NAME_CHARS&&points.every(point=>{const code=point.codePointAt(0)!;return code<0xd800||code>0xdfff;});
+}
 export const validCategoryColor=(value:unknown):value is CategoryColor=>CATEGORY_COLORS.includes(value as CategoryColor);
 const object=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const keys=(value:Record<string,unknown>,allowed:readonly string[])=>Object.keys(value).every(key=>allowed.includes(key));

@@ -89,6 +89,42 @@ for(const pending of ['initial','sessions','configuration'] as const)test(`a liv
   assert.equal(answer.events.some(event=>event.type==='snapshot'),pending!=='configuration');
 });
 
+for(const reader of ['owner','foreign'] as const)for(const encoding of ['identity','gzip'] as const)for(const refreshed of [false,true]){
+  test(`${reader} ${encoding} poll retires producer work expired before take${refreshed?' even after a fresh queued batch':''}`,async t=>{
+    const f=await fixture(t,reader,encoding),first=await f.request(),now=Date.now(),canary='expired-before-take-canary';
+    f.hub.ingest.live.report(f.device.id,f.owner.id,[{clientId:'opencode',sessionId:null,source:null,origin:'terminal',project:canary,folder:null,startedAt:now,sentStartedAt:now,lastWorkedAt:null,working:false,device:{id:f.device.id,name:'Laptop'},accountBy:null,route:null}],now);
+    f.pin(canary);f.events.flush();const work=f.store.workKey(f.board);
+    f.advance(KEEP_MS+1);
+    if(refreshed){f.events.touchBoards([f.board]);f.events.flush();}
+    const {answer,body}=await f.request(first.answer.lease);
+    assert.equal(body.includes(canary),false);assert.equal(f.store.workKey(f.board),work);
+    const snapshot=answer.events.find(event=>event.type==='snapshot')!.data,colors=answer.events.find(event=>event.type==='projectColors')!.data;
+    assert.deepEqual(snapshot.unattributedSessions,[]);assert.deepEqual(colors.pins,[]);
+    assert.equal(snapshot.projectColorsAuthority,colors.authority);assert.equal(snapshot.workAuthority,work);
+    assert.equal(answer.events.some(event=>event.type==='history'),false);
+  });
+}
+
+test('another reader cannot replace the producer provenance by sanitizing metadata before enqueue',async t=>{
+  const f=await fixture(t),now=Date.now();let expire=false;
+  const opened=f.events.open({user:f.user.id,secret:f.secret,board:f.board,kind:'stream',send:()=>{if(expire){expire=false;f.advance(KEEP_MS+1);}},end:()=>{}});
+  assert.ok(opened&&opened!=='limit');
+  const first=await f.request(),canary='expired-during-producer-canary';
+  f.hub.ingest.live.report(f.device.id,f.owner.id,[{clientId:'opencode',sessionId:null,source:null,origin:'terminal',project:canary,folder:null,startedAt:now,sentStartedAt:now,lastWorkedAt:null,working:false,device:{id:f.device.id,name:'Laptop'},accountBy:null,route:null}],now);
+  f.pin(canary);expire=true;f.events.flush();
+  const {body,answer}=await f.request(first.answer.lease);
+  assert.equal(body.includes(canary),false);assert.ok(answer.events.some(event=>event.type==='snapshot'));
+});
+
+test('a producer deadline retires queued live work even without any colour pins',async t=>{
+  const f=await fixture(t),first=await f.request(),now=Date.now(),canary='unpinned-expired-canary';
+  f.hub.ingest.live.report(f.device.id,f.owner.id,[{clientId:'opencode',sessionId:null,source:null,origin:'terminal',project:canary,folder:null,startedAt:now,sentStartedAt:now,lastWorkedAt:null,working:false,device:{id:f.device.id,name:'Laptop'},accountBy:null,route:null}],now);
+  f.events.flush();const before=f.hub.projectColors!.context(f.board).envelope,work=f.store.workKey(f.board);f.advance(KEEP_MS+1);
+  const {answer,body}=await f.request(first.answer.lease),after=f.hub.projectColors!.context(f.board).envelope;
+  assert.equal(body.includes(canary),false);assert.deepEqual(after,before);assert.equal(f.store.workKey(f.board),work);
+  assert.deepEqual(answer.events.find(event=>event.type==='snapshot')!.data.unattributedSessions,[]);
+});
+
 for(const reset of [false,true])test(`a colour-only ${reset?'reset':'save'} keeps a prepared session delta without a new baseline`,async t=>{
   const f=await fixture(t),now=Date.now();
   const report=(folder:string)=>f.hub.ingest.live.report(f.device.id,f.owner.id,[{clientId:'opencode',sessionId:null,source:null,origin:'terminal',project:'still-admitted',folder,startedAt:now,sentStartedAt:now,lastWorkedAt:null,working:false,device:{id:f.device.id,name:'Laptop'},accountBy:null,route:null}],now);

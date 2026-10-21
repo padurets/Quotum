@@ -1464,6 +1464,9 @@ HTTP overview also includes the authorized map. The native background reader omi
 all colour fields and frames to preserve its 320 KiB decoder boundary. The desktop
 window gets ordinary browser presentation. The configuration is its own browser
 metadata slice: colour-only updates neither invalidate evidence nor read history.
+Queued poll batches retain their producing authority and live-session deadline.
+Expired or withdrawn work is replaced before configuration is refreshed or a
+prepared response is delivered.
 
 Secrets (sessions, tokens, codes, invites) are random, prefixed by kind (`qt_s_`,
 `qt_m_`, `qt_d_`, `qt_c_`, `qt_i_`) and stored only as SHA-256 hashes; passwords as
@@ -2066,8 +2069,9 @@ project pins reserve their distinct swatches first, including low-ranked groups 
 repeated choices. A reservation displaces only conflicting automatic groups. Absent
 pins reserve nothing; muted/offscreen registry entries retain their colours, and a
 released slot does not promote surviving neutral groups. Current paint resolves after
-numeric preparation, so an in-flight drawing uses the latest accepted palette across
-interiors, edges, legends and readouts without rebuilding geometry. Resource series
+numeric preparation over both current and still displayed groups, so an in-flight
+drawing uses the latest accepted palette across interiors, edges, legends and
+readouts without rebuilding geometry. Resource series
 keep their card colours. Outside a navigation registry, a new numeric model assigns
 automatic colours by its current rank. Visible
 missing cells are read immediately in contiguous batches of at most eight tiles.

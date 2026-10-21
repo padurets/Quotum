@@ -58,7 +58,7 @@ export function filterContext(store:Store,board:string,ingest?:Ingest,capturedAc
     if(typeof ref!=='string')return false;
     return projectAllowed(ref);
   };
-  const names=store.db.prepare('SELECT n.user_id,n.reported,n.name FROM project_names n WHERE n.user_id IN (SELECT user_id FROM devices WHERE id IN (SELECT value FROM json_each(?))) ORDER BY n.user_id,n.reported').all(devices);
+  const names=store.db.prepare('SELECT n.user_id,CAST(n.reported AS BLOB) AS reported,CAST(n.name AS BLOB) AS name FROM project_names n WHERE n.user_id IN (SELECT user_id FROM devices WHERE id IN (SELECT value FROM json_each(?))) ORDER BY n.user_id,n.reported').iterate(devices);
   const labels=store.db.prepare('SELECT id,COALESCE(label,name) AS name FROM devices WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id').all(devices);
   const raw=store.db.prepare('SELECT payload FROM board_filters WHERE board_id=?').get(board);
   const stored=raw?parseStoredFilters(JSON.parse(String(raw.payload))):null;
@@ -66,8 +66,12 @@ export function filterContext(store:Store,board:string,ingest?:Ingest,capturedAc
   // Ordinary work credits and samples do not change this projection precondition.
   // Availability of saved dormant decisions does: a newly visible rule must not
   // disappear in a replacement based on the earlier projection.
-  const authority=createHash('sha256').update(JSON.stringify([store.db.prepare("SELECT value FROM meta WHERE key='activityHubId'").get()?.value,board,
-    sources.map(source=>[source.id,source.budget,source.holders]),[...access.sources].map(([id,scope])=>[id,scope.since]),[...access.devices],names,labels,explicitProjects.map(ref=>[ref,allowed('projects',ref)])])).digest('base64url');
+  const hash=createHash('sha256').update(JSON.stringify([store.db.prepare("SELECT value FROM meta WHERE key='activityHubId'").get()?.value,board,
+    sources.map(source=>[source.id,source.budget,source.holders]),[...access.sources].map(([id,scope])=>[id,scope.since]),[...access.devices]]).slice(0,-1));
+  // Stream exact aliases so a catalogue page never materializes every correction.
+  hash.update(',[');let first=true;
+  for(const row of names){row.reported=Buffer.from(row.reported as Uint8Array).toString();row.name=Buffer.from(row.name as Uint8Array).toString();if(!first)hash.update(',');hash.update(JSON.stringify(row));first=false;}
+  const authority=hash.update('],').update(JSON.stringify([labels,explicitProjects.map(ref=>[ref,allowed('projects',ref)])]).slice(1)).digest('base64url');
   const automatic=(ref:MoneyRef)=>ref.kind==='balance'||store.state(ref.source).keys?.slice(0,5).some(key=>key.id===ref.key)===true;
   return {allowed,authority,automatic};
 }

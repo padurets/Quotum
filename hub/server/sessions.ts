@@ -214,21 +214,22 @@ export class Sessions {
   projects(access:WorkAccess,now:number,wanted?:ReadonlySet<string|null>,reserve:(bytes:number)=>void=()=>{},release:(bytes:number)=>void=()=>{}) {
     reserve(128);
     const projects=new Set<string|null>();
-    const corrected=wanted?this.store.db.prepare('SELECT name FROM project_names WHERE user_id=? AND reported=?'):null;
+    const corrected=wanted?this.store.db.prepare('SELECT CAST(name AS BLOB) AS name FROM project_names WHERE user_id=? AND reported=?'):null;
     for(const [id,machine] of this.machines){
       if(!admitted(access,id,machine.user)||now-machine.at>KEEP_MS)continue;
       if(wanted){
         for(const session of machine.sessions){
           reserve(1024);
           try{
-            const project=session.project===null?null:String(corrected!.get(machine.user,session.project)?.name??session.project);
+            const alias=session.project===null?undefined:corrected!.get(machine.user,session.project)?.name;
+            const project=alias===undefined?session.project:Buffer.from(alias as Uint8Array).toString();
             if(wanted.has(project)&&!projects.has(project)){reserve(128+(project?.length??0)*2);projects.add(project);}
           }finally{release(1024);}
           if(projects.size===wanted.size)return projects;
         }
         continue;
       }
-      const names=this.store.projectNames(machine.user);
+      const names=this.store.projectNames(machine.user,{reported:machine.sessions.flatMap(session=>session.project===null?[]:[session.project])});
       for(const session of machine.sessions)projects.add(session.project===null?null:names.get(session.project)??session.project);
     }
     return projects;
@@ -245,12 +246,12 @@ export class Sessions {
   /** Bounded sorted choices need neither interval reads nor funding resolution. */
   projectChoices(access:WorkAccess,now:number,query:string,after:string|null,limit:number):string[] {
     const found:string[]=[];
-    const corrected=this.store.db.prepare('SELECT name FROM project_names WHERE user_id=? AND reported=?');
     for(const [id,machine] of this.machines){
       if(!admitted(access,id,machine.user)||now-machine.at>KEEP_MS)continue;
+      const names=this.store.projectNames(machine.user,{reported:machine.sessions.flatMap(session=>session.project===null?[]:[session.project])});
       for(const session of machine.sessions){
         if(session.project===null)continue;
-        const name=String(corrected.get(machine.user,session.project)?.name??session.project);
+        const name=names.get(session.project)??session.project;
         if(!name.includes(query)||after!==null&&Buffer.compare(Buffer.from(name),Buffer.from(after))<=0||found.includes(name))continue;
         const index=found.findIndex(old=>Buffer.compare(Buffer.from(name),Buffer.from(old))<0);
         if(index<0){if(found.length<limit)found.push(name);}else {found.splice(index,0,name);if(found.length>limit)found.pop();}

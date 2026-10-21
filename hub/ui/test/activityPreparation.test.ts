@@ -98,6 +98,69 @@ test('ordinary Activity frames allocate unpinned colours by current rank while m
   assert.equal(render().identities.find(group=>group.name==='P2')!.color,CATEGORY_COLORS[0],'pending numeric preparation resolves the latest pins when it commits');
 });
 
+test('actual Activity composition resolves retained stacks and the new legend together while replacement prepares', () => {
+  const parent=preparationFixture(),child=preparationFixture(),length=24*3_600_000;
+  let groupPreparations=0,stackPreparations=0,draws=0;
+  class CountedPaths extends StackPaths {override *drawPrepared(...args:Parameters<StackPaths['drawPrepared']>){draws++;return yield*super.drawPrepared(...args);}}
+  const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
+  const start=source.indexOf('  const prepared = usePrepared('),region=source.slice(start,source.indexOf('  const currentGroups=',start));
+  const elementStart=source.indexOf('<Stacks\n'),element=source.slice(elementStart,source.indexOf('/>',elementStart)+2);
+  const legendStart=source.indexOf('<div className="legend">'),legend=source.slice(legendStart,source.indexOf('</div>',legendStart)+6);
+  const axis={box:{current:null},svg:{current:null},width:400,scale:1,hover:null,drag:null,clip:'c',handlers:{},basis:{from:0,to:length,end:length},active:false,screenX:(at:number)=>at,commitDrawing:()=>{}};
+  type Row={group:ActivityGroup;color:string;name:string};
+  type Frame={element:React.ReactElement<Record<string,unknown>>;legend:React.ReactNode;prepared:{value:unknown}};
+  const context={...parent,React,memo:(fn:unknown)=>fn,useEffect:()=>{},useId:()=> 'c',seriesFocusStyle:()=>({}),mutedKey:(_by:string,key:string)=>key,
+    StackPaths:CountedPaths,stacksHeight:()=>160,activityScale,niceTicks,cellStart,navigationKey,MINUTE:60_000,CSS:{escape:(id:string)=>id},pan:{active:()=>null,subscribe:()=>()=>{}},
+    useLocale:()=> 'en',useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),PlotLayer:()=>null,PlotOverlay:()=>null,
+    clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',t:(key:string)=>key,LegendItem:()=>null,groupName:(group:{name:string|null})=>group.name??'',groupMuted:()=>false,
+    EMPTY_CELLS:[],registry:{current:null},groups:[] as ActivityGroup[],colors:[] as string[],shown:[] as Row[],strip:null,by:'project',prefs:{muted:{}},locale:'en',
+    history:{board:'b'},authority:1,arrange:{view:{}},titles:{},drawing:{range:'24h',since:0},pins:[['A',CATEGORY_COLORS[8]]] as ProjectColorPins,colorsReady:true,resolveProjectColors,groupRegistry,
+    activity:{barMs:60_000,by:{project:[] as ActivityGroup[]},cells:[]},drawnActivity:{barMs:60_000,by:{project:[] as ActivityGroup[]},cells:[]},currentGroups:[] as ActivityGroup[],
+    subset:{},scoped:false,EMPTY_ACTIVITY:{},emptyFrame:null,panning:null,answered:true,error:undefined,from:0,to:length,since:null,onBase:()=>{},setTimeRange:()=>{},plot:undefined,navigation:{context:'b',range:'24h'},
+    render:null as unknown as ()=>Frame,Stacks:null as unknown as (props:object)=>React.ReactNode,
+  };
+  runInNewContext(ts.transpileModule(`function render(){${region}\nreturn {element:(${element}),legend:(${legend}),prepared};}\nglobalThis.render=render;\n${source.slice(source.indexOf('const Stacks = memo(function Stacks('))}\nglobalThis.Stacks=Stacks;`,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React}}).outputText,context);
+  const frame=(names:string[])=>{
+    context.groups=names.map(name=>({key:JSON.stringify(name),name,cells:Array.from({length:480},(_,i):[number,number]=>[i*60_000,60_000]),agentMs:60_000,activeMs:60_000,agents:1}));
+    context.colors=groupColors(context.groups,'project',{} as Parameters<typeof groupColors>[2],()=> '');
+    context.shown=context.groups.map((group,i)=>({group,color:context.colors[i],name:group.name!}));
+    context.activity=context.drawnActivity={barMs:60_000,by:{project:context.groups},cells:[]};context.currentGroups=context.groups;
+  };
+  const nodes=(node:React.ReactNode):React.ReactElement<Record<string,unknown>>[]=>Array.isArray(node)?node.flatMap(nodes):React.isValidElement<Record<string,unknown>>(node)?[node,...nodes(node.props.children as React.ReactNode)]:[];
+  const render=()=>{
+    let current!:Frame,paths!:React.ReactElement<Record<string,unknown>>[];
+    // React flushes a parent's state from a child's layout effect before painting.
+    for(let i=0;i<2;i++){
+      Object.assign(context,parent,{usePrepared:(work:()=>Generator<void,unknown,void>,deps:readonly unknown[],scope:unknown,enabled:boolean)=>parent.usePrepared(()=>{groupPreparations++;return work();},deps,scope,enabled)});
+      parent.begin();current=context.render();parent.commit();
+      Object.assign(context,child,{usePrepared:(work:()=>Generator<void,unknown,void>,deps:readonly unknown[],scope:unknown,enabled:boolean)=>child.usePrepared(()=>{stackPreparations++;return work();},deps,scope,enabled)});
+      child.begin();paths=nodes(context.Stacks(current.element.props)).filter(node=>node.props.className==='activity-stack');child.commit();
+    }
+    return {current,paths,legend:nodes(current.legend).filter(node=>node.type===context.LegendItem)};
+  };
+  const settle=()=>{for(let i=0;i<4;i++){render();parent.finish();child.finish();}return render();};
+  const fills=(value:ReturnType<typeof render>,name:string)=>value.paths.filter(node=>node.key===JSON.stringify(name)).map(node=>node.props.fill);
+  const legendColor=(value:ReturnType<typeof render>,name:string)=>value.legend.find(node=>node.props.name===name)?.props.color;
+  frame(['A','B']);const initial=settle();
+  assert.deepEqual(fills(initial,'A'),[CATEGORY_COLORS[8],CATEGORY_COLORS[8]]);
+  frame(['B']);render();parent.finish();const pending=render();child.tick();
+  const geometry=initial.paths.filter(node=>node.props.d!==undefined).map(node=>node.props.d);
+  assert.deepEqual(pending.paths.filter(node=>node.props.d!==undefined).map(node=>node.props.d),geometry);
+  assert.deepEqual(fills(pending,'A'),[CATEGORY_COLORS[8],CATEGORY_COLORS[8]],'removed parent membership must not revive a raw automatic colour on retained interior or edge paths');
+  const before={groups:groupPreparations,stacks:stackPreparations,draws,model:pending.current.prepared.value,jobs:child.scheduler.size};
+  context.pins=[['A',CATEGORY_COLORS[0]]];const repainted=render();
+  assert.deepEqual(fills(repainted,'A'),[CATEGORY_COLORS[0],CATEGORY_COLORS[0]],'retained membership uses the latest pin');
+  assert.deepEqual(fills(repainted,'B'),[CATEGORY_COLORS[1],CATEGORY_COLORS[1]],'the retained manual reservation displaces its conflicting automatic neighbour');
+  assert.equal(legendColor(repainted,'B'),CATEGORY_COLORS[1],'the new legend and both retained plot layers share one resolution');
+  assert.equal(repainted.current.prepared.value,before.model);assert.equal(groupPreparations,before.groups);assert.equal(stackPreparations,before.stacks);assert.equal(draws,before.draws);assert.equal(child.scheduler.size,before.jobs);
+  child.finish();const replacement=render();
+  assert.deepEqual(fills(replacement,'A'),[]);assert.deepEqual(fills(replacement,'B'),[CATEGORY_COLORS[0],CATEGORY_COLORS[0]]);
+  assert.equal(legendColor(replacement,'B'),CATEGORY_COLORS[0],'a committed replacement releases the absent reservation');
+
+  context.pins=[];frame(['A','B']);settle();frame(['B']);render();parent.finish();render();child.finish();
+  const unpinned=render();assert.deepEqual(fills(unpinned,'B'),[CATEGORY_COLORS[0],CATEGORY_COLORS[0]]);assert.equal(legendColor(unpinned,'B'),CATEGORY_COLORS[0],'ordinary unpinned replacement still allocates by current rank');
+});
+
 test('actual Activity generators hold one coherent model and produce exact stacks after interrupted preparation', () => {
   const H = 3_600_000, length = 30 * 24 * H, barMs = 2 * H;
   const buffer = (start: number): PlotBuffer => {

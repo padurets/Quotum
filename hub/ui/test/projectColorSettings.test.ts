@@ -109,6 +109,37 @@ test('the combined project writer preserves an exact ending-space target',async(
   f.requests[1].resolve(initial);await flush();await f.resolveListing([{...project,name:'B '}]);await save;
 });
 
+test('a save completing after reconnect leaves the new listing request and baseline intact',async()=>{
+  const f=fixture();f.render();await f.resolveListing();
+  const save=f.render().find(node=>node.type===f.editor)!.props.save('B',null);
+  f.page.dispatch({type:'hub',event:{type:'hello',data:{epoch:'reconnected'}}});
+  f.page.dispatch({type:'hub',event:{type:'snapshot',data:snapshot}});
+  f.page.dispatch({type:'hub',event:{type:'projectColors',data:initial}});
+  f.render();f.render();const current=f.requests[2];
+  f.requests[1].resolve({...initial,revision:1});await flush();
+  assert.equal(current.signal.aborted,false);
+  assert.equal(f.requests.length,3,'a retired write must not start a stale listing');
+  await save;
+  await f.resolveListing([{...project,name:'Z'}]);
+  assert.deepEqual(f.render().filter(node=>node.type===f.editor).map(node=>node.props.project.name),['Z']);
+  assert.equal(f.page.get().board!.projectColors!.revision,0);
+});
+
+test('a late save refreshes the current search rather than restoring its captured query',async()=>{
+  const f=fixture();f.render();await f.resolveListing();
+  const save=f.render().find(node=>node.type===f.editor)!.props.save('B',null);
+  f.render().find(node=>node.type==='input'&&node.props['aria-label']==='projectColors.search')!.props.onChange({target:{value:'Z'}});
+  f.render().find(node=>node.type==='form'&&node.props.className==='project-search')!.props.onSubmit({preventDefault(){}});
+  f.render();f.render();
+  f.requests[1].resolve({...initial,revision:1});await flush();
+  const refresh=f.requests.at(-1)!;
+  assert.equal(new URL(refresh.url,'http://hub').searchParams.get('query'),'Z');
+  await f.resolveListing([{...project,name:'Z'}]);await save;
+  const tree=f.render();
+  assert.equal(tree.find(node=>node.type==='input'&&node.props['aria-label']==='projectColors.search')!.props.value,'Z');
+  assert.deepEqual(tree.filter(node=>node.type===f.editor).map(node=>node.props.project.name),['Z']);
+});
+
 test('an existing whitespace-only name permits a colour-only save',async()=>{
   for(const name of [' ','\n']){
     const f=fixture('Projects','ProjectEditor'),calls:any[]=[];

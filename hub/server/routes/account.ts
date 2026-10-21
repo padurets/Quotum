@@ -492,14 +492,15 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     const user = guards.user(request, reply);
     if (!user) return reply;
     const keptDays = config.retention.sampleDays;
-    const own=store.projectsOf(user.id,Date.now()-keptDays*86_400_000);
-    if(!request.query.board)return {keptDays,projects:own};
+    const since=Date.now()-keptDays*86_400_000;
+    if(!request.query.board)return {keptDays,projects:store.projectsOf(user.id,since)};
     const access=guards.board(request,reply,request.query.board);if(!access)return reply;
     const {query='',cursor}=request.query;
     if(typeof query!=='string'||[...query].length>120||cursor!==undefined&&(typeof cursor!=='string'||cursor.length>3000))return reply.code(400).send({error:'invalid_request'});
     const colors=projectColorsOf(hub),context=colors.context(access.board.id);
     try{
-      const result=colors.choices(access.board.id,query,cursor,Date.now(),{user:user.id,names:own.flatMap(group=>group.name===null?[]:[group.name])});
+      const result=colors.choices(access.board.id,query,cursor,Date.now(),{user:user.id,since});
+      const own=result.changed?[]:store.projectsOf(user.id,since,result.projects);
       projectReads.set(request,{user:user.id,board:access.board.id,authority:result.changed?result.envelope.authority:result.authority,rows:result.changed?null:result.projects.map(name=>({name,own:own.some(group=>group.name===name)}))});
       if(result.changed)return reply.code(409).send({error:'project_colors_context_changed',...result.envelope});
       return {keptDays,authority:result.authority,nextCursor:result.nextCursor,projects:result.projects.map(name=>{

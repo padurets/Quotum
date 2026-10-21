@@ -24,12 +24,12 @@ export class ProjectColors {
     return {access,allowed,raw,envelope};
   }
 
-  choices(board:string,query:string,cursor?:string,now=Date.now(),personal?:{user:string;names:string[]}) {
+  choices(board:string,query:string,cursor?:string,now=Date.now(),personal?:{user:string;since:number}) {
     const context=this.context(board,undefined,now),authority=context.envelope.authority;
     let after:string|null=null;
     if(cursor){
       const [payload,signature,...extra]=cursor.split('.');
-      if(extra.length||!payload||!signature||payload.length>2048)throw new Error('invalid_cursor');
+      if(extra.length||!payload||!signature||payload.length>2048||!/^[A-Za-z0-9_-]+$/.test(payload)||!/^[A-Za-z0-9_-]{43}$/.test(signature))throw new Error('invalid_cursor');
       const expected=this.mac(['quotum/project-colors/cursor/v1',payload]);
       if(signature.length!==expected.length||!timingSafeEqual(Buffer.from(signature),Buffer.from(expected)))throw new Error('invalid_cursor');
       let parsed:unknown;try{parsed=JSON.parse(Buffer.from(payload,'base64url').toString());}catch{throw new Error('invalid_cursor');}
@@ -38,14 +38,15 @@ export class ProjectColors {
       after=parsed[3];
     }
     const devices=JSON.stringify(Object.fromEntries([...context.access.devices].map(([id,scope])=>[id,scope.from])));
-    const retained=this.store.db.prepare(`SELECT DISTINCT COALESCE(n.name,NULLIF(s.project,'')) AS project_name
+    const retained=this.store.db.prepare(`WITH projects AS (SELECT DISTINCT COALESCE(n.name,NULLIF(s.project,'')) AS project_name
       FROM agent_sessions s JOIN devices d ON d.id=s.device_id JOIN json_each(?) j ON j.key=s.device_id
       LEFT JOIN project_names n ON n.user_id=d.user_id AND n.reported=s.project
+      WHERE EXISTS(SELECT 1 FROM agent_work w WHERE w.session_id=s.id AND w.to_at>CAST(j.value AS INTEGER)))
+      SELECT CAST(project_name AS BLOB) AS project_bytes FROM projects
       WHERE project_name IS NOT NULL AND instr(project_name,?)>0 AND (? IS NULL OR project_name COLLATE BINARY>?)
-      AND EXISTS(SELECT 1 FROM agent_work w WHERE w.session_id=s.id AND w.to_at>CAST(j.value AS INTEGER))
-      ORDER BY project_name COLLATE BINARY LIMIT 51`).all(devices,query,after,after).map(row=>String(row.project_name));
+      ORDER BY project_name COLLATE BINARY LIMIT 51`).all(devices,query,after,after).map(row=>Buffer.from(row.project_bytes as Uint8Array).toString());
     const live=this.ingest.live.projectChoices(context.access,now,query,after,51);
-    const own=personal?.names.filter(name=>name.includes(query)&&(after===null||Buffer.compare(Buffer.from(name),Buffer.from(after))>0))??[];
+    const own=personal?this.store.projectChoices(personal.user,personal.since,query,after,51):[];
     const names=[...new Set([...retained,...live,...own])].sort((a,b)=>Buffer.compare(Buffer.from(a),Buffer.from(b)));
     const projects=names.slice(0,50),last=projects.at(-1);
     const payload=last&&names.length>50?Buffer.from(JSON.stringify([board,query,authority,last,...(personal?[personal.user]:[])])).toString('base64url'):null;

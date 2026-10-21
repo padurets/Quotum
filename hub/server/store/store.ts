@@ -232,7 +232,7 @@ export class Store {
     reserve?.(scratch);
     try{
     const ids=[...access.devices.keys()];
-    const names=this.db.prepare('SELECT user_id,reported,name FROM project_names n WHERE n.user_id IN (SELECT value FROM json_each(?)) AND EXISTS(SELECT 1 FROM devices d WHERE d.id IN (SELECT value FROM json_each(?)) AND d.user_id=n.user_id AND EXISTS(SELECT 1 FROM agent_sessions s WHERE s.device_id=d.id AND s.project=n.reported)) ORDER BY user_id,reported').iterate(JSON.stringify([...new Set([...access.devices.values()].map(device=>device.owner))]),JSON.stringify(ids));
+    const names=this.db.prepare('SELECT user_id,CAST(reported AS BLOB) AS reported,CAST(name AS BLOB) AS name FROM project_names n WHERE n.user_id IN (SELECT value FROM json_each(?)) AND EXISTS(SELECT 1 FROM devices d WHERE d.id IN (SELECT value FROM json_each(?)) AND d.user_id=n.user_id AND EXISTS(SELECT 1 FROM agent_sessions s WHERE s.device_id=d.id AND s.project=n.reported)) ORDER BY user_id,n.reported').iterate(JSON.stringify([...new Set([...access.devices.values()].map(device=>device.owner))]),JSON.stringify(ids));
     const devices=this.db.prepare('SELECT id,COALESCE(label,name) AS name FROM devices WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id').iterate(JSON.stringify(ids));
     const coverage=[...access.sources].filter(([id,s])=>s.holders.size>0&&supportsQuota(providerOf(id.split(':')[0]))).map(([id,s])=>[id,s.since,[...s.holders].sort()]);
     const hash=createHash('sha256').update(JSON.stringify([access.knownFrom,[...access.devices],access.fundingRevision??'',access.attributionRevision??'',coverage]).slice(0,-1));
@@ -241,6 +241,7 @@ export class Store {
     for(const rows of [names,devices]){
       hash.update(',[');let first=true;
       for(const row of rows){
+        if(rows===names){row.reported=Buffer.from(row.reported as Uint8Array).toString();row.name=Buffer.from(row.name as Uint8Array).toString();}
         const bytes=512+Object.values(row).reduce<number>((sum,value)=>sum+(typeof value==='string'?value.length*24:32),0);
         reserve?.(bytes);
         try{if(!first)hash.update(',');hash.update(JSON.stringify(row));first=false;}
@@ -1032,7 +1033,8 @@ export class Store {
     }
     // A bulk native result can exceed the read ceiling before admission.
     const sessions:({id: number; clientId: string; accountBy: SessionEvidence['accountBy']; class: SessionRoute['class']; by: SessionRoute['by'] | null; host: string | null; provider: string | null;client:string;producer_id:string|null;raw_project:string;raw_folder:string;device_name:string} & Omit<Stretch, 'session' | 'from' | 'to'>)[]=[];
-    for(const row of this.db.prepare("SELECT s.id,s.client AS clientId,s.source_id AS source,s.device_id AS device,d.user_id AS user,s.origin,COALESCE(n.name,NULLIF(s.project,'')) AS project,NULLIF(s.folder,'') AS folder,s.started_at AS startedAt,s.account_by AS accountBy,s.route_class AS class,s.route_by AS by,s.route_host AS host,s.route_provider AS provider,s.client,s.producer_id,s.project AS raw_project,s.folder AS raw_folder,COALESCE(d.label,d.name) AS device_name FROM agent_sessions s JOIN devices d ON d.id=s.device_id LEFT JOIN project_names n ON n.user_id=d.user_id AND n.reported=s.project WHERE s.id IN (SELECT value FROM json_each(?))").iterate(JSON.stringify([...bounds.keys()]))) {
+    for(const row of this.db.prepare("SELECT s.id,s.client AS clientId,s.source_id AS source,s.device_id AS device,d.user_id AS user,s.origin,CAST(COALESCE(n.name,NULLIF(s.project,'')) AS BLOB) AS project,NULLIF(s.folder,'') AS folder,s.started_at AS startedAt,s.account_by AS accountBy,s.route_class AS class,s.route_by AS by,s.route_host AS host,s.route_provider AS provider,s.client,s.producer_id,CAST(s.project AS BLOB) AS raw_project,s.folder AS raw_folder,COALESCE(d.label,d.name) AS device_name FROM agent_sessions s JOIN devices d ON d.id=s.device_id LEFT JOIN project_names n ON n.user_id=d.user_id AND n.reported=s.project WHERE s.id IN (SELECT value FROM json_each(?))").iterate(JSON.stringify([...bounds.keys()]))) {
+      row.project=row.project===null?null:Buffer.from(row.project as Uint8Array).toString();row.raw_project=Buffer.from(row.raw_project as Uint8Array).toString();
       const session=row as unknown as typeof sessions[number];
       reserve?.(768+2*((session.project?.length??0)+(session.folder?.length??0)+session.client.length+(session.source?.length??0)+(session.producer_id?.length??0)+session.raw_project.length+session.raw_folder.length+session.device_name.length));sessions.push(session);
     }
@@ -1075,16 +1077,30 @@ export class Store {
   }
 
   /** The projects a person's machines worked on since `since`, under the names the person gave them. */
-  projectsOf(user: string, since: number): ProjectGroup[] {
+  projectsOf(user: string, since: number,selected?:readonly string[]): ProjectGroup[] {
+    if(selected&&!selected.length)return [];
     const rows = this.db
       .prepare(
-        'SELECT s.project, d.id, COALESCE(d.label, d.name) AS name, max(w.to_at) AS last' +
+        'SELECT CAST(s.project AS BLOB) AS project, d.id, COALESCE(d.label, d.name) AS name, max(w.to_at) AS last' +
           ' FROM devices d JOIN agent_sessions s ON s.device_id = d.id JOIN agent_work w ON w.session_id = s.id' +
-          ' WHERE d.user_id = ? AND w.to_at > ? GROUP BY s.project, d.id',
+          (selected?' LEFT JOIN project_names n ON n.user_id=d.user_id AND n.reported=s.project':'')+
+          ' WHERE d.user_id = ? AND w.to_at > ?'+(selected?" AND COALESCE(n.name,NULLIF(s.project,'')) IN (SELECT value FROM json_each(?))":'')+' GROUP BY s.project, d.id',
       )
-      .all(user, since) as {project: string; id: string; name: string; last: number}[];
-    const work = rows.map(r => ({reported: r.project, machine: {id: r.id, name: r.name}, lastAt: r.last}));
-    return projectGroups(work, this.projectNames(user));
+      .all(user, since,...(selected?[JSON.stringify(selected)]:[])) as {project: Uint8Array; id: string; name: string; last: number}[];
+    const work = rows.map(r => ({reported: Buffer.from(r.project).toString(), machine: {id: r.id, name: r.name}, lastAt: r.last}));
+    return projectGroups(work, this.projectNames(user,selected?{names:selected}:undefined));
+  }
+
+  /** Page names before loading the machines and reported members of the final groups. */
+  projectChoices(user:string,since:number,query:string,after:string|null,limit:number):string[] {
+    return this.db.prepare(`WITH projects(project_name) AS (
+      SELECT name FROM project_names WHERE user_id=?
+      UNION SELECT COALESCE(n.name,NULLIF(s.project,'')) FROM devices d JOIN agent_sessions s ON s.device_id=d.id
+      LEFT JOIN project_names n ON n.user_id=d.user_id AND n.reported=s.project
+      WHERE d.user_id=? AND EXISTS(SELECT 1 FROM agent_work w WHERE w.session_id=s.id AND w.to_at>?)
+    ) SELECT CAST(project_name AS BLOB) AS project_bytes FROM projects
+      WHERE project_name IS NOT NULL AND instr(project_name,?)>0 AND (? IS NULL OR project_name COLLATE BINARY>?)
+      ORDER BY project_name COLLATE BINARY LIMIT ?`).all(user,user,since,query,after,after,limit).map(row=>Buffer.from(row.project_bytes as Uint8Array).toString());
   }
 
   /**
@@ -1096,8 +1112,8 @@ export class Store {
     return transaction(this.db,()=>{
       const names = this.projectNames(user);
       const sent = new Set(
-        (this.db.prepare('SELECT DISTINCT s.project FROM devices d JOIN agent_sessions s ON s.device_id = d.id WHERE d.user_id = ?').all(user) as {project: string}[]).map(
-          r => r.project,
+        (this.db.prepare('SELECT DISTINCT CAST(s.project AS BLOB) AS project FROM devices d JOIN agent_sessions s ON s.device_id = d.id WHERE d.user_id = ?').all(user) as {project: Uint8Array}[]).map(
+          r => Buffer.from(r.project).toString(),
         ),
       );
       const reported = new Set(groups.flatMap(group => members(group, names, sent)));
@@ -1125,22 +1141,23 @@ export class Store {
       const now=Date.now(),aliases=this.projectNames(user),names=new Set([...reported.map(raw=>aliases.get(raw)??raw),...targets]);
       const boards=this.db.prepare('SELECT board_id FROM members WHERE user_id=?').all(user).map(row=>String(row.board_id));
       const captures=[];
-      const corrected=this.db.prepare('SELECT name FROM project_names WHERE user_id=? AND reported=?');
+      const corrected=this.db.prepare('SELECT CAST(name AS BLOB) AS name FROM project_names WHERE user_id=? AND reported=?');
+      const nameOf=(owner:string,raw:string)=>{const alias=corrected.get(owner,raw)?.name;return alias===undefined?raw:Buffer.from(alias as Uint8Array).toString();};
       const membership=(pairs:Iterable<readonly [string,string]>)=>{
         const groups=new Map<string,Set<string>>();
-        for(const [owner,raw] of pairs){const name=String(corrected.get(owner,raw)?.name??raw);let group=groups.get(name);if(!group)groups.set(name,group=new Set());group.add(JSON.stringify([owner,raw]));}
+        for(const [owner,raw] of pairs){const name=nameOf(owner,raw);let group=groups.get(name);if(!group)groups.set(name,group=new Set());group.add(JSON.stringify([owner,raw]));}
         return groups;
       };
       for(const board of boards){
         const state=readProjectColors(this.db,board);if(!state.pins.length)continue;
         const access=this.workAccess(board,now);if(![...access.devices.values()].some(scope=>scope.owner===user))continue;
         const devices=JSON.stringify(Object.fromEntries([...access.devices].map(([id,scope])=>[id,scope.from]))),pairs=new Map<string,readonly [string,string]>();
-        const rows=this.db.prepare(`SELECT DISTINCT d.user_id,s.project FROM agent_sessions s JOIN devices d ON d.id=s.device_id
+        const rows=this.db.prepare(`SELECT DISTINCT d.user_id,CAST(s.project AS BLOB) AS project FROM agent_sessions s JOIN devices d ON d.id=s.device_id
           JOIN json_each(?) j ON j.key=s.device_id LEFT JOIN project_names n ON n.user_id=d.user_id AND n.reported=s.project
           WHERE COALESCE(n.name,NULLIF(s.project,'')) IN (SELECT value FROM json_each(?))
           AND EXISTS(SELECT 1 FROM agent_work w WHERE w.session_id=s.id AND w.to_at>CAST(j.value AS INTEGER))`).iterate(devices,JSON.stringify([...names]));
-        for(const row of rows){const pair=[String(row.user_id),String(row.project)] as const;pairs.set(JSON.stringify(pair),pair);}
-        for(const pair of this.liveProjectPairs(access,now))if(names.has(String(corrected.get(...pair)?.name??pair[1])))pairs.set(JSON.stringify(pair),pair);
+        for(const row of rows){const pair=[String(row.user_id),Buffer.from(row.project as Uint8Array).toString()] as const;pairs.set(JSON.stringify(pair),pair);}
+        for(const pair of this.liveProjectPairs(access,now))if(names.has(nameOf(...pair)))pairs.set(JSON.stringify(pair),pair);
         captures.push({board,state,pairs:[...pairs.values()],before:membership(pairs.values())});
       }
       change();
@@ -1173,9 +1190,11 @@ export class Store {
   }
 
   /** The names a person gave the projects their machines report: reported → shown. */
-  projectNames(user: string): Map<string, string> {
-    const rows = this.db.prepare('SELECT reported, name FROM project_names WHERE user_id = ?').all(user) as {reported: string; name: string}[];
-    return new Map(rows.map(r => [r.reported, r.name]));
+  projectNames(user: string,selection?:{names:readonly string[]}|{reported:readonly string[]}): Map<string, string> {
+    // Node's SQLite TEXT reads stop at NUL; BLOB reads preserve the stored UTF-8 name.
+    const column=selection&&('reported' in selection?'reported':'name'),values=selection&&('reported' in selection?selection.reported:selection.names);
+    const rows = this.db.prepare('SELECT CAST(n.reported AS BLOB) AS reported, CAST(n.name AS BLOB) AS name FROM project_names n WHERE user_id = ?'+(column?` AND n.${column} IN (SELECT value FROM json_each(?))`:'')).all(user,...(values?[JSON.stringify(values)]:[])) as {reported: Uint8Array; name: Uint8Array}[];
+    return new Map(rows.map(r => [Buffer.from(r.reported).toString(), Buffer.from(r.name).toString()]));
   }
 
   /** Since when the hub keeps how agents worked: before it, that is not known. */

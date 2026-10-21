@@ -439,8 +439,9 @@ boards use the same editor and API. There is no separate colour settings page.
 Pins have distinct exact project names in Unicode codepoint order. Repeated colours
 are allowed. The nine values are `#bf616a`, `#d08770`, `#ebcb8b`, `#a3be8c`,
 `#8fbcbb`, `#88c0d0`, `#81a1c1`, `#5e81ac`, `#b48ead`. Missing pins mean Auto.
-Names retain the ingest/alias contract: 1–120 Unicode codepoints, including supported
-control characters and ending spaces, without trimming or normalization.
+Names contain 1–120 Unicode codepoints in well-formed Unicode strings, including
+supported control characters, NUL and ending spaces, without trimming or
+normalization. Unpaired UTF-16 surrogates are rejected.
 
 Owner-only `PUT` to that URL takes quoted integer `If-Match` and exactly
 `{version: 1, authority, project, color?, name?}`, with at least one changed field.

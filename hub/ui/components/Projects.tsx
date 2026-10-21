@@ -25,6 +25,7 @@ export function Projects({board=null}:{board?:Board|null}) {
   const currentAccess=useRef(access);currentAccess.current=access;
   const cursors=useRef<(string|undefined)[]>([undefined]),pending=useRef<AbortController|null>(null);
   const cursorAuthority=useRef<string|undefined>(undefined);
+  const currentLoad=useRef<(()=>Promise<ProjectList|null>)|null>(null);
   const writes=useRef(false);
   const chosenRows=useRef(new Map<string,ProjectGroup>()),focusAfterSave=useRef<{board:string|undefined;name:string}|null>(null);
   const [loadedAccess,setLoadedAccess]=useState(access),[busy,setBusy]=useState(false);
@@ -35,7 +36,8 @@ export function Projects({board=null}:{board?:Board|null}) {
   // The row a rename led to, chosen in the list that came after it: the keyboard goes there,
   // each time anew (a new number), though it was the same row the time before.
   const [landing, setLanding] = useState<{name: string; n: number} | null>(null);
-  const load=useCallback(async()=>{
+  const load=useCallback(async():Promise<ProjectList|null>=>{
+    if(currentLoad.current!==load)return null;
     const controller=new AbortController();pending.current?.abort();pending.current=controller;
     try{
       if(cursorAuthority.current!==saved?.authority){cursors.current=[undefined];cursorAuthority.current=saved?.authority;}
@@ -43,16 +45,17 @@ export function Projects({board=null}:{board?:Board|null}) {
       for(let at=board&&index>0&&!cursors.current[index]?0:index;at<=index;at++){
         const params=new URLSearchParams();if(board){params.set('board',board.id);params.set('query',query);if(cursors.current[at])params.set('cursor',cursors.current[at]!);}
         answer=await call<ProjectList>('GET','/api/projects'+(params.size?'?'+params:''),undefined,12000,controller.signal);
-        if(controller.signal.aborted||currentAccess.current!==access)return null;
+        if(controller.signal.aborted||currentLoad.current!==load)return null;
         if(board&&answer.authority!==page.get().board?.projectColors?.authority)return null;
         cursors.current[at+1]=answer.nextCursor;
         if(at<index&&!answer.nextCursor){setIndex(at);return null;}
       }
       setLoadedAccess(access);setList(answer!);return answer!;
-    }catch(failure){if(!controller.signal.aborted&&currentAccess.current===access){setError(failure);if(failure instanceof ApiError&&failure.status===409){cursors.current=[undefined];setIndex(0);}}return null;}
+    }catch(failure){if(!controller.signal.aborted&&currentLoad.current===load){setError(failure);if(failure instanceof ApiError&&failure.status===409){cursors.current=[undefined];setIndex(0);}}return null;}
   },[board?.id,query,index,access,saved?.authority]);
+  currentLoad.current=load;
   useEffect(()=>{setList(null);setSelected([]);chosenRows.current.clear();setError(null);cursors.current=[undefined];setIndex(0);},[access,query]);
-  useEffect(()=>{void load();return()=>pending.current?.abort();},[load]);
+  useEffect(()=>{currentLoad.current=load;void load();return()=>{pending.current?.abort();if(currentLoad.current===load)currentLoad.current=null;};},[load]);
   useEffect(()=>{
     const target=focusAfterSave.current;
     if(!busy&&target&&target.board===board?.id&&loadedAccess===access&&list?.projects.some(row=>row.name===target.name)){
@@ -68,9 +71,11 @@ export function Projects({board=null}:{board?:Board|null}) {
     try {
       await call('POST', url, body);
     } finally {
-      setMerge(false);
-      setSelected([]);chosenRows.current.clear();
-      answer = await load();
+      if(currentAccess.current===access){
+        setMerge(false);
+        setSelected([]);chosenRows.current.clear();
+        answer = await currentLoad.current?.()??null;
+      }
     }
     return answer;
   };
@@ -84,15 +89,17 @@ export function Projects({board=null}:{board?:Board|null}) {
         const answer=await call('PUT','/api/boards/'+board.id+'/project-colors',{version:1,authority:expected.authority,project:group.name,...(rename?{name:target}:{}),...(changedColor?{color}:{})},12000,undefined,{'If-Match':'"'+expected.revision+'"'});
         const colors=projectColorReply(answer);if(colors&&currentAccess.current===where)page.dispatch({type:'project-colors-response',board:board.id,generation,workAuthority,expected,colors});
       }else if(rename)await call('POST','/api/projects',renaming(group,target));
-      if(page.get().board?.id===board?.id)focusAfterSave.current={board:board?.id,name:target};
-      const answer=await load();
-      if(answer?.projects.some(row=>row.name===target))setLanding(before=>({name:target,n:(before?.n??0)+1}));
+      if(page.get().board?.id===board?.id&&(page.get().projectColorsGeneration??0)===generation)focusAfterSave.current={board:board?.id,name:target};
+      // A write may finish after navigation or a new search. Refresh the current list only.
+      const refresh=currentLoad.current;
+      const answer=currentAccess.current===where?await refresh?.():null;
+      if(currentLoad.current===refresh&&answer?.projects.some(row=>row.name===target))setLanding(before=>({name:target,n:(before?.n??0)+1}));
     }catch(failure){
       if(currentAccess.current===where&&failure instanceof ApiError&&board&&expected){const colors=projectColorReply(failure.data);if(colors)page.dispatch({type:'project-colors-response',board:board.id,generation,workAuthority,expected,colors});}
       throw failure;
     }finally{writes.current=false;setBusy(false);}
   };
-  const failing = (url: string, body: object) => change(url, body).catch(setError);
+  const failing = (url: string, body: object) => change(url, body).catch(failure=>{if(currentAccess.current===access)setError(failure);});
 
   const visible=list&&loadedAccess===access?list:null;
   if (!visible) return <ErrorLine error={error} />;
