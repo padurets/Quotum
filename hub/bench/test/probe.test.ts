@@ -88,6 +88,21 @@ test("a component's work is counted in the part of the page its first element is
   assert.equal(nodeOf(fiber(FUNCTION, {children: [fiber(HOST, {stateNode: el('main', null)})]}), NODES), null, 'outside every part: the page');
 });
 
+test('opening and closing legend details stay separate while real chart renders remain counted',()=>{
+  const p=page(),panel=el('section',null,{'data-time':'chart'},'budget-history');
+  const detail=el('span',null,{'data-series-details':''},'tooltip series-tip');
+  const opened=fiber(FUNCTION,{children:[fiber(HOST,{stateNode:detail})]});
+  const closed=fiber(FUNCTION,{flags:PERFORMED,was:opened});
+  fiber(HOST,{stateNode:panel,children:[closed]});
+  assert.equal(nodeOf(opened,NODES),detail);
+  assert.equal(nodeOf(closed,NODES),detail,'an empty detail fiber must not fall back to its chart ancestor');
+  p.hook.onCommitFiberRoot(1,{current:closed});
+  assert.equal(p.bench.read().renders[0].kind,null);
+  p.bench.reset();
+  p.hook.onCommitFiberRoot(1,{current:fiber(FUNCTION,{children:[fiber(HOST,{stateNode:panel,children:[opened]})]})});
+  assert.ok(p.bench.read().renders.some(part=>part.kind==='chart'),'the detail exemption cannot hide work in a chart data consumer');
+});
+
 /** Runs the probe as the browser gets it, in a context of its own with a stand-in DOM. */
 function page() {
   type Mutation = {type?: string; attributeName?: string; target: unknown; addedNodes?: unknown[]};

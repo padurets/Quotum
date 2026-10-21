@@ -25,7 +25,7 @@ export type Place = {closest(selector: string): Place | null};
  * The parts of the page work is counted by, the nearest first: a label that shows time, a
  * card, the header, the list of agents, the analytics. Anything else is the page.
  */
-export const NODES = '[data-time], [data-card], header.topbar, section.agents-panel, .history, .forecast, .activity, .budget-history, .budget-table, .subscription-funds, .agent-hours-heatmap, .analytics-head';
+export const NODES = '[data-series-details], [data-time], [data-card], header.topbar, section.agents-panel, .history, .forecast, .activity, .budget-history, .budget-table, .subscription-funds, .agent-hours-heatmap, .analytics-head';
 
 /**
  * The components that rendered in a commit, found as React DevTools finds them: walking
@@ -65,6 +65,9 @@ export function nodeOf(fiber: Fiber, selector: string): Place | null {
     return null;
   };
   let host = first(fiber.child);
+  // Closing a transient detail is still that detail's work. Its now-empty fiber
+  // must not be charged as a render of the surrounding chart data consumer.
+  if(!host&&fiber.alternate){const detail=first(fiber.alternate.child)?.closest('[data-series-details]');if(detail)return detail;}
   for (let f = fiber.return; !host && f; f = f.return) host = element(f);
   return host ? host.closest(selector) : null;
 }

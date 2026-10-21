@@ -33,4 +33,3 @@ export function arbiter(modules:Record<string,unknown>={}) {
     shift:(value:boolean)=>{shift=value;phase();},pan:(value:number|null)=>{active=value;phase();},fold:(value:boolean)=>{folding=value;changed();},
     get writes(){return writes;},get observing(){return observing;}};
 }
-
