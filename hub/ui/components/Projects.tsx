@@ -26,6 +26,7 @@ export function Projects({board=null}:{board?:Board|null}) {
   const cursors=useRef<(string|undefined)[]>([undefined]),pending=useRef<AbortController|null>(null);
   const cursorAuthority=useRef<string|undefined>(undefined);
   const currentLoad=useRef<(()=>Promise<ProjectList|null>)|null>(null);
+  const focusScope=useRef(0),searchField=useRef<HTMLInputElement>(null);
   const writes=useRef(false);
   const chosenRows=useRef(new Map<string,ProjectGroup>()),focusAfterSave=useRef<{board:string|undefined;name:string}|null>(null);
   const [loadedAccess,setLoadedAccess]=useState(access),[busy,setBusy]=useState(false);
@@ -36,6 +37,7 @@ export function Projects({board=null}:{board?:Board|null}) {
   // The row a rename led to, chosen in the list that came after it: the keyboard goes there,
   // each time anew (a new number), though it was the same row the time before.
   const [landing, setLanding] = useState<{name: string; n: number} | null>(null);
+  const retireFocus=()=>{focusScope.current++;focusAfterSave.current=null;setLanding(null);};
   const load=useCallback(async():Promise<ProjectList|null>=>{
     if(currentLoad.current!==load)return null;
     const controller=new AbortController();pending.current?.abort();pending.current=controller;
@@ -54,12 +56,15 @@ export function Projects({board=null}:{board?:Board|null}) {
     }catch(failure){if(!controller.signal.aborted&&currentLoad.current===load){setError(failure);if(failure instanceof ApiError&&failure.status===409){cursors.current=[undefined];setIndex(0);}}return null;}
   },[board?.id,query,index,access,saved?.authority]);
   currentLoad.current=load;
-  useEffect(()=>{setList(null);setSelected([]);chosenRows.current.clear();setError(null);cursors.current=[undefined];setIndex(0);},[access,query]);
+  useEffect(()=>{setList(null);setSelected([]);chosenRows.current.clear();setError(null);setLanding(null);cursors.current=[undefined];setIndex(0);},[access,query]);
   useEffect(()=>{currentLoad.current=load;void load();return()=>{pending.current?.abort();if(currentLoad.current===load)currentLoad.current=null;};},[load]);
+  useEffect(()=>{focusScope.current++;focusAfterSave.current=null;},[board?.id,board?.role,generation]);
   useEffect(()=>{
     const target=focusAfterSave.current;
-    if(!busy&&target&&target.board===board?.id&&loadedAccess===access&&list?.projects.some(row=>row.name===target.name)){
-      focusAfterSave.current=null;setLanding(before=>({name:target.name,n:(before?.n??0)+1}));
+    if(!busy&&target&&target.board===board?.id&&loadedAccess===access&&list){
+      focusAfterSave.current=null;
+      if(list.projects.some(row=>row.name===target.name))setLanding(before=>({name:target.name,n:(before?.n??0)+1}));
+      else searchField.current?.focus({preventScroll:true});
     }
   },[list,busy,access,loadedAccess,board?.id]);
 
@@ -81,7 +86,7 @@ export function Projects({board=null}:{board?:Board|null}) {
   };
   const edit=async(group:ProjectGroup,name:string,color:CategoryColor|null)=>{
     if(writes.current)return;writes.current=true;setBusy(true);setError(null);setLanding(null);
-    const expected=saved,where=access;
+    const expected=saved,where=access,focus=focusScope.current;
     const exact=board?.role==='owner'&&group.colorAllowed&&!!expected;
     const target=name===group.name||exact?name:name.trim(),rename=target!==group.name,changedColor=color!==(new Map(saved?.pins??[]).get(group.name!)??null);
     try{
@@ -89,11 +94,9 @@ export function Projects({board=null}:{board?:Board|null}) {
         const answer=await call('PUT','/api/boards/'+board.id+'/project-colors',{version:1,authority:expected.authority,project:group.name,...(rename?{name:target}:{}),...(changedColor?{color}:{})},12000,undefined,{'If-Match':'"'+expected.revision+'"'});
         const colors=projectColorReply(answer);if(colors&&currentAccess.current===where)page.dispatch({type:'project-colors-response',board:board.id,generation,workAuthority,expected,colors});
       }else if(rename)await call('POST','/api/projects',renaming(group,target));
-      if(page.get().board?.id===board?.id&&(page.get().projectColorsGeneration??0)===generation)focusAfterSave.current={board:board?.id,name:target};
+      if(focusScope.current===focus&&page.get().board?.id===board?.id&&(page.get().projectColorsGeneration??0)===generation)focusAfterSave.current={board:board?.id,name:target};
       // A write may finish after navigation or a new search. Refresh the current list only.
-      const refresh=currentLoad.current;
-      const answer=currentAccess.current===where?await refresh?.():null;
-      if(currentLoad.current===refresh&&answer?.projects.some(row=>row.name===target))setLanding(before=>({name:target,n:(before?.n??0)+1}));
+      if(currentAccess.current===where)await currentLoad.current?.();
     }catch(failure){
       if(currentAccess.current===where&&failure instanceof ApiError&&board&&expected){const colors=projectColorReply(failure.data);if(colors)page.dispatch({type:'project-colors-response',board:board.id,generation,workAuthority,expected,colors});}
       throw failure;
@@ -106,7 +109,7 @@ export function Projects({board=null}:{board?:Board|null}) {
 
   const chosen = selected.flatMap(name=>chosenRows.current.get(name)??[]);
   const pins=new Map(saved?.pins??[]);
-  const submit=(event:FormEvent)=>{event.preventDefault();cursors.current=[undefined];setIndex(0);setQuery(search);};
+  const submit=(event:FormEvent)=>{event.preventDefault();retireFocus();cursors.current=[undefined];setIndex(0);setQuery(search);};
   const toggle = (group: ProjectGroup, on: boolean) => {
     if(on)chosenRows.current.set(group.name!,group);else chosenRows.current.delete(group.name!);
     const next = on ? [...selected, group.name!] : selected.filter(name => name !== group.name);
@@ -118,7 +121,7 @@ export function Projects({board=null}:{board?:Board|null}) {
     <>
       <p className="dialog-text">{t('projects.caption', {days: visible.keptDays})}</p>
       <ErrorLine error={error} />
-      {board&&<form className="project-search" onSubmit={submit}><input aria-label={t('projectColors.search')} placeholder={t('projectColors.search')} value={search} maxLength={240} onChange={event=>setSearch([...event.target.value].slice(0,120).join(''))}/><button className="button">{t('projectColors.find')}</button></form>}
+      {board&&<form className="project-search" onSubmit={submit}><input ref={searchField} aria-label={t('projectColors.search')} placeholder={t('projectColors.search')} value={search} maxLength={240} onChange={event=>{retireFocus();setSearch([...event.target.value].slice(0,120).join(''));}}/><button className="button">{t('projectColors.find')}</button></form>}
       {!visible.projects.length&&<p className="admin-empty">{t('projects.empty')}</p>}
       <div className="table-wrap">
         <table className="admin-table projects-table">
@@ -191,7 +194,7 @@ export function Projects({board=null}:{board?:Board|null}) {
         </table>
       </div>
       {board&&<div className="table-pages project-pages" aria-label={t('projectColors.pages')}>
-        <button className="button" disabled={index===0||busy} onClick={()=>setIndex(index-1)}>{t('projectColors.previous')}</button><span>{t('projectColors.page',{page:index+1})}</span><button className="button" disabled={!visible.nextCursor||busy} onClick={()=>setIndex(index+1)}>{t('projectColors.next')}</button>
+        <button className="button" disabled={index===0||busy} onClick={()=>{retireFocus();setIndex(index-1);}}>{t('projectColors.previous')}</button><span>{t('projectColors.page',{page:index+1})}</span><button className="button" disabled={!visible.nextCursor||busy} onClick={()=>{retireFocus();setIndex(index+1);}}>{t('projectColors.next')}</button>
       </div>}
       {board&&<ResetProjectColors board={board}/>}
       {chosen.length >= 2 && (

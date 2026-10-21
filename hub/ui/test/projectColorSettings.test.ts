@@ -140,6 +140,42 @@ test('a late save refreshes the current search rather than restoring its capture
   assert.deepEqual(tree.filter(node=>node.type===f.editor).map(node=>node.props.project.name),['Z']);
 });
 
+function searchFor(f:ReturnType<typeof fixture>,value:string){
+  f.render().find(node=>node.type==='input'&&node.props['aria-label']==='projectColors.search')!.props.onChange({target:{value}});
+  f.render().find(node=>node.type==='form'&&node.props.className==='project-search')!.props.onSubmit({preventDefault(){}});
+  f.render();f.render();
+}
+
+test('a rename outside the current query returns focus to search without stealing it on a later search',async()=>{
+  const f=fixture();f.render();await f.resolveListing();searchFor(f,'A');await f.resolveListing();
+  let searches=0;
+  const field=f.render().find(node=>node.type==='input'&&node.props['aria-label']==='projectColors.search')!;
+  if(field.props.ref)field.props.ref.current={focus:()=>{searches++;}};
+  const save=f.render().find(node=>node.type===f.editor)!.props.save('B',null);
+  f.requests.at(-1)!.resolve({...initial,revision:1});await flush();await f.resolveListing([]);await save;f.render();
+  assert.equal(searches,1,'a filtered-out rename returns the keyboard to the current search');
+  searchFor(f,'B');await f.resolveListing([{...project,name:'B'}]);
+  assert.equal(f.render().find(node=>node.type===f.editor)!.props.focus,0,'the completed save cannot focus a result of a later independent search');
+});
+
+test('a new search retires the focus intent of a pending save even when its target becomes visible',async()=>{
+  const f=fixture();f.render();await f.resolveListing();
+  const save=f.render().find(node=>node.type===f.editor)!.props.save('B',null),write=f.requests.at(-1)!;
+  searchFor(f,'B');await f.resolveListing([{...project,name:'B'}]);
+  write.resolve({...initial,revision:1});await flush();await f.resolveListing([{...project,name:'B'}]);await save;
+  f.render();assert.equal(f.render().find(node=>node.type===f.editor)!.props.focus,0);
+});
+
+test('a visible renamed row retains its explicit post-save keyboard focus',async()=>{
+  const f=fixture();f.render();await f.resolveListing();
+  const save=f.render().find(node=>node.type===f.editor)!.props.save('B',null);
+  f.requests.at(-1)!.resolve({...initial,revision:1});await flush();await f.resolveListing([{...project,name:'B'}]);await save;
+  f.render();assert.ok(f.render().find(node=>node.type===f.editor)!.props.focus>0);
+  searchFor(f,'A');await f.resolveListing([]);
+  searchFor(f,'B');await f.resolveListing([{...project,name:'B'}]);
+  assert.equal(f.render().find(node=>node.type===f.editor)!.props.focus,0,'an applied focus token cannot be replayed when a later search remounts the row');
+});
+
 test('an existing whitespace-only name permits a colour-only save',async()=>{
   for(const name of [' ','\n']){
     const f=fixture('Projects','ProjectEditor'),calls:any[]=[];

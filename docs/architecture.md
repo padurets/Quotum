@@ -1469,7 +1469,7 @@ Expired or withdrawn work is replaced before configuration is refreshed or a
 prepared response is delivered. Replacements preserve pending history invalidations
 under current permissions, so cached cells remain current even when the work
 authority stays the same. Incremental delivery coalesces colour metadata before
-checking the serialized backlog size.
+its final serialized size check. The physical queue retains its own memory limit.
 
 Secrets (sessions, tokens, codes, invites) are random, prefixed by kind (`qt_s_`,
 `qt_m_`, `qt_d_`, `qt_c_`, `qt_i_`) and stored only as SHA-256 hashes; passwords as
