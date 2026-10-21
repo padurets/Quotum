@@ -59,7 +59,7 @@ export function useTableLayout(box:RefObject<HTMLElement|null>,columns:readonly 
     const fit=()=>{const measured=space.current!,width=measured.width;
       const layout=tableLayout(columns,width,nameWidth,edges??measured.padding);
       setModel(was=>was.width===width&&was.layout===layout?was:{width,layout});};
-    const measure=()=>{const width=root.clientWidth;
+    const measure=()=>{const width=root.clientWidth;if(width===0)return;
       const style=getComputedStyle(root),padding=edges??parseFloat(style.paddingLeft)+parseFloat(style.paddingRight)-20;
       space.current={element:root,width,padding,widthKey};fit();};
     const observer=new ResizeObserver(measure);observer.observe(root);
@@ -78,6 +78,7 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
   const seen=useRef<{key:string;outer:number;live:number;layer:number;footer:number;singleFooter:number}|null>(null);
   const rowBoxes=useRef(new WeakMap<Element,{width:number;height:number}>());
   const rowRun=useRef<{key:string;rows:Element[]}|null>(null);
+  const suspended=useRef<HTMLElement|null>(null);
   const sizes=measurement?.scope===scope?measurement:null;
   const fallback=sizes?.fallback??(layout==='table'?44:90),heights=sizes?.heights??new Map<string,number>();
   let starts:number[];
@@ -87,11 +88,16 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     if(starts.length>1)starts=tablePages(keys,heights,fallback,room-sizes.footer,sizes.border);
   }else starts=Array.from({length:Math.max(1,Math.ceil(keys.length/TABLE_PAGE_ROWS))},(_,i)=>i*TABLE_PAGE_ROWS);
   const page=Math.min(position.key===resetKey?position.page:0,starts.length-1),from=starts[page],to=starts[page+1]??keys.length;
-  useLayoutEffect(()=>{if((position.key!==resetKey&&position.page!==0)||((sizes||!sizing?.manual)&&position.page!==page))setPosition({key:resetKey,page});},[resetKey,page,position,!!sizes,sizing?.manual]);
+  useLayoutEffect(()=>{if((position.key!==resetKey&&position.page!==0)||((sizes||!sizing?.manual||!keys.length)&&position.page!==page))setPosition({key:resetKey,page});},[resetKey,page,position,!!sizes,sizing?.manual,keys.length]);
   const update=useRef<(reuseRows?:boolean)=>void>(()=>{});
   update.current=(reuseRows=false)=>{
-    const root=panel.current;if(!root)return;
-    const outer=pixels(root.getBoundingClientRect().height-fillOf(root));
+    const root=panel.current;if(!root||suspended.current===root)return;
+    const rect=root.getBoundingClientRect();
+    // A hidden panel has no row geometry. Keep the last useful measurements
+    // until its own resize notification lets us measure the shown panel again.
+    if(rect.width===0){suspended.current=root;return;}
+    suspended.current=null;
+    const outer=pixels(rect.height-fillOf(root));
     const signal={key:JSON.stringify([scope,keysKey,from,to,sizing?.manual]),outer,live:pixels(live.current?.getBoundingClientRect().height??0),
       layer:pixels(measured.current?.getBoundingClientRect().height??0),footer:pixels(measuredFooter.current?.getBoundingClientRect().height??0),singleFooter:pixels(measuredSingleFooter.current?.getBoundingClientRect().height??0)};
     const last=seen.current;
@@ -135,7 +141,12 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     const body=sizing?.manual?measured.current:live.current;
     const rows=new Set([...(body?.children??[])].filter(row=>!row.hasAttribute('data-table-total')));
     const observer=new ResizeObserver(entries=>{
-      const resized=entries.some(entry=>{
+      const root=panel.current,entry=entries.find(entry=>entry.target===root),box=entry?.borderBoxSize;
+      if(root&&box?.length===1&&box[0].inlineSize===0){suspended.current=root;return;}
+      const resumed=!!root&&suspended.current===root&&!!entry;
+      if(resumed){suspended.current=null;seen.current=null;rowRun.current=null;}
+      if(suspended.current===root)return;
+      const resized=resumed||entries.some(entry=>{
         if(!rows.has(entry.target))return false;
         const previous=rowBoxes.current.get(entry.target),box=entry.borderBoxSize?.length===1?entry.borderBoxSize[0]:undefined;
         return !previous||!box||!same(previous.width,box.inlineSize)||!same(previous.height,box.blockSize);
