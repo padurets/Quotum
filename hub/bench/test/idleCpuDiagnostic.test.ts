@@ -316,7 +316,7 @@ class NativeCdpFake extends CurrentCdpFake {
     signal?.throwIfAborted();
     if(method==='Page.getFrameTree'){this.commands.push(method);return {frameTree:{frame:{id:'own-frame',loaderId:this.loader}}} as T;}
     if(method==='Tracing.start'){
-      this.commands.push(method);assert.equal((params as {categories:string}).categories,'toplevel,v8,blink,cc,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.frame');
+      this.commands.push(method);assert.equal((params as {categories:string}).categories,'toplevel,v8,blink,cc,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.frame,disabled-by-default-cc.debug.scheduler');
       if(!this.skipMetadata)this.emit('Tracing.dataCollected',{value:[nativeMetadata(),{name:'thread_name',ph:'M',pid:101,tid:101,args:{name:'CrRendererMain'}}]});
       return {} as T;
     }
@@ -495,6 +495,26 @@ test('unsafe flow and host observations fail closed without borrowing nearby num
   assert.equal(record(receipt.capture).invalid,bad.length);assert.equal(record(receipt.capture).status,'insufficient-evidence');
   assert.ok(!(receipt.events as any[]).some(row=>row.flowId!==undefined||row.hostId!==undefined));
   assert.ok((receipt.rejected as any[]).every(row=>row.reason==='commit-metadata'));
+});
+const schedulerFields=['has_pending_tree','pending_tree_is_ready_for_activation','active_tree_needs_first_draw','active_tree_is_ready_to_draw',
+  'processing_animation_worklets_for_pending_tree','processing_paint_worklets_for_pending_tree','current_pending_tree_is_impl_side','can_draw'];
+test('scheduler snapshots retain exact booleans through evidence and keep boundary scopes without invented states',async()=>{
+  const state=Object.fromEntries(schedulerFields.map((key,i)=>[key,i%2===0]));
+  const base={name:'SchedulerStateMachine',pid:101,tid:105,ts:2_000_000};
+  const snapshot={...base,ph:'X',dur:20,args:{cc_scheduler_state:{state_machine:{minor_state:{...state,private:'private-scheduler-canary'}}},private:'private-scheduler-canary'}};
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:[snapshot,{...base,ph:'B'},{...base,ph:'E',ts:2_000_100}]}));
+  const rows=record(safeEvidence(receipt)).events as any[],saved=rows.filter(row=>row.name==='SchedulerStateMachine');
+  assert.deepEqual(saved.map(row=>row.scheduler??null),[state,null,null]);assert.equal(record(receipt.capture).invalid,0);
+  assert.doesNotMatch(JSON.stringify(safeEvidence(receipt)),/private-scheduler-canary|cc_scheduler_state|minor_state/);
+});
+test('missing and nonboolean scheduler fields fail closed rather than becoming false',async()=>{
+  const state=Object.fromEntries(schedulerFields.map(key=>[key,false])),base={name:'SchedulerStateMachine',ph:'X',pid:101,tid:105,ts:2_000_000,dur:20};
+  const values=[...schedulerFields.map(key=>{const missing={...state};delete missing[key];return missing;}),
+    ...[null,0,'false',undefined].map(value=>({...state,has_pending_tree:value}))];
+  const bad=values.map(minor_state=>({...base,args:{cc_scheduler_state:{state_machine:{minor_state}}}}));
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:bad}));
+  assert.equal(record(receipt.capture).invalid,bad.length);assert.equal(record(receipt.capture).status,'insufficient-evidence');
+  assert.ok(!(receipt.events as any[]).some(row=>row.name==='SchedulerStateMachine'));assert.ok((receipt.rejected as any[]).every(row=>row.reason==='scheduler-metadata'));
 });
 test('native-profile stop failure retains its first error, signed cleanup profile and all owned releases',async()=>{
   const owner=new RunOwner(),original=Error('original native profile stop'),saved:Saved[]=[];let attempts=0;
