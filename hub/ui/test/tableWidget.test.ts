@@ -76,7 +76,7 @@ function widgetFixture(border=0,manual=true){
   };
   const original=keys;
   return {render,reports,keys:()=>keys,shown:(widget:TableWidget)=>keys.slice(widget.from,widget.to),resize:(height:number)=>{sizing.allocated=height;},narrow:()=>{root.clientWidth=350;sizing.width='narrow';},reset:(next='period-b')=>{key=next;},clear:()=>{keys=[];},limit:(n:number)=>{keys=original.slice(0,n);},height:()=>root.height,rowReads:()=>rowReads,layoutReads:()=>layoutReads,updates:()=>updates,
-    display:(show:boolean,boxes=true)=>{displayed=show;for(const observer of observers)if(observer.targets.has(root))observer.callback([{target:root,...(boxes?{borderBoxSize:[{inlineSize:root.clientWidth,blockSize:show?root.height:0}]}:{})}] as any);},
+    display:(show:boolean,boxes=true,deliver=true)=>{displayed=show;if(!deliver)return;for(const observer of observers)if(observer.targets.has(root))observer.callback([{target:root,...(boxes?{borderBoxSize:[{inlineSize:root.clientWidth,blockSize:show?root.height:0}]}:{})}] as any);},
     reverse:()=>{keys=[...keys].reverse();},
     rowHeights:(changes:Record<string,number>)=>{for(const [id,height]of Object.entries(changes))rowHeights.set(id,height);},
     chrome:(delta:number,nextBorder=border)=>{shell+=delta;border=nextBorder;root.height+=delta;for(const observer of observers)if(observer.targets.has(root))observer.callback([{target:root}]);},
@@ -114,6 +114,14 @@ test('a table first mounted hidden measures its first shown layout',()=>{
   f.display(true);widget=f.render();
   assert.equal(widget.layout,'table');assert.equal(f.height(),560);assert.ok(f.rowReads()>0);
   assert.equal(widget.page,0);assert.ok(widget.to<57);
+});
+
+test('a zero read before resize observation cannot suspend later measurements',()=>{
+  const f=widgetFixture();f.render();const min=f.reports.at(-1)!.min,reads=f.rowReads();
+  f.display(false,true,false);f.resize(561);f.render();
+  f.rowHeights({'row-0':60,'row-1':28});f.display(true,true,false);f.resize(560);f.render();
+  assert.equal(f.reports.at(-1)!.min,min+16);assert.ok(f.rowReads()>reads);
+  assert.equal(f.height(),560,'the observed outer dimensions never changed');
 });
 
 test('showing the same-sized panel remeasures balanced row changes',()=>{

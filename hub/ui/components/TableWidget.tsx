@@ -59,7 +59,7 @@ export function useTableLayout(box:RefObject<HTMLElement|null>,columns:readonly 
     const fit=()=>{const measured=space.current!,width=measured.width;
       const layout=tableLayout(columns,width,nameWidth,edges??measured.padding);
       setModel(was=>was.width===width&&was.layout===layout?was:{width,layout});};
-    const measure=()=>{const width=root.clientWidth;if(width===0)return;
+    const measure=()=>{const width=root.clientWidth;
       const style=getComputedStyle(root),padding=edges??parseFloat(style.paddingLeft)+parseFloat(style.paddingRight)-20;
       space.current={element:root,width,padding,widthKey};fit();};
     const observer=new ResizeObserver(measure);observer.observe(root);
@@ -79,7 +79,8 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
   const rowBoxes=useRef(new WeakMap<Element,{width:number;height:number}>());
   const rowRun=useRef<{key:string;rows:Element[]}|null>(null);
   const suspended=useRef<HTMLElement|null>(null);
-  const sizes=measurement?.scope===scope?measurement:null;
+  // A hidden layout keeps the last useful geometry for page ownership.
+  const sizes=measurement?.scope===scope||(panel.current&&suspended.current===panel.current)?measurement:null;
   const fallback=sizes?.fallback??(layout==='table'?44:90),heights=sizes?.heights??new Map<string,number>();
   let starts:number[];
   if(sizing?.manual&&sizes){
@@ -93,9 +94,9 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
   update.current=(reuseRows=false)=>{
     const root=panel.current;if(!root||suspended.current===root)return;
     const rect=root.getBoundingClientRect();
-    // A hidden panel has no row geometry. Keep the last useful measurements
-    // until its own resize notification lets us measure the shown panel again.
-    if(rect.width===0){suspended.current=root;return;}
+    // A hidden panel has no row geometry. Refresh the rows on the next real
+    // layout read, even if the panel returns to its last measured size.
+    if(rect.width===0){seen.current=null;rowRun.current=null;return;}
     suspended.current=null;
     const outer=pixels(rect.height-fillOf(root));
     const signal={key:JSON.stringify([scope,keysKey,from,to,sizing?.manual]),outer,live:pixels(live.current?.getBoundingClientRect().height??0),
