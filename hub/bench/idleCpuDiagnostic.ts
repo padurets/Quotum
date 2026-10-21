@@ -273,7 +273,7 @@ export class IdleCpuDiagnostic {
     }
     if(!this.native)await this.clock('start');
     this.active=true;this.tracing=true;
-    await this.cdp.send('Tracing.start',{categories:this.native?'toplevel,v8,blink,cc,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.frame,disabled-by-default-cc.debug.scheduler':'devtools.timeline,disabled-by-default-devtools.timeline.stack',transferMode:'ReportEvents'},this.nativeSignal);
+    await this.cdp.send('Tracing.start',{categories:this.native?'toplevel,cc,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.frame,disabled-by-default-cc.debug.scheduler':'devtools.timeline,disabled-by-default-devtools.timeline.stack',transferMode:'ReportEvents'},this.nativeSignal);
     if(this.native)await this.nativeClock('start');
     if(this.profiling)await this.cdp.send('Profiler.start',{},this.nativeSignal);
   }
