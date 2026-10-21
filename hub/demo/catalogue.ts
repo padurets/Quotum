@@ -612,7 +612,7 @@ const all: DemoSet = {
         'Its hour bars stack agent-hours and can stand above an hour; over 30 days the bars are two hours',
         'The legend adds up to 44 agent-hours; atlas has 28 agent-hours and 16 active hours',
         'The atlas legend bubble shows 28 agent-hours, 16 active hours, 1.8 average parallel sessions and two agents: hover, Tab or tap; Escape dismisses it even when focus is elsewhere, a tap also toggles its emphasis',
-        'Switch harbor off: stacks and scale shrink, 28h shown appears in the totals and Shown in the bar tooltip; active time, agents and at once keep their values',
+        'Toggle atlas and harbor emphasis: both choices accumulate, while stacks, scale, totals and bar values retain the full board-filtered cohort',
         'Over 30 days the first twenty are hatched: not known before',
         'The table, for the weekly window: active time, spent per active hour, the forecast by work and, turned on, the share of spending while active',
       ],

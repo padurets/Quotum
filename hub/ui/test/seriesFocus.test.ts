@@ -71,3 +71,23 @@ test('shared plans use the strongest associated series without changing their in
   h.click(a);h.hover(c);assert.equal(focus(plans[0]),.65);assert.equal(focus(plans[1]),.4);
   h.hover(b);assert.equal(focus(plans[0]),1);assert.equal(plans[0].props.d,'M0,0L10,10');h.cleanup();
 });
+
+test('actual crosshair markers follow click choices and previews without changing readout geometry',()=>{
+  const start=chart.indexOf('{rows.map(row => row.value !== null && <circle'),end=chart.indexOf('\n          </g>',start);
+  assert.ok(start>=0&&end>start);
+  const h=arbiter(),rows=h.buttons.map((button,i)=>({line:{key:button.dataset.seriesKey,color:`color-${i}`},value:i+1}));
+  const context={exports:{} as {paint:()=>{children:{props:Record<string,any>}[][]}},rows:[...rows,{line:{key:'unknown',color:'none'},value:null}],seriesFocusStyle,
+    hover:12,hoverX:20,preciseReadout:()=>true,bx:()=>15,y:(value:number)=>value*2,node:(_tag:unknown,props:unknown,...children:unknown[])=>({props,children})};
+  runInNewContext(ts.transpileModule(`export const paint=()=><g>${chart.slice(start,end)}</g>;`,{fileName:'crosshair.tsx',compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React,jsxFactory:'node'}}).outputText,context);
+  const markers=Array.from(context.exports.paint().children[0]).filter(Boolean);
+  assert.equal(markers.length,3,'unknown values do not invent a point');
+  const geometry=()=>markers.map(({props})=>[props.cx,props.cy,props.r,props.fill]);
+  const before=geometry(),matrix=()=>markers.map(({props})=>{
+    assert.equal(props.className,'series-focus');
+    const variable=props.style['--series-focus'].match(/var\((--series-[\w-]+)/)![1];
+    return Number(h.properties.get(variable)??h.properties.get('--chart-focus')??1);
+  });
+  assert.deepEqual(matrix(),[1,1,1]);h.click(h.a);h.click(h.b);assert.deepEqual(matrix(),[1,1,.4]);
+  h.hover(h.c);assert.deepEqual(matrix(),[.65,.65,1]);h.leave();assert.deepEqual(matrix(),[1,1,.4]);
+  assert.deepEqual(geometry(),before,'paint changes neither the sampled values nor their point coordinates');h.cleanup();
+});

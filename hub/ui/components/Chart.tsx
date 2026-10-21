@@ -716,7 +716,7 @@ export const Chart = memo(function Chart({
           <g className="crosshair">
             <rect x={axis.screenX(hover)} width={bandWidth} y={top} height={height - top - bottom} className="hover-band" />
             <line x1={hoverX} x2={hoverX} y1={top} y2={height - bottom} />
-            {rows.map(row => row.value !== null && <circle key={row.line.key} cx={preciseReadout(row.line)?hoverX:bx(hover!)} cy={y(row.value)} r={4} fill={row.line.color} />)}
+            {rows.map(row => row.value !== null && <circle key={row.line.key} className="series-focus" style={seriesFocusStyle(row.line.key)} cx={preciseReadout(row.line)?hoverX:bx(hover!)} cy={y(row.value)} r={4} fill={row.line.color} />)}
           </g>
         )}
       </PlotOverlay>
