@@ -110,7 +110,7 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const evidence = new Evidence();
   const idleCpuMode = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_CPU;
-  const nativeFrameMode=idleCpuMode==='native-trace';
+  const nativeFrameMode=idleCpuMode==='native-trace'||idleCpuMode==='native-profile';
   const poolDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL;
   evidence.save('scope', {mode: options.scope});
   let idleCpu:IdleCpuDiagnostic|undefined;
@@ -128,7 +128,7 @@ async function main() {
     const diagnostics = [nativeFrameMode&&options.scope==='dashboard'?undefined:idleCpuMode, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE];
     if (options.scope !== 'all' && diagnostics.some(Boolean)) throw new Stop('Partial benchmark scopes cannot be combined with diagnostics');
     address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
-    if (idleCpuMode && (!['trace','profile','native-trace'].includes(idleCpuMode) || !options.ci || options.cdp || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
+    if (idleCpuMode && (!['trace','profile','native-trace','native-profile'].includes(idleCpuMode) || !options.ci || options.cdp || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
     if (poolDiagnostic && (poolDiagnostic !== '1' || !options.ci || options.cdp || idleCpuMode || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting history pool diagnostic mode');
     await prepare(address);
     chrome = options.cdp ? null : findChrome(process.env);
@@ -369,7 +369,7 @@ async function main() {
     evidence.begin('panning');
     const nativeFrameTrace=nativeFrameMode?()=>{
       const save=(name:string,value:unknown,large=false)=>large?evidence.saveTrace(name,value):evidence.save(name,value);
-      const trace=new IdleCpuDiagnostic(cdp,save,clientIdentity(),!options.cdp,'native-trace',owner.signal);
+      const trace=new IdleCpuDiagnostic(cdp,save,clientIdentity(),!options.cdp,idleCpuMode==='native-profile'?'native-profile':'native-trace',owner.signal);
       owner.resource(()=>trace.close());
       evidence.save('native-frame-source',sourceIdentity());
       return trace;

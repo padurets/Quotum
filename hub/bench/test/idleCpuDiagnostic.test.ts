@@ -335,9 +335,9 @@ const nativeEvents=[
   {name:'RunTask',ph:'E',ts:1_026_000,tts:1400,pid:101,tid:101},
   {name:'MajorGC',ph:'X',ts:1_027_000,dur:300,pid:102,tid:102},
 ];
-async function captureNative(configure?:(cdp:NativeCdpFake)=>void,during?:(cdp:NativeCdpFake)=>void){
-  const cdp=new NativeCdpFake({forbidProfiler:true}),saved:Saved[]=[];configure?.(cdp);
-  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value,large)=>saved.push({name,value,large}),client,true,'native-trace');
+async function captureNative(configure?:(cdp:NativeCdpFake)=>void,during?:(cdp:NativeCdpFake)=>void,collection:'native-trace'|'native-profile'='native-trace'){
+  const cdp=new NativeCdpFake({forbidProfiler:collection==='native-trace'}),saved:Saved[]=[];configure?.(cdp);
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value,large)=>saved.push({name,value,large}),client,true,collection);
   cdp.emit('Network.responseReceived',{type:'Script',requestId:'asset-1',response:{url:asset}});
   await diagnostic.start();cdp.emit('Tracing.dataCollected',{value:nativeEvents});during?.(cdp);
   cdp.commands.push('ORIGINAL.report-frozen');await diagnostic.stop();await diagnostic.bindAndClose();await diagnostic.close();
@@ -439,4 +439,59 @@ test('native trace cap remains explicit through the actual artifact writer',asyn
   assert.equal(saved.capture.status,'insufficient-evidence');assert.equal(saved.status,'unqualified');
   const manifest=JSON.parse(readFileSync(path.join(root,'manifest.json'),'utf8'));
   assert.deepEqual(manifest.errors,[]);assert.equal(manifest.files[0].truncated,false);
+});
+
+
+test('native profiling is explicit, keeps signed samples and never changes the trace-only default',async()=>{
+  const plain=await captureNative();assert.ok(!plain.cdp.commands.some(name=>name.startsWith('Profiler.')));assert.ok(!plain.saved.some(row=>row.name==='native-frame-profile'));
+  const measured=await captureNative(undefined,undefined,'native-profile');
+  for(const name of ['Profiler.enable','Profiler.setSamplingInterval','Profiler.start','Profiler.stop','Profiler.disable'])assert.equal(measured.cdp.commands.filter(value=>value===name).length,1);
+  const saved=result(measured.saved,'native-frame-profile'),numeric=record(saved.profile);
+  assert.equal(saved.status,'unqualified');assert.equal(saved.samplingInterval,2000);assert.equal(record(saved.capture).status,'complete');
+  assert.deepEqual(numeric.timeDeltas,[2000,-50,2050]);assert.equal(numeric.reversedDeltas,1);assert.equal(measured.receipt.status,'unqualified');
+});
+test('native rejections keep only the first eight numeric fixed classifications without waiving invalid',async()=>{
+  const bad=Array.from({length:12},(_,i)=>({name:'Layout',ph:'X',ts:2_000_000+i,pid:101,tid:101,args:{data:{frame:'own-frame',url:'private-rejected-canary',stackTrace:'private-rejected-canary'}}}));
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:bad}));
+  assert.equal(record(receipt.capture).invalid,12);assert.equal(record(receipt.capture).status,'insufficient-evidence');assert.equal(receipt.omittedRejections,4);
+  const rejected=receipt.rejected as Record<string,unknown>[];assert.equal(rejected.length,8);
+  assert.deepEqual(rejected[0],{name:'Layout',kind:'known',phase:'X',pid:101,tid:101,ts:2_000_000,frame:1,reason:'duration'});
+  assert.doesNotMatch(JSON.stringify(safeEvidence(receipt)),/private-rejected-canary/);
+});
+test('only the four requested rendering envelopes join the existing native whitelist',async()=>{
+  const names=['PrePaint','Paint','Layerize','CompositeLayers'];
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:[...names,'private-extra-canary'].map(name=>({name,ph:'X',ts:2_000_000,dur:20,pid:101,tid:101}))}));
+  for(const name of names)assert.equal((receipt.events as any[]).filter(row=>row.name===name).length,1);
+  assert.doesNotMatch(JSON.stringify(receipt),/private-extra-canary/);assert.equal(receipt.status,'unqualified');
+});
+test('native-profile stop failure retains its first error, signed cleanup profile and all owned releases',async()=>{
+  const owner=new RunOwner(),original=Error('original native profile stop'),saved:Saved[]=[];let attempts=0;
+  const cdp=new class extends NativeCdpFake {
+    override async send<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>{
+      if(method==='Profiler.stop'&&attempts++===0){this.commands.push(method);throw original;}
+      return super.send<T>(method,params,signal);
+    }
+  }();
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value)=>saved.push({name,value}),client,true,'native-profile',owner.signal);
+  owner.resource(()=>diagnostic.close());await diagnostic.start();await assert.rejects(diagnostic.stop(),error=>error===original);await owner.close();
+  for(const name of ['Tracing.end','Runtime.disable','Profiler.disable'])assert.equal(cdp.commands.filter(value=>value===name).length,1);
+  assert.equal(cdp.commands.filter(value=>value==='Profiler.stop').length,2);
+  const receipt=result(saved,'native-frame-profile');assert.equal(record(receipt.capture).status,'insufficient-evidence');assert.deepEqual(record(receipt.profile).timeDeltas,[2000,-50,2050]);
+  for(const listeners of cdp.listeners.values())assert.equal(listeners.length,0);
+});
+test('native-profile owner abort still attempts Profiler.disable when Profiler.stop rejects',async()=>{
+  const owner=new RunOwner(),stopped=Error('profile cleanup stop rejected'),signals:AbortSignal[]=[];
+  const cdp=new class extends NativeCdpFake {
+    override async send<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>{
+      if(['Tracing.end','Runtime.disable','Profiler.stop','Profiler.disable'].includes(method)){
+        assert.equal(owner.signal.aborted,true);assert.ok(signal);assert.equal(signal.aborted,false);assert.notEqual(signal,owner.signal);signals.push(signal);
+      }
+      if(method==='Profiler.stop'){this.commands.push(method);throw stopped;}return super.send<T>(method,params,signal);
+    }
+  }();
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,()=>{},client,true,'native-profile',owner.signal);owner.resource(()=>diagnostic.close());await diagnostic.start();
+  await assert.rejects(owner.close(),/resource cleanup failed/);
+  for(const name of ['Tracing.end','Runtime.disable','Profiler.stop','Profiler.disable'])assert.equal(cdp.commands.filter(value=>value===name).length,1);
+  assert.equal(signals.length,4);assert.ok(signals.every(signal=>signal===signals[0]));
+  for(const listeners of cdp.listeners.values())assert.equal(listeners.length,0);
 });

@@ -72,7 +72,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   class Stop extends Error {}
   class ChromeLaunchError extends Error {}
   class IdleCpuDiagnostic {
-    constructor(_cdp:unknown,_save:unknown,_client:unknown,owned:boolean,mode:string,readonly signal:AbortSignal){assert.equal(owned,true);assert.equal(mode,'native-trace');signal.throwIfAborted();mark('native-trace-created');}
+    constructor(_cdp:unknown,_save:unknown,_client:unknown,owned:boolean,mode:string,readonly signal:AbortSignal){assert.equal(owned,true);assert.ok(['native-trace','native-profile'].includes(mode));signal.throwIfAborted();mark('native-trace-created');}
     async close(){assert.equal(this.signal.aborted,true);mark('native-trace-close');}
   }
   const panning=async(_cdp?:unknown,_pace?:unknown,_output?:unknown,_reload?:unknown,trace?:()=>IdleCpuDiagnostic)=>{mark('panning');trace?.();if(fault==='panning-throw')throw Error('panning-original');
@@ -242,8 +242,8 @@ test('the existing bench check requires success from both independent scopes',{s
 });
 
 
-for(const scope of ['all','dashboard'])test('native-trace '+scope+' keeps every original dashboard phase and owned cleanup',async()=>{
-  const result=await run(['--scope',scope],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'native-trace'});
+for(const mode of ['native-trace','native-profile'])for(const scope of ['all','dashboard'])test(mode+' '+scope+' keeps every original dashboard phase and owned cleanup',async()=>{
+  const result=await run(['--scope',scope],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode});
   assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);assert.deepEqual(result.statuses,['diagnostic']);
   for(const name of tail)assert.equal(result.calls.filter(call=>call===name).length,1);
   assert.ok(result.calls.indexOf('native-trace-created')>result.calls.indexOf('frequency'));
@@ -256,10 +256,10 @@ for(const fault of ['panning','panning-throw','cancel'] as const)test('native-tr
   if(fault==='panning')assert.ok((result.saved.get('result') as {problems:string[]}).problems.includes('panning-red'));
   if(fault==='panning-throw')assert.ok(result.logs.some(line=>line.includes('panning-original')));
 });
-test('history still rejects native-trace before preparation',async()=>{
-  const result=await run(['--scope','history'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'native-trace'});assert.match(String(result.error),/scope/i);assert.deepEqual(result.calls,[]);
+for(const mode of ['native-trace','native-profile'])test('history still rejects '+mode+' before preparation',async()=>{
+  const result=await run(['--scope','history'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode});assert.match(String(result.error),/scope/i);assert.deepEqual(result.calls,[]);
 });
-test('native-trace refuses attached, non-CI and conflicting diagnostic runs before preparation',async()=>{
+for(const mode of ['native-trace','native-profile'])test(mode+' refuses attached, non-CI and conflicting diagnostic runs before preparation',async()=>{
   const cases:[string[],Record<string,string>,boolean][]=[
     [['--scope','dashboard','--cdp','http://example.test'],{},true],
     [['--scope','dashboard'],{},false],
@@ -268,7 +268,7 @@ test('native-trace refuses attached, non-CI and conflicting diagnostic runs befo
     [[],{QUOTUM_BENCH_REVERSAL_PROBE:'1'},true],
   ];
   for(const [args,env,ci] of cases){
-    const result=await run(args,undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'native-trace',...env},ci);
+    const result=await run(args,undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,...env},ci);
     assert.match(String(result.error),/conflicting/i);assert.ok(!result.calls.includes('prepare'));
   }
 });
@@ -280,10 +280,10 @@ test('manual native tracing uses only the existing dashboard job and rejects mis
     const expression=job(name).match(/if: \$\{\{ (.+) \}\}/)![1];
     return Boolean(runInNewContext(expression,{inputs,github:{event_name:event,ref},always:()=>true,startsWith:(value:string,prefix:string)=>value.startsWith(prefix)}));
   };
-  for(const native_trace of [false,true]){
-    const inputs={diagnostic_ref:'1'.repeat(40),native_trace};
-    assert.equal(selected('bench-dashboard',inputs),native_trace);
-    assert.equal(selected('idle-cpu-control',inputs),!native_trace);
+  for(const native_trace of [false,true])for(const native_profile of [false,true]){
+    const inputs={diagnostic_ref:'1'.repeat(40),native_trace,native_profile};
+    assert.equal(selected('bench-dashboard',inputs),native_trace||native_profile);
+    assert.equal(selected('idle-cpu-control',inputs),!native_trace&&!native_profile);
     assert.equal(selected('bench-history',inputs),false);
     assert.equal(selected('bench',inputs),false);
   }
@@ -293,11 +293,12 @@ test('manual native tracing uses only the existing dashboard job and rejects mis
     .replace(/^\s*import .+;\n/gm,'');
   const source='1'.repeat(40),hash='2'.repeat(64);
   const verify=(env:Record<string,string|undefined>={},head=source,client:object={status:'available',sha256:hash})=>runInNewContext(script,{
-    process:{env:{QUOTUM_BENCH_SOURCE_SHA:source,EXPECTED_CLIENT_SHA256:hash,...env}},
+    process:{env:{QUOTUM_BENCH_SOURCE_SHA:source,EXPECTED_CLIENT_SHA256:hash,NATIVE_TRACE:'true',...env}},
     execFileSync:()=>head,clientIdentity:()=>client,console:{log(){}},
   });
   assert.doesNotThrow(()=>verify());
-  for(const env of [{TRACE_ONLY:'true'},{ORIGINAL_TIMING:'true'},{QUOTUM_BENCH_SOURCE_SHA:'bad'},{EXPECTED_CLIENT_SHA256:'bad'}])assert.throws(()=>verify(env),/diagnostic mode|mismatch/);
+  assert.doesNotThrow(()=>verify({NATIVE_TRACE:'false',NATIVE_PROFILE:'true'}));
+  for(const env of [{TRACE_ONLY:'true'},{ORIGINAL_TIMING:'true'},{NATIVE_PROFILE:'true'},{NATIVE_TRACE:'false'},{QUOTUM_BENCH_SOURCE_SHA:'bad'},{EXPECTED_CLIENT_SHA256:'bad'}])assert.throws(()=>verify(env),/diagnostic mode|mismatch/);
   assert.throws(()=>verify({},'3'.repeat(40)),/mismatch/);
   assert.throws(()=>verify({},source,{status:'unavailable'}),/mismatch/);
   assert.throws(()=>verify({},source,{status:'available',sha256:'3'.repeat(64)}),/mismatch/);

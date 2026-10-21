@@ -25,7 +25,7 @@ const location=(value:any)=>{
 
 type NativeRow={name:string;phase:string;ts:number|null;duration:number|null;threadTs:number|null;threadDuration:number|null;pid:number;tid:number;frame:number|null;
   source:ReturnType<typeof location>;id:number|null;marker:number|null;kind?:string;processId?:number|null;outermost?:boolean;primary?:boolean};
-const NATIVE_NAMES=new Set(['RunTask','FunctionCall','FireAnimationFrame','RequestAnimationFrame','CancelAnimationFrame','MinorGC','MajorGC','Layout','UpdateLayoutTree','RunMicrotasks','EventDispatch','TimerFire','TimeStamp']);
+const NATIVE_NAMES=new Set(['RunTask','FunctionCall','FireAnimationFrame','RequestAnimationFrame','CancelAnimationFrame','MinorGC','MajorGC','Layout','UpdateLayoutTree','RunMicrotasks','EventDispatch','TimerFire','TimeStamp','PrePaint','Paint','Layerize','CompositeLayers']);
 
 /** Compiled positions are valid only for the bytes the page actually received. */
 export function clientIdentity(directory=path.join(import.meta.dirname,'../dist/client/assets')):Client {
@@ -109,9 +109,12 @@ export class IdleCpuDiagnostic {
   private nativeLifecycle=0;
   private nativeRuntime=false;
   private nativeCleaning:Promise<void>|undefined;
+  private nativeProfile:ReturnType<typeof numericProfile>|null=null;
+  private readonly nativeRejected:Record<string,unknown>[]=[];
   private readonly nativeClocks:{stage:'start'|'end';lo:number;hi:number;timeOrigin:number}[]=[];
   private readonly nativeInvalidated=()=>{this.nativeLifecycle++;};
-  private get native(){return this.collection==='native-trace';}
+  private get native(){return this.collection==='native-trace'||this.collection==='native-profile';}
+  private get profiling(){return this.collection==='profile'||this.collection==='native-profile';}
   private readonly clocks:{stage:string;before:number|null;page:number;after:number|null;valid:boolean}[]=[];
   private readonly collected=(message:{value:RawEvent[]})=>{
     if(!this.active)return;
@@ -142,12 +145,23 @@ export class IdleCpuDiagnostic {
   private readonly completed=(message?:{dataLossOccurred?:unknown})=>{
     this.ended=true;if(this.native)this.nativeLoss=typeof message?.dataLossOccurred==='boolean'?message.dataLossOccurred:null;this.complete();
   };
+  private rejectNative(event:RawEvent,reason:'identity'|'timestamp'|'phase'|'duration'|'frame-metadata'){
+    this.invalid++;
+    if(this.nativeRejected.length>=8)return;
+    const metadata=event.name==='thread_name'||event.name==='TracingStartedInBrowser',known=NATIVE_NAMES.has(event.name),frame=event.args?.data?.frame;
+    this.nativeRejected.push({name:known||metadata?event.name:'other',kind:metadata?'metadata':known?'known':'other',
+      phase:['B','E','X','I','M','i','b','e','n','s','t','f','C','R','S','T','F','P','N','O','D'].includes(event.ph)?event.ph:null,
+      pid:Number.isSafeInteger(event.pid)?event.pid:null,tid:Number.isSafeInteger(event.tid)?event.tid:null,
+      ts:typeof event.ts==='number'&&Number.isFinite(event.ts)?event.ts:null,frame:typeof frame==='string'&&frame?frame===this.frame?1:2:null,reason});
+  }
   private collectNative(events:RawEvent[]){
     for(const event of events){
       const metadata=event.name==='thread_name'||event.name==='TracingStartedInBrowser',known=NATIVE_NAMES.has(event.name);
       if(!metadata&&!known&&event.ph!=='B'&&event.ph!=='E')continue;
-      if(!Number.isSafeInteger(event.pid)||event.pid!<=0||!Number.isSafeInteger(event.tid)||event.tid!<=0||!metadata&&!finite(event.ts)) {this.invalid++;continue;}
-      if(!['B','E','X','I','M'].includes(event.ph)||event.ph==='X'&&!finite(event.dur)) {this.invalid++;continue;}
+      if(!Number.isSafeInteger(event.pid)||event.pid!<=0||!Number.isSafeInteger(event.tid)||event.tid!<=0){this.rejectNative(event,'identity');continue;}
+      if(!metadata&&!finite(event.ts)){this.rejectNative(event,'timestamp');continue;}
+      if(!['B','E','X','I','M'].includes(event.ph)){this.rejectNative(event,'phase');continue;}
+      if(event.ph==='X'&&!finite(event.dur)){this.rejectNative(event,'duration');continue;}
       const data=event.args?.data,marker=data?.message==='quotum-native-start'?1:data?.message==='quotum-native-end'?2:null;
       if(event.name==='TimeStamp'&&marker===null&&event.ph!=='B'&&event.ph!=='E')continue;
       const row:NativeRow={name:known||metadata?event.name:'other',phase:event.ph,ts:finite(event.ts)?event.ts!:null,duration:finite(event.dur)?event.dur!:null,
@@ -155,7 +169,7 @@ export class IdleCpuDiagnostic {
         source:event.name==='FunctionCall'?location(data):null,id:Number.isSafeInteger(data?.id)?data!.id!:null,marker};
       if(event.name==='thread_name')row.kind=event.args?.name==='CrRendererMain'?'renderer-main':'other';
       if(event.name==='TracingStartedInBrowser'){
-        if(!Array.isArray(data?.frames)){this.invalid++;continue;}
+        if(!Array.isArray(data?.frames)){this.rejectNative(event,'frame-metadata');continue;}
         if(data.frames.length>32)this.omitted+=data.frames.length-32;
         for(const frame of data.frames.slice(0,32))if(frame.frame===this.frame)this.appendNative({...row,frame:1,processId:Number.isSafeInteger(frame.processId)&&frame.processId!>0?frame.processId!:null,
           outermost:frame.isOutermostMainFrame===true,primary:frame.isInPrimaryMainFrame===true});
@@ -184,8 +198,10 @@ export class IdleCpuDiagnostic {
       capture:{status:cleanup==='complete'&&this.ended&&this.nativeLoss===false&&!this.omitted&&!this.invalid?'complete':'insufficient-evidence',cleanup,ended:this.ended,dataLossOccurred:this.nativeLoss,omitted:this.omitted,invalid:this.invalid,bytes:this.bytes},
       scope:{status:scope?'complete':'unknown',frame:1,pid:pid??null,tid,lifecycleEvents:this.nativeLifecycle,stableFrame:this.nativeStable},
       clocks:{status:scope&&clock&&stamps?'recorded-unqualified':'unknown',readings:this.nativeClocks,markers},
-      source:this.sourceBinding??{status:'unknown'},events:rows,
+      source:this.sourceBinding??{status:'unknown'},events:rows,rejected:this.nativeRejected,omittedRejections:Math.max(0,this.invalid-this.nativeRejected.length),
       unqualifiedCandidates:scope?0:rows.length},true);
+    if(this.profiling)this.save('native-frame-profile',{mode:'diagnostic',status:'unqualified',kind:'Signed sampled elapsed widths; not exclusive cost or thread CPU time. Observer overhead is unqualified.',
+      capture:{status:cleanup==='complete'&&this.nativeProfile?.status==='complete'?'complete':'insufficient-evidence',cleanup},samplingInterval:2000,profile:this.nativeProfile},true);
   }
   private cleanupNative(){
     // Owner cancellation stops observations; release both domains with one separate deadline.
@@ -193,6 +209,8 @@ export class IdleCpuDiagnostic {
       const results=await Promise.allSettled([
         (async()=>{if(this.tracing){await this.cdp.send('Tracing.end',{},signal);this.tracing=false;}})(),
         (async()=>{if(this.nativeRuntime){await this.cdp.send('Runtime.disable',{},signal);this.nativeRuntime=false;}})(),
+        (async()=>{if(this.profiler&&!this.nativeProfile){const reply=await this.cdp.send<{profile:Profile}>('Profiler.stop',{},signal);this.nativeProfile=numericProfile(reply.profile);}})(),
+        (async()=>{if(this.profiler){await this.cdp.send('Profiler.disable',{},signal);this.profiler=false;}})(),
       ]);
       const failure=results.find(result=>result.status==='rejected');if(failure?.status==='rejected')throw failure.reason;
     },5000);
@@ -203,7 +221,7 @@ export class IdleCpuDiagnostic {
     }
   }
 
-  constructor(private readonly cdp:Cdp,private readonly save:Save,client:Client,ownedSynthetic:boolean,private readonly collection:'profile'|'trace'|'native-trace'='profile',private readonly nativeSignal?:AbortSignal){
+  constructor(private readonly cdp:Cdp,private readonly save:Save,client:Client,ownedSynthetic:boolean,private readonly collection:'profile'|'trace'|'native-trace'|'native-profile'='profile',private readonly nativeSignal?:AbortSignal){
     if(!ownedSynthetic)throw Error('Idle CPU diagnostics require an owned synthetic browser');
     this.clockSource=this.native?null:clockTimerSource(client);
     this.binding=new ScriptBinding(cdp,client,(name,value)=>{if(name.startsWith('source-family-'))this.sourceBinding=value;save((this.native?'native-frame-':'idle-cpu-')+name,value);});
@@ -228,15 +246,15 @@ export class IdleCpuDiagnostic {
     this.frame=frame.id;if(this.native)this.nativeLoader=typeof frame.loaderId==='string'&&frame.loaderId?frame.loaderId:null;
     if(typeof this.frame!=='string'||!this.frame)throw Error('Owned target frame unavailable');
     this.cdp.on('Tracing.dataCollected',this.collected);this.cdp.on('Tracing.tracingComplete',this.completed);
-    if(this.collection==='profile'){
-      this.profiler=true;await this.cdp.send('Profiler.enable');
-      await this.cdp.send('Profiler.setSamplingInterval',{interval:2000});
+    if(this.profiling){
+      this.profiler=true;await this.cdp.send('Profiler.enable',{},this.nativeSignal);
+      await this.cdp.send('Profiler.setSamplingInterval',{interval:2000},this.nativeSignal);
     }
     if(!this.native)await this.clock('start');
     this.active=true;this.tracing=true;
     await this.cdp.send('Tracing.start',{categories:this.native?'toplevel,v8,devtools.timeline,disabled-by-default-devtools.timeline':'devtools.timeline,disabled-by-default-devtools.timeline.stack',transferMode:'ReportEvents'},this.nativeSignal);
     if(this.native)await this.nativeClock('start');
-    if(this.collection==='profile')await this.cdp.send('Profiler.start');
+    if(this.profiling)await this.cdp.send('Profiler.start',{},this.nativeSignal);
   }
 
   /** Stop only after the original counter readout or native report is frozen. */
@@ -249,10 +267,11 @@ export class IdleCpuDiagnostic {
         const frame=(await this.cdp.send<{frameTree:{frame:{id:string;loaderId?:string}}}>('Page.getFrameTree',{},this.nativeSignal)).frameTree.frame;
         this.nativeStable=!!this.nativeLoader&&frame.id===this.frame&&frame.loaderId===this.nativeLoader;
       }else await this.clock('end');
-      if(this.collection==='profile'){
-        const reply=await this.cdp.send<{profile:Profile}>('Profiler.stop');
-        await this.cdp.send('Profiler.disable');this.profiler=false;
-        profile=numericProfile(reply.profile);
+      if(this.profiling){
+        const reply=await this.cdp.send<{profile:Profile}>('Profiler.stop',{},this.nativeSignal);
+        if(this.native)this.nativeProfile=numericProfile(reply.profile);
+        await this.cdp.send('Profiler.disable',{},this.nativeSignal);this.profiler=false;
+        profile=this.native?this.nativeProfile:numericProfile(reply.profile);
       }
       const completed=new Promise<void>(resolve=>{this.complete=resolve;});
       await this.cdp.send('Tracing.end',{},this.nativeSignal);
@@ -262,7 +281,7 @@ export class IdleCpuDiagnostic {
     finally{
       this.active=false;
       this.cdp.off('Tracing.dataCollected',this.collected);this.cdp.off('Tracing.tracingComplete',this.completed);
-      if(this.profiler)try{await this.cdp.send('Profiler.stop');await this.cdp.send('Profiler.disable');this.profiler=false;}catch{cleanup='incomplete';}
+      if(this.profiler&&!this.native)try{await this.cdp.send('Profiler.stop');await this.cdp.send('Profiler.disable');this.profiler=false;}catch{cleanup='incomplete';}
       if(this.native){
         this.nativeListeners(false);
         try{await this.cleanupNative();}catch(value){cleanup='incomplete';error??=value;}
@@ -296,11 +315,11 @@ export class IdleCpuDiagnostic {
     this.save('idle-cpu-original-trace',receipt);return receipt;
   }
   async close(){
-    const interrupted=this.native&&(this.active||this.tracing||this.nativeRuntime);
+    const interrupted=this.native&&(this.active||this.tracing||this.nativeRuntime||this.profiler);
     this.active=false;this.binding.close();
     if(this.native)this.nativeListeners(false);
     this.cdp.off('Tracing.dataCollected',this.collected);this.cdp.off('Tracing.tracingComplete',this.completed);
-    if(this.profiler){try{await this.cdp.send('Profiler.stop');}finally{await this.cdp.send('Profiler.disable');this.profiler=false;}}
+    if(this.profiler&&!this.native){try{await this.cdp.send('Profiler.stop');}finally{await this.cdp.send('Profiler.disable');this.profiler=false;}}
     if(this.native){
       let error:unknown;
       try{await this.cleanupNative();}catch(value){error=value;}
