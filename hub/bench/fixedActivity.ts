@@ -249,10 +249,17 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       },true),2);
       assert.ok(during.current.flights<=2);
       const generations=await phase('cancelled A to B to A',()=>intercepted(async()=>{await actor.through(actor.floorAt+700);},async()=>{
+        const before=await cdp.evaluate('JSON.stringify(window.__quotumFixedActivity.reader().intent().request.workFilter)');
         await cdp.evaluate(`${filterRoot}.querySelector('button').click()`);
-        await cdp.evaluate(`${filterRoot}.querySelectorAll('[role="switch"]')[1].click()`);
-        await cdp.evaluate(`${filterRoot}.querySelectorAll('[role="switch"]')[1].click()`);
+        await waitFor(`${filterRoot}.querySelectorAll('[role="switch"]').length>1`);
+        const project=await cdp.evaluate<string>(`(()=>{const button=${filterRoot}.querySelectorAll('[role="switch"]')[1],name=button.querySelector('span').textContent;button.click();return name;})()`);
+        // Applying B invalidates its facet rows. Wait for that same choice to
+        // return instead of clicking a detached row or a different list index.
+        const option=`[...${filterRoot}.querySelectorAll('[role="switch"]')].find(button=>button.querySelector('span').textContent===${JSON.stringify(project)})`;
+        await waitFor(`!!(${option})`);
+        await cdp.evaluate(`(${option}).click()`);
         await cdp.evaluate(`${filterRoot}.querySelector('button').click()`);
+        assert.equal(await cdp.evaluate('JSON.stringify(window.__quotumFixedActivity.reader().intent().request.workFilter)'),before,'A to B to A restores the exact shared cohort');
         assert.equal(await cdp.evaluate('window.__quotumFixedActivity.sample()'),null);
       }),null);
       assert.ok(generations.reads.length>=2&&generations.reads.length<=3,'cancelled attempts remain counted');
