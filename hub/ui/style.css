@@ -467,11 +467,11 @@ td.muted, small.muted { color: var(--text-3); }
 .table-surface > .panel-empty, .table-surface > .panel-loading { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; }
 .table-preview { position: relative; min-width: 0; }
 .table-preview-content { max-height: calc(var(--row-budget, 100000px) - 22px); overflow: hidden; }
-.table-preview.has-detail > .table-preview-content { padding-right: 22px; }
 .table-preview > .picker { position: absolute; right: 0; top: 0; }
 .text-button.table-preview-trigger { border: 0; padding: 0 3px; height: 20px; color: var(--text-2); background: var(--surface); border-radius: 4px; }
 .table-cell-details { white-space: normal; overflow-wrap: anywhere; }
 .table-cell-details .analytics-name { display: block; }
+.table-cell-details :is(.agents-open,.agents-project > span,.agents-project small) { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 .reader-state .popover-body { white-space: pre-line; }
 .table-footer.is-list .table-summary dl { grid-template-rows: repeat(var(--metric-rows, 1),20px); }
 .table-footer.is-list .table-summary dt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

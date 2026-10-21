@@ -8,7 +8,7 @@ export function TablePreview({children,label,still=false}:{children:ReactNode;la
   const box=useRef<HTMLDivElement>(null),content=useRef<HTMLDivElement>(null),[overflow,setOverflow]=useState(false);
   useLayoutEffect(()=>{
     if(still)return;
-    const measure=()=>{const node=content.current;if(node)setOverflow(node.scrollHeight>node.clientHeight+1||node.scrollWidth>node.clientWidth+1);};
+    const measure=()=>{const node=content.current;if(node)setOverflow([node,...node.querySelectorAll<HTMLElement>('*')].some(part=>part.clientHeight>0&&part.clientWidth>0&&(part.scrollHeight>part.clientHeight+1||part.scrollWidth>part.clientWidth+1)));};
     measure();const observer=new ResizeObserver(measure);if(content.current)observer.observe(content.current);return()=>observer.disconnect();
   },[children,still]);
   return <div ref={box} className={`table-preview${overflow?' has-detail':''}`}>
