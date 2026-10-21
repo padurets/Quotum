@@ -34,6 +34,19 @@ export function assertActivityOverlap(requests:readonly PeriodRequest[],updates:
   }
 }
 
+/** Work outside the fixed interval can refresh the calendar, but never its session ledger. */
+export function assertActivityOutside(requests:readonly PeriodRequest[],intent:Pick<PeriodRequest,'selection'|'workFilter'>) {
+  assert.ok(requests.length<=1,'outside work allows at most one shared calendar refresh');
+  for(const body of requests){
+    assert.ok(body.calendar,'outside work must not start an independent chart read');
+    assert.ok(!body.sessions&&!body.budget&&!body.funds&&!body.values&&!body.facets&&!body.sourceWork);
+    assert.notEqual(body.quota?.work,'1');
+    assert.notEqual(body.quota?.sources,'[]','outside work adds no empty-source Activity reader');
+    assert.deepEqual(body.selection,intent.selection);
+    assert.deepEqual(body.workFilter,intent.workFilter);
+  }
+}
+
 /** Independent endpoint sweep: no group aggregate, PeriodActivity or new selection helper. */
 export function activityOracle(trace:WorkTrace,from:number,to:number):Numbers {
   const events:[number,number][]=[],identities=new Set<string>();let agentMs=0;
@@ -48,7 +61,7 @@ export function activityOracle(trace:WorkTrace,from:number,to:number):Numbers {
 
 function observationScript(period:string){return historyPoolReceiptScript()+`;(() => {
   localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d',activityBy:'project',filtersVisible:true}));
-  const original=window.__quotumInspectHistoryPool,ids=new WeakMap();let serial=0,pool,scheduler,stats;
+  const original=window.__quotumInspectHistoryPool,ids=new WeakMap(),news=new Set();let serial=0,pool,scheduler,stats;
   const reset=()=>stats={bytes:0,flights:0,advances:0,jobsStarted:0,fetches:0,preparationMs:0,failedReservations:0,preferenceWrites:0};reset();
   const fetch=window.fetch;window.fetch=function(...args){stats.fetches++;return fetch.apply(this,args);};
   const save=Storage.prototype.setItem;Storage.prototype.setItem=function(key,...args){if(key==='quotum.prefs')stats.preferenceWrites++;return save.call(this,key,...args);};
@@ -59,12 +72,12 @@ function observationScript(period:string){return historyPoolReceiptScript()+`;((
     const request=p.request;p.request=function(owner,flight,start,cancel){return request.call(this,owner,flight,()=>{stats.flights=Math.max(stats.flights,this.active.size);start();},cancel);};
   };
   window.__quotumInspectPreparations=value=>{scheduler=value;const replace=scheduler.replace;scheduler.replace=function(owner,work,...rest){stats.jobsStarted++;const next=work.next;work.next=function(...args){const start=performance.now();try{stats.advances++;return next.apply(this,args);}finally{stats.preparationMs+=performance.now()-start;}};return replace.call(this,owner,work,...rest);};};
-  const status=()=>{const p=reader(),h=chart()?.get().history,s=p?.activityProjectionState(h);return {registered:!!p,error:s?.error,loading:p?.get().loading,ready:s?.ready,preparing:scheduler?.size,flights:pool.activeFlights,bytes:pool.estimatedBytes,members:pool.members.size};};
-  window.__quotumFixedActivity={reset,reader,status,holdDispatch:()=>{const t=reader().transport,schedule=t.schedule;t.schedule=()=>{};return window.__quotumFixedActivity.resumeDispatch=()=>{t.schedule=schedule;schedule.call(t);};},sample:()=>{
+  const status=()=>{const p=reader(),h=chart()?.get().history,s=p?.activityProjectionState(h),t=p?.transport;return {registered:!!p,error:s?.error,loading:p?.get().loading,ready:s?.ready,calendarPending:!!p?.calendar.demand(),transportPending:!!(t?.scheduled||t?.queue.length||t?.flights.size),preparing:scheduler?.size,flights:pool.activeFlights,bytes:pool.estimatedBytes,members:pool.members.size};};
+  window.__quotumFixedActivity={reset,reader,status,observeNews:()=>{const p=reader(),changed=p.changed;p.changed=function(event,...args){if(event?.type==='hub'&&event.event.type==='history')news.add(event.event.data.workSince);return changed.call(this,event,...args);};},heardSince:at=>news.has(at),holdDispatch:()=>{const t=reader().transport,schedule=t.schedule;t.schedule=()=>{};return window.__quotumFixedActivity.resumeDispatch=()=>{t.schedule=schedule;schedule.call(t);};},sample:()=>{
     const p=reader(),c=chart(),h=c?.get().history;if(!h||!p.activityProjectionState(h).ready)return null;
     const a=p.project(h,'quota',Date.now()).activity;
     return {...stats,numbers:{agentMs:a.agentMs,activeMs:a.activeMs,agents:a.agents},activity:a,tiles:[...c.grids.values()].flatMap(grid=>[...grid.values()].map(tile=>{if(!ids.has(tile))ids.set(tile,++serial);return[tile.from,tile.to,ids.get(tile)];}))};
-  },ready:()=>{const s=status();return s.ready&&s.flights===0&&s.preparing===0&&!document.querySelector('.chart>svg[data-draw-ready="false"],.activity.is-loading,.history.is-loading,.budget-history.is-loading,.subscription-funds.is-loading');}};
+  },ready:()=>{const s=status();return s.ready&&!s.calendarPending&&!s.transportPending&&s.flights===0&&s.preparing===0&&!document.querySelector('.chart>svg[data-draw-ready="false"],.activity.is-loading,.history.is-loading,.budget-history.is-loading,.subscription-funds.is-loading');}};
 })();`;}
 
 /** Physical requests are retained through cancellation and their final response-body accounting. */
@@ -110,8 +123,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       await waitFor(`${filterRoot}.querySelectorAll('[role="switch"]').length>2`);
       const excluded=await cdp.evaluate<string>(`(()=>{const button=[...${filterRoot}.querySelectorAll('[role="switch"]')].find(b=>!b.textContent.includes('Observed benchmark'));const name=button.querySelector('span').textContent;button.click();return name;})()`);
       await cdp.evaluate(`${filterRoot}.querySelector('button').click()`);
-      const settled=async()=>{
-        const deadline=Date.now()+30_000;
+      const settled=async(deadline=Date.now()+30_000)=>{
         await waitFor(`window.__quotumFixedActivity?.ready()===true`,deadline);
         await cdp.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
         await waitFor(`window.__quotumFixedActivity?.ready()===true`,deadline);
@@ -120,6 +132,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       console.error('bench: fixed Activity settled '+JSON.stringify(await cdp.evaluate('window.__quotumFixedActivity.status()')));
       const sample=()=>cdp.evaluate<Sample>('window.__quotumFixedActivity.sample()');
       const baseline=await sample();assert.ok(baseline.activity.known);assert.ok(baseline.tiles.length<=8);
+      await cdp.evaluate('window.__quotumFixedActivity.observeNews()');
       const selectedFilter=[...bodies.bodies].reverse().find(row=>row.body.workFilter)!.body.workFilter;assert.ok(selectedFilter);
       assert.equal(await cdp.evaluate('window.__quotumFixedActivity.status().members'),4,'emphasis adds no history reader');
       // SVG viewport bounds lose float precision after native focus scrolls the page.
@@ -194,14 +207,20 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       };
       const phase=async(name:string,run:()=>Promise<void>,expected:number|null,overlap=false)=>{
         const start=bodies.bodies.length;await cdp.evaluate('window.__quotumFixedActivity.reset()');const at=Date.now();
+        const deadline=at+30_000;
         referenceReceipt={requests:0,requestBytes:0,decodedBytes:0,encodedBytes:0};
         const metrics=async()=>{const {metrics}=await cdp.send<{metrics:{name:string;value:number}[]}>('Performance.getMetrics');return Object.fromEntries(metrics.map(metric=>[metric.name,metric.value]));};
         const before=await metrics();
         await run();
-        if(expected){const deadline=Date.now()+30_000;while(bodies.bodies.length-start<expected){if(Date.now()>deadline)throw Error(name+' did not dispatch its shared reads');await pause(30);}}
-        await pause(350);await settled();while(bodies.active.size||bodies.pending.size){await Promise.allSettled([...bodies.pending]);await pause(20);}
+        if(expected){while(bodies.bodies.length-start<expected){if(Date.now()>deadline)throw Error(name+' did not dispatch its shared reads');await pause(30);}}
+        await pause(350);await settled(deadline);while(bodies.active.size||bodies.pending.size){await Promise.allSettled([...bodies.pending]);await pause(20);}
         const coherentAt=Date.now();
-        const current=await check(),reads=bodies.bodies.slice(start);
+        const verified=await check();
+        // Verification can overlap a calendar response. Account its complete body
+        // and preparation before taking the phase's final traffic and CPU snapshot.
+        await settled(deadline);while(bodies.active.size||bodies.pending.size){await Promise.allSettled([...bodies.pending]);await pause(20);}
+        const current=await sample(),reads=bodies.bodies.slice(start);
+        assert.deepEqual(current.numbers,verified.numbers,'verification cannot outlive the cohort it checked');
         const after=await metrics();assert.deepEqual(bodies.errors,[],'every completed response must remain accounted');
         assert.ok(Number.isFinite(after.ScriptDuration-before.ScriptDuration)&&Number.isFinite(after.TaskDuration-before.TaskDuration));
         const decoded=reads.reduce((n,row)=>n+row.decoded,0);
@@ -212,6 +231,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         reports.push(report);console.error('bench: fixed Activity '+JSON.stringify(report));
         if(expected!==null){
           if(overlap)assertActivityOverlap(reads.map(row=>row.body),expected);
+          else if(expected===0)assertActivityOutside(reads.map(row=>row.body),{selection,workFilter:selectedFilter});
           else assert.equal(reads.length,expected,name+' shared requests; no legend allowance');
         }
         assert.ok(current.flights<=2&&current.bytes<=FIXED_ACTIVITY_BUDGET.pool&&!current.failedReservations&&current.tiles.length<=8);
@@ -283,7 +303,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       }),null);
       assert.ok(generations.reads.length>=2&&generations.reads.length<=3,'cancelled attempts remain counted');
       await phase('through upper bound',async()=>{await actor.through(selection.to);},1);
-      await phase('outside range',async()=>{await actor.through(selection.to+100);},0);
+      await phase('outside range',async()=>{await actor.through(selection.to+100);await waitFor(`window.__quotumFixedActivity.heardSince(${selection.to})`);},0);
       const receipt=await cdp.evaluate<{status:string;members:{kind:string}[]}>(`(()=>{__quotumHistoryPoolReceipt.mark(2,3);return __quotumHistoryPoolReceipt.read();})()`);
       assert.equal(receipt.status,'complete');assert.equal(receipt.members.length,4);assert.ok(!receipt.members.some(member=>member.kind==='activity'));
     }finally{await tab.close();await actor.close();}

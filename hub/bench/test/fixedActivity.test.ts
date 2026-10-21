@@ -1,8 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {activityOracle,assertActivityOverlap,FIXED_ACTIVITY_BUDGET} from '../fixedActivity';
+import {activityOracle,assertActivityOverlap,assertActivityOutside,FIXED_ACTIVITY_BUDGET} from '../fixedActivity';
 import {packWork,type WorkTrace} from '../../server/domain/periodWork';
 import type {PeriodRequest} from '../../server/domain/periodRead';
+import {fixture,flush,NOW} from '../../ui/test/periodRuntimeFixture';
 
 test('the shared-filter benchmark oracle clips intervals, unions overlap and deduplicates identities',()=>{
   const trace:WorkTrace={anchor:100,knownFrom:100,cut:200,refs:[0,1,2].map(i=>({ref:String(i),identityRef:i<2?'shared':'other',source:null,project:null,device:{id:'d',name:'D'},origin:'terminal',folder:null,startedAt:100})),spans:[[0,0,30],[1,10,40],[2,50,60]]};
@@ -29,4 +30,23 @@ test('overlapping work counts its recorded native follow-up without allowing ano
   assert.throws(()=>assertActivityOverlap([work,work,{...native,quota:{...native.quota!,evidence:'another-ledger'}}],2));
   assert.throws(()=>assertActivityOverlap([work,work,{...native,facets:true}],2));
   assert.throws(()=>assertActivityOverlap([work,work,{...native,selection:{mode:'range',from:123,to:2000}}],2));
+});
+
+test('outside fixed work refreshes the actual calendar without rereading or changing Activity',async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const h=await fixture({heatmap:true,fixed:true});t.after(()=>h.close());
+  const rows=JSON.stringify(h.period.get().rows),cells=JSON.stringify(h.period.calendar.get().value.cells);
+  h.credit(NOW,NOW+100);h.events.flush();await flush();
+  assert.equal(h.requests.length,1);
+  const reads=JSON.parse(JSON.stringify(h.requests)) as PeriodRequest[];
+  assertActivityOutside(reads,{selection:{mode:'range',...h.selectedRange()!}});
+  assert.equal(JSON.stringify(h.period.get().rows),rows);
+  assert.equal(JSON.stringify(h.period.calendar.get().value.cells),cells);
+  const body=reads[0],native={...body,quota:{cell:'300000',from:String(NOW-300000),to:String(NOW),sources:JSON.stringify([h.source]),evidence:'skip'}};
+  assertActivityOutside([native],body);
+  for(const requests of [[body,body],[{...body,sessions:{}}],[{...native,calendar:undefined}],
+    [{...body,budget:native.quota}],[{...native,quota:{...native.quota,sources:'[]'}}],
+    [{...body,selection:{mode:'range' as const,from:NOW-100,to:NOW}}]]){
+    assert.throws(()=>assertActivityOutside(requests,body));
+  }
 });
