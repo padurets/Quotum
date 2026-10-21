@@ -27,12 +27,12 @@ on:
         type: boolean
         default: false
       native_trace:
-        description: Trace funds at 24h within the complete original dashboard checks
+        description: Trace activity at 24h within the complete original dashboard checks
         required: false
         type: boolean
         default: false
       native_profile:
-        description: Sample CPU alongside the opt-in funds timeline observation
+        description: Sample CPU alongside the opt-in activity timeline observation
         required: false
         type: boolean
         default: false
