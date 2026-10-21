@@ -49,7 +49,7 @@ function TableFooter({table,count,metrics=[],columns,still=false,single=false,bo
   </footer>;
 }
 
-type Measurement={scope:string;heights:ReadonlyMap<string,number>;fallback:number;shell:number;footer:number;singleFooter:number;border:number};
+type Measurement={scope:string;heights:ReadonlyMap<string,number>;fallback:number;head:number;shell:number;footer:number;singleFooter:number;border:number};
 export function useTableLayout(box:RefObject<HTMLElement|null>,columns:readonly number[],nameWidth:number,edges?:number,widthKey?:string){
   const [model,setModel]=useState<{layout:'table'|'list';width:number}>({layout:'table',width:0}),key=columns.join(',');
   useLayoutEffect(()=>{
@@ -71,8 +71,10 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
   const scope=JSON.stringify([layout,width,structure,nameWidth,edges,locale,footerMetrics]);
   const [measurement,setMeasurement]=useState<Measurement|null>(null),[position,setPosition]=useState({key:resetKey,page:0});
   const seen=useRef<{key:string;outer:number;live:number;layer:number;footer:number;singleFooter:number}|null>(null);
-  const sizes=measurement?.scope===scope?measurement:null;
-  const rowBudget=layout==='table'?60:Math.max(90,44+Math.ceil(Math.max(0,structure.length-1)/2)*36),head=layout==='table'?56:18;
+  const suspended=useRef<HTMLElement|null>(null);
+  const hidden=width===0||!!panel.current&&suspended.current===panel.current;
+  const sizes=measurement?.scope===scope||hidden?measurement:null;
+  const rowBudget=hidden&&sizes?sizes.fallback:layout==='table'?60:Math.max(90,44+Math.ceil(Math.max(0,structure.length-1)/2)*36),head=hidden&&sizes?sizes.head:layout==='table'?56:18;
   const fallback=rowBudget,heights=sizes?.heights??new Map<string,number>();
   let starts:number[];
   if(sizing?.manual&&sizes){
@@ -83,8 +85,13 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
   useLayoutEffect(()=>{if(position.key!==resetKey||((sizes||!sizing?.manual)&&position.page!==page))setPosition({key:resetKey,page});},[resetKey,page,position,!!sizes,sizing?.manual]);
   const update=useRef(()=>{});
   update.current=()=>{
-    const root=panel.current;if(!root)return;
-    const outer=pixels(root.getBoundingClientRect().height-fillOf(root));
+    const root=panel.current;if(!root||suspended.current===root)return;
+    if(width===0){seen.current=null;return;}
+    const rect=root.getBoundingClientRect();
+    // Hidden rows have no useful geometry. Recheck them even when the panel
+    // returns to the same width, preserving its last complete page meanwhile.
+    if(rect.width===0){seen.current=null;return;}
+    const outer=pixels(rect.height-fillOf(root));
     const signal={key:JSON.stringify([scope,keysKey,resetKey,from,to,sizing?.manual]),outer,live:pixels(live.current?.getBoundingClientRect().height??0),
       layer:pixels(measured.current?.getBoundingClientRect().height??0),footer:pixels(measuredFooter.current?.getBoundingClientRect().height??0),singleFooter:pixels(measuredSingleFooter.current?.getBoundingClientRect().height??0)};
     const last=seen.current;
@@ -108,12 +115,17 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     const natural=shell+TABLE_PAGE_ROWS*rowBudget+multiFooter;
     sizing?.report({min:pixels(min),natural:pixels(Math.max(min,natural)),shown:outer,layout:scope});
     if(!sizes||!same(sizes.shell,shell)||!same(sizes.footer,multiFooter)||!same(sizes.singleFooter,singleFooter)||!same(sizes.border,border)||!same(sizes.fallback,base)||nextHeights.size!==sizes.heights.size||[...nextHeights].some(([key,height])=>!same(sizes.heights.get(key),height)))
-      setMeasurement({scope,heights:nextHeights,fallback:base,shell,footer:multiFooter,singleFooter,border});
+      setMeasurement({scope,heights:nextHeights,fallback:base,head,shell,footer:multiFooter,singleFooter,border});
   };
   const keysKey=keys.join('\n'),columnsKey=columns.join(',');
   useLayoutEffect(()=>update.current(),[layout,scope,keysKey,resetKey,page,from,to,sizing?.manual,sizing?.allocated,columnsKey]);
   useLayoutEffect(()=>{
-    const observer=new ResizeObserver(()=>update.current());
+    const observer=new ResizeObserver(entries=>{
+      const root=panel.current,entry=entries.find(entry=>entry.target===root),box=entry?.borderBoxSize;
+      if(root&&box?.length===1&&box[0].inlineSize===0){suspended.current=root;return;}
+      if(root&&entry&&suspended.current===root){suspended.current=null;seen.current=null;}
+      update.current();
+    });
     for(const element of [panel.current,surface.current,live.current,measured.current,footer.current,measuredFooter.current,measuredSingleFooter.current])if(element)observer.observe(element);
     return ()=>observer.disconnect();
   },[panel,layout,!!keys.length,sizing?.manual]);
