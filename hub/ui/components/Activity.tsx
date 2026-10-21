@@ -173,15 +173,16 @@ function useSubsetNumbers(reader:ActivitySelection,history:History|null,enabled:
 }
 
 /** Only this small region hears legend preview changes. Its reserved geometry is constant. */
-const Totals=memo(function Totals({history,by,subset,scoped,allOff,since,focus,groups}:{history:History|null;by:ActivityDimension;subset:ActivitySelection;scoped:boolean;allOff:boolean;since:number|null;focus:SeriesFocus;groups:ActivityGroup[]}) {
+const Totals=memo(function Totals({history,by,subset,scoped,allOff,since,focus}:{history:History|null;by:ActivityDimension;subset:ActivitySelection;scoped:boolean;allOff:boolean;since:number|null;focus:SeriesFocus}) {
   useLocale();const selected=useSyncExternalStore(focus.subscribe,focus.get);
-  const group=groups.find(group=>mutedKey(by,group.key)===selected),key=group?.key;
-  const base=useActivityNumbers(history,by,value=>JSON.stringify([!!value.known,...metricsText(value)]),!scoped||!!group,undefined,key);
-  const local=useSubsetNumbers(subset,history,scoped&&!group);
-  const preview=group&&base?.by[by].find(part=>part.key===group.key);
-  const activity=group&&base?{...base,agentMs:preview?.agentMs??0,activeMs:preview?.activeMs??0,agents:preview?.agents??0}:scoped?local.activity:base;
+  // The legend can retain an identity after its last work leaves this interval.
+  const prefix=mutedKey(by,''),key=selected?.startsWith(prefix)?selected.slice(prefix.length):undefined,previewed=key!==undefined;
+  const base=useActivityNumbers(history,by,value=>JSON.stringify([!!value.known,...metricsText(value)]),!scoped||previewed,undefined,key);
+  const local=useSubsetNumbers(subset,history,scoped&&!previewed);
+  const preview=previewed?base?.by[by].find(part=>part.key===key):undefined;
+  const activity=previewed&&base?{...base,agentMs:preview?.agentMs??0,activeMs:preview?.activeMs??0,agents:preview?.agents??0}:scoped?local.activity:base;
   const text=allOff?t('activity.noSeries'):activity?.available===false?t('activity.noSessions'):activity&&!activity.known?t('activity.knownFrom',{time:stamp(activity.since)}):null;
-  return <div className="chart-info activity-info" data-time="activity-info" data-series-context={group?selected:undefined}>
+  return <div className="chart-info activity-info" data-time="activity-info" data-series-context={previewed?selected:undefined}>
     <div className="activity-totals" data-time="activity-totals" data-agent-ms={!text?activity?.agentMs:undefined}>
       {text?<span>{text}</span>:<>
         <span title={t('activity.agentHoursHint')}><span className="activity-total-name">{t('activity.agentHours')}</span><b>{activity?workHours(activity.agentMs):'—'}</b></span>
@@ -191,7 +192,7 @@ const Totals=memo(function Totals({history,by,subset,scoped,allOff,since,focus,g
       </>}
     </div>
     {since!==null&&<span className="sr-only">{t('activity.since',{time:stamp(since)})}</span>}
-    {scoped&&!group&&<ReadState error={local.state.error} retry={subset.retry}/>}
+    {scoped&&!previewed&&<ReadState error={local.state.error} retry={subset.retry}/>}
   </div>;
 });
 
@@ -282,7 +283,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     <AnalyticsPanel ref={panel} className="activity" title={t('activity.title')} chart history={history} loading={loading} error={error} retry={()=>{boardPeriod.retry();quotaHistory.retry();}}
       settings={<ActivitySettings arrange={arrange} since={since}/>}
     >
-      <Totals history={drawing} by={by} subset={subset} scoped={scoped} allOff={allOff} since={since} focus={focus} groups={currentGroups}/>
+      <Totals history={drawing} by={by} subset={subset} scoped={scoped} allOff={allOff} since={since} focus={focus}/>
       <>
           <Stacks
             history={history}

@@ -738,7 +738,9 @@ separate states. Zero active time has no average concurrency.
 The four metrics sit directly below the heading, without a separate group-name row.
 Pointing to a visible legend entry or focusing it with the keyboard temporarily shows
 that group's metrics in the same space. Pointer takes visual priority over keyboard
-focus; each focused entry keeps its own accessible description. Escape dismisses the
+focus. A retained legend identity with no work in the known selected interval shows
+zero for that group; it does not borrow the totals of other groups. Each focused entry
+keeps its own accessible description. Escape dismisses the
 preview, and a tap toggles visibility and holds an enabled entry's preview for four
 seconds. A hidden entry supplies no preview or peer dimming. Shift and panning suppress
 temporary readouts. The heading area, plot and widget retain their geometry throughout.

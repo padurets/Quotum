@@ -23,6 +23,7 @@ import {HistoryPool} from '../lib/historyPool';
 import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
 import {flush} from './periodRuntimeFixture';
 import {CHART_SERIES_SCENES} from '../../demo/catalogue';
+import {groupRegistry} from '../lib/plotRegistry';
 
 const require=createRequire(import.meta.url),React=require('react'),{renderToStaticMarkup}=require('react-dom/server');
 const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
@@ -178,6 +179,35 @@ test('the actual summary uses one selected or preview cohort in EN/RU, including
     }
     for(const scene of CHART_SERIES_SCENES)for(const code of scene.expect)assert.ok(seen.has(code),scene.id+': '+code);
   }finally{setLocale('en');reader.reset();d.close();await h.close();}
+});
+
+test('a retained legend group with no work in the selected interval previews zero instead of another group',async test=>{
+  test.mock.method(Date,'now',()=>NOW);
+  const h=await fixture({personal:true,creditFrom:NOW-50*M,creditTo:NOW-40*M}),d=await drawings(h);
+  const clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}});
+  try{
+    const first:History=d.renderActivity().drawing!;
+    const seed=first.activity.by.project.map(group=>({...group,color:'blue'})),old=seed[0];assert.ok(old);
+    h.store.creditWork(h.device,NOW-25*M,NOW-15*M,[{source:h.source,client:'codex',origin:'terminal',project:'B',folder:'',startedAt:NOW-H,identity:{kind:'stable',sessionId:'B'}}]);
+    h.events.flush();await flush();
+    h.selectRange({from:NOW-30*M,to:NOW-10*M});d.loader.choose(h.settings.range,h.selectedRange());await flush();
+    const history:History=d.renderActivity().drawing!;
+    const groups=history.activity.by.project,legend=groupRegistry(seed,seed,groups);
+    assert.equal(h.period.activityProjectionState(history).ready,true);
+    assert.equal(history.activity.agentMs,10*M);assert.equal(groups.length,1);assert.notEqual(groups[0].key,old.key);
+    assert.ok(legend.some(group=>group.key===old.key),'the actual registry retains the old legend identity');
+    let selected:string|null=mutedKey('project',old.key);const focus={get:()=>selected,subscribe:()=>()=>{}};
+    h.requests.length=0;
+    for(const locale of ['en','ru'] as const)for(const scoped of [false,true]){
+      setLocale(locale);const props={history,by:'project',groups,focus,scoped,since:null},view=consumer('Totals',clock,h.period,props);
+      try{
+        const html=view.render();assert.ok(html.includes('data-series-context='),'the absent group remains the preview context');assert.ok(html.includes('data-agent-ms="0"'));assert.ok(html.includes(t('activity.agents')+'</span><b>0'));
+        selected=null;const all=view.update({...props,scoped:false});assert.ok(all.includes('data-agent-ms="600000"'));assert.ok(!all.includes('data-series-context='));
+        selected=mutedKey('project',old.key);
+      }finally{view.close();}
+    }
+    assert.equal(h.requests.length,0,'hover and focus only read accepted evidence');
+  }finally{setLocale('en');d.close();await h.close();}
 });
 
 test('the Activity clock advances the plot without invalidating unchanged numerical consumers',async test=>{
