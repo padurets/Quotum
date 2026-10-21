@@ -316,7 +316,7 @@ class NativeCdpFake extends CurrentCdpFake {
     signal?.throwIfAborted();
     if(method==='Page.getFrameTree'){this.commands.push(method);return {frameTree:{frame:{id:'own-frame',loaderId:this.loader}}} as T;}
     if(method==='Tracing.start'){
-      this.commands.push(method);assert.equal((params as {categories:string}).categories,'toplevel,v8,blink,cc,devtools.timeline,disabled-by-default-devtools.timeline');
+      this.commands.push(method);assert.equal((params as {categories:string}).categories,'toplevel,v8,blink,cc,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.frame');
       if(!this.skipMetadata)this.emit('Tracing.dataCollected',{value:[nativeMetadata(),{name:'thread_name',ph:'M',pid:101,tid:101,args:{name:'CrRendererMain'}}]});
       return {} as T;
     }
