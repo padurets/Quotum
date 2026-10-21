@@ -2,7 +2,7 @@ import type {HistoryReadOwner} from './periodTransport';
 import {onDataFilters,filtersReady,effectiveFilters} from './filterSelection';
 import {executableWorkFilters,workFilter,type WorkFilter} from '../../server/domain/dataFilters';
 import {HistoryPool,historyPool} from './historyPool';
-import {boardPeriod,followPeriod} from './period';
+import {boardPeriod,followPeriod,type ActivityFrame} from './period';
 import type {HistoryScope} from '../../server/domain/history';
 import {widgetVisible, QUOTA_WIDGETS, BUDGET_WIDGETS, SUBSCRIPTION_FUNDS, ACTIVITY} from '../../server/domain/widgets';
 import {useMemo,useRef,useSyncExternalStore} from 'react';
@@ -1198,7 +1198,7 @@ if (typeof window !== 'undefined') {
   };
   onPrefs(chosen);onTimeRange(chosen);chosen();
 }
-function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false):Shown&{drawing:History|null} {
+function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false,activityOnly=false):Shown&{drawing:History|null} {
   const shown=useSyncExternalStore(financial?loader.subscribeFinancial:loader.subscribe,financial?loader.getFinancial:loader.get,financial?loader.getFinancial:loader.get);
   const panning=pan.active();
   const revision=useSyncExternalStore(listener=>boardPeriod.subscribeProjection(loader===fundsHistory?'funds':loader.scope??'quota',listener),()=>(financial?boardPeriod.getFinancialProjectionRevision:boardPeriod.getProjectionRevision)(loader===fundsHistory?'funds':loader.scope??'quota'));
@@ -1237,14 +1237,14 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false):Sho
       if(!shownNow.history)return shownNow;
       const scope=loader===fundsHistory?'funds':loader.scope??'quota',state=boardPeriod.projectionState(shownNow.history,scope);
       if(!state.ready)return {...shownNow,history:retained.current?.history??null,loading:!folding&&!state.error&&!shownNow.error,error:state.error??shownNow.error};
-      const projected=boardPeriod.project(shownNow.history,scope,at),deadline=held?.history.events===projected.events?held.deadline:planEventsDeadline(projected.events);
+      const projected=boardPeriod.project(shownNow.history,scope,at,activityOnly),deadline=held?.history.events===projected.events?held.deadline:planEventsDeadline(projected.events);
       const events=validAt>=deadline?planEventsAt(projected.events,validAt):projected.events,history=events===projected.events?projected:{...projected,events};
       retained.current={board,history,deadline:events===projected.events?deadline:planEventsDeadline(events)};
       if(!shownNow.loading)gesture.current.target=null;return {...shownNow,history,loading:folding?false:shownNow.loading,error:state.error??shownNow.error};
     })();
     snapshot.current={inputs,phase:panning,phaseRevision:(previous?.phaseRevision??0)+(previous&&previous.phase!==panning?1:0),value:previous&&shallowEqual(previous.value,value)?previous.value:value};
     return snapshot.current.value;
-  },[shown,revision,loader,now,financial]);
+  },[shown,revision,loader,now,financial,activityOnly]);
   const result=useSyncExternalStore(pan.onPhase,read,read);
   // Rolling totals change with the endpoints; their unchanged drawing evidence
   // must not restart line and stack preparation on the same clock wake.
@@ -1252,6 +1252,7 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false):Sho
   return {...result,drawing};
 }
 export function useHistory(rolling=false) {return usePeriodHistory(quotaHistory,rolling);}
+export function useActivityHistory():Omit<Shown,'history'>&{history:ActivityFrame|null;drawing:ActivityFrame|null}{return usePeriodHistory(quotaHistory,true,false,true);}
 export function useQuotaFinancialHistory(){return usePeriodHistory(quotaHistory,false,true);}
 export function useBudgetHistory(family:MoneyFamily='budget',rolling=false) {return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory,rolling);}
 export function useBudgetFinancialHistory(family:MoneyFamily='budget',rolling=false){return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory,rolling,true);}

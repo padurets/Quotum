@@ -9,9 +9,9 @@ import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks, periodOf} fro
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
 import {page, usePersonalBoard, useBoardId, useLineup, useTitles,useProjectColorPins,useProjectColorsReady} from '../lib/board';
 import {useClock,hubNow} from '../lib/clock';
-import {quotaHistory, useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
+import {quotaHistory, useActivityHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {boardPeriod} from '../lib/period';
-import type {History} from '../../server/domain/history';
+import type {ActivityFrame as History} from '../lib/period';
 import {plotBar, plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
 import {usePrepared, usePreparationBasis} from './prepared';
 import {axisNavigation, navigationKey, type AxisNavigation} from '../lib/axisNavigation';
@@ -197,7 +197,7 @@ type ActivityRegistry={authority:number;token:number;range:string|undefined;by:A
  * render it. The unknown part of the period is hatched rather than drawn as idle.
  */
 export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
-  const {history,drawing,loading,error,presentation:authority} = useHistory(true);
+  const {history,drawing,loading,error,presentation:authority} = useActivityHistory();
   const strip = useHistoryPlot(true);
   const pins=useProjectColorPins(),colorsReady=useProjectColorsReady();
   const registry = useRef<ActivityRegistry|null>(null);

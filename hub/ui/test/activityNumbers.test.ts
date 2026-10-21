@@ -185,7 +185,7 @@ test('the Activity clock advances the plot without invalidating unchanged numeri
   const prefs={range:'1h',activityBy:'project',muted:{}},titles={},view=h.page.get().board!.view;
   const context:any={...projectColorBindings(h.page),chartSeriesMuted,ACTIVITY,exports:{},require,memo:(value:any)=>value,...hooks,
     useMemo:(read:any,deps:any[])=>{const box=hooks.useRef(null) as any;if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;},
-    useActivitySubset:()=>({}),useHistory:()=>shown,useHistoryPlot:()=>null,usePlot:()=>({}),useLineup:()=>[],usePersonalBoard:()=>false,useTitles:()=>titles,
+    useActivitySubset:()=>({}),useHistory:()=>shown,useActivityHistory:()=>shown,useHistoryPlot:()=>null,usePlot:()=>({}),useLineup:()=>[],usePersonalBoard:()=>false,useTitles:()=>titles,
     useChartMuted:()=>prefs.muted,usePref:(key:keyof typeof prefs)=>prefs[key],useSeriesFocus:()=>{},useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=>h.board,useClock:()=>now,usePanning:()=>null,useHistoryBegins:()=>0,
     axisNavigation:()=>({context:h.board,range:'1h'}),frameOf:()=>({from:now-H,to:now}),measuredTo:()=>now,
     activityEmpty,groupColors,groupName:(group:any)=>group.name,mutedKey,stamp,t,useLayoutEffect:hooks.useLayoutEffect,

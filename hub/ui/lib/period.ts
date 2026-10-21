@@ -38,6 +38,8 @@ import type {History} from '../../server/domain/history';
 import {canShift,shifted} from '../../server/domain/periodShift';
 import * as retention from '../../server/domain/periodRetention';
 
+export type ActivityFrame=Omit<History,'series'|'meterSeries'|'moneyWork'>;
+
 type Reading<T>={value:T|null;basis:PeriodBasis|null;loading:boolean;error:string|null};
 type WorkedSession=Omit<RecordedSession,'currentPresence'>&Pick<LiveSession,'currentPresence'>;
 const empty=<T>():Reading<T>=>({value:null,basis:null,loading:false,error:null});
@@ -183,11 +185,12 @@ class BoardPeriod {
     const range=evaluatedRange(tape.selection,now);
     return range.from>=tape.tape.from?range:tape.basisRange??evaluatedRange(tape.selection,this.evaluatedAt);
   }
-  project(history:History,scope:PeriodScope,now=this.evaluatedAt) {
+  project(history:History,scope:PeriodScope,now=this.evaluatedAt,activityOnly=false) {
     // Fixed endpoints share one exact frame across widgets. Weak slots leave
     // its lifetime with the readers that display it.
     const tape=this.tapes.get(scope),selection=tape?.selection;
     const fixed=selection?.mode==='range'&&(scope!=='quota'||!this.activity||this.workSelection.mode==='range')?selection:null;
+    if(activityOnly&&scope==='quota'&&!fixed)return this.projectFrame(history,scope,now,true);
     const entry=this.projectFrames[scope];
     if(fixed&&entry&&entry.history.deref()===history&&entry.tape.deref()===tape&&entry.work.deref()===this.work&&(entry.activity?.deref()??null)===this.activity&&entry.generation===this.generation&&entry.projectionRevision===this.projectionRevision[scope]&&entry.workRangeKey===this.workRangeKey&&entry.from===fixed.from&&entry.to===fixed.to){
       const value=entry.value.deref();if(value)return value;
@@ -196,16 +199,26 @@ class BoardPeriod {
     if(fixed&&tape&&typeof WeakRef==='function')this.projectFrames[scope]={history:new WeakRef(history),tape:new WeakRef(tape),work:new WeakRef(this.work),activity:this.activity?new WeakRef(this.activity):null,generation:this.generation,projectionRevision:this.projectionRevision[scope],workRangeKey:this.workRangeKey,from:fixed.from,to:fixed.to,value:new WeakRef(result)};
     return result;
   }
-  private projectFrame(history:History,scope:PeriodScope,now=this.evaluatedAt) {
+  private projectFrame(history:History,scope:PeriodScope,now=this.evaluatedAt,activityOnly=false) {
     const tape=this.tapes.get(scope);
     let result=history;
-    if(tape?.rangeKey===history.range){const range=this.tapeRange(tape,now),values=new Map<string,PeriodValues>();if(tape.selection.mode==='range')for(const [id,reading] of this.values)if(reading.value&&reading.basis?.range.to===range.to)values.set(id,reading.value);result=tape.accounting.project(history,range,values,false,Math.min(range.to,now));}
+    if(tape?.rangeKey===history.range){
+      const range=this.tapeRange(tape,now);
+      if(activityOnly){
+        const fixed=tape.tape.fixed;
+        const fits=fixed?range.from===fixed.range.from&&range.to===fixed.range.to&&history.cellMs===fixed.cell:!(range.from<tape.tape.from);
+        if(fits)result={...history,exact:true,since:range.from,to:range.to};
+      }else{
+        const values=new Map<string,PeriodValues>();if(tape.selection.mode==='range')for(const [id,reading] of this.values)if(reading.value&&reading.basis?.range.to===range.to)values.set(id,reading.value);
+        result=tape.accounting.project(history,range,values,false,Math.min(range.to,now));
+      }
+    }
     if(scope==='quota'&&this.activity&&this.workRangeKey===history.range&&this.work.basis){const range=this.workRange(now)!;result={...result,since:range.from,to:range.to,activity:this.activity.project(history.activity,range)};}
-    if(scope==='quota'&&this.selectedPending())result={...result,series:result.series.map(series=>({...series,selectedWork:{from:result.to,ms:null,agentMs:0}})),activity:{...result.activity,known:null,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
+    if(scope==='quota'&&this.selectedPending())result={...result,...(!activityOnly?{series:result.series.map(series=>({...series,selectedWork:{from:result.to,ms:null,agentMs:0}}))}:{}),activity:{...result.activity,known:null,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
     return result;
   }
   private selectedPending(){return !!effectiveFilters()&&(this.workLimit||this.work.loading||!!this.work.error||!this.work.value);}
-  activityAt(history:History,by:import('./types').ActivityDimension,now:number,bar?:number,key?:string) {
+  activityAt(history:ActivityFrame,by:import('./types').ActivityDimension,now:number,bar?:number,key?:string) {
     let fallback=effectiveFilters()&&(this.workLimit||this.work.loading||this.work.error||!this.work.value)?{...history.activity,known:null,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}:history.activity;
     if(bar!==undefined){const cell=fallback.cells.find(([at])=>at===bar);fallback={...fallback,activeMs:cell?.[1]??0,agentMs:cell?.[2]??0,agents:cell?.[3]??0,by:{...fallback.by,[by]:fallback.by[by].map(group=>({...group,agentMs:group.cells.find(([at])=>at===bar)?.[1]??0}))}};}
     if(!this.activity||this.workRangeKey!==history.range||!this.work.basis||this.workSelection.mode==='range')return fallback;
@@ -213,7 +226,7 @@ class BoardPeriod {
     if(bar!==undefined){range.from=Math.max(range.from,bar);range.to=Math.min(range.to,bar+history.activity.barMs);}
     return this.activity.numbers(fallback,range,by,key);
   }
-  activityChangesAt(history:History,by:import('./types').ActivityDimension,now:number,read:(at:number)=>string,key?:string) {
+  activityChangesAt(history:ActivityFrame,by:import('./types').ActivityDimension,now:number,read:(at:number)=>string,key?:string) {
     if(!this.workAdvances(now)||this.workRangeKey!==history.range)return null;
     const period=this.workSelection.mode==='live'?this.workSelection.periodMs:0;
     return periodTextChangesAt(now,at=>this.activity?.changesAt(at,period,by,key)??null,read);
