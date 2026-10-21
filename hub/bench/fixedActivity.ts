@@ -3,7 +3,7 @@ import {cards,people,DAY} from '../demo/model.js';
 import type {Stand} from '../demo/setup.js';
 import {workSpans,type WorkTrace} from '../server/domain/periodWork.js';
 import {expandPeriod} from '../server/domain/periodWire.js';
-import {cellOf,cellStart} from '../server/domain/history.js';
+import {cellOf,cellStart,MAX_READ_TILES,TILE_CELLS} from '../server/domain/history.js';
 import type {History} from '../server/domain/history.js';
 import type {PeriodRequest,PeriodReply} from '../server/domain/periodRead.js';
 import {defaultFilters} from '../server/domain/dataFilters.js';
@@ -26,11 +26,33 @@ export function assertActivityOverlap(requests:readonly PeriodRequest[],updates:
   const work=requests.filter(body=>body.sessions),native=requests.filter(body=>!body.sessions);
   assert.equal(work.length,updates,'overlapping updates cannot add another work reader');
   assert.ok(native.length<=1,'overlapping updates allow at most one native chart follow-up');
+  for(const body of native)assertNativeDrawing(body,work[0].selection);
+}
+
+function assertNativeDrawing(body:PeriodRequest,selection:PeriodRequest['selection']) {
+  assert.equal(body.quota?.evidence,'skip','the follow-up reads native drawing cells only');
+  assert.notEqual(body.quota?.cells,'skip');
+  assert.notEqual(body.quota?.sources,'[]','native drawing adds no empty-source Activity reader');
+  assert.notEqual(body.quota?.work,'1');
+  assert.ok(!body.budget&&!body.funds&&!body.values&&!body.facets&&!body.calendar&&!body.sourceWork);
+  assert.deepEqual(body.selection,selection);
+}
+
+/** Replacing a work filter can rebuild the existing native strip, one tile per request. */
+export function assertActivityCancellation(requests:readonly PeriodRequest[],selection:PeriodRequest['selection']) {
+  const work=requests.filter(body=>body.sessions),native=requests.filter(body=>!body.sessions);
+  assert.ok(work.length>=2&&work.length<=3,'cancelled shared-work attempts remain counted');
+  assert.ok(native.length<=MAX_READ_TILES,'replacement drawing stays within the existing tile window');
+  assert.ok(selection.mode==='range');
+  const cell=cellOf(selection.to-selection.from),span=cell*TILE_CELLS;
+  for(const body of work)assert.deepEqual(body.selection,selection);
   for(const body of native){
-    assert.equal(body.quota?.evidence,'skip','the follow-up reads native drawing cells only');
-    assert.notEqual(body.quota?.cells,'skip');
-    assert.ok(!body.budget&&!body.funds&&!body.values&&!body.facets&&!body.calendar&&!body.sourceWork);
-    assert.deepEqual(body.selection,work[0].selection);
+    assertNativeDrawing(body,selection);
+    assert.equal(Number(body.quota!.cell),cell);
+    const from=Number(body.quota!.from),to=Number(body.quota!.to);
+    assert.ok(Number.isSafeInteger(from)&&Number.isSafeInteger(to)&&to>from);
+    assert.equal(Math.floor(from/span),Math.floor((to-1)/span),'a pooled native read fits one tile');
+    assert.ok(from>=Math.floor(selection.from/span)*span-span&&to<=Math.ceil(selection.to/span)*span+span,'only the selected strip and its buffer are read');
   }
 }
 
@@ -205,14 +227,14 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         }
         return current;
       };
-      const phase=async(name:string,run:()=>Promise<void>,expected:number|null,overlap=false)=>{
+      const phase=async(name:string,run:()=>Promise<void>,expected:number|null)=>{
         const start=bodies.bodies.length;await cdp.evaluate('window.__quotumFixedActivity.reset()');const at=Date.now();
         const deadline=at+30_000;
         referenceReceipt={requests:0,requestBytes:0,decodedBytes:0,encodedBytes:0};
         const metrics=async()=>{const {metrics}=await cdp.send<{metrics:{name:string;value:number}[]}>('Performance.getMetrics');return Object.fromEntries(metrics.map(metric=>[metric.name,metric.value]));};
         const before=await metrics();
         await run();
-        if(expected){while(bodies.bodies.length-start<expected){if(Date.now()>deadline)throw Error(name+' did not dispatch its shared reads');await pause(30);}}
+        if(expected){while(bodies.bodies.slice(start).filter(row=>row.body.sessions).length<expected){if(Date.now()>deadline)throw Error(name+' did not dispatch its shared reads');await pause(30);}}
         await pause(350);await settled(deadline);while(bodies.active.size||bodies.pending.size){await Promise.allSettled([...bodies.pending]);await pause(20);}
         const coherentAt=Date.now();
         const verified=await check();
@@ -225,15 +247,14 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         assert.ok(Number.isFinite(after.ScriptDuration-before.ScriptDuration)&&Number.isFinite(after.TaskDuration-before.TaskDuration));
         const decoded=reads.reduce((n,row)=>n+row.decoded,0);
         const cancelled=reads.filter(row=>row.cancelled).length;
-        const preparationLimit=FIXED_ACTIVITY_BUDGET.advancesPerUpdate*Math.max(1,expected??reads.length);
-        const attempts=reads.map(row=>({sections:(['quota','budget','funds','sessions','values','facets','calendar','sourceWork'] as const).filter(section=>row.body[section]),cancelled:row.cancelled,decoded:row.decoded}));
-        const report={days,name,excluded,requests:reads.length,preparationLimit,requestBytes:reads.reduce((n,row)=>n+row.requestBytes,0),decoded,encoded:reads.reduce((n,row)=>n+row.encoded,0),cancelled,attempts,coherentMs:coherentAt-at,verificationMs:Date.now()-coherentAt,reference:referenceReceipt,scriptMs:(after.ScriptDuration-before.ScriptDuration)*1000,taskMs:(after.TaskDuration-before.TaskDuration)*1000,...current,numbers:current.numbers,activity:undefined,tiles:undefined};
+        const workRequests=reads.filter(row=>row.body.sessions).length;
+        const preparationLimit=FIXED_ACTIVITY_BUDGET.advancesPerUpdate*Math.max(1,expected??workRequests);
+        const attempts=reads.map(row=>({sections:(['quota','budget','funds','sessions','values','facets','calendar','sourceWork'] as const).filter(section=>row.body[section]),cancelled:row.cancelled,decoded:row.decoded,...(row.body.quota?{quota:{cell:row.body.quota.cell,from:row.body.quota.from,to:row.body.quota.to,evidenceSkip:row.body.quota.evidence==='skip'}}:{})}));
+        const report={days,name,excluded,requests:reads.length,workRequests,nativeRequests:reads.length-workRequests,preparationLimit,requestBytes:reads.reduce((n,row)=>n+row.requestBytes,0),decoded,encoded:reads.reduce((n,row)=>n+row.encoded,0),cancelled,attempts,coherentMs:coherentAt-at,verificationMs:Date.now()-coherentAt,reference:referenceReceipt,scriptMs:(after.ScriptDuration-before.ScriptDuration)*1000,taskMs:(after.TaskDuration-before.TaskDuration)*1000,...current,numbers:current.numbers,activity:undefined,tiles:undefined};
         reports.push(report);console.error('bench: fixed Activity '+JSON.stringify(report));
-        if(expected!==null){
-          if(overlap)assertActivityOverlap(reads.map(row=>row.body),expected);
-          else if(expected===0)assertActivityOutside(reads.map(row=>row.body),{selection,workFilter:selectedFilter});
-          else assert.equal(reads.length,expected,name+' shared requests; no legend allowance');
-        }
+        if(expected===null)assertActivityCancellation(reads.map(row=>row.body),selection);
+        else if(expected===0)assertActivityOutside(reads.map(row=>row.body),{selection,workFilter:selectedFilter});
+        else assertActivityOverlap(reads.map(row=>row.body),expected);
         assert.ok(current.flights<=2&&current.bytes<=FIXED_ACTIVITY_BUDGET.pool&&!current.failedReservations&&current.tiles.length<=8);
         assert.ok(current.advances<=preparationLimit);
         if(expected&&expected>0)assert.ok(current.advances>0,'real shared preparation must be observed');
@@ -243,9 +264,9 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       };
       const isolated=await phase('isolated',async()=>{await actor.through(actor.floorAt+100);},1);
       const cell=cellOf(days*DAY),dirty=cellStart(actor.floorAt,cell);
-      const query=isolated.reads[0].body.quota!;
+      const request=isolated.reads.find(row=>row.body.sessions)!.body,query=request.quota!;
       if(query.cells!=='skip')assert.equal(Number(query.from),dirty,'a combined drawing read fetches only dirty native cells');
-      assert.deepEqual(isolated.reads[0].body.selection,selection);
+      assert.deepEqual(request.selection,selection);
       const clean=baseline.tiles.filter(([,to])=>to<=dirty);
       assert.ok(clean.length);for(const row of clean)assert.deepEqual(isolated.current.tiles.find(([from,to])=>from===row[0]&&to===row[1]),row);
       assert.equal(isolated.current.activity.barMs,baseline.activity.barMs);
@@ -284,9 +305,9 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       const during=await phase('news during response',()=>intercepted(async()=>{await actor.through(actor.floorAt+500);},async()=>{
         await actor.through(actor.floorAt+600);await pause(350);
         assert.equal(await cdp.evaluate('document.querySelector(".activity-totals").outerHTML'),retainedSummary,'held work answers preserve the complete previous cohort, including all four metrics');
-      },true),2,true);
+      },true),2);
       assert.ok(during.current.flights<=2);
-      const generations=await phase('cancelled A to B to A',()=>intercepted(async()=>{await actor.through(actor.floorAt+700);},async()=>{
+      await phase('cancelled A to B to A',()=>intercepted(async()=>{await actor.through(actor.floorAt+700);},async()=>{
         const before=await cdp.evaluate('JSON.stringify(window.__quotumFixedActivity.reader().intent().request.workFilter)');
         const clients=`document.querySelector('[data-filter="filters.clients"]')`;
         await cdp.evaluate(`${clients}.querySelector('button').click()`);
@@ -301,7 +322,6 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         assert.equal(await cdp.evaluate('JSON.stringify(window.__quotumFixedActivity.reader().intent().request.workFilter)'),before,'A to B to A restores the exact shared cohort');
         assert.equal(await cdp.evaluate('window.__quotumFixedActivity.sample()'),null);
       }),null);
-      assert.ok(generations.reads.length>=2&&generations.reads.length<=3,'cancelled attempts remain counted');
       await phase('through upper bound',async()=>{await actor.through(selection.to);},1);
       await phase('outside range',async()=>{await actor.through(selection.to+100);await waitFor(`window.__quotumFixedActivity.heardSince(${selection.to})`);},0);
       const receipt=await cdp.evaluate<{status:string;members:{kind:string}[]}>(`(()=>{__quotumHistoryPoolReceipt.mark(2,3);return __quotumHistoryPoolReceipt.read();})()`);

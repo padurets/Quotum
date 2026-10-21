@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {activityOracle,assertActivityOverlap,assertActivityOutside,FIXED_ACTIVITY_BUDGET} from '../fixedActivity';
+import {activityOracle,assertActivityOverlap,assertActivityOutside,assertActivityCancellation,FIXED_ACTIVITY_BUDGET} from '../fixedActivity';
 import {packWork,type WorkTrace} from '../../server/domain/periodWork';
 import type {PeriodRequest} from '../../server/domain/periodRead';
-import {fixture,flush,NOW} from '../../ui/test/periodRuntimeFixture';
+import {fixture,drawings,flush,NOW} from '../../ui/test/periodRuntimeFixture';
 
 test('the shared-filter benchmark oracle clips intervals, unions overlap and deduplicates identities',()=>{
   const trace:WorkTrace={anchor:100,knownFrom:100,cut:200,refs:[0,1,2].map(i=>({ref:String(i),identityRef:i<2?'shared':'other',source:null,project:null,device:{id:'d',name:'D'},origin:'terminal',folder:null,startedAt:100})),spans:[[0,0,30],[1,10,40],[2,50,60]]};
@@ -23,6 +23,9 @@ test('the shared-filter benchmark oracle clips intervals, unions overlap and ded
 test('overlapping work counts its recorded native follow-up without allowing another selected-work reader',()=>{
   const base:PeriodRequest={version:1,selection:{mode:'range',from:123,to:1000},evaluatedAt:2000};
   const work:PeriodRequest={...base,sessions:{}},native:PeriodRequest={...base,quota:{cell:'300000',from:'0',to:'300000',sources:'["source"]',evidence:'skip'}};
+  assertActivityOverlap([work],1);
+  assertActivityOverlap([work,native],1);
+  assert.throws(()=>assertActivityOverlap([work,work],1));
   assertActivityOverlap([work,work],2);
   assertActivityOverlap([work,work,native],2);
   assert.throws(()=>assertActivityOverlap([work,work,work],2),'a cancelled third work attempt still counts');
@@ -30,6 +33,29 @@ test('overlapping work counts its recorded native follow-up without allowing ano
   assert.throws(()=>assertActivityOverlap([work,work,{...native,quota:{...native.quota!,evidence:'another-ledger'}}],2));
   assert.throws(()=>assertActivityOverlap([work,work,{...native,facets:true}],2));
   assert.throws(()=>assertActivityOverlap([work,work,{...native,selection:{mode:'range',from:123,to:2000}}],2));
+});
+
+test('fixed monthly native drawing uses the existing tile window independently of shared-work attempts',async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const h=await fixture({periodName:'30d',fixed:true});let d:Awaited<ReturnType<typeof drawings>>|undefined;
+  t.after(async()=>{d?.close();await h.close();});
+  const selection={mode:'range' as const,from:NOW-30*86400000,to:NOW};
+  h.selectRange(selection);await flush();
+  const work=JSON.parse(JSON.stringify(h.requests.find(body=>body.sessions))) as PeriodRequest;
+  assert.ok(work);h.requests.length=0;
+  d=await drawings(h,false);await flush();
+  const native=JSON.parse(JSON.stringify(h.requests)) as PeriodRequest[];
+  assert.ok(native.length>3&&native.length<=8,'a real monthly strip needs several one-tile reads');
+  assertActivityCancellation([work,work,...native],selection);
+  assertActivityCancellation([work,work,work,...native],selection);
+  assert.throws(()=>assertActivityCancellation([work,work,work,work,...native],selection),'retired work still counts');
+  assert.throws(()=>assertActivityCancellation([work,work,...Array.from({length:9},()=>native[0])],selection));
+  const first=native[0],query=first.quota!;
+  for(const extra of [{...first,facets:true as const},{...first,quota:{...query,evidence:'another-ledger'}},
+    {...first,quota:{...query,to:String(Number(query.from)+2*60*Number(query.cell))}},
+    {...first,selection:{...selection,to:selection.to+1}}]){
+    assert.throws(()=>assertActivityCancellation([work,work,extra],selection));
+  }
 });
 
 test('outside fixed work refreshes the actual calendar without rereading or changing Activity',async t=>{
