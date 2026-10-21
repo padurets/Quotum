@@ -124,7 +124,8 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       })()`);
       assert.equal(emphasis.length,5);
       const key=async(key:string,code:string,windowsVirtualKeyCode:number)=>{
-        for(const type of ['keyDown','keyUp'])await cdp.send('Input.dispatchKeyEvent',{type,key,code,windowsVirtualKeyCode});
+        const text=key==='Enter'?'\r':key===' '?' ':undefined;
+        for(const type of ['keyDown','keyUp'])await cdp.send('Input.dispatchKeyEvent',{type,key,code,windowsVirtualKeyCode,text:type==='keyDown'?text:undefined});
       };
       for(let index=0;index<5;index++){
         await cdp.evaluate(`document.querySelectorAll('.panel[data-time="chart"]')[${index}].querySelector('.legend-item').focus()`);
