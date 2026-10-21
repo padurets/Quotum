@@ -15,11 +15,15 @@ type Choices={projects:string[];authority:string;nextCursor?:string};
 
 function Picker({project,color,disabled,save}:{project:string;color:CategoryColor|null;disabled:boolean;save:(color:CategoryColor|null)=>Promise<void>}) {
   const [open,setOpen]=useState(false),[draft,setDraft]=useState(color),[error,setError]=useState<unknown>(null),[busy,setBusy]=useState(false);
+  const trigger=useRef<HTMLButtonElement|null>(null),landing=useRef(false),visible=useRef(open);visible.current=open;
   const radio=useId();
+  // The popover detaches before React reenables its trigger in the same save commit.
+  useLayoutEffect(()=>{if(!open&&!busy&&!disabled&&landing.current){landing.current=false;trigger.current?.focus({preventScroll:true});}},[open,busy,disabled]);
   const change=(next:boolean)=>{if(next){setDraft(color);setError(null);}setOpen(next);};
   const submit=async(event:FormEvent)=>{
     event.preventDefault();if(busy)return;setBusy(true);setError(null);
-    try{await save(draft);setOpen(false);}catch(failure){setError(failure);}finally{setBusy(false);}
+    trigger.current=event.currentTarget.closest('.picker')?.querySelector('button')??null;
+    try{await save(draft);landing.current=visible.current;setOpen(false);}catch(failure){setError(failure);}finally{setBusy(false);}
   };
   return <Popover label={t('projectColors.choose',{project,color:colorName(color)})} trigger={<><i className="activity-swatch" style={{background:color??'transparent'}}/>{colorName(color)}</>} triggerClass="button project-color-trigger" buttonProps={{disabled}} width={290} open={open} onOpenChange={change}>
     <form onSubmit={submit}>
