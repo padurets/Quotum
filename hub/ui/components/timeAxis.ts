@@ -511,12 +511,17 @@ export function useTimeAxis({
       }
       return {element,x:Number(element.getAttribute('x')),length};
     });
+    let glyphScale:number|null=null;
     paintTicks.current=()=>{
+      const changed=glyphScale!==pose.current.a;
+      glyphScale=pose.current.a;
       for(const {element,x,length} of ticks){
         const view=tickPresentation(x,length,pose.current,scale,left,width-right);
         const visibility=view.visible?'':'hidden';
         if(element.style.visibility!==visibility)element.style.visibility=visibility;
-        if(element.style.transform!==view.transform)element.style.transform=view.transform;
+        // CSS rounds fractional transforms; comparing its serialization would
+        // parse the same glyph transform again on every translated frame.
+        if(changed)element.style.transform=view.transform;
       }
     };
     paintTicks.current();
