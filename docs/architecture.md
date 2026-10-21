@@ -1563,6 +1563,8 @@ of the selected duration. A chosen height changes orientation, cell grouping and
 label density; it never removes a civil date or divides a coarse amount to invent
 fine evidence. Repeated DST hours retain separate lanes. Its cells fill the assigned
 plot while labels remain legible and gaps fit the available pitch.
+Pointer and keyboard previews share one active cell. Opening a cell's detail
+suppresses previews; touch opens that detail directly.
 Its legend inherits the same typography as the other charts and keeps the
 agent-hours unit beside its scale.
 Anonymous aggregate hour patterns share the history budget and preserve exact

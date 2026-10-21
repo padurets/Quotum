@@ -20,25 +20,50 @@ import {fillOf,pixels,same,useSizing} from './sizing';
 function Details({heading,label,interval,item}:{heading:boolean;label:string;interval:string;item:HeatCell}){
   return <>{heading&&<strong>{label}</strong>}{interval&&<p className="heatmap-interval">{interval}</p>}<p>{item.cell.agentMs===null?t('calendar.unavailable'):item.cell.agentMs===0?t('calendar.zero'):`${exactAgentHours(item.cell.agentMs,formatLocale())} ${t('calendar.hours')}`}</p>{item.partial&&<p>{t('calendar.partial')}</p>}</>;
 }
-type BucketProps={item:HeatCell;span:number;zone:string;tab:boolean;selected:boolean;focus:(key:string)=>void;openRange:(range:{from:number;to:number})=>void;panel:RefObject<HTMLElement|null>;onKey:(event:KeyboardEvent<HTMLButtonElement>,item:HeatCell)=>void;timed?:boolean};
+
+/** The latest interaction owns one description; an open detail suppresses previews. */
+class HeatmapPreview {
+  private active:{key:string;input:'pointer'|'focus'}|null=null;
+  private opened=new Set<string>();
+  private listeners=new Map<string,Set<()=>void>>();
+  get=(key:string)=>this.active?.key===key;
+  subscribe(key:string,listener:()=>void){
+    let listeners=this.listeners.get(key);if(!listeners)this.listeners.set(key,listeners=new Set());
+    listeners.add(listener);return()=>{listeners!.delete(listener);if(!listeners!.size)this.listeners.delete(key);};
+  }
+  private select(next:typeof this.active){
+    const before=this.active;this.active=next;
+    if(before?.key===next?.key)return;
+    for(const key of [before?.key,next?.key])if(key!==undefined)for(const listener of [...(this.listeners.get(key)??[])])listener();
+  }
+  show(key:string,input:'pointer'|'focus'){if(!this.opened.size&&(this.active?.key!==key||this.active.input!==input))this.select({key,input});}
+  dismiss=()=>this.select(null);
+  leave(key:string,input:'pointer'|'focus'){if(this.active?.key===key&&this.active.input===input)this.select(null);}
+  open(key:string,open:boolean){if(open){this.opened.add(key);this.select(null);}else this.opened.delete(key);}
+  retire(key:string){this.opened.delete(key);if(this.active?.key===key)this.select(null);}
+}
+type BucketProps={item:HeatCell;span:number;zone:string;tab:boolean;selected:boolean;focus:(key:string)=>void;openRange:(range:{from:number;to:number})=>void;panel:RefObject<HTMLElement|null>;onKey:(event:KeyboardEvent<HTMLButtonElement>,item:HeatCell)=>void;preview:HeatmapPreview;timed?:boolean};
 function TimedBucket(props:BucketProps){
   const timed=props.item.cell.validUntil!==null,now=useClock(now=>heatCellChangesAt(props.item,now),[props.item],timed);
   return <Bucket {...props} item={timed?heatCellAt(props.item,now):props.item} timed={timed}/>;
 }
-const Bucket=memo(function Bucket({item,span,zone,tab,selected,focus,openRange,panel,onKey,timed}:BucketProps){
-  const locale=useLocale(),[open,setOpen]=useState(false),[hover,setHover]=useState(false),[focused,setFocused]=useState(false);
-  const anchor=useRef<HTMLDivElement>(null),active=!open&&(hover||focused),tip=useBubble(active,anchor,panel.current);
+const Bucket=memo(function Bucket({item,span,zone,tab,selected,focus,openRange,panel,onKey,preview,timed}:BucketProps){
+  const locale=useLocale(),[open,setOpen]=useState(false);
+  const subscribe=useMemo(()=>(listener:()=>void)=>preview.subscribe(item.key,listener),[preview,item.key]);
+  const active=useSyncExternalStore(subscribe,()=>preview.get(item.key),()=>false);
+  useLayoutEffect(()=>()=>preview.retire(item.key),[preview,item.key]);
+  const anchor=useRef<HTMLDivElement>(null),tip=useBubble(active,anchor,panel.current);
   const label=useMemo(()=>heatDateLabel(item.date,formatLocale()),[item.date,locale]);
   const interval=useMemo(()=>heatIntervalLabel(item,span,zone,formatLocale()),[item.from,item.to,item.repeated,item.dayRange.from,item.dayRange.to,span,zone,locale]);
   const available=item.cell.agentMs!==null,level=available?calendarLevel(item.cell.agentMs!,span):0;
   const aria=[label,interval,available?t('calendar.exact',{hours:exactAgentHours(item.cell.agentMs!,formatLocale())}):t('calendar.unavailable'),...(item.partial?[t('calendar.partial')]:[])].join('\n');
   const day=span>=23*3_600_000,range=day?item.dayRange:{from:item.from,to:item.to};
-  const changeOpen=(next:boolean)=>{setHover(false);setOpen(next);};
+  const changeOpen=(next:boolean)=>{preview.open(item.key,next);setOpen(next);};
   return <div className={`calendar-date heatmap-bucket${selected?' is-selected':''}${!available?' is-unavailable':''}${item.partial?' is-partial':''}`} role="gridcell" aria-selected={selected} ref={anchor} data-time={timed?'calendar':undefined}
-    style={{left:item.x,top:item.y,width:item.width,height:item.height}} onPointerEnter={()=>setHover(true)} onPointerLeave={()=>setHover(false)}>
+    style={{left:item.x,top:item.y,width:item.width,height:item.height}} onPointerEnter={event=>{if(event.pointerType==='touch')preview.dismiss();else preview.show(item.key,'pointer');}} onPointerMove={event=>{if(event.pointerType!=='touch')preview.show(item.key,'pointer');}} onPointerLeave={()=>preview.leave(item.key,'pointer')}>
     <Popover label={aria} trigger={<svg viewBox="0 0 24 24" preserveAspectRatio="none" aria-hidden="true"><rect width="24" height="24" rx="2" fill={level?CATEGORY_COLORS[0]:'var(--hair)'} fillOpacity={level?CALENDAR_OPACITY[level]:1}/></svg>} triggerClass="calendar-cell"
       open={open} onOpenChange={changeOpen} width={320} portal={panel.current}
-      buttonProps={{tabIndex:tab?0:-1,'data-calendar-date':item.date,'data-heatmap-cell':item.key,'data-agent-ms':item.cell.agentMs??undefined,'aria-label':aria,title:'',onFocus:()=>{focus(item.key);setFocused(true);},onBlur:()=>setFocused(false),onKeyDown:event=>onKey(event,item)}}>
+      buttonProps={{tabIndex:tab?0:-1,'data-calendar-date':item.date,'data-heatmap-cell':item.key,'data-agent-ms':item.cell.agentMs??undefined,'aria-label':aria,title:'',onFocus:event=>{focus(item.key);if(event.currentTarget.matches(':focus-visible'))preview.show(item.key,'focus');},onBlur:()=>preview.leave(item.key,'focus'),onKeyDown:event=>onKey(event,item)}}>
       <PopoverHeading onClose={()=>changeOpen(false)}>{label}</PopoverHeading>
       <div className="popover-body calendar-details"><Details heading={false} label={label} interval={interval} item={item}/>
         {available&&range.to-range.from>=MIN_TIME_RANGE&&<button className="button" onClick={()=>{openRange(range);changeOpen(false);}}>{t(day?'calendar.openDay':'calendar.openInterval')}</button>}
@@ -52,6 +77,7 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
   const locale=useLocale(),view=usePref('heatmapView'),reading=useSyncExternalStore(boardPeriod.calendar.subscribe,boardPeriod.calendar.get),selection=useTimeRange();
   const {value,loading,error,window}=reading,root=useRef<HTMLElement>(null),matrix=useRef<HTMLDivElement>(null),sizing=useSizing();
   const [focused,setFocused]=useState(''),[settings,setSettings]=useState(false),[width,setWidth]=useState(0),[height,setHeight]=useState(0);
+  const [preview]=useState(()=>new HeatmapPreview());
   const focusRange=useRef<{from:number;to:number}|null>(null);
   const context=JSON.stringify([boardPeriod.calendar.presentationKey(),!!value,window.zone,view,width,height,locale,selection]);
   const aligned=!selection||window.range.from===selection.from&&window.range.to===selection.to;
@@ -88,14 +114,15 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
     setFocused(next.key);matrix.current?.querySelector<HTMLButtonElement>(`[data-heatmap-cell="${next.key}"]`)?.focus();
   };
   const unit=layout.span<3_600_000?60_000:3_600_000,thresholds=[0,0,layout.span*.5,layout.span,layout.span*2,layout.span*4];
-  return <section ref={root} className={`panel agent-hours-heatmap${loading?' is-loading':''}`} aria-label={t('calendar.title')} aria-busy={loading||!prepared.ready} data-calendar-ready={!!value&&prepared.ready}>
+  return <section ref={root} className={`panel agent-hours-heatmap${loading?' is-loading':''}`} aria-label={t('calendar.title')} aria-busy={loading||!prepared.ready} data-calendar-ready={!!value&&prepared.ready}
+    onFocusCapture={event=>{if(!(event.target as Element).closest('[data-heatmap-cell]'))preview.dismiss();}}>
     <div className="panel-head"><h2 className="panel-heading">{t('calendar.title')}</h2><div className="panel-controls"><ReadState error={error} loading={loading&&!!selection&&!!value} range={reading.basis?.range} retry={boardPeriod.retry}/><Popover label={t('calendar.settings')} icon={<SlidersIcon/>} open={settings} onOpenChange={setSettings}>
       <div className="popover-section"><div className="popover-title">{t('calendar.view')}</div><div className="popover-pad"><Segmented value={view} onChange={heatmapView=>setPrefs({heatmapView})} options={['matrix','calendar'].map(key=>[key as 'matrix'|'calendar',t(key==='matrix'?'calendar.matrix':'calendar.calendar')])} label={t('calendar.view')}/></div></div>
       {arrange.owner&&<HideRow onHide={()=>arrange.update(view=>withHidden(view,AGENT_HOURS_HEATMAP,true))}>{t('widget.hide')}</HideRow>}
     </Popover></div></div>
     <div className="heatmap-plot" ref={matrix} role="grid" aria-label={t('calendar.registered')} aria-description={t('calendar.observations')} style={{height:layout.height} as CSSProperties} data-heatmap-view={layout.kind}>
       {layout.labels.map((label,i)=><span key={i} aria-hidden="true" className="heatmap-axis" style={{left:label.x,top:label.y,transform:label.align==='end'?'translate(-100%,-100%)':label.align==='middle'?'translate(-50%,-100%)':'translateY(-100%)'}}>{label.text}</span>)}
-      {[...new Set(layout.cells.map(c=>c.row))].sort((a,b)=>a-b).map(row=><div role="row" className="heatmap-row" key={row}>{layout.cells.filter(c=>c.row===row).sort((a,b)=>a.column-b.column||a.from-b.from).map(item=><TimedBucket key={item.key} item={item} span={layout.span} zone={window.zone} selected={selection?.from===item.from&&selection?.to===item.to} tab={item.key===tab?.key} focus={setFocused} openRange={openRange} panel={root} onKey={key}/>)}</div>)}
+      {[...new Set(layout.cells.map(c=>c.row))].sort((a,b)=>a-b).map(row=><div role="row" className="heatmap-row" key={row}>{layout.cells.filter(c=>c.row===row).sort((a,b)=>a.column-b.column||a.from-b.from).map(item=><TimedBucket key={item.key} item={item} span={layout.span} zone={window.zone} selected={selection?.from===item.from&&selection?.to===item.to} tab={item.key===tab?.key} focus={setFocused} openRange={openRange} panel={root} onKey={key} preview={preview}/>)}</div>)}
     </div>
     <div className="legend calendar-legend" style={{height:width<260?80:width<560?48:24}}><span className="heatmap-unit">{t(unit===60_000?'calendar.scaleMinutes':'calendar.scaleHours')}</span>{thresholds.map((value,level)=><span className="heatmap-key" key={level}><svg width="10" height="8" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="4" fill={level?CATEGORY_COLORS[0]:'var(--hair)'} fillOpacity={level?CALENDAR_OPACITY[level]:1}/></svg>{level===1?'>0':level===5?'≥ '+num(value/unit,2):num(value/unit,2)}</span>)}</div>
   </section>;
