@@ -135,6 +135,11 @@ export function useSeriesFocus(panel:RefObject<HTMLElement|null>,context?:string
         const removed=before.lineup.filter(id=>!board!.lineup.includes(id));
         if(!kind||removed.some(id=>legendHasSource(kind,before.cards[id])))controller.reset();
       }
+      if((kind==='budget'||kind==='funds')&&before?.lineup.some(id=>{
+        const old=before.cards[id],next=board!.cards[id];
+        return old?.budget&&legendHasSource(kind,old)&&
+          (old.budget.revision!==next?.budget?.revision||old.budget.enabled&&next?.budget?.enabled!==true);
+      }))controller.reset();
       if(event.type==='hub'&&event.event.type==='history'&&activity){
         const data=event.event.data;
         const filters=effectiveFilters();

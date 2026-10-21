@@ -1997,7 +1997,9 @@ selection edit resets only that legend immediately: Activity's grouping dimensio
 each quota kind's source/window choices, or money's sources and active-unit wallet/funds
 rule. Canonical ref order, menu/search, Save and presentation revisions are not edits.
 Board/grouping changes and real authorized-context revocation clear affected choices
-and previews; delayed replies cannot restore them. Escape dismisses only preview.
+and previews; delayed replies cannot restore them. A financial grant revision retires
+its money legend even if the source stays on the board; an ordinary first-observation
+anchor does not. Escape dismisses only preview.
 A time range selected on any chart becomes the board's period, including card measurements, session lists and
 accounting tables; it lives in the page's
 address (`?from=&to=`), so a reload keeps it, Back undoes it and a link to it can be shared on the board.

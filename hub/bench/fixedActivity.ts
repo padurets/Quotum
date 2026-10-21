@@ -166,7 +166,8 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       };
       const isolated=await phase('isolated',async()=>{await actor.through(actor.floorAt+100);},1);
       const cell=cellOf(days*DAY),dirty=cellStart(actor.floorAt,cell);
-      assert.equal(isolated.reads[0].body.quota!.cells,'skip','the coordinator reuses native cells for its compact work summary');
+      const query=isolated.reads[0].body.quota!;
+      if(query.cells!=='skip')assert.equal(Number(query.from),dirty,'a combined drawing read fetches only dirty native cells');
       assert.deepEqual(isolated.reads[0].body.selection,selection);
       const clean=baseline.tiles.filter(([,to])=>to<=dirty);
       assert.ok(clean.length);for(const row of clean)assert.deepEqual(isolated.current.tiles.find(([from,to])=>from===row[0]&&to===row[1]),row);

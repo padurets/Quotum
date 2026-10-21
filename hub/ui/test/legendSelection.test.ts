@@ -43,7 +43,7 @@ test('canonical equivalent refs and inactive-unit legacy rules preserve the chos
 
 for(const kind of kinds)test(`${kind}: the mounted production hook follows applied edits, late saves and real revocation`,async()=>{
   const hooks=preparationFixture(),watchers=new Set<(event:any,state:any)=>void>();
-  let board:any={id:'board',lineup:cards.map(card=>card.id),cards:Object.fromEntries(cards.map(card=>[card.id,card])),workAuthority:'work-A'};
+  let board:any={id:'board',lineup:cards.map(card=>card.id),cards:Object.fromEntries(cards.map(card=>[card.id,{...card,budget:{enabled:true,since:0,anchor:0,revision:'grant-A'}}])),workAuthority:'work-A'};
   const page={get:()=>({board}),listen:(run:any)=>{watchers.add(run);return()=>watchers.delete(run);}};
   const h=arbiter({react:{useRef:hooks.useRef,useLayoutEffect:hooks.useLayoutEffect,useEffect:hooks.useLayoutEffect},'../lib/board':{page},'../lib/filterSelection':filterRuntime,'../lib/legendSelection':legendModel,'../../server/domain/dataFilters':filterModel,'../lib/workChanges':{workChange}});
   h.cleanup();
@@ -71,6 +71,15 @@ for(const kind of kinds)test(`${kind}: the mounted production hook follows appli
     h.click(h.a);filterRuntime.publishDataFilters(null);render();assert.equal(h.a.pressed,'true','pending is not an accepted selection edit');
     filterRuntime.publishDataFilters(state.get().current);render();assert.equal(h.a.pressed,'true');
     const event={type:'hub',event:{type:'snapshot'}};board={...board};for(const run of watchers)run(event,{board});assert.equal(h.a.pressed,'true','ordinary presentation revisions are not revocation');
+    for(const [id,family] of [['q','funds'],['w','budget']] as const){
+      board={...board,cards:{...board.cards,[id]:{...board.cards[id],budget:{...board.cards[id].budget,anchor:1}}}};
+      for(const run of watchers)run(event,{board});assert.equal(h.a.pressed,'true','an ordinary first observation anchor preserves every choice');
+      board={...board,cards:{...board.cards,[id]:{...board.cards[id],budget:{enabled:false,since:null,anchor:null,revision:'grant-B'}}}};
+      for(const run of watchers)run(event,{board});assert.equal(h.a.pressed,kind===family?'false':'true','a same-source financial revocation resets only its money legend');
+      board={...board,cards:{...board.cards,[id]:{...board.cards[id],budget:{enabled:true,since:10,anchor:null,revision:'grant-C'}}}};
+      for(const run of watchers)run(event,{board});assert.equal(h.a.pressed,kind===family?'false':'true','regranting the same source cannot restore revoked choices');
+      if(kind===family)h.click(h.a);
+    }
     context='other-board:'+kind;render();assert.equal(h.a.pressed,'false');h.click(h.a);
     board=null;for(const run of watchers)run({type:'board-close'},{board});assert.equal(h.a.pressed,'false','access close clears immediately');
   }finally{hooks.unmount();publish();filterRuntime.publishDataFilters(null,false);assert.equal(h.events.size,0);assert.equal(h.globalEvents.size,0);assert.equal(watchers.size,0);}
