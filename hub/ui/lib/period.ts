@@ -278,12 +278,14 @@ class BoardPeriod {
   }
   workedChangesAt(refs:readonly string[],now:number,read:(now:number)=>string){return refs.length?periodTextChangesAt(now,at=>this.workBoundary(at,refs),read):null;}
   cellBasis(scope:PeriodScope):object|undefined{return this.tapes.get(scope);}
-  cellChangesAt(scope:PeriodScope,now:number,read:(now:number)=>string,extra?:(now:number)=>number|null,source?:string,rangeKey?:string,window?:string,initial?:string){
+  cellChangesAt(scope:PeriodScope,now:number,read:(now:number)=>string,extra?:(now:number)=>number|null,source?:string,rangeKey?:string,window?:string,initial?:string,selectedWork=false){
     const tape=this.tapes.get(scope);if(!tape||tape.selection.mode!=='live'||rangeKey!==undefined&&tape.rangeKey!==rangeKey)return extra?.(now)??null;
     if(evaluatedRange(tape.selection,now).from<tape.tape.from)return null;
     const period=tape.selection.periodMs;
     return periodTextChangesAt(now,at=>{
-      const own=scope==='quota'&&source!==undefined&&window!==undefined?tape.accounting.quotaChangesAt(source,window,at,period):undefined;
+      const scoped=scope==='quota'&&source!==undefined&&window!==undefined;
+      const selected=scoped&&selectedWork&&!this.selectedPending()?tape.accounting.quotaSelectedWorkChangesAt(source,window,at,period):undefined;
+      const own=selected===undefined?(scoped?tape.accounting.quotaChangesAt(source,window,at,period):undefined):selected;
       const next=Math.min(own===undefined?tape.accounting.changesAt(at,period,source)??Infinity:own??Infinity,own===undefined&&scope==='quota'?this.workBoundary(at,undefined,source)??Infinity:Infinity,extra?.(at)??Infinity);
       return Number.isFinite(next)?next:null;
     },read,initial);

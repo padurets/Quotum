@@ -25,6 +25,8 @@ import * as retention from '../../server/domain/periodRetention';
 import {fixture,flush,NOW,H} from './periodRuntimeFixture';
 import type {Cell,TimedCell} from '../components/AnalyticsTable';
 import type {Line} from '../lib/lines';
+import {defaultFilters} from '../../server/domain/dataFilters';
+import {publishDataFilters} from '../lib/filterSelection';
 
 const code=(file:string)=>readFileSync(new URL(file,import.meta.url),'utf8');
 const compile=(body:string)=>ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
@@ -107,6 +109,54 @@ for(const locale of ['en','ru'] as const)test(`${locale}: rendered work cells se
       }
     }
   } finally {setLocale('en',false);await h.close();}
+});
+
+test('pending selected work keeps the prior clock while a real filter request waits',async context=>{
+  context.mock.method(Date,'now',()=>NOW);const h=await fixture(),filters=defaultFilters();
+  filters.projects={mode:'include',values:['Work project']};const gate=h.hold();
+  try{
+    publishDataFilters(filters);h.period.changed();await flush();assert.equal(h.period.work.loading,true);
+    const entry=h.period.tapes.get('quota');assert.ok(entry);
+    context.mock.method(entry.accounting,'quotaSelectedWorkChangesAt',()=>{throw new Error('pending work used a stable selected clock');});
+    const legacy=new Proxy(h.period,{get(target,key){const value=Reflect.get(target,key);return key==='cellChangesAt'?(...args:any[])=>{args[8]=false;return value.apply(target,args);}:typeof value==='function'?value.bind(target):value;}});
+    for(const locale of ['en','ru'] as const){setLocale(locale,false);
+      for(const column of ['work','agenthours'] as const){
+        const cell=make(h.period,line(h.source),{range:'1h',since:NOW-H},column,NOW+H),before=make(legacy,line(h.source),{range:'1h',since:NOW-H},column,NOW+H);
+        assert.deepEqual(plain(cell.at(NOW)),plain(before.at(NOW)));
+        assert.equal(cell.changesAt(NOW),before.changesAt(NOW));
+      }
+    }
+  }finally{gate.release();await flush();publishDataFilters(null,false);setLocale('en',false);await h.close();}
+});
+
+for(const locale of ['en','ru'] as const)test(`${locale}: actual work cells preserve future transitions through clock retirement`,async context=>{
+  context.mock.method(Date,'now',()=>NOW);setLocale(locale,false);
+  const h=await fixture({personal:true,clocked:true,creditFrom:NOW-H+17*60_000,creditTo:NOW-H+47*60_000});
+  const legacy=new Proxy(h.period,{get(target,key){const value=Reflect.get(target,key);return key==='cellChangesAt'?(...args:any[])=>{args[8]=false;return value.apply(target,args);}:typeof value==='function'?value.bind(target):value;}});
+  let removed=0,changes=0;
+  try{
+    for(const now of [NOW,NOW+17*60_000+1,NOW+47*60_000+1]){
+      h.advance(now);await flush();
+      for(const column of ['work','agenthours'] as const){
+        const history={range:'1h',since:now-H},base=line(h.source);
+        const cell=make(h.period,base,history,column,NOW+H),before=make(legacy,base,history,column,NOW+H);
+        const shown=plain(cell.at(now));assert.deepEqual(shown,plain(before.at(now)));
+        const due=cell.changesAt(now),oldDue=before.changesAt(now);
+        if(due!==oldDue){
+          assert.equal(due,null);assert.equal(oldDue,now+H);removed++;
+          // Every minute and the captured work edges retain content and title.
+          const probes=new Set([now+1,now+H-1,now+H,...Array.from({length:61},(_,i)=>now+i*60_000),NOW+17*60_000,NOW+47*60_000]);
+          for(const at of probes)if(at>=now&&at<=now+H){assert.deepEqual(plain(before.at(at)),shown);assert.deepEqual(plain(cell.at(at)),shown);}
+        }else if(due!==null&&due<now+H){
+          changes++;assert.deepEqual(plain(cell.at(due-1)),shown);assert.notDeepEqual(plain(cell.at(due)),shown);
+          assert.deepEqual(plain(cell.at(due)),plain(before.at(due)));
+        }
+      }
+    }
+    assert.ok(changes>0,'real selected hours cross a displayed rounding boundary');
+    assert.ok(removed>0,'exhausted selected work drops only its unchanged hourly wake');
+    assert.equal(h.pool.activeFlights,0);
+  }finally{setLocale('en',false);await h.close();}
 });
 
 /** Actual receive/preparation/reservation paths, with no direct authority mutation. */

@@ -171,7 +171,8 @@ const WindowForecast = memo(function WindowForecast({arrange,kind='weekly'}: {ar
           const captured=stamp;stamp=undefined;
           const basis=captured?.basis.deref();
           const initial=captured&&basis!==undefined&&captured.now===now&&captured.cell===shown&&captured.locale===formatLocale()&&basis===boardPeriod.cellBasis('quota')?JSON.stringify(shown):undefined;
-          return boardPeriod.cellChangesAt('quota',now,at=>JSON.stringify(workCell(column,at)),column==='workleft'?at=>workLeftChangesAt(lineAt(at),resetAt,at):undefined,line.sourceId,history!.range,line.windowId,initial);
+          // Direct work totals do not change when a quota observation leaves the period.
+          return boardPeriod.cellChangesAt('quota',now,at=>JSON.stringify(workCell(column,at)),column==='workleft'?at=>workLeftChangesAt(lineAt(at),resetAt,at):undefined,line.sourceId,history!.range,line.windowId,initial,column==='work'||column==='agenthours');
         },
         at:(now:number)=>{const cell=workCell(column,now),basis=boardPeriod.cellBasis('quota');stamp=basis&&typeof WeakRef==='function'?{now,cell,locale:formatLocale(),basis:new WeakRef(basis)}:undefined;return cell;}
       };

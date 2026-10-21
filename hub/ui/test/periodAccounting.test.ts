@@ -146,10 +146,44 @@ test('each quota work column keeps exact content and titles through source hando
       const own=(at:number)=>{const next=Math.min(accounting.quotaChangesAt('s','w',at,period)??Infinity,column==='workleft'?workLeftChangesAt(lineAt(at),resetAt,at)??Infinity:Infinity);return Number.isFinite(next)?next:null;};
       const due=periodTextChangesAt(now,own,read);
       assert.equal(due,periodTextChangesAt(now,original,read),`${locale}/${column}/${now}`);
+      if(column==='work'||column==='agenthours'){
+        const selected=(at:number)=>accounting.quotaSelectedWorkChangesAt('s','w',at,period)??null;
+        assert.equal(periodTextChangesAt(now,selected,read),due,`${locale}/${column} keeps its first displayed transition without quota boundaries`);
+      }
       if(due!==null){
         assert.ok(due>now);const seen=read(now);
         for(const at of [now+1,Math.floor((now+due)/2),due-1])if(at<due)assert.equal(read(at),seen);
       }
+    }
+  }
+  setLocale('en',false);
+});
+
+test('selected work clocks preserve different supplier curves and knowledge without quota-only wakes',()=>{
+  const H=3_600_000,M=60_000,refs=[0,1].map(i=>({ref:String(i),source:'s',device:{id:'d',name:'D'},origin:'terminal' as const,project:String(i),folder:null,startedAt:0}));
+  const all:WorkTrace={anchor:0,cut:H,knownFrom:0,refs,spans:[[0,0,H/2],[1,H/3,H]]};
+  const supplier=new PeriodIndex(all).curves;
+  for(const knownFrom of [0,17*M])for(const workFrom of [0,23*M]){
+    const selected={...all,knownFrom,spans:all.spans.filter(([id])=>id===0)},curves=new PeriodIndex(selected).curves;
+    const evidence={...tape(),cut:H,quota:[{source:'s',window:'w',workFrom,samples:packSamples(Array.from({length:61},(_,i)=>({at:i*M,used:i/10,resetAt:3*H,staleAfterMs:2*H})))}]};
+    const accounting=drain(PeriodAccounting.prepare(evidence,selected,curves,undefined,undefined,undefined,{groups:{source:supplier.groups.source},knownFrom:0}));
+    for(const locale of ['en','ru'] as const){setLocale(locale,false);
+      for(const column of ['work','agenthours'] as const)for(const now of [knownFrom,workFrom,H,H+1,H+17*M,2*H]){
+        const read=(at:number)=>{const summary=accounting.quotaSummary('s','w',{from:at-H,to:at})!,line={...summary,current:83,minutes:300},cells=lineWork(line,false,3*H,at)!;return JSON.stringify(workText(column,cells[column],line.work,at-H,3*H,null,line.selectedWork));};
+        const legacy=periodTextChangesAt(now,at=>accounting.quotaChangesAt('s','w',at,H)??null,read);
+        const due=periodTextChangesAt(now,at=>accounting.quotaSelectedWorkChangesAt('s','w',at,H)??null,read);
+        if(due!==legacy){
+          assert.equal(due,null);assert.equal(legacy,now+H,'only an unchanged hourly fallback may disappear');
+          for(const offset of [1,M,17*M,30*M,H-1,H])assert.equal(read(now+offset),read(now));
+        }
+      }
+    }
+    assert.equal(accounting.quotaSelectedWorkChangesAt('missing','w',H,H),undefined);
+    assert.equal(accounting.quotaSelectedWorkChangesAt('s','missing',H,H),undefined);
+    for(const unavailable of [{...selected,available:false as const},selected]){
+      const rows={...evidence,quota:evidence.quota.map(row=>({...row,...(unavailable===selected?{workFrom:null}:{})}))};
+      const unknown=drain(PeriodAccounting.prepare(rows,unavailable,curves));
+      assert.equal(unknown.quotaSelectedWorkChangesAt('s','w',H,H),undefined,'unknown work retains the prior display clock');
     }
   }
   setLocale('en',false);

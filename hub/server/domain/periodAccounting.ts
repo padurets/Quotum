@@ -574,6 +574,13 @@ export class PeriodAccounting {
     return {...history,exact:true,since:range.from,to:range.to,series,...(this.moneyWork.size?{moneyWork:[...this.moneyWork.keys()].map(source=>this.moneyWorkSummary(source,range)!)}:{}),meterSeries:history.meterSeries?.map(series=>{const index=this.money.get(series.sourceId+'\n'+series.meterId+'\n'+series.unit);return index?{...series,...index.at(range),...(!history.live?{points:index.plot(range,history.cellMs,series.points,{from:history.since,to:history.to}),...(series.kind!=='cap'?{pointMode:'observation' as const}:{})}:{})}:series;})};
   }
   /** Undefined leaves a missing window's captured fallback with its existing clock. */
+  quotaSelectedWorkChangesAt(source:string,window:string,now:number,period:number):number|null|undefined {
+    const index=this.quota.get(source+'\n'+window);if(!index)return undefined;
+    const cutoff=index.series.workFrom===null?Infinity:index.series.workFrom??0;
+    // Unknown work can name the current time; retain its existing display clock.
+    if(!Number.isFinite(Math.max(this.selectedKnown,cutoff)))return undefined;
+    const next=this.directWorkChangesAt(source,now,period,cutoff);return Number.isFinite(next)?next:null;
+  }
   quotaChangesAt(source:string,window:string,now:number,period:number):number|null|undefined {
     const index=this.quota.get(source+'\n'+window);if(!index)return undefined;
     const next=Math.min(index.changesAt(now,period),this.directWorkChangesAt(source,now,period,index.series.workFrom===null?Infinity:index.series.workFrom??0));return Number.isFinite(next)?next:null;
