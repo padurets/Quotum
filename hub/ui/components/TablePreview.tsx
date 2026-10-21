@@ -11,7 +11,7 @@ export function TablePreview({children,label,still=false}:{children:ReactNode;la
     const measure=()=>{
       const node=content.current;if(!node)return;
       if(!node.clientHeight||!node.clientWidth){setOverflow(false);return;}
-      setOverflow([node,...node.querySelectorAll<HTMLElement>('*')].some(part=>part.clientHeight>0&&part.clientWidth>0&&(part.scrollHeight>part.clientHeight+1||part.scrollWidth>part.clientWidth+1)));
+      setOverflow([node,...node.querySelectorAll<HTMLElement>('*')].some(part=>!part.closest('.sr-only')&&part.clientHeight>0&&part.clientWidth>0&&(part.scrollHeight>part.clientHeight+1||part.scrollWidth>part.clientWidth+1)));
     };
     measure();const observer=new ResizeObserver(measure);if(content.current)observer.observe(content.current);return()=>observer.disconnect();
   },[children,still]);

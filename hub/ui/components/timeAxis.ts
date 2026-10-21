@@ -112,6 +112,7 @@ export function useTimeAxis({
   const wheelBounds = useRef<DOMRect | null>(null);
   const panLayers = useRef<HTMLElement[]>([]);
   const paintTicks = useRef(() => {});
+  // Strips replace nodes; their shared axis font keeps the same shaped glyphs.
   const tickWidths=useRef(new Map<string,number>());
   useEffect(()=>{
     const fonts=document.fonts;
