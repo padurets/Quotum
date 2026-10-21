@@ -21,37 +21,36 @@ type Numbers={agentMs:number;activeMs:number;agents:number};
 type Body={id:string;requestBytes:number;decoded:number;encoded:number;cancelled:boolean;body:PeriodRequest};
 type Sample={numbers:Numbers;activity:History['activity'];tiles:[number,number,number][];bytes:number;flights:number;advances:number;jobsStarted:number;fetches:number;preparationMs:number;failedReservations:number;preferenceWrites:number};
 
-/** Each update owns one shared work attempt; only a native cells-only follow-up may overlap it. */
+/** Each update owns one shared work attempt; only a cells-only drawing follow-up may overlap it. */
 export function assertActivityOverlap(requests:readonly PeriodRequest[],updates:number) {
-  const work=requests.filter(body=>body.sessions),native=requests.filter(body=>!body.sessions);
+  const work=requests.filter(body=>body.sessions),drawing=requests.filter(body=>!body.sessions);
   assert.equal(work.length,updates,'overlapping updates cannot add another work reader');
-  assert.ok(native.length<=1,'overlapping updates allow at most one native chart follow-up');
-  for(const body of native)assertNativeDrawing(body,work[0].selection);
+  assert.ok(drawing.length<=1,'overlapping updates allow at most one drawing follow-up');
+  for(const body of drawing)assertDrawing(body,work[0].selection);
 }
 
-function assertNativeDrawing(body:PeriodRequest,selection:PeriodRequest['selection']) {
-  assert.equal(body.quota?.evidence,'skip','the follow-up reads native drawing cells only');
+function assertDrawing(body:PeriodRequest,selection:PeriodRequest['selection']) {
+  assert.equal(body.quota?.evidence,'skip','the follow-up reads drawing cells only');
   assert.notEqual(body.quota?.cells,'skip');
-  assert.notEqual(body.quota?.sources,'[]','native drawing adds no empty-source Activity reader');
   assert.notEqual(body.quota?.work,'1');
   assert.ok(!body.budget&&!body.funds&&!body.values&&!body.facets&&!body.calendar&&!body.sourceWork);
   assert.deepEqual(body.selection,selection);
 }
 
-/** Replacing a work filter can rebuild the existing native strip, one tile per request. */
+/** The shared reader rebuilds native or Activity drawing cells one tile per request. */
 export function assertActivityCancellation(requests:readonly PeriodRequest[],selection:PeriodRequest['selection']) {
-  const work=requests.filter(body=>body.sessions),native=requests.filter(body=>!body.sessions);
+  const work=requests.filter(body=>body.sessions),drawing=requests.filter(body=>!body.sessions);
   assert.ok(work.length>=2&&work.length<=3,'cancelled shared-work attempts remain counted');
-  assert.ok(native.length<=MAX_READ_TILES,'replacement drawing stays within the existing tile window');
+  assert.ok(drawing.length<=MAX_READ_TILES,'replacement drawing stays within the existing tile window');
   assert.ok(selection.mode==='range');
   const cell=cellOf(selection.to-selection.from),span=cell*TILE_CELLS;
   for(const body of work)assert.deepEqual(body.selection,selection);
-  for(const body of native){
-    assertNativeDrawing(body,selection);
+  for(const body of drawing){
+    assertDrawing(body,selection);
     assert.equal(Number(body.quota!.cell),cell);
     const from=Number(body.quota!.from),to=Number(body.quota!.to);
     assert.ok(Number.isSafeInteger(from)&&Number.isSafeInteger(to)&&to>from);
-    assert.equal(Math.floor(from/span),Math.floor((to-1)/span),'a pooled native read fits one tile');
+    assert.equal(Math.floor(from/span),Math.floor((to-1)/span),'a pooled drawing read fits one tile');
     assert.ok(from>=Math.floor(selection.from/span)*span-span&&to<=Math.ceil(selection.to/span)*span+span,'only the selected strip and its buffer are read');
   }
 }
@@ -63,7 +62,6 @@ export function assertActivityOutside(requests:readonly PeriodRequest[],intent:P
     assert.ok(body.calendar,'outside work must not start an independent chart read');
     assert.ok(!body.sessions&&!body.budget&&!body.funds&&!body.values&&!body.facets&&!body.sourceWork);
     assert.notEqual(body.quota?.work,'1');
-    assert.notEqual(body.quota?.sources,'[]','outside work adds no empty-source Activity reader');
     assert.deepEqual(body.selection,intent.selection);
     assert.deepEqual(body.workFilter,intent.workFilter);
   }
@@ -250,7 +248,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         const workRequests=reads.filter(row=>row.body.sessions).length;
         const preparationLimit=FIXED_ACTIVITY_BUDGET.advancesPerUpdate*Math.max(1,expected??workRequests);
         const attempts=reads.map(row=>({sections:(['quota','budget','funds','sessions','values','facets','calendar','sourceWork'] as const).filter(section=>row.body[section]),cancelled:row.cancelled,decoded:row.decoded,...(row.body.quota?{quota:{cell:row.body.quota.cell,from:row.body.quota.from,to:row.body.quota.to,evidenceSkip:row.body.quota.evidence==='skip'}}:{})}));
-        const report={days,name,excluded,requests:reads.length,workRequests,nativeRequests:reads.length-workRequests,preparationLimit,requestBytes:reads.reduce((n,row)=>n+row.requestBytes,0),decoded,encoded:reads.reduce((n,row)=>n+row.encoded,0),cancelled,attempts,coherentMs:coherentAt-at,verificationMs:Date.now()-coherentAt,reference:referenceReceipt,scriptMs:(after.ScriptDuration-before.ScriptDuration)*1000,taskMs:(after.TaskDuration-before.TaskDuration)*1000,...current,numbers:current.numbers,activity:undefined,tiles:undefined};
+        const report={days,name,excluded,requests:reads.length,workRequests,otherRequests:reads.length-workRequests,preparationLimit,requestBytes:reads.reduce((n,row)=>n+row.requestBytes,0),decoded,encoded:reads.reduce((n,row)=>n+row.encoded,0),cancelled,attempts,coherentMs:coherentAt-at,verificationMs:Date.now()-coherentAt,reference:referenceReceipt,scriptMs:(after.ScriptDuration-before.ScriptDuration)*1000,taskMs:(after.TaskDuration-before.TaskDuration)*1000,...current,numbers:current.numbers,activity:undefined,tiles:undefined};
         reports.push(report);console.error('bench: fixed Activity '+JSON.stringify(report));
         if(expected===null)assertActivityCancellation(reads.map(row=>row.body),selection);
         else if(expected===0)assertActivityOutside(reads.map(row=>row.body),{selection,workFilter:selectedFilter});

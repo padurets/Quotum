@@ -4,6 +4,8 @@ import {activityOracle,assertActivityOverlap,assertActivityOutside,assertActivit
 import {packWork,type WorkTrace} from '../../server/domain/periodWork';
 import type {PeriodRequest} from '../../server/domain/periodRead';
 import {fixture,drawings,flush,NOW} from '../../ui/test/periodRuntimeFixture';
+import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
+import {publishDataFilters} from '../../ui/lib/filterSelection';
 
 test('the shared-filter benchmark oracle clips intervals, unions overlap and deduplicates identities',()=>{
   const trace:WorkTrace={anchor:100,knownFrom:100,cut:200,refs:[0,1,2].map(i=>({ref:String(i),identityRef:i<2?'shared':'other',source:null,project:null,device:{id:'d',name:'D'},origin:'terminal',folder:null,startedAt:100})),spans:[[0,0,30],[1,10,40],[2,50,60]]};
@@ -35,15 +37,15 @@ test('overlapping work counts its recorded native follow-up without allowing ano
   assert.throws(()=>assertActivityOverlap([work,work,{...native,selection:{mode:'range',from:123,to:2000}}],2));
 });
 
-test('fixed monthly native drawing uses the existing tile window independently of shared-work attempts',async t=>{
+test('the shared monthly reader rebuilds native and Activity tiles without creating a legend reader',async t=>{
   t.mock.method(Date,'now',()=>NOW);
-  const h=await fixture({periodName:'30d',fixed:true});let d:Awaited<ReturnType<typeof drawings>>|undefined;
-  t.after(async()=>{d?.close();await h.close();});
+  const filters=defaultFilters(),h=await fixture({periodName:'30d',fixed:true,initialFilters:filters});let d:Awaited<ReturnType<typeof drawings>>|undefined;
+  t.after(async()=>{try{d?.close();await h.close();}finally{publishDataFilters(null,false);}});
   const selection={mode:'range' as const,from:NOW-30*86400000,to:NOW};
   h.selectRange(selection);await flush();
   const work=JSON.parse(JSON.stringify(h.requests.find(body=>body.sessions))) as PeriodRequest;
   assert.ok(work);h.requests.length=0;
-  d=await drawings(h,false);await flush();
+  d=await drawings(h,true);await flush();
   const native=JSON.parse(JSON.stringify(h.requests)) as PeriodRequest[];
   assert.ok(native.length>3&&native.length<=8,'a real monthly strip needs several one-tile reads');
   assertActivityCancellation([work,work,...native],selection);
@@ -56,6 +58,21 @@ test('fixed monthly native drawing uses the existing tile window independently o
     {...first,selection:{...selection,to:selection.to+1}}]){
     assert.throws(()=>assertActivityCancellation([work,work,extra],selection));
   }
+  const members=(h.pool as unknown as {members:Set<unknown>}).members;
+  assert.equal(members.size,2);h.requests.length=0;
+  const held=h.hold();
+  try{
+    h.credit(NOW-60000,NOW);h.events.flush();await flush();
+    const changed={...filters,clients:{mode:'exclude' as const,values:['codex']}};
+    for(const next of [changed,filters]){
+      publishDataFilters(next);h.period.changed();d.loader.setWorkFilter(JSON.stringify(workFilter(next)),next);
+    }
+  }finally{held.release();}
+  await flush();
+  const replacement=JSON.parse(JSON.stringify(h.requests)) as PeriodRequest[];
+  assert.ok(replacement.some(body=>!body.sessions&&body.quota?.sources==='[]'),'the existing reader fetches Activity cells without native source data');
+  assertActivityCancellation(replacement,selection);
+  assert.equal(members.size,2,'shared-filter replacement creates no legend-specific reader');
 });
 
 test('outside fixed work refreshes the actual calendar without rereading or changing Activity',async t=>{
@@ -70,8 +87,9 @@ test('outside fixed work refreshes the actual calendar without rereading or chan
   assert.equal(JSON.stringify(h.period.calendar.get().value.cells),cells);
   const body=reads[0],native={...body,quota:{cell:'300000',from:String(NOW-300000),to:String(NOW),sources:JSON.stringify([h.source]),evidence:'skip'}};
   assertActivityOutside([native],body);
+  assertActivityOutside([{...native,quota:{...native.quota,sources:'[]'}}],body);
   for(const requests of [[body,body],[{...body,sessions:{}}],[{...native,calendar:undefined}],
-    [{...body,budget:native.quota}],[{...native,quota:{...native.quota,sources:'[]'}}],
+    [{...body,budget:native.quota}],
     [{...body,selection:{mode:'range' as const,from:NOW-100,to:NOW}}]]){
     assert.throws(()=>assertActivityOutside(requests,body));
   }
