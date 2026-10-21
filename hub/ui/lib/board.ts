@@ -474,10 +474,14 @@ export const useTitle = (id: string, names?: Record<string, string>) => usePage(
 
 export type Named = Card & {title?: string};
 
+const namedCardInputs=new WeakMap<BoardState,Map<'quota'|MoneyFamily|undefined,Card[]>>();
+
 /** Financial heartbeats of a subscription cannot change its quota drawing inputs. */
 export function namedCardsOf(state:PageState,scope?:'quota'|MoneyFamily):Card[] {
-  return (state.board?.lineup??[]).flatMap(id=>{
-    const card=state.board?.cards[id];
+  const board=state.board;if(!board)return NONE;
+  let variants=namedCardInputs.get(board);const cached=variants?.get(scope);if(cached)return cached;
+  const cards=board.lineup.flatMap(id=>{
+    const card=board.cards[id];
     if(!card||scope&&(scope==='quota'?!supportsQuota(providerOf(card.provider)):moneyFamily(providerOf(card.provider))!==scope))return [];
     if(scope!=='quota')return [card];
     return [{id:card.id,provider:card.provider,plan:card.plan,successAt:card.successAt,error:card.error,stale:card.stale,
@@ -485,6 +489,9 @@ export function namedCardsOf(state:PageState,scope?:'quota'|MoneyFamily):Card[] 
       ...(card.quota?{quota:card.quota}:{}),...(card.resources?{resources:card.resources}:{}),
       meters:card.meters?.filter(m=>quotaMeter(providerOf(card.provider),m.id))??[]}];
   });
+  // Private contact frames keep this board, so all readers share its projection.
+  if(!variants){variants=new Map();namedCardInputs.set(board,variants);}variants.set(scope,cards);
+  return cards;
 }
 
 /** The board's cards in its order, each with its name: what the chart and the table draw. Not their agents or pace. */

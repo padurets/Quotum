@@ -1502,6 +1502,9 @@ waiting for garbage collection or continuing to encode the abandoned body.
 
 ## The dashboard
 
+Private device-contact updates do not reconfigure analytical readers. Resource-card
+readers share their projections while the immutable board is unchanged.
+
 A single-page React app served by the hub. It asks nothing again and again: it opens one
 connection to its board's [events](../spec/dashboard-v1.md) (`GET /api/events`), and the
 hub tells it the board as it is, then each part of it that changes, within a tenth of a
