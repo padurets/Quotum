@@ -67,11 +67,29 @@ test('concurrent Windows helpers share one native mutex and one published key',w
   assert.equal(managedRegistry(id,false).fingerprint,values[0]);
 });
 
-test('numeric stages survive the original helper deadline before compilation and mutex acquisition',{...windows,timeout:25_000},t=>{
+test('a missing packaged Windows helper fails closed without runtime compilation',windows,t=>{
+  const root=mkdtempSync(path.join(tmpdir(),'quotum-registry-missing-')),id=randomUUID();
+  const script=path.join(root,'windows.ps1');writeFileSync(script,readFileSync(new URL('../secrets/windows.ps1',import.meta.url)));
+  const nativeSpawn=childProcess.spawnSync;
+  let receipt:{timeout:number|undefined;exit:number|null;bytes:number;header:boolean;status:number|null;stages:number[]}|undefined;
+  t.after(()=>{t.mock.restoreAll();syncBuiltinESMExports();cleanup(id);rmSync(root,{recursive:true,force:true});});
+  t.mock.method(childProcess,'spawnSync',(...args:Parameters<typeof nativeSpawn>)=>{
+    assert.ok(Array.isArray(args[1]));const actual=[...args[1]],at=actual.indexOf('-File');assert.ok(at>=0);actual[at+1]=script;
+    const result=nativeSpawn(args[0],actual,{...args[2],env:{...process.env,...args[2]?.env,QUOTUM_TEST_KEY_STAGES:'1'}});
+    const output=result.stdout,header=Buffer.isBuffer(output)&&output.length>=5&&output.subarray(0,4).equals(Buffer.from('QKR1'));
+    receipt={timeout:args[2]?.timeout,exit:result.status,bytes:Buffer.isBuffer(output)?output.length:0,header,status:header?output[4]:null,stages:registryStages(result.stderr).map(value=>value.stage)};
+    return result;
+  });
+  syncBuiltinESMExports();
+  assert.throws(()=>managedRegistry(id,true),/secret_key_storage_unavailable/);
+  assert.deepEqual(receipt,{timeout:10_000,exit:0,bytes:5,header:true,status:3,stages:[1]});
+});
+
+test('numeric stages survive the original helper deadline before readiness and mutex acquisition',{...windows,timeout:25_000},t=>{
   const root=mkdtempSync(path.join(tmpdir(),'quotum-registry-stages-'));
   t.after(()=>rmSync(root,{recursive:true,force:true}));
   const executable=path.join(process.env.SystemRoot!,'System32','WindowsPowerShell','v1.0','powershell.exe');
-  const original=readFileSync(new URL('../secrets/windows.ps1',import.meta.url),'utf8').replaceAll('\r\n','\n');
+  const original=sourceScript();
   for(const point of ['setup','mutex'] as const) {
     const before=point==='setup'?'Observe-SetupStage 1\ntry {':'var waited=WaitForSingleObject(mutex,8000);';
     const delayed=point==='setup'?'Observe-SetupStage 1\nStart-Sleep -Seconds 11\ntry {':'System.Threading.Thread.Sleep(11000);'+before;
@@ -108,9 +126,18 @@ function sendFrame(pipe:Writable,input:Buffer) {
   });
 }
 
+// Rebuild only instrumented fixtures from the same C# body; production only loads its DLL.
+function sourceScript() {
+  const script=readFileSync(new URL('../secrets/windows.ps1',import.meta.url),'utf8').replaceAll('\r\n','\n');
+  const source=readFileSync(new URL('../secrets/windows.cs',import.meta.url),'utf8').replaceAll('\r\n','\n');
+  const load="  Add-Type -LiteralPath (Join-Path $PSScriptRoot 'managed-key.dll') -ErrorAction Stop | Out-Null";
+  assert.equal(script.split(load).length,2);
+  return script.replace(load,()=>"  Add-Type -TypeDefinition @'\n"+source+"\n'@ -ErrorAction Stop | Out-Null");
+}
+
 // Instrument a disposable copy of the actual helper, without giving production a test switch.
 function pausedScript(root:string,name:string,point:'write'|'flush'|'wait'|'reader') {
-  let script=readFileSync(new URL('../secrets/windows.ps1',import.meta.url),'utf8').replaceAll('\r\n','\n');
+  let script=sourceScript();
   const ready=path.join(root,name+'-ready'),gate=path.join(root,name+'-gate'),acquired=path.join(root,name+'-acquired');
   const compiled=path.join(root,name+'-compiled'),start=path.join(root,name+'-start'),finished=path.join(root,name+'-finished'),status=path.join(root,name+'-status'),diagnostic=path.join(root,name+'-diagnostic');
   const before=point==='flush'?'if(RegFlushKey(leaf)!=0)throw new Exception();':point==='write'?'if(RegSetValueEx(leaf,"CurrentKey",0,3,candidate,43)!=0)':'var waited=WaitForSingleObject(mutex,8000);';

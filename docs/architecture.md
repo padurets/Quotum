@@ -1298,7 +1298,10 @@ Linux container storage identifies the opened directories by their kernel `mnt_i
 and compares the actual backing mount roots, including stacked and hidden mounts.
 Windows reserves a durable nonsecret UUID, then a packaged bounded helper owns a
 global native mutex through private registry query/write, flush and read-back. The
-resolver runs under the same SQLite transaction as the key check; an established
+Windows hub build compiles this helper with the system .NET Framework compiler and
+copies its DLL beside the PowerShell loader. Key requests load the prepared DLL
+within their ten-second deadline; they never invoke a compiler. The resolver runs
+under the same SQLite transaction as the key check; an established
 missing or mismatched store is never regenerated, including an empty credential set.
 The desktop's native controller remains the authority in local mode.
 
