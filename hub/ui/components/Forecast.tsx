@@ -10,6 +10,7 @@ import {
   announcedOf,
   cellChangesAt,
   outlook,
+  outlookChangesAt,
   outlookText,
   planCell,
   planEndOf,
@@ -67,12 +68,12 @@ const SortedForecast=memo(function SortedForecast({rows,models,columns,fixed,ran
   const [watch]=useState(()=>clock.watch()),cached=useRef<AnalyticsRow<ForecastColumn>[]>([]);
   const evaluate=useCallback(()=>{
     const {rows,models,active,fixed,rangeKey,locale}=current.current,now=hubNow();
-    const values=models.map(model=>sortValue(model,fixed||model.line.capCells?model.line:boardPeriod.quotaAt(model.line,now,rangeKey),now,fixed)).sort(forecastComparator(active,fixed,locale));
+    const values=models.map(model=>sortValue(model,fixed||model.line.capCells||!active||active.column==='name'?model.line:boardPeriod.quotaAt(model.line,now,rangeKey),now,fixed,active?.column??'name')).sort(forecastComparator(active,fixed,locale));
     let next=Infinity;
     const linear:{value:number;slope:number}[]=[];
     if(!fixed)for(const value of values){
-      const row=value.row,work=boardPeriod.quotaOrderAt(row.line,now,rangeKey,active?.column!=='agenthours');
-      next=Math.min(next,work.next,row.validUntil!==undefined&&row.validUntil>now?row.validUntil:Infinity,row.live?.resetAt!=null&&row.live.resetAt>now?row.live.resetAt:Infinity, value.said.key==='runsOut'?Math.ceil(value.said.at):Infinity,workLeftChangesAt(row.line,row.live?.resetAt??null,now)??Infinity);
+      const row=value.row,names=!active||active.column==='name',work=names?{slope:0,next:outlookChangesAt(row.live,row.measuredAt,now,row.ahead,row.context)??Infinity}:boardPeriod.quotaOrderAt(row.line,now,rangeKey,active?.column!=='agenthours');
+      next=Math.min(next,work.next,row.validUntil!==undefined&&row.validUntil>now?row.validUntil:Infinity,row.live?.resetAt!=null&&row.live.resetAt>now?row.live.resetAt:Infinity, value.said.key==='runsOut'?Math.ceil(value.said.at):Infinity,names?Infinity:workLeftChangesAt(row.line,row.live?.resetAt??null,now)??Infinity);
       const key=active?.column&&active.column!=='name'?value.keys[active.column]:null;
       if(active?.column==='plan'){
         const plan=planOrderAt(row.live,row.measuredAt,now,row.plan);next=Math.min(next,plan.next);
