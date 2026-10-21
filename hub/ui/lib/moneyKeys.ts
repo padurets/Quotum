@@ -28,7 +28,7 @@ export function useShownKeys(source:Card,view:View|undefined,board:string) {
     let live=true;const controller=new AbortController();
     setExtra(previous=>({...previous,...(previous.query===query?{}:{keys:[],meters:[]}),query,loading:true,error:null}));
     readKeyIds(board,source.id,selected,controller.signal)
-      .then(parts=>{if(live)setExtra({query,...parts,loading:false,error:null});},error=>{if(live)setExtra(previous=>({...previous,loading:false,error}));});
+      .then(parts=>{if(live)setExtra({query,...parts,loading:false,error:null});},error=>{if(live)setExtra(previous=>({...previous,...(error instanceof ApiError&&[401,403,404].includes(error.status)?{keys:[],meters:[]}:{}),loading:false,error}));});
     return()=>{live=false;controller.abort();};
   },[board,source,ids,query,attempt]);
   const extras=extra.query===query?extra:{keys:[],meters:[],loading:!!board&&JSON.parse(ids).length>0,error:null};

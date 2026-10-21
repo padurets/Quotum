@@ -81,11 +81,11 @@ for(const periodName of ['1h','30d'])test(`${periodName}: PageClock updates fina
   const render=()=>readers.map(reader=>reader.render());
   const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=next[1].at;h.advance(now);timers.delete(next[0]);next[1].run();render();}now=at;h.advance(now);render();};
   try {
-    const before=render();assert.match(before[0],/Recorded sessions <b>1/);assert.match(before[2],/>1<\/strong>/);assert.ok(before[3]);
+    const before=render();assert.match(before[0],/Recorded sessions<\/span><b>1/);assert.match(before[2],/>1<\/strong>/);assert.ok(before[3]);
     h.requests.length=0;
     advance(to+periodMs+250);
     assert.equal(h.period.get().rows.length,0);
-    assert.match(totals.render(),/Recorded sessions <b>0/,'expired work leaves a confirmed zero in the stable information area');
+    assert.match(totals.render(),/Recorded sessions<\/span><b>0/,'expired work leaves a confirmed zero in the stable information area');
     assert.match(amount.render(),new RegExp('>'+workHours(0)+'</b>'));
     assert.ok(!metrics.render().includes('>1</strong>'),'the already open legend metrics retire membership');
     assert.equal(readout.render(),'','a stationary readout retires its clipped work');
@@ -102,8 +102,8 @@ test('numerical labels freeze during a gesture and retire on an authority replac
   try {
     const before=totals.render();assert.ok(before);assert.equal(timers.size,0);
     now=NOW+H;h.advance(now);assert.equal(totals.render(),before);
-    panning=null;assert.ok(!totals.update(props).includes('Recorded sessions <b>1'));
-    assert.ok(!totals.update({...props,history:null}).includes('Recorded sessions <b>1'),'retired input cannot retain old numerical work');
+    panning=null;assert.ok(!totals.update(props).includes('Recorded sessions</span><b>1'));
+    assert.ok(!totals.update({...props,history:null}).includes('Recorded sessions</span><b>1'),'retired input cannot retain old numerical work');
   }finally{totals.close();d.close();await h.close();}
 });
 
@@ -142,9 +142,9 @@ test('the actual summary uses one selected or preview cohort in EN/RU, including
     for(const locale of ['en','ru'] as const){
       setLocale(locale);const view=consumer('Totals',clock,h.period,props);
       try{
-        const html=view.render();assert.ok(html.includes('data-agent-ms="2400000"'));assert.ok(html.includes(workHours(40*M)));assert.ok(html.includes(workHours(30*M)));assert.ok(html.includes(t('activity.agents')+' <b>2'));
+        const html=view.render();assert.ok(html.includes('data-agent-ms="2400000"'));assert.ok(html.includes(workHours(40*M)));assert.ok(html.includes(workHours(30*M)));assert.ok(html.includes(t('activity.agents')+'</span><b>2'));
         seen.add('selected-summary');seen.add('exact-union');seen.add('distinct-sessions');
-        selected=mutedKey('project','"A"');const preview=view.update(props);assert.ok(preview.includes('data-series-context='));assert.ok(preview.includes('data-agent-ms="1200000"'));assert.ok(preview.includes(t('activity.agents')+' <b>1'));seen.add('one-group-preview');
+        selected=mutedKey('project','"A"');const preview=view.update(props);assert.ok(preview.includes('data-series-context='));assert.ok(preview.includes('data-agent-ms="1200000"'));assert.ok(preview.includes(t('activity.agents')+'</span><b>1'));seen.add('one-group-preview');
         selected=null;const allOff=view.update({...props,allOff:true});assert.ok(allOff.includes(t('activity.noSeries')));assert.ok(!allOff.includes('data-agent-ms='));seen.add('no-selected-series');
         const pending=view.update({...props,subset:{get:()=>({model:null,loading:true,error:null}),subscribe:()=>()=>{},changesAt:()=>null,numbers:()=>null}});
         assert.ok(!pending.includes(t('activity.pendingRange')));assert.equal((pending.match(/<b>—<\/b>/g)??[]).length,4);assert.ok(!pending.includes('data-agent-ms='));seen.add('pending-without-wider-totals');

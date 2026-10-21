@@ -54,7 +54,7 @@ export const ANALYTICS_SCENES=[
 
 /** In analytics, filter a project, then toggle a different legend entry. The selected
  * summary and its four quantities occupy the same area as pointer/keyboard previews.
- * Toggle every entry off, then restore one. Money provenance uses its heading area.
+ * Toggle every entry off, then restore one. Money provenance opens beside its legend.
  * Pending/error/generation races are held by ui/test/activitySelection.test.ts;
  * the rendered numerical states and these codes by ui/test/activityNumbers.test.ts.
  */
@@ -63,7 +63,7 @@ export const CHART_SERIES_SCENES=[
   {id:'all-muted',expect:['no-selected-series']},
   {id:'legend-context',expect:['one-group-preview','pending-without-wider-totals'],look:[
     'On the analytics board, point to one visible project while keyboard focus remains on another. The four metrics directly below the heading and the highlight follow the pointer, without a separate project-name row; each button retains its own accessible description.',
-    'Check long names, narrow and manually sized widgets in English and Russian: previews preserve the plot and widget geometry. Monetary details appear above the plot; limit charts have no empty strip.',
+    'Check long names, narrow and manually sized widgets in English and Russian: previews preserve the plot and widget geometry. Monetary details appear beside the active legend entry; no hover-only text reserves an empty strip.',
   ]},
 ] as const;
 
@@ -152,10 +152,10 @@ export const SESSION_ACTIVITY_SCENES=[
  * permission loss and late replies are checked on the live menu.
  * An in-flight filter save is held by ui/test/filterState.test.ts; the saving indicator
  * and disabled actions are checked on the live menu with a delayed response.
- * Continuous panning, partial loading and future folding are short-lived transitions:
+ * Continuous panning, partial loading and return-to-live unfolding are short-lived transitions:
  * ui/test/pan.test.ts, history.test.ts and historyPlot.test.ts hold their input,
  * cancellation, coverage and whole-cell accounting; bench/panning.ts exercises native
- * wheel and Shift-drag with delayed history on both charts. Cooperative preparation
+ * wheel and Shift-drag with delayed history on all five charts. Cooperative preparation
  * and the held final pose are checked by ui/test/prepare.test.ts, history.test.ts and
  * timeAxisMotion.test.ts; they add no lasting demo state.
  *
@@ -567,7 +567,7 @@ const all: DemoSet = {
         'The table of agents in a dialog has a way back to all the groups when it was opened from them, and none when opened from a row',
         'The agent details dialog has no repeated working-count or work-total summary above its rows; the toolbar appears only for Back or compact-list sorting',
         'At the wide dialog width, default agent details form a table whose rows highlight from edge to edge; on a narrow screen they form an inset list',
-        'Each agent\'s directory appears below its project in the details table, without a separate column; long worktree names wrap and stay readable',
+        'Each agent\'s directory appears below its project, without a separate column; oversized rows keep a bounded preview and complete worktree names in the shared disclosure',
         'The card tray\'s agents panel labels its right column Agent-hours and shows each session\'s credited work rather than its running duration; infra has zero work although its client is open',
         'Agent sessions is 32 grid rows tall: projects fit as whole rows, with a pager and row count at the bottom right; the remaining projects stay on widget pages, whole-period totals stay above the pager, and a project opens its own session details',
         'Agent activity and the chart are taller than they draw themselves: the room goes to the plot, the totals, heads and legends stay whole',

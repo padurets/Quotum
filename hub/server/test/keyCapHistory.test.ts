@@ -36,7 +36,7 @@ async function renderer() {
   const load=(file:string)=>import(new URL(file,import.meta.url).href);
   const money=await load('../../ui/lib/money.ts'),format=await load('../../ui/lib/format.ts'),i18n=await load('../../ui/i18n/index.ts');
   let clock=now;
-  const trigger=({trigger}:{trigger:React.ReactNode})=>React.createElement('span',{},trigger);
+  const trigger=({trigger,children}:{trigger:React.ReactNode;children:React.ReactNode})=>React.createElement('span',{},trigger,React.createElement('span',{'data-fixture-disclosure':true},children));
   const fixture={exports:{} as {MoneyValues:React.ComponentType<Record<string,unknown>>},require:(name:string)=>{
     if(name==='../lib/dataFilters')return {useDataFilters:()=>({current:null})};
     if(name==='../../server/domain/dataFilters')return filterModel;

@@ -37,3 +37,10 @@ test('selected caps beyond the preview retain their query identity, recover and 
 test('an excessive cap selection reports the bounded refusal without starting transport',()=>{
   const f=fixture();f.select(Array.from({length:MAX_METERS+1},(_,i)=>String(i)));f.render();const result=f.render();assert.equal(result.loading,false);assert.equal((result.error as ApiError).code,'filters_limit');assert.equal(f.flights.length,0);
 });
+
+test('lost cap access retires retained amounts while an ordinary transport failure preserves them',async()=>{
+  for(const status of [401,403,404,503]){
+    const f=fixture();f.render();f.flights[0].resolve(part('extra-a'));await flush();const result=f.render();assert.equal(result.keys.length,1);
+    result.retry();f.render();f.flights[1].reject(new ApiError(status,'unavailable'));await flush();assert.equal(f.render().keys.length,status===503?1:0);assert.equal(f.render().meters.length,status===503?1:0);
+  }
+});
