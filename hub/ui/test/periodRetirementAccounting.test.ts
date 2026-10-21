@@ -73,14 +73,14 @@ const columnValues=(column:any)=>Array.from({length:column.length},(_,i)=>number
 const columnBuffers=(column:any):ArrayBufferLike[]=>ArrayBuffer.isView(column)?[column.buffer]:column.runs?[column.runs.ends.buffer,column.runs.bases.buffer,column.runs.steps.buffer]:column.values?[column.values.buffer]:[];
 const quotaSnapshot=(index:any)=>({samples:Array.from({length:sampleCount(index.series.samples)},(_,i)=>sampleAt(index.series.samples,i)),descriptors:structuredClone(index.series.descriptors),columns:quotaColumns.map(field=>columnValues(index[field]))});
 
-async function retirementControl(t:any){
+async function retirementControl(t:any,nonzeroSpending=false){
   const clock={now:NOW};t.mock.method(Date,'now',()=>clock.now);
   const h=await fixture({personal:true,periodName:'24h',clocked:true});
   try{
     const start=NOW-24*H,sources=['b','d','e'].map(account=>h.store.source('codex',account.repeat(24),start-H));
     for(const source of sources){
       h.store.hold(source,h.alice.id,start-H);
-      for(let i=0;i<256;i++){const used=i<2?0:.005*(i-1);h.store.record(source,{observedAt:start+M+i*5*M,plan:'',resets:null,staleAfterMs:48*H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used,remaining:100-used,resetAt:NOW+24*H}]});}
+      for(let i=0;i<256;i++){const used=nonzeroSpending?.005*i:i<2?0:.005*(i-1);h.store.record(source,{observedAt:start+M+i*5*M,plan:'',resets:null,staleAfterMs:48*H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used,remaining:100-used,resetAt:NOW+24*H}]});}
     }
     h.events.flush();await flush();
     const before=h.period.tapes.get('quota'),old=sources.map(source=>before.accounting.quota.get(source+'\nw'));
@@ -161,6 +161,29 @@ test('real single-observation retirement copies exact quota prefixes without rea
     for(const source of c.sources)for(const at of [range.from,range.from+1,range.from+5*M,range.to])for(const selected of [{from:range.from,to:at},{from:at,to:range.to}])assert.deepEqual(after.accounting.quotaSummary(source,'w',selected),expected.quotaSummary(source,'w',selected));
     assert.deepEqual(after.accounting.fixed(range,10*M),expected.fixed(range,10*M));
     assert.equal(h.requests.length,c.requests);
+  }finally{c.stopReads();await h.close();c.preparer.dispose();}
+});
+
+test('nonzero spending retires integer coverage while rebuilding the exact floating prefix forward',async t=>{
+  const c=await retirementControl(t,true),{h}=c;
+  try{
+    await c.startRetirement();await c.drain();c.stopReads();
+    assert.equal(c.coveredCopies.size,3,'a nonzero spending origin must not rebuild the independent integer coverage');
+    assert.equal(c.copied.size,0,'floating spending is recomputed instead of subtracting its expired prefix');
+    const after=h.period.tapes.get('quota'),fresh=new PeriodAccounting(after.tape,c.work,h.period.index.curves);
+    let inverseMismatches=0;
+    for(let i=0;i<c.sources.length;i++){
+      const key=c.sources[i]+'\nw',actual=after.accounting.quota.get(key),expected=(fresh as any).quota.get(key),previous=c.old[i];
+      for(const field of quotaColumns)assert.deepEqual(columnValues(actual[field]),columnValues(expected[field]),`${field} must keep every exact fresh value`);
+      const spent=columnValues(expected.spent),origin=numberAt(previous.spent,1)!;
+      inverseMismatches+=spent.filter((value,j)=>!Object.is(value,numberAt(previous.spent,j+1)!-origin)).length;
+      const expired=quotaColumns.flatMap(field=>columnBuffers(previous[field]));
+      for(const buffer of quotaColumns.flatMap(field=>columnBuffers(actual[field])))assert.ok(!expired.includes(buffer),'retired prefixes own new buffers');
+      for(const from of [c.clock.now-24*H,c.clock.now-12*H])assert.deepEqual(after.accounting.quotaSummary(c.sources[i],'w',{from,to:c.clock.now}),fresh.quotaSummary(c.sources[i],'w',{from,to:c.clock.now}));
+    }
+    assert.ok(inverseMismatches>0,'the fixture must distinguish forward floating addition from inverse subtraction');
+    c.unchanged();assert.equal(h.requests.length,c.requests);assert.equal(h.period.getProjectionRevision('quota'),c.revision);
+    assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes);assert.equal(c.preparer.size,0);assert.equal(c.tails?.size,0);
   }finally{c.stopReads();await h.close();c.preparer.dispose();}
 });
 

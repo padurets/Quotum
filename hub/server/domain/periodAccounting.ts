@@ -170,7 +170,7 @@ class QuotaIndex {
     if(tail.removed!==1||tail.before!==prior.series||tail.after!==series||!('columns' in prior.series.samples)||!('columns' in series.samples)
       ||sampleCount(prior.series.samples)!==sampleCount(series.samples)+1||prior.activity!==activity||!Object.is(prior.known,known)
       ||!('base' in prior.spent)||!('base' in prior.during)||!('base' in prior.worked)
-      ||!Object.is(numberAt(prior.spent,1),0)||!Object.is(numberAt(prior.during,1),0)||!Object.is(numberAt(prior.worked,1),0))return undefined;
+      ||!Object.is(numberAt(prior.during,1),0)||!Object.is(numberAt(prior.worked,1),0))return undefined;
     const dropped=sampleDeadlineAt(prior.series.samples,0),origin=numberAt(prior.covered,1)!;
     if(!(Number.isFinite(dropped)||dropped===Infinity)||!Object.is(dropped,numberAt(prior.deadlines,0))
       ||!(yield*integerTimes(prior.series.samples.columns[0]))||!(yield*numericDeadlines(prior.deadlines))||!(yield*integerTailReady(prior.covered,origin)))return undefined;
@@ -179,7 +179,23 @@ class QuotaIndex {
     yield;
     value.deadlines=yield*numberTail(prior.deadlines as NumberColumn,1,copying);
     yield;
-    value.spent=yield*numberTail(prior.spent as NumberColumn,1,copying);
+    if(Object.is(numberAt(prior.spent,1),0))value.spent=yield*numberTail(prior.spent as NumberColumn,1,copying);
+    else {
+      // Removing nonzero spending changes floating addition order. Rebuild it
+      // forward while the independent integer coverage and deadlines keep their tails.
+      const count=sampleCount(series.samples);copying(count*16+64);
+      const spent=new Float64Array(count);let previous:ReturnType<typeof sampleAt>,integers=true;
+      for(let i=0;i<count;i++){
+        if((i&15)===0)yield 16;
+        const sample=sampleAt(series.samples,i)!;
+        if(i){spent[i]=spent[i-1];const step=edge(previous!,sample);if(step.valid)spent[i]+=step.delta;}
+        integers&&=Number.isSafeInteger(spent[i]);previous=sample;
+      }
+      if(count)yield 16;
+      // A finite prefix that cannot use integer packing starts at zero and is
+      // nondecreasing, so the ordinary packer would only copy this Float64 column.
+      value.spent=!integers&&Number.isFinite(spent[count-1])?{length:count,base:0,values:spent}:yield*numberColumn(count,i=>spent[i]);
+    }
     yield;
     value.covered=yield*integerTail(prior.covered,origin,copying);
     yield;

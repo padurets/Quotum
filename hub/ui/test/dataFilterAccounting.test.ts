@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {PeriodCurves,sourceWorkTape,sourceWorkCurves,mergeSourceWorkTape,sameSourceWork} from '../../server/domain/periodCurves';
 import {PeriodAccounting} from '../../server/domain/periodAccounting';
-import {packSamples,retainSamplesPrepared} from '../../server/domain/periodTape';
+import {packSamples,retainSamplesPrepared,numberAt} from '../../server/domain/periodTape';
 import {retainTapeWithTails,type QuotaTail} from '../../server/domain/periodRetention';
 import {drain} from '../lib/prepare';
 import type {WorkTrace} from '../../server/domain/periodWork';
@@ -176,7 +176,9 @@ test('quota retirement keeps selected work separate from supplier curves through
     assert.equal(value.selectedWork.ms,30*M);assert.equal(value.selectedWork.agentMs,30*M);
     assert.equal(value.work!.ms,62*M);assert.equal(value.work!.agentMs,62*M,'supplier work includes the excluded second context');
     for(const selectedRange of [range,{from:32*M+.5,to:63*M+.5}])assert.deepEqual(retired.quotaSummary('s',window,selectedRange),fresh.quotaSummary('s',window,selectedRange));
+    const actual=(retired as any).quota.get('s\n'+window),expected=(fresh as any).quota.get('s\n'+window);
+    for(const field of ['times','deadlines','spent','covered','worked','during'])assert.deepEqual(Array.from({length:actual[field].length},(_,i)=>numberAt(actual[field],i)),Array.from({length:expected[field].length},(_,i)=>numberAt(expected[field],i)),`${field} keeps exact values with independent source work`);
   }
-  assert.deepEqual(rebuilt,[['rebuilt']],'the zero first step copies prefixes; actual spending requires normal preparation');
+  assert.deepEqual(rebuilt,[[]],'nonzero spending also keeps its independent prefixes out of generic quota preparation');
   assert.deepEqual(retired.fixed(range,M),fresh.fixed(range,M));
 });
