@@ -239,8 +239,7 @@ function Dashboard({
                 owner={board.role === 'owner'}
                 locked={prefs.locked}
                 onLock={() => setPrefs({locked: !prefs.locked})}
-                onSettings={section => navigate(settingsHref('/boards/' + boardId + '/settings/' + (local?'project-colors':section), boardId))}
-                local={local}
+                onSettings={local ? null : section => navigate(settingsHref('/boards/' + boardId + '/settings/' + section, boardId))}
                 personal={board.personal}
               />
             }

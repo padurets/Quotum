@@ -24,7 +24,7 @@ export class ProjectColors {
     return {access,allowed,raw,envelope};
   }
 
-  choices(board:string,query:string,cursor?:string,now=Date.now()) {
+  choices(board:string,query:string,cursor?:string,now=Date.now(),personal?:{user:string;names:string[]}) {
     const context=this.context(board,undefined,now),authority=context.envelope.authority;
     let after:string|null=null;
     if(cursor){
@@ -33,7 +33,7 @@ export class ProjectColors {
       const expected=this.mac(['quotum/project-colors/cursor/v1',payload]);
       if(signature.length!==expected.length||!timingSafeEqual(Buffer.from(signature),Buffer.from(expected)))throw new Error('invalid_cursor');
       let parsed:unknown;try{parsed=JSON.parse(Buffer.from(payload,'base64url').toString());}catch{throw new Error('invalid_cursor');}
-      if(!Array.isArray(parsed)||parsed.length!==4||parsed[0]!==board||parsed[1]!==query||typeof parsed[3]!=='string')throw new Error('invalid_cursor');
+      if(!Array.isArray(parsed)||parsed.length!==(personal?5:4)||parsed[0]!==board||parsed[1]!==query||typeof parsed[3]!=='string'||personal&&parsed[4]!==personal.user)throw new Error('invalid_cursor');
       if(parsed[2]!==authority)return {changed:true as const,envelope:context.envelope};
       after=parsed[3];
     }
@@ -45,9 +45,10 @@ export class ProjectColors {
       AND EXISTS(SELECT 1 FROM agent_work w WHERE w.session_id=s.id AND w.to_at>CAST(j.value AS INTEGER))
       ORDER BY project_name COLLATE BINARY LIMIT 51`).all(devices,query,after,after).map(row=>String(row.project_name));
     const live=this.ingest.live.projectChoices(context.access,now,query,after,51);
-    const names=[...new Set([...retained,...live])].sort((a,b)=>Buffer.compare(Buffer.from(a),Buffer.from(b)));
+    const own=personal?.names.filter(name=>name.includes(query)&&(after===null||Buffer.compare(Buffer.from(name),Buffer.from(after))>0))??[];
+    const names=[...new Set([...retained,...live,...own])].sort((a,b)=>Buffer.compare(Buffer.from(a),Buffer.from(b)));
     const projects=names.slice(0,50),last=projects.at(-1);
-    const payload=last&&names.length>50?Buffer.from(JSON.stringify([board,query,authority,last])).toString('base64url'):null;
+    const payload=last&&names.length>50?Buffer.from(JSON.stringify([board,query,authority,last,...(personal?[personal.user]:[])])).toString('base64url'):null;
     return {changed:false as const,projects,authority,...(payload?{nextCursor:payload+'.'+this.mac(['quotum/project-colors/cursor/v1',payload])}:{})};
   }
 

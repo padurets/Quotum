@@ -46,7 +46,6 @@ const LABELS: Record<ActivityDimension, Key> = {source: 'activity.bySource', pro
 /** The widget's own settings, as the chart has its own: what its stacks are split by, and (for the board's owner) hiding it. */
 function ActivitySettings({arrange}: {arrange: Arrange}) {
   const activityBy=usePref('activityBy');
-  const board=useBoardId();
   const [open,setOpen]=useState(false);
   return (
     <>
@@ -58,7 +57,6 @@ function ActivitySettings({arrange}: {arrange: Arrange}) {
         </div>
       </div>
       <div className="popover-section"><button className="popover-row" onClick={()=>{setOpen(false);navigate(settingsHref('/settings/projects'));}}><span>{t('projects.manage')}</span></button></div>
-      {arrange.owner&&board&&<div className="popover-section"><button className="popover-row" onClick={()=>{setOpen(false);navigate(settingsHref('/boards/'+board+'/settings/project-colors',board));}}><span>{t('projectColors.title')}</span></button></div>}
       {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, ACTIVITY, true))}>{t('widget.hide')}</HideRow>}
     </Popover>
     </>

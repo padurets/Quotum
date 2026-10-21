@@ -430,8 +430,9 @@ names as they are.
 Project colours are a board presentation resource, independent of the v5 view and
 saved data filters. A project is its exact corrected display name across admitted
 participants; null is never a named project. This resource supplies no data access.
-The owner edits it under Board settings → Project colours, also reachable from
-Activity settings. Personal, shared and local desktop boards use the same API.
+The existing project editor edits the name and colour in one popup under Manage
+projects, also reachable from Activity settings. Personal, shared and local desktop
+boards use the same editor and API. There is no separate colour settings page.
 
 `GET /api/boards/:board/project-colors` requires membership and returns
 `{version: 1, pins: [[project, color], ...], revision, authority}` with no caching.
@@ -442,7 +443,12 @@ Names retain the ingest/alias contract: 1–120 Unicode codepoints, including su
 control characters and ending spaces, without trimming or normalization.
 
 Owner-only `PUT` to that URL takes quoted integer `If-Match` and exactly
-`{version: 1, authority, project, color}`. `color: null` removes that one pin.
+`{version: 1, authority, project, color?, name?}`, with at least one changed field.
+`color: null` removes that one pin. An optional nonempty `name` corrects only the
+caller’s own project group. A combined edit commits aliases and colour atomically,
+including rollback on capacity or stale preconditions, with one colour revision.
+Omitting `color` preserves the rename/merge lifecycle choice. Explicit colour applies
+to the resulting name; it must still be admitted to the board.
 The project must currently be admitted. Other entries, including private dormant
 entries, survive this patch. An unchanged value is a no-op. An accepted change
 increments the persistent revision once. Old layout writers cannot erase pins.
@@ -475,6 +481,14 @@ names in the same order, independently of range, filters, legend mutes, funding 
 card visibility. Search is a literal substring of at most 120 codepoints. The
 signed cursor binds board, query and authority; changed context returns the same
 sanitized context conflict. There is no snapshot total or background catalogue poll.
+
+`GET /api/projects?board=...&query=...&cursor=...` supplies the existing project
+manager with a single paged union of the caller’s own project groups (including
+unused aliases) and admitted board projects. Rows retain their available own
+reported-name, device and last-work details, with `canRename` and `colorAllowed`.
+The cursor additionally binds the caller. Own aliases outside board admission can
+be renamed but cannot receive a board colour. Plain `GET /api/projects` retains its
+personal catalogue contract. Pending board projections recheck admission at delivery.
 
 Browser snapshots and board configuration updates carry only
 `projectColorsRevision` and `projectColorsAuthority`. Initial order is

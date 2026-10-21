@@ -5,7 +5,7 @@ import {jsonBytes} from './dataFilters.js';
 export type ProjectColorPins = [project:string,color:CategoryColor][];
 export type StoredProjectColors = {version:1;pins:ProjectColorPins};
 export type ProjectColorEnvelope = StoredProjectColors & {revision:number;authority:string};
-export type ProjectColorUpdate = {version:1;authority:string;project:string;color:CategoryColor|null};
+export type ProjectColorUpdate = {version:1;authority:string;project:string;color?:CategoryColor|null;name?:string};
 export type ProjectColorReset = {version:1;authority:string};
 export const PROJECT_COLOR_BYTES=64*1024;
 export const PROJECT_COLOR_FRAME_BYTES=68*1024;
@@ -41,8 +41,9 @@ export function parseProjectColorEnvelope(value:unknown):ProjectColorEnvelope|nu
   return stored?{...stored,revision:Number(value.revision),authority:value.authority}:null;
 }
 export function parseProjectColorUpdate(value:unknown):ProjectColorUpdate|null {
-  if(!object(value)||!keys(value,['version','authority','project','color'])||value.version!==1||!authority(value.authority)||!validProjectName(value.project)||value.color!==null&&!validCategoryColor(value.color))return null;
-  return {version:1,authority:value.authority,project:value.project,color:value.color};
+  if(!object(value)||!keys(value,['version','authority','project','color','name'])||value.version!==1||!authority(value.authority)||!validProjectName(value.project)||
+    !('color' in value)&&!('name' in value)||'color' in value&&value.color!==null&&!validCategoryColor(value.color)||'name' in value&&!validProjectName(value.name))return null;
+  return {version:1,authority:value.authority,project:value.project,...('color' in value?{color:value.color as CategoryColor|null}:{}),...('name' in value?{name:value.name as string}:{})};
 }
 export function parseProjectColorReset(value:unknown):ProjectColorReset|null {
   return object(value)&&keys(value,['version','authority'])&&value.version===1&&authority(value.authority)?{version:1,authority:value.authority}:null;

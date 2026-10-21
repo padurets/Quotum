@@ -383,7 +383,8 @@ and start the demo again.
 shows repeated manual project colours, automatic displacement, neutral overflow,
 retained out-of-period pins and merged names. Its capacity and dormant-reset boards
 exercise the 89-assignment bound and the owner's explicit reset without exposing
-unavailable names. Check owner and reader views, both languages and narrow settings.
+unavailable names. Check owner and reader views, both languages and the combined name/colour popup
+in Manage projects at narrow widths.
 
 `npm run demo -- links --still` opens the client-link scenarios. For the synthetic
 month history comparison, archive the control revision into a separate temporary

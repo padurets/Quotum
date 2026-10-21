@@ -2,8 +2,9 @@ import type {FastifyInstance,onSendHookHandler} from 'fastify';
 import type {Guards,Hub} from '../api.js';
 import {projectColorsOf} from '../projectColors.js';
 import {PROJECT_COLOR_BODY_BYTES,PROJECT_COLOR_PIN_LIMIT,parseProjectColorUpdate,parseProjectColorReset} from '../domain/projectColors.js';
-import {saveProjectColors} from '../store/projectColors.js';
+import {readProjectColors,saveProjectColors} from '../store/projectColors.js';
 import {currentUser} from '../session.js';
+import {config} from '../config.js';
 
 export function projectColorRoutes(app:FastifyInstance,hub:Hub,guards:Guards) {
   const colors=projectColorsOf(hub);
@@ -52,13 +53,25 @@ export function projectColorRoutes(app:FastifyInstance,hub:Hub,guards:Guards) {
         const board=access.board.id,context=colors.context(board),current=context.envelope;
         if(current.revision!==Number(match.slice(1,-1)))return reply.code(409).send({error:'project_colors_conflict',...current});
         if(current.authority!==update.authority)return reply.code(409).send({error:'project_colors_context_changed',...current});
-        const pins=new Map(context.raw.pins);
+        let pins=new Map(context.raw.pins);
         if(patch){
           if(!context.allowed(patch.project))return reply.code(400).send({error:'invalid_request'});
-          if(patch.color===null)pins.delete(patch.project);else pins.set(patch.project,patch.color);
+          let project=patch.project;
+          if(patch.name!==undefined&&patch.name!==project){
+            if(!hub.store.projectsOf(access.user.id,Date.now()-config.retention.sampleDays*86_400_000).some(group=>group.name===project))return reply.code(403).send({error:'forbidden'});
+            const name=patch.name.trim();
+            if(!name)return reply.code(400).send({error:'invalid_project_name'});
+            hub.store.nameProjects(access.user.id,[project],name);project=name;
+            pins=new Map(readProjectColors(hub.store.db,board).pins);
+          }
+          if('color' in patch){
+            if(!colors.context(board).allowed(project))throw Object.assign(new Error('Invalid project'),{statusCode:400});
+            if(patch.color===null)pins.delete(project);else pins.set(project,patch.color!);
+          }
         }else pins.clear();
-        if(pins.size>PROJECT_COLOR_PIN_LIMIT)return reply.code(413).send({error:'project_colors_limit'});
-        if(saveProjectColors(hub.store.db,board,[...pins],access.user.id,Date.now()))hub.store.projectColorsChanged(board);
+        // Throwing rolls back aliases too; returning an error reply would commit them.
+        if(pins.size>PROJECT_COLOR_PIN_LIMIT)throw Object.assign(new Error('Project colour limit'),{statusCode:413});
+        if(saveProjectColors(hub.store.db,board,[...pins],access.user.id,Date.now(),current.revision))hub.store.projectColorsChanged(board);
         return colors.context(board).envelope;
       });
     }});

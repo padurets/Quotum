@@ -10,11 +10,12 @@ export function readProjectColors(db:DatabaseSync,board:string):StoredProjectCol
 }
 
 /** Caller owns the transaction and publishes a board touch only when bytes change. */
-export function saveProjectColors(db:DatabaseSync,board:string,pins:ProjectColorPins,user:string,now:number):boolean {
+export function saveProjectColors(db:DatabaseSync,board:string,pins:ProjectColorPins,user:string,now:number,baseRevision?:number):boolean {
   const next=parseProjectColors({version:1,pins}),current=readProjectColors(db,board);
   if(!next)throw new Error('Invalid stored project colours');
   if(JSON.stringify(current.pins)===JSON.stringify(canonicalPins(next.pins)))return false;
-  const revision=current.revision+1;
+  // One editor save may have already reconciled an alias inside this transaction.
+  const revision=(baseRevision??current.revision)+1;
   if(!Number.isSafeInteger(revision))throw new Error('Project colour revision exhausted');
   db.prepare('INSERT INTO board_project_colors VALUES (?,?,?,?,?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision,updated_by=excluded.updated_by,updated_at=excluded.updated_at')
     .run(board,JSON.stringify(next),revision,user,now);

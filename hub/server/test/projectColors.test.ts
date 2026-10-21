@@ -263,3 +263,58 @@ test('layout 33 upgrades lazily and persisted board colours survive reopening an
   store=new Store(file,at);directory=new Directory(store.db);
   try{assert.deepEqual(readProjectColors(store.db,board),{version:1,pins:[['persisted',CATEGORY_COLORS[0]]],revision:1});directory.deleteBoard(board);assert.equal(store.db.prepare('SELECT count(*) n FROM board_project_colors').get()!.n,0);}finally{store.close();}
 });
+
+test('one project editor save renames and colours atomically with one resource revision',async t=>{
+  const f=await fixture();t.after(async()=>{await f.app.close();f.store.close();});f.credit(['A']);await f.pin('A',CATEGORY_COLORS[0]);
+  const before=await f.get();
+  const reply=await f.request('PUT','',{version:1,authority:before.authority,project:'A',name:'B',color:CATEGORY_COLORS[4]},before.revision);
+  assert.equal(reply.statusCode,200);assert.equal(f.store.projectNames(f.owner.id).get('A'),'B');
+  assert.deepEqual(reply.json().pins,[['B',CATEGORY_COLORS[4]]]);assert.equal(reply.json().revision,before.revision+1);
+});
+
+test('a stale editor and capacity failure preserve both the name and colour',async t=>{
+  const f=await fixture();t.after(async()=>{await f.app.close();f.store.close();});f.credit(['A']);
+  const stale=await f.get();await f.pin('A',CATEGORY_COLORS[0]);
+  assert.equal((await f.request('PUT','',{version:1,authority:stale.authority,project:'A',name:'B',color:CATEGORY_COLORS[1]},stale.revision)).statusCode,409);
+  assert.equal(f.store.projectNames(f.owner.id).has('A'),false);
+  saveProjectColors(f.store.db,f.board,Array.from({length:89},(_,i)=>['dormant-'+i,CATEGORY_COLORS[0]]),f.owner.id,at);
+  const before=await f.get(),raw=readProjectColors(f.store.db,f.board);
+  assert.equal((await f.request('PUT','',{version:1,authority:before.authority,project:'A',name:'B',color:CATEGORY_COLORS[1]},before.revision)).statusCode,413);
+  assert.equal(f.store.projectNames(f.owner.id).has('A'),false);assert.deepEqual(readProjectColors(f.store.db,f.board),raw);
+});
+
+test('a name-only editor merge retains the target colour and foreign names cannot be edited',async t=>{
+  const f=await fixture();t.after(async()=>{await f.app.close();f.store.close();});f.credit(['A','B']);
+  await f.pin('A',CATEGORY_COLORS[0]);await f.pin('B',CATEGORY_COLORS[1]);
+  const before=await f.get();assert.equal((await f.request('PUT','',{version:1,authority:before.authority,project:'A',name:'B'},before.revision)).statusCode,200);
+  assert.deepEqual((await f.get()).pins,[['B',CATEGORY_COLORS[1]]]);
+  const other=f.directory.saveDevice({userId:f.reader.id,machine:{id:'editor-other-machine',name:'Other',os:'linux',arch:'x86_64'},agent:'fixture',tokenId:null},at);
+  f.credit(['Foreign'],other.id);const current=await f.get();
+  assert.equal((await f.request('PUT','',{version:1,authority:current.authority,project:'Foreign',name:'Taken',color:CATEGORY_COLORS[2]},current.revision)).statusCode,403);
+  assert.equal(f.store.projectNames(f.owner.id).has('Foreign'),false);
+});
+
+test('the existing project list pages own aliases and admitted board projects in one catalogue',async t=>{
+  const f=await fixture();t.after(async()=>{await f.app.close();f.store.close();});f.credit(Array.from({length:57},(_,i)=>'P'+String(i).padStart(2,'0')));
+  f.store.nameProjects(f.owner.id,['not-reported'],'Private alias');
+  const get=(query='')=>f.app.inject({url:'/api/projects?board='+f.board+query,headers:{cookie:'quotum_session='+f.sessionSecret}});
+  const first=(await get()).json();assert.equal(first.projects.length,50);assert.ok(first.projects.every((row:{canRename:boolean;colorAllowed:boolean})=>row.canRename&&row.colorAllowed));
+  const next=(await get('&cursor='+encodeURIComponent(first.nextCursor))).json();assert.equal(next.projects.length,8);assert.equal(next.nextCursor,undefined);
+  const own=next.projects.find((row:{name:string})=>row.name==='Private alias');assert.equal(own.canRename,true);assert.equal(own.colorAllowed,false);
+  const found=(await get('&query=Private')).json();assert.deepEqual(found.projects.map((row:{name:string})=>row.name),['Private alias']);
+});
+
+for(const encoding of ['identity','gzip'])test(`the combined catalogue retires foreign rows before ${encoding} delivery`,async t=>{
+  const f=await fixture(),other=f.directory.saveDevice({userId:f.reader.id,machine:{id:'editor-private-machine',name:'Other',os:'linux',arch:'x86_64'},agent:'fixture',tokenId:null},at);
+  f.credit(Array.from({length:30},(_,i)=>'foreign-canary-'+i),other.id);await f.app.close();let retire=false;
+  const app=await buildApp(f.hub,app=>{app.addHook('onSend',async(request,_reply,payload)=>{
+    if(retire&&request.url.startsWith('/api/projects?')){retire=false;const policy=f.store.sessionDevices(f.board,f.reader.id).find(device=>device.id===other.id)!;f.store.setDeviceSessions(f.board,other.id,f.reader.id,false,policy.revision,Date.now());}
+    return payload;
+  });});
+  t.after(async()=>{await app.close();f.store.close();});
+  const read=()=>app.inject({url:'/api/projects?board='+f.board,headers:{cookie:'quotum_session='+f.sessionSecret,'accept-encoding':encoding}});
+  const first=await read();assert.equal(first.statusCode,200);
+  const body=encoding==='gzip'?(await import('node:zlib')).gunzipSync(first.rawPayload).toString():first.body;
+  assert.ok(JSON.parse(body).projects.some((row:{name:string;canRename:boolean})=>row.name==='foreign-canary-0'&&!row.canRename));
+  retire=true;const retired=await read();assert.equal(retired.statusCode,409);assert.equal(retired.headers['content-encoding'],undefined);assert.ok(!retired.body.includes('foreign-canary'));
+});

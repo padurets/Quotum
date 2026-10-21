@@ -14,7 +14,6 @@ import {ErrorLine, Field} from './Kit';
 import {ConnectionsPage} from './ConnectionsPage';
 import {CurrencySettings} from './CurrencySettings';
 import {ClientLinks} from './ClientLinks';
-import {ProjectColors} from './ProjectColors';
 
 type Section = {id: string; title: Key};
 const PERSONAL: Section[] = [
@@ -24,7 +23,7 @@ const PERSONAL: Section[] = [
   {id: 'currencies', title: 'currencies.title'},
   {id: 'interface', title: 'settings.interface'}, {id: 'application', title: 'settings.application'},
 ];
-const BOARD: Section[] = [{id: 'general', title: 'boardSettings.general'}, {id:'project-colors',title:'projectColors.title'}, {id: 'members', title: 'admin.members'}, {id: 'data', title: 'boardSettings.data'}];
+const BOARD: Section[] = [{id: 'general', title: 'boardSettings.general'}, {id: 'members', title: 'admin.members'}, {id: 'data', title: 'boardSettings.data'}];
 
 function SettingsFrame({title, sections, section, base, board, children}: {
   title: string; sections: Section[]; section: string; base: string; board: Board | null; children: ReactNode;
@@ -115,7 +114,7 @@ export function Settings({user, board, boards, local, trustedKeys, refresh, onAp
   const capabilities = settingsSections(local, inApp());
   const sections = PERSONAL.filter(item => item.id === 'profile' ? !local : item.id === 'application' ? capabilities.includes('app') || capabilities.includes('measuring') : true);
   const first = local ? inApp() ? 'application' : 'interface' : 'profile';
-  const section = boardPath ? boardPath[2] ?? (local?'project-colors':'general') : path.split('/')[2] ?? first;
+  const section = boardPath ? boardPath[2] ?? 'general' : path.split('/')[2] ?? first;
   const base = boardPath ? '/boards/' + boardPath[1] + '/settings' : '/settings';
   useEffect(() => {
     if (!boardPath && section === 'connections' && new URLSearchParams(address.split('?')[1]).has('links')) {
@@ -129,15 +128,15 @@ export function Settings({user, board, boards, local, trustedKeys, refresh, onAp
     }
     if (path === base) navigate(settingsHref(base + '/' + section, board?.id), true);
   }, [address, path, base, section, board?.id]);
-  if (boardPath && (local&&section!=='project-colors' || board?.id !== boardPath[1])) return <main><section className="panel settings-content"><ErrorLine error={null} /><p>{t('settings.unavailable')}</p></section></main>;
-  const visible = boardPath ? (local?BOARD.filter(item=>item.id==='project-colors'):board?.personal ? BOARD.filter(item=>item.id==='general'||item.id==='project-colors') : BOARD) : sections;
+  if (boardPath && (local || board?.id !== boardPath[1])) return <main><section className="panel settings-content"><ErrorLine error={null} /><p>{t('settings.unavailable')}</p></section></main>;
+  const visible = boardPath ? (board?.personal ? BOARD.slice(0, 1) : BOARD) : sections;
   return <SettingsFrame title={boardPath ? t('boardSettings.forBoard', {board: boardTitle(board!)}) : t('header.settings')} sections={visible} section={section} base={base} board={board}>
-    {boardPath ? section==='project-colors'?<ProjectColors key={board!.id+':'+user.id} board={board!}/>:section === 'general' ? <General board={board!} /> : section === 'members' ? <MembersTab board={board!} userId={user.id} /> : <SharesTab board={board!} userId={user.id} /> :
+    {boardPath ? section === 'general' ? <General board={board!} /> : section === 'members' ? <MembersTab board={board!} userId={user.id} /> : <SharesTab board={board!} userId={user.id} /> :
       section === 'profile' ? <><Profile user={user} onChanged={refresh} /><Password /></> :
       section === 'links' ? <ClientLinks key={user.id} userId={user.id} /> :
       section === 'connections' ? <ConnectionsPage key={entry+':'+(new URLSearchParams(address.split('?')[1]??'').get('source')??'')} userId={user.id} boards={boards} trustedKeys={trustedKeys} local={local} /> :
       section === 'currencies' ? <CurrencySettings key={user.id} /> :
-      section === 'projects' ? <Projects /> : section === 'interface' ? <><p className="dialog-text">{t('settings.browserScope')}</p><Browser title={t('settings.interface')} /></> :
+      section === 'projects' ? <Projects board={board} /> : section === 'interface' ? <><p className="dialog-text">{t('settings.browserScope')}</p><Browser title={t('settings.interface')} /></> :
       section === 'application' && appState ? <>{capabilities.includes('measuring') && <Measuring state={appState} onState={onAppState} />}{capabilities.includes('app') && <AppSection state={appState} onState={onAppState} />}</> : null}
   </SettingsFrame>;
 }

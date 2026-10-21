@@ -18,7 +18,7 @@ export const PROJECT_COLOR_SCENES=[
 export const PROJECT_COLORS:DemoSet={...SESSION_ANALYTICS,id:'project-colors',about:'Pinned, repeated and automatic project colours, overflow, aliases and dormant reset',entries:[
   ...SESSION_ANALYTICS.entries,
   ...PROJECT_COLOR_SCENES.map(scene=>({kind:'board' as const,id:'colors-'+scene.id,name:{pinned:'Pinned project colours',reserved:'All colours reserved',renamed:'Merged project colours',capacity:'Project colour capacity',dormant:'Dormant colour reset'}[scene.id],owner:'ana',members:['boris'],agents:true,
-    expect:[{state:'widgets' as const}],look:['Project colours are shared with Boris and editable only by Ana. Check the board settings in both languages and a narrow window; Auto and repeated swatches remain independent choices.']})),
+    expect:[{state:'widgets' as const}],look:['Project colours are shared with Boris and editable only by Ana. Open Manage projects and edit a name and colour in the same popup. Check both languages and a narrow window; Auto and repeated swatches remain independent choices.']})),
 ]};
 
 export function seedProjectColors(store:Store,directory:Directory,stand:Stand) {

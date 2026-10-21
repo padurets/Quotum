@@ -1438,9 +1438,11 @@ and its limits.
 
 Project colours are a separate board presentation resource in
 `board_project_colors`, outside the layout and filter documents. Owners choose Auto
-or one of the nine shared Nord Warm swatches in Board settings → Project colours;
-readers share that choice, including on the local desktop board. The Activity menu
-has an owner shortcut, while personal project settings continue to manage aliases.
+or one of the nine shared Nord Warm swatches in the existing project editor under
+Manage projects. The same popup edits the name and board colour with one Save.
+Readers share that colour, including on the local desktop board; the Activity menu
+opens the same project management. Names retain their personal scope and colours
+their board ownership. A combined edit commits both changes atomically.
 Repeated manual colours are allowed. The picker keeps a local draft until Save;
 resetting every colour, including dormant choices, requires confirmation.
 
