@@ -1978,7 +1978,9 @@ unchosen series 40%. Without a preview, chosen series are normal; with no repres
 choices, every series is normal. Each multiplier preserves the layer's intrinsic
 opacity. Shared plans take their strongest associated series multiplier.
 Activity preview replaces the four useful summary metrics without changing their
-geometry. Monetary details and currency provenance appear in the shared glass tooltip
+geometry. A retained legend identity with no work in the interval previews confirmed
+zero, preserving unknown and unavailable evidence rather than borrowing the board total.
+Monetary details and currency provenance appear in the shared glass tooltip
 anchored to the legend entry, using exact money presentation. They occupy no space
 at rest and do not constrain a widget's minimum height. Quota charts reserve no strip.
 The common Resources filter selects accounts, key caps and subscription funds

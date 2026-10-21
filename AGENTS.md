@@ -192,7 +192,8 @@ and platform smoke checks still apply.
   clear the affected context; late replies never restore reset choices.
   Activity summaries and bar numbers always describe the board-filtered cohort,
   including exact interval union and distinct sessions. Preview temporarily replaces
-  the useful summary in the same stable area. Monetary details and provenance use
+  the useful summary in the same stable area. A retained legend identity with no work
+  in the interval previews confirmed zero, never the wider cohort. Monetary details and provenance use
   the shared glass tooltip anchored to their legend button, without a hidden content
   reserve. Quota charts gain no empty information strip or aggregate.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the list of agents, agent activity, the chart, the table).

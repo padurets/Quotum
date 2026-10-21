@@ -54,13 +54,14 @@ export const ANALYTICS_SCENES=[
  * then preview Ledger and Atlas: choices accumulate, previews are stronger, and leaving
  * restores the choices. Toggle both off: every series regains its normal paint.
  * Controller/lifetime races are held by ui/test/seriesFocus.test.ts; numerical semantics
- * by ui/test/activityNumbers.test.ts. Shared filters remain a separate operation.
+ * by ui/test/activityNumbers.test.ts, including a retained legend identity with no
+ * work left in the interval. Shared filters remain a separate operation.
  */
 export const CHART_SERIES_SCENES=[
   {id:'board-cohort',expect:['board-summary','exact-union','distinct-sessions']},
   {id:'legend-context',expect:['one-group-preview','restored-summary'],look:[
     'In all five charts, choose two entries, preview a third, leave it, preview a chosen entry and toggle each choice off. The chart keeps every series, its geometry and numerical cohort.',
-    'Check English/Russian, narrow and manually sized widgets, mouse/keyboard/touch, and the 100/65/25 hierarchy. Monetary provenance appears beside its legend entry in a glass tooltip without an empty strip. Activity previews replace its useful summary in the same space.',
+    'Check English/Russian, narrow and manually sized widgets, mouse/keyboard/touch, and the 100/65/40 hierarchy. Monetary provenance appears beside its legend entry in a glass tooltip without an empty strip. Activity previews replace its useful summary in the same space.',
   ]},
 ] as const;
 

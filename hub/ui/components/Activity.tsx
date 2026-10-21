@@ -112,14 +112,15 @@ const LegendItem = memo(function LegendItem({history,group,groupKey,by,name,colo
 });
 
 /** Only this small region hears legend preview changes. Its reserved geometry is constant. */
-const Totals=memo(function Totals({history,by,since,focus,groups}:{history:History|null;by:ActivityDimension;since:number|null;focus:SeriesFocus;groups:ActivityGroup[]}) {
+const Totals=memo(function Totals({history,by,since,focus}:{history:History|null;by:ActivityDimension;since:number|null;focus:SeriesFocus}) {
   useLocale();const selected=useSyncExternalStore(focus.subscribe,focus.get);
-  const group=groups.find(group=>activitySeriesKey(by,group.key)===selected),key=group?.key;
+  // The strip can retain a legend identity after its work leaves the interval.
+  const prefix=activitySeriesKey(by,''),key=selected?.startsWith(prefix)?selected.slice(prefix.length):undefined;
   const base=useActivityNumbers(history,by,value=>JSON.stringify([!!value.known,...metricsText(value)]),true,undefined,key);
-  const preview=group&&base?.by[by].find(part=>part.key===group.key);
-  const activity=group&&base?{...base,agentMs:preview?.agentMs??0,activeMs:preview?.activeMs??0,agents:preview?.agents??0}:base;
+  const preview=base?.by[by].find(part=>part.key===key);
+  const activity=key!==undefined&&base?{...base,agentMs:preview?.agentMs??0,activeMs:preview?.activeMs??0,agents:preview?.agents??0}:base;
   const text=activity?.available===false?t('activity.noSessions'):activity&&!activity.known?t('activity.knownFrom',{time:stamp(activity.since)}):null;
-  return <div className="chart-info activity-info" data-time="activity-info" data-series-context={group?selected:undefined}>
+  return <div className="chart-info activity-info" data-time="activity-info" data-series-context={key!==undefined?selected:undefined}>
     <div className="activity-totals" data-time="activity-totals" data-agent-ms={!text?activity?.agentMs:undefined}>
       {text?<span>{text}</span>:<>
         <span title={t('activity.agentHoursHint')}><span className="activity-total-name">{t('activity.agentHours')}</span><b>{activity?workHours(activity.agentMs):'—'}</b></span>
@@ -214,7 +215,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     <AnalyticsPanel ref={panel} className="activity" title={t('activity.title')} chart history={history} loading={loading} error={error} retry={()=>{boardPeriod.retry();quotaHistory.retry();}}
       settings={<ActivitySettings arrange={arrange} since={since}/>}
     >
-      <Totals history={drawing} by={by} since={since} focus={focus} groups={currentGroups}/>
+      <Totals history={drawing} by={by} since={since} focus={focus}/>
       <>
           <Stacks
             history={history}

@@ -19,6 +19,7 @@ import {preparationFixture} from './preparationFixture';
 import {activityEmpty,groupColors,activityGroupName as groupName} from '../lib/activity';
 import {flush} from './periodRuntimeFixture';
 import {CHART_SERIES_SCENES} from '../../demo/catalogue';
+import {groupRegistry} from '../lib/plotRegistry';
 
 const require=createRequire(import.meta.url),React=require('react'),{renderToStaticMarkup}=require('react-dom/server');
 const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
@@ -29,7 +30,7 @@ const compile=(code:string)=>ts.transpileModule(code,{compilerOptions:{target:ts
 function consumer(name:string,clock:PageClock,period:any,initial:any,panning:()=>number|null=()=>null) {
   let cursor=0,dirty=true,renders=0,props=initial,output='',node:any;
   const focus={get:()=>null,subscribe:()=>()=>{}};
-  props={focus,groups:[],titles:{},...props};
+  props={focus,titles:{},...props};
   const slots:any[]=[],effects:(()=>void)[]=[],stops:(()=>void)[]=[];
   const slot=(create:()=>any)=>{const at=cursor++;return slots[at]??(slots[at]=create());};
   const useRef=(current:any)=>slot(()=>({current}));
@@ -46,7 +47,7 @@ function consumer(name:string,clock:PageClock,period:any,initial:any,panning:()=
   const legend=source.slice(source.indexOf('const LegendItem = memo'),source.indexOf('/** Only this small region'));
   runInNewContext(compile(numbers+legend+totals+readout+`\nexports.component=${name};`),context);
   const render=()=>{if(dirty){dirty=false;cursor=0;node=context.exports.component(props);output=renderToStaticMarkup(node);renders++;while(effects.length)effects.shift()!();}return output;};
-  return {render,focus:(visible:boolean)=>node.props.children[0].props.onFocus({currentTarget:{matches:()=>visible}}),update:(next:any)=>{props={focus,groups:[],titles:{},...next};dirty=true;return render();},get renders(){return renders;},close:()=>stops.forEach(stop=>stop())};
+  return {render,focus:(visible:boolean)=>node.props.children[0].props.onFocus({currentTarget:{matches:()=>visible}}),update:(next:any)=>{props={focus,titles:{},...next};dirty=true;return render();},get renders(){return renders;},close:()=>stops.forEach(stop=>stop())};
 }
 
 test('a mouse-focused legend keeps its own metric description when keyboard modality changes',async test=>{
@@ -133,7 +134,7 @@ test('the actual summary always describes the board cohort; transient preview de
     }
     h.events.flush();await flush();
     const history=d.render().history!,clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}});
-    const focus={get:()=>selected,subscribe:()=>()=>{}},props={history,by:'project',since:null,focus,groups:history.activity.by.project};
+    const focus={get:()=>selected,subscribe:()=>()=>{}},props={history,by:'project',since:null,focus};
     const expected=history.activity;
     for(const locale of ['en','ru'] as const){
       setLocale(locale);const view=consumer('Totals',clock,h.period,props);
@@ -147,6 +148,35 @@ test('the actual summary always describes the board cohort; transient preview de
     }
     for(const scene of CHART_SERIES_SCENES)for(const code of scene.expect)assert.ok(seen.has(code),scene.id+': '+code);
   }finally{setLocale('en');d.close();await h.close();}
+});
+
+test('a retained legend identity previews confirmed zero when its work leaves the selected interval',async test=>{
+  test.mock.method(Date,'now',()=>NOW);const h=await fixture({personal:true}),d=await drawings(h);
+  try{
+    for(const [project,from,to] of [['A',NOW-50*M,NOW-30*M],['B',NOW-20*M,NOW-10*M]] as const)
+      h.store.creditWork(h.device,from,to,[{source:h.source,client:'codex',origin:'terminal',project,folder:'',startedAt:NOW-H,identity:{kind:'stable',sessionId:project}}]);
+    h.events.flush();await flush();
+    const initial:History=d.renderActivity().drawing!,seed=initial.activity.by.project.map(group=>({...group,color:'#aaa'}));
+    const range={from:NOW-25*M,to:NOW-5*M};h.selectRange(range);d.loader.choose('1h',range);await flush();
+    const history:History=d.renderActivity().drawing!,groups=history.activity.by.project;
+    assert.ok(history.activity.agentMs>0);assert.ok(!groups.some(group=>group.key==='"A"'));
+    assert.ok(groupRegistry(seed,seed,groups).some(group=>group.key==='"A"'),'the current strip can retain A as a valid legend target');
+    let selected:string|null=activitySeriesKey('project','"A"');
+    const focus={get:()=>selected,subscribe:()=>()=>{}};
+    const clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}});
+    const view=consumer('Totals',clock,h.period,{history,by:'project',since:null,focus});
+    try{
+      const html=view.render();assert.ok(html.includes('data-series-context='));assert.ok(html.includes('data-agent-ms="0"'),'an absent preview must not borrow the positive board cohort');
+      assert.ok(html.includes(t('activity.agents')+'</span><b>0'));
+      for(const label of ['activity.agentHours','activity.active'] as const)assert.ok(html.includes(t(label)+'</span><b>'+workHours(0)));
+      assert.ok(html.includes(t('activity.atOnce')+'</span><b>—'));
+      const unknown=view.update({history:{...history,activity:{...history.activity,known:null}},by:'project',since:null,focus});
+      assert.ok(!unknown.includes('data-agent-ms='));assert.ok(unknown.includes(t('activity.knownFrom',{time:stamp(history.activity.since)})));
+      const unavailable=view.update({history:{...history,activity:{...history.activity,available:false}},by:'project',since:null,focus});
+      assert.ok(!unavailable.includes('data-agent-ms='));assert.ok(unavailable.includes(t('activity.noSessions')));
+      selected=null;assert.ok(view.update({history,by:'project',since:null,focus}).includes('data-agent-ms="'+history.activity.agentMs+'"'));
+    }finally{view.close();}
+  }finally{d.close();await h.close();}
 });
 
 test('the Activity clock advances the plot without invalidating unchanged numerical consumers',async test=>{
