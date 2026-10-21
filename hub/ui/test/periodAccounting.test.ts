@@ -19,7 +19,6 @@ import {compactJSON} from '../../server/history.js';
 import {cellsOf} from '../../server/domain/cells.js';
 import {compose,type HistorySeries} from '../../server/domain/history.js';
 import {valueIn} from '../lib/lines.js';
-import {drain} from '../lib/prepare.js';
 import {observationRunsPrepared} from '../lib/plotPath.js';
 
 for(const cadence of [30_000,120_000])for(const kind of ['weekly','session'] as const)test(`fixed ${kind} retains producer cell support at ${cadence}ms cadence`,()=>{
