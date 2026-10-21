@@ -515,16 +515,14 @@ function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;
   const windows=historical?value?.windows??[]:source.windows;
   const periods=quotaPeriods({provider:source.provider,windows}),shownPeriods=periods.filter(w=>!isWindowHidden(arrange.view,source.id,w.id));
   const visible=windows.filter(w=>!isWindowHidden(arrange.view,source.id,w.id)),weekly=planOf(arrange.view,source.id),caps=hasSubscriptionCaps(source.provider);
-  const primary=primaryQuotaPeriods(shownPeriods);
+  const primary=primaryQuotaPeriods(shownPeriods),allHidden=!!periods.length&&!shownPeriods.length;
   const wallet=providerOf(source.provider)?.funding==='wallet';
   const noEvidence=historical&&!!value&&!reading.loading&&!reading.error&&!windows.length&&!value.meters.length&&value.creditBalance?.status!=='unlimited'&&!allowances.length;
   return <MeasurementClock.Provider value={historical?reading.basis?.range.to??selected.to:null}>
     <div className={`limits card-primary${wallet?' is-wallet':''}`}>
       {!caps&&wallet&&budgetVisible(source)&&<MoneyCard source={source} board={boardId} view={arrange.view} measurement={historical?value:undefined}/>}
-      {!noEvidence&&primary.map(period=>{const w=visible.find(w=>w.id===period.id),measurement=historical?value:source;return w?<Limit key={w.id} w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={weekly}/>:caps&&measurement?<QuotaCard key={period.id} source={measurement} ids={[period.id]}/>:null;})}
-      {noEvidence&&<div className="card-empty">{t('period.noEvidence')}</div>}
+      {allHidden?<AllHidden/>:noEvidence?<div className="card-empty">{t('period.noEvidence')}</div>:primary.map(period=>{const w=visible.find(w=>w.id===period.id),measurement=historical?value:source;return w?<Limit key={w.id} w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={weekly}/>:caps&&measurement?<QuotaCard key={period.id} source={measurement} ids={[period.id]}/>:null;})}
       {!historical&&!caps&&!source.windows.length&&!budgetVisible(source)&&!source.meters&&<div className="card-empty">{errorText(source.error??'waiting')}</div>}
-      {!noEvidence&&!!periods.length&&!shownPeriods.length&&<AllHidden/>}
     </div>
   </MeasurementClock.Provider>;
 }

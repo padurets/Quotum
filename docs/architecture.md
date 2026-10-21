@@ -2304,6 +2304,7 @@ balance, or the first selected cap when the balance is excluded; other caps and 
 amounts remain in the balance disclosure.
 A successful historical read before any observation shows one empty state inside
 the primary area, replacing empty quota scales rather than appending a row.
+An explicitly empty limit selection keeps its hidden-limits state and filter action.
 Loading extra selected caps never adds a card row or an inventory-wide lookup.
 The allowance count and disclosure use the logical wallet selection shared with
 analytics. Explicit choices remain named with an unavailable value when their cap

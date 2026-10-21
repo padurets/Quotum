@@ -31,7 +31,7 @@ function nodes(value:unknown):Node[] {
   return [node,...nodes(node.props.children),...nodes(node.props.trigger)];
 }
 
-test('a historical subscription without observations uses one primary empty state instead of stacking quota placeholders',()=>{
+test('a historical subscription distinguishes missing observations from hidden limits in one primary state',()=>{
   const now=1_800_000_000_000,at=now-600_000,store=new Store(':memory:',now-3_600_000);
   try{
     const directory=new Directory(store.db),user=directory.createUser('quota-evidence@example.test','Evidence','unused',now-3_600_000),board=directory.boards(user.id)[0].id;
@@ -50,8 +50,9 @@ test('a historical subscription without observations uses one primary empty stat
     const draw=()=>nodes(context.exports.draw({source,arrange:{view:EMPTY_VIEW},boardId:board}));
     assert.deepEqual(reading.value.meters,[],'the historical endpoint precedes the first observation');
     for(const locale of ['en','ru'] as const){setLocale(locale);for(hidden of [false,true]){
-      const tree=draw();assert.equal(tree.filter(node=>node.props.children===t('period.noEvidence')).length,1);
-      assert.equal(tree.filter(node=>node.type==='quota'||node.type==='limit'||node.type==='hidden').length,0,'no competing scales or all-hidden state are appended to the empty state');
+      const tree=draw();assert.equal(tree.filter(node=>node.props.children===t('period.noEvidence')).length,hidden?0:1);
+      assert.equal(tree.filter(node=>node.type==='quota'||node.type==='limit').length,0,'no competing scales are appended to the empty state');
+      assert.equal(tree.filter(node=>node.type==='hidden').length,hidden?1:0,'an explicit empty selection keeps its filter action instead of becoming missing evidence');
     }}
     hidden=false;reading.value=read(now);reading.basis.range.to=now;
     assert.equal(reading.value.meters.find(meter=>meter.id===QUOTA_IDS[0])?.amount,cap.amount);
