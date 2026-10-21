@@ -23,6 +23,7 @@ export function useBubble(active: boolean, anchor?: RefObject<HTMLElement | null
       if (cap !== null) {
         element.style.maxHeight = `${cap}px`;
         element.style.overflow = 'auto';
+        element.style.pointerEvents = 'auto';
       }
       if (container) {
         // A scrolling legend clips its descendants; its panel owns the bubble.

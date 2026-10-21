@@ -1620,8 +1620,8 @@ first Nord Warm colour and remain independent of the filtered sample.
 The page makes cells from `since` stale and reads only those its frame needs,
 without a rate limit or a timer. Reconnect, a new lineup, or a change of whose work the
 board shows or its names (`Store.workKey`) makes all tiles stale. The last frame stays
-undimmed while its tail loads. A frame of another period stays dimmed until its cells
-are complete. One pending read per target coalesces news until its response, while another
+undimmed while its tail loads. A replacement period retains compatible content at full opacity until its cells
+are complete; incompatible or unauthorized evidence retires inside the same shell. One pending read per target coalesces news until its response, while another
 target can read independently. Errors and retries belong to the target that requested
 them. Time alone never rebuilds or reads history; cells past the hub's cut are
 known empty until new data arrives, and a response predating news cannot restore that
@@ -1755,13 +1755,13 @@ Every widget is arranged on one grid. A row is 48 px (a 32 px track and a 16 px 
 Content measurements update grid positions and reading order directly, without a
 React render of the grid or neighbouring widgets. Only a widget whose own allocated
 height changes hears a sizing update; layout edits still reconcile through React.
-Each widget fills the fewest whole rows that contain its content, with any spare room
-above a card's tray or at the bottom of a panel, unless the owner chose a height for it
-(`h`, in rows). A chosen height is a request, not what shows: a card never
-gets shorter than its content, and grows past the chosen rows while its content needs
-more, back to them when it needs less, without the view changing. All five charts give a
-chosen height to their plot, never drawing it lower than they do by themselves, their
-heads, totals and legends whole. The Agent sessions widget gathers the period's sessions
+Each widget establishes its natural height and minimum from its structural shell.
+The grid rounds that height to whole rows unless the owner chose a height (`h`, in rows),
+clamped to the structural minimum. Data, filters, period navigation and asynchronous
+results do not revise those dimensions. Display configuration and viewport reflow
+can establish a new structure. Spare room stays above a card's tray or at the bottom
+of a panel. All five charts give the allocated content height to their plot while
+keeping their heads, totals and legends whole. The Agent sessions widget gathers the period's sessions
 by project (one name across people, as agent activity counts it), machine or subscription,
 each viewer for themselves, or lists each agent with None first. Client is shown by
 default in individual and disclosure rows; its owner column setting is independent
@@ -1791,8 +1791,8 @@ a fixed two-column metric grid above the count and pager. Tables without aggrega
 metrics show only the count and pager.
 Each value names its metric and scope. The sessions table shows whole-period work and
 context counts; quota and budget tables show matching row counts without summing
-unrelated percentages or overlapping wallet components. One-page tables hide the
-pager. Grouping uses the shared labelled segmented control, with None first and
+unrelated percentages or overlapping wallet components. One-page tables keep the disabled 1/1
+pager in the same footer slot. Grouping uses the shared labelled segmented control, with None first and
 Project still the default. Optional activity and concurrency columns do not add
 details to the compact session rows. The current working count is a subtitle under
 the session widget's heading, in the shared analytics-note style.
@@ -2282,7 +2282,8 @@ the shared Popover. Whole rows page through the full loaded index without an inn
 vertical scroller or another history read.
 Subscription cards keep two primary percentage slots, with a session and weekly
 limit when both families are available. General five-hour and weekly windows lead;
-equally specific windows retain the provider's order. Every selected native window
+equal-specificity and equal-duration ties use descending stable IDs, independently
+of supplier reply order or remaining amounts. Every selected native window
 remains in their existing measurement disclosure. Wallet cards show one available
 balance, or the first selected cap when the balance is excluded; other caps and exact
 amounts remain in the balance disclosure.

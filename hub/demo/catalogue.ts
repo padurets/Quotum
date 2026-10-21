@@ -91,7 +91,7 @@ export const SESSION_ACTIVITY_SCENES=[
   {id:'comparison',expect:['opt-in-table','union-total','retained-contributions','shared-work-index']},
   {id:'review',expect:['populated-24h','paged-comparison','height-fit-pages','narrow-sort-menu','header-sort-reset','retained-pagination','rich-breakdowns'],
     look:['Complete-period totals have their own line above the separate row count and pager; wide totals align with columns and narrow totals use a fixed two-by-two grid.',
-      'Increasing the session table height fits all 57 projects and hides its pager.',
+      'Increasing the session table height fits all 57 projects and keeps a disabled 1/1 pager in the stable footer.',
       'Agent sessions starts with None, then Project, Machine and Subscription. Client is visible by default in ordinary rows and the disclosure, and its switch is independent of chart selections.']},
 ] as const;
 

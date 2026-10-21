@@ -40,7 +40,7 @@ export function slideOf(before: {from: number; end: number}, after: {from: numbe
  * A precise readout also keeps `hoverAt`, the pointer's time inside that cell.
  * A mouse or a pen drags a range across it at once, as in Grafana; a finger sliding along
  * it reads its cells, and held still for a moment starts a range instead. A swipe sideways
- * on a touchpad, Shift with the wheel, or Shift-drag pans both charts through one shared
+ * on a touchpad, Shift with the wheel, or Shift-drag pans all five charts through one shared
  * transaction. Holding Shift also hides readouts before movement starts. HTML owners
  * move the prepared SVG within stationary clips. After an arrow step
  * they slide in from the side it came from. `end` is where

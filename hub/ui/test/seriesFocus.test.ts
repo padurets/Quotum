@@ -13,8 +13,9 @@ runInNewContext(ts.transpileModule(`export const paint=(plans,planPaths)=><g>${p
 test('one legend arbiter handles pointer, keyboard, toggles, touch, dismissal and cleanup',()=>{
   const properties=new Map<string,string>(),events=new Map<string,(event:any)=>void>(),globalEvents=new Map<string,(event:any)=>void>(),microtasks:(()=>void)[]=[],timers=new Map<number,()=>void>();
   let writes=0,phase=()=>{},shift=false,active:number|null=null,folding=false,changed=()=>{},observing=false;
-  class Button {dataset:Record<string,string>;pressed='true';visible=true;attached=true;isConnected=true;constructor(key:string){this.dataset={seriesKey:key};}closest(){return this;}contains(target:unknown){return target===this;}getAttribute(){return this.pressed;}matches(){return this.visible;}}
-  const root={querySelector:()=>folding?{}:null,contains:(button:Button)=>button.attached,style:{setProperty:(key:string,value:string)=>{writes++;properties.set(key,value);},removeProperty:(key:string)=>{writes++;properties.delete(key);}},addEventListener:(name:string,run:(event:any)=>void)=>events.set(name,run),removeEventListener:(name:string)=>events.delete(name)};
+  class Button {dataset:Record<string,string>;pressed='true';visible=true;attached=true;isConnected=true;tip=false;scrollHeight=94;clientHeight=20;scrollTop=0;constructor(key:string){this.dataset={seriesKey:key,seriesContext:key};}closest(selector:string){return selector.startsWith('.series-tip')?this.tip?this:null:this.tip?null:this;}contains(target:unknown){return target===this;}getAttribute(){return this.pressed;}matches(){return this.visible;}}
+  const tips:Button[]=[];
+  const root={querySelectorAll:()=>tips,querySelector:()=>folding?{}:null,contains:(button:Button)=>button.attached,style:{setProperty:(key:string,value:string)=>{writes++;properties.set(key,value);},removeProperty:(key:string)=>{writes++;properties.delete(key);}},addEventListener:(name:string,run:(event:any)=>void)=>events.set(name,run),removeEventListener:(name:string)=>events.delete(name)};
   const context={exports:{} as {SeriesFocus:new()=>{attach:(panel:unknown,phase:unknown)=>()=>void;get:()=>string|null;refresh:()=>void;reset:()=>void;subscribe:(run:()=>void)=>()=>void}},Element:Button,require:()=>({}),
     queueMicrotask:(run:()=>void)=>microtasks.push(run),setTimeout:(run:()=>void)=>{timers.set(1,run);return 1;},clearTimeout:(id:number)=>timers.delete(id),
     addEventListener:(name:string,run:(event:any)=>void)=>globalEvents.set(name,run),removeEventListener:(name:string)=>globalEvents.delete(name),
@@ -44,6 +45,14 @@ test('one legend arbiter handles pointer, keyboard, toggles, touch, dismissal an
   globalEvents.get('pointerdown')!({target:a});assert.equal(controller.get(),null);assert.equal(timers.size,0);
   send('pointerup',muted,null,'touch');globalEvents.get('click')!({target:muted});microtasks.splice(0).forEach(run=>run());assert.equal(controller.get(),null);
   send('pointerup',b,null,'touch');globalEvents.get('click')!({target:b});microtasks.splice(0).forEach(run=>run());timers.get(1)!();assert.equal(controller.get(),null);
+  controller.reset();const detail=new Button(b.dataset.seriesKey);detail.tip=true;tips.push(detail);
+  send('pointerover',b);send('pointerout',b);assert.equal(controller.get(),b.dataset.seriesKey,'a capped preview survives crossing the gap');
+  send('pointerover',detail);assert.equal(controller.get(),b.dataset.seriesKey,'the tooltip belongs to the same legend context');assert.equal(timers.size,0);
+  let prevented=false;events.get('keydown')?.({target:b,key:'PageDown',preventDefault(){prevented=true;},stopPropagation(){}});
+  assert.equal(prevented,true);assert.equal(detail.scrollTop,20,'keyboard scroll goes to the full details rather than the legend or page');
+  controller.reset();send('pointerup',b,null,'touch');globalEvents.get('click')!({target:b});microtasks.splice(0).forEach(run=>run());
+  globalEvents.get('pointerdown')!({target:detail});send('pointerup',detail,null,'touch');assert.equal(controller.get(),b.dataset.seriesKey,'touch scrolling the preview keeps its own pin');
+  globalEvents.get('keydown')!({key:'Escape'});assert.equal(controller.get(),null);assert.equal(timers.size,0);
   assert.ok(changes.length>5);cleanup();assert.equal(properties.size,0);assert.equal(events.size,0);assert.equal(globalEvents.size,0);assert.equal(observing,false);
   assert.notDeepEqual(seriesFocusStyle('a:b'),seriesFocusStyle('ab'));
 });

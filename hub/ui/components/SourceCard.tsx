@@ -284,7 +284,10 @@ function Frequency({source, board}: {source: Card; board: string}) {
 
 /** A card's menu: holders choose frequency, readers refresh, and the board's owner arranges its view. */
 function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Card; title: string; arrange: Arrange; boardId: string; takeOff: boolean}) {
+  useDataFilters();
   const reading=usePeriodValues(source.id),selected=useTimeRange();
+  const value=selected?reading.value:source;
+  const count=value?quotaPeriods(value).filter(w=>!isWindowHidden(arrange.view,source.id,w.id)).length:null;
   const pending=!!selected&&(reading.loading||!!reading.error);
   const status=pending?[t(reading.error?'period.failed':'period.loading'),reading.basis?t('analytics.retainedRange',{range:timeRangeLabel(reading.basis.range)}):null].filter(Boolean).join('\n'):'';
   const mine = useMine(source.id);
@@ -303,7 +306,7 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
   };
 
   return (
-    <Popover label={[t('source.menu', {source: title}),status].filter(Boolean).join('\n')} icon={<span className="source-settings-icon"><SlidersIcon />{pending&&<i className={reading.error?'is-error':undefined}/>}</span>} open={open} onOpenChange={setOpen} width={288}>
+    <Popover label={[t('source.menu', {source: title}),count?t('source.selectedMeasurements',{count}):null,status].filter(Boolean).join('\n')} icon={<span className="source-settings-icon"><SlidersIcon />{pending&&<i className={reading.error?'is-error':undefined}/>}</span>} open={open} onOpenChange={setOpen} width={288}>
       <MeasurementDetails source={source} arrange={arrange}/>
       {owner && (
         <>

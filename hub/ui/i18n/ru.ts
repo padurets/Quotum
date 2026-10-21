@@ -706,6 +706,7 @@ export const ru = {
   'card.freeResetsNever': 'без срока',
 
   'source.menu': 'Меню карточки: {source}',
+  'source.selectedMeasurements': 'Выбрано показателей: {count}',
   'source.show': 'Показывать лимиты',
   'source.plan': 'План расхода',
   'source.color': 'Цвет',
@@ -1212,6 +1213,7 @@ export const ru = {
   "money.granted": "Выданные средства",
   "money.toppedUp": "Пополненные средства",
   "money.breakdown": "Состав остатка",
+  'money.selectedAllowances': 'Выбрано лимитов: {count}',
   "money.noBalance": "Нет данных о балансе",
   "money.balanceUnavailable": "DeepSeek сообщает, что средств для API недостаточно.",
   "money.balancePartial": "Часть данных баланса отсутствует. Последние корректные значения сохранены как устаревшие.",

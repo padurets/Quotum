@@ -36,8 +36,7 @@ in Chrome 154 can leave a tile unfinished and deadlock an input frame's commit.
 An attached CDP browser retains its own launch settings.
 The observer credits input after its coalesced position reaches the actual data layers
 in the production RAF. Stationary input-free gaps are excluded; delayed pending input
-remains measurable. A last input committed on release waits for the final geometry and
-fold. These RAF proxies do not establish physical presentation.
+remains measurable. A last input committed on release waits for the final geometry. These RAF proxies do not establish physical presentation.
 
 **The desktop app** (`desktop/`) shares a Rust controller between Electron on Linux
 and Tauri/WebView2 on Windows. `node desktop/prepare.mjs` builds the hub, downloads
@@ -259,7 +258,7 @@ on a separate line above the pager and row count. Wide totals reuse the table's 
 and headings; narrow totals use a fixed grid. The current working count is a subtitle.
 Grouping uses shared segments; None comes first while Project stays the default.
 Increasing the height fits more rows without a fifty-row page cap or another API read;
-when every row fits, the pager disappears. Wide tables sort through their headers, with the
+when every row fits, its disabled 1/1 pager keeps the same footer slot. Wide tables sort through their headers, with the
 third click clearing the selected sort; only narrow lists show a sort menu.
 Atlas's 67-context disclosure has two pages.
 Recent overlapping work, 64 retained Atlas contexts absent from the live

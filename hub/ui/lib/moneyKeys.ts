@@ -33,5 +33,6 @@ export function useShownKeys(source:Card,view:View|undefined,board:string) {
   },[board,source,ids,query,attempt]);
   const extras=extra.query===query?extra:{keys:[],meters:[],loading:!!board&&JSON.parse(ids).length>0,error:null};
   const keys=[...(source.keys??[]),...extras.keys.filter(k=>!preview.has(k.id))].filter(k=>!view||keyShown(view,source.id,k.id,source.keys??[]));
-  return {keys,meters:[...(source.meters??[]),...extras.meters.filter(m=>!preview.has(m.id.split(':')[1]))],error:extras.error,loading:extras.loading,selected:JSON.parse(ids).length>0,retry:()=>setAttempt(value=>value+1)};
+  const selectedCount=new Set([...keys.map(key=>key.id),...JSON.parse(ids) as string[]]).size;
+  return {keys,meters:[...(source.meters??[]),...extras.meters.filter(m=>!preview.has(m.id.split(':')[1]))],error:extras.error,loading:extras.loading,selected:JSON.parse(ids).length>0,selectedCount,retry:()=>setAttempt(value=>value+1)};
 }

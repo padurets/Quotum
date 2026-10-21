@@ -336,16 +336,17 @@ export function MoneyCard({
   tray?: boolean;
 }) {
   const context = useCurrencyContext(source.id);
-  const {keys, meters, error,loading,selected,retry} = useShownKeys(source, view, board);
-  return <MoneyValues source={source} keys={keys} meters={meters} error={error} loading={loading} selected={selected} retry={retry} compact={compact} tray={tray} context={context}/>;
+  const {keys, meters, error,loading,selected,selectedCount,retry} = useShownKeys(source, view, board);
+  return <MoneyValues source={source} keys={keys} meters={meters} error={error} loading={loading} selected={selected} selectedCount={selectedCount} retry={retry} compact={compact} tray={tray} context={context}/>;
 }
 
 type MoneySource=Pick<Card,'id'|'provider'|'meters'|'currencyUnavailable'|'creditBalance'>;
-export function MoneyValues({source,keys,meters,error=null,loading=false,selected=false,retry,compact=false,tray=false,context}:{source:MoneySource;keys:KeyPart[];meters:Meter[];error?:unknown;loading?:boolean;selected?:boolean;retry?:()=>void;compact?:boolean;tray?:boolean;context:CurrencyContext}) {
+export function MoneyValues({source,keys,meters,error=null,loading=false,selected=false,selectedCount=keys.length,retry,compact=false,tray=false,context}:{source:MoneySource;keys:KeyPart[];meters:Meter[];error?:unknown;loading?:boolean;selected?:boolean;selectedCount?:number;retry?:()=>void;compact?:boolean;tray?:boolean;context:CurrencyContext}) {
   const filters=useDataFilters().current,moneyPrefs=usePref('money'),fundsPrefs=usePref('funds');
   const showBalance=!filters||matchesWallet(walletRule(filters,moneyPrefs.unit??undefined),{source:source.id,kind:'balance'},true);
   const {remaining, limits} = budgetView(source, keys, meters, context),
     groups = remaining.values;
+  const disclosureLabel=[t('money.breakdown'),selectedCount?t('money.selectedAllowances',{count:selectedCount}):null].filter(Boolean).join('\n');
   const credit=source.provider==='codex';
   const native=source.meters?.find(m=>m.id==='balance:credits'&&!m.conversion);
   const displayUnavailable =
@@ -417,7 +418,7 @@ export function MoneyValues({source,keys,meters,error=null,loading=false,selecte
           {approximate && conversion && <p className="popover-note">{conversion}</p>}
         </section>
       ))}
-      {limits.length>0&&<section className="measurement-details">{limits.map(limit=><div key={limit.scope.id}><BudgetKeyMetrics limit={limit} context={context} compact={compact}/><small className="measurement-proof">{[money(capLeft(limit.native),limit.native.unit,true,context),t('money.of',{amount:money(limit.native.limit,limit.native.unit,true,context)}),t('source.measured',{at:stamp(limit.native.at)}),limit.native.resetAt!==null?stamp(limit.native.resetAt):null].filter(Boolean).join('\n')}</small></div>)}</section>}
+      {limits.length>0&&<section className="measurement-details">{limits.map(limit=><div key={limit.scope.id}><BudgetKeyMetrics limit={limit} context={context}/><small className="measurement-proof">{[money(capLeft(limit.native),limit.native.unit,true,context),t('money.of',{amount:money(limit.native.limit,limit.native.unit,true,context)}),t('source.measured',{at:stamp(limit.native.at)}),limit.native.resetAt!==null?stamp(limit.native.resetAt):null].filter(Boolean).join('\n')}</small></div>)}</section>}
       <ErrorLine error={error}/>
       {loading&&<p>{t('period.loading')}</p>}
       {selected&&!limits.length&&!loading&&!error&&<p>{t('quota.unavailable')}</p>}
@@ -432,7 +433,7 @@ export function MoneyValues({source,keys,meters,error=null,loading=false,selecte
         <div className="money-balance-values">
           <CreditBalanceValue source={source} breakdown={breakdown}>
           {!groups.length ? (
-            <Popover label={t('money.breakdown')} triggerClass="money-balance-trigger" trigger={<span
+            <Popover label={disclosureLabel} triggerClass="money-balance-trigger" trigger={<span
               className="limit-value"
               title={
                 displayUnavailable
@@ -466,10 +467,11 @@ export function MoneyValues({source,keys,meters,error=null,loading=false,selecte
                   <small>{symbol}</small>
                 </span>
               );
-              return composition.length || credit || limits.length || error ? (
+              return composition.length || credit || limits.length || selected || selectedCount || error ? (
                 <Popover
                   key={total.id}
-                  label={`${t('money.breakdown')}: ${approximate ? '≈ ' : ''}${formatted}`}
+                  label={`${disclosureLabel}
+${approximate ? '≈ ' : ''}${formatted}`}
                   trigger={value}
                   triggerClass="money-balance-trigger"
                   up
@@ -484,8 +486,8 @@ export function MoneyValues({source,keys,meters,error=null,loading=false,selecte
           </CreditBalanceValue>
         </div>
       </div>}
-      {!showBalance&&limits[0]&&<Popover label={t('money.breakdown')} trigger={<BudgetKeyMetrics limit={limits[0]} context={context} compact={compact}/>} triggerClass="money-primary-trigger">{breakdown}</Popover>}
-      {!showBalance&&!limits.length&&(selected||error?<Popover label={t('money.breakdown')} trigger={<span className="limit-value">—</span>} triggerClass="money-primary-trigger">{breakdown}</Popover>:<div className="card-empty"><span>{t('filters.emptyMetrics')}</span><button type="button" className="text-button" onClick={openDataFilters}>{t('header.filters')}</button></div>)}
+      {!showBalance&&limits[0]&&<Popover label={disclosureLabel} trigger={<BudgetKeyMetrics limit={limits[0]} context={context} compact={compact}/>} triggerClass="money-primary-trigger">{breakdown}</Popover>}
+      {!showBalance&&!limits.length&&(selected||error?<Popover label={disclosureLabel} trigger={<span className="limit-value">—</span>} triggerClass="money-primary-trigger">{breakdown}</Popover>:<div className="card-empty"><span>{t('filters.emptyMetrics')}</span><button type="button" className="text-button" onClick={openDataFilters}>{t('header.filters')}</button></div>)}
     </div>
   );
 }

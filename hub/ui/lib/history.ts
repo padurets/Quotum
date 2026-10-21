@@ -1110,7 +1110,7 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>,
       else if (hub.type === 'lineup') {loader.lineup(state.board?.lineup ?? []); if(scope==='quota')loader.setWindows(windowsOf(state));}
       else if (hub.type === 'card'&&scope==='quota') loader.setWindows(windowsOf(state));
       else if (hub.type === 'history') {
-        const selected=scope==='budget'?new Set(selection(state)?.ids.map(([source])=>source)):new Set(state.board?.lineup??[]);
+        const meters=selection(state),selected=new Set(scope==='budget'?meters?.ids.map(([source])=>source):meters?.sources??state.board?.lineup??[]);
         const changes=hub.data.changes?.filter(change=>change.scope===scope&&selected.has(change.source)&&(scope!=='budget'||change.workSince===undefined||change.since<change.workSince));
         const workSince = scope==='quota'?hub.data.workSince : undefined;
         const retired=scope==='quota'&&workChange(hub.data,[...selected]).retired;

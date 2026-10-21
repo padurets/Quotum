@@ -366,6 +366,7 @@ function AgentsRows({
     <button
       type="button"
       className="agents-open"
+      onClick={event=>{event.stopPropagation();open(group)?.();}}
       data-agents-group={still ? undefined : group.key}
       tabIndex={still || !onOpen ? -1 : undefined}
       title={`${groupName(group)}\n${t('agents.openGroup')}`}

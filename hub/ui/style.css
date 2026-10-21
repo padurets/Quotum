@@ -603,7 +603,7 @@ td.muted, small.muted { color: var(--text-3); }
 .legend-empty { color: var(--text-4); padding: 4px 0; }
 
 .chart { position: relative; margin-top: 18px; }
-/* Dimmed while the next period loads. Not the chart itself: that would lay its tooltip under the next widget. */
+/* Paint changes stay on data layers; the chart keeps its tooltip above nearby widgets. */
 .panel .chart > svg, .panel .plot-layer, .panel .plot-overlay, .panel .table-wrap { transition: opacity .2s; }
 .reader-state { display: inline-flex; flex-shrink: 0; }
 .reader-error { color: var(--warn); }
@@ -638,7 +638,7 @@ td.muted, small.muted { color: var(--text-3); }
 .source-settings-icon > i { position: absolute; right: -3px; top: -3px; width: 5px; height: 5px; border-radius: 50%; background: var(--text-3); }
 .source-settings-icon > i.is-error { background: var(--warn); }
 @container (min-width: 650px) { .activity-totals { grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: 36px; } }
-.series-tip { width: 340px; max-width: calc(100vw - 32px); white-space: pre-line; overflow-wrap: anywhere; }
+.series-tip { width: 340px; max-width: calc(100vw - 32px); white-space: pre-line; overflow-wrap: anywhere; overscroll-behavior: contain; touch-action: pan-y; }
 .series-tip > span { display: block; margin-top: 6px; }
 .activity .chart-loading { min-height: 200px; }
 .activity-legend-item { min-width: 0; }

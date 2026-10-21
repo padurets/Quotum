@@ -1,9 +1,26 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {defaultFilters} from '../../server/domain/dataFilters';
+import {publishDataFilters} from '../lib/filterSelection';
 import type {PeriodReply} from '../../server/domain/periodRead';
 import type {HubEvent} from '../lib/board';
 import {drawings,fixture,flush,NOW,H,M} from './periodRuntimeFixture';
+
+for(const fixed of [false,true])test(`${fixed?'fixed':'live'} Activity ignores retirement of an excluded in-board source`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const h=await fixture({fixed,personal:true,initialFilters:defaultFilters()});let d:Awaited<ReturnType<typeof drawings>>|undefined;
+  try{
+    const extra=h.store.source('codex','b'.repeat(24),NOW-3*H);h.store.hold(extra,h.alice.id,NOW-3*H);
+    h.store.record(extra,{observedAt:NOW-2*M,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:NOW+H}]});
+    h.events.flush();await flush();
+    const filters=defaultFilters();filters.sources={mode:'include',values:[{source:h.source}]};publishDataFilters(filters);h.period.changed();await flush();
+    assert.ok(h.page.get().board!.lineup.includes(extra));
+    d=await drawings(h);const before=d.renderActivity(),presentation=d.loader.get().presentation;h.requests.length=0;
+    h.event({type:'history',data:{sources:[extra],since:0,changes:[{source:extra,scope:'quota',since:0}]}});
+    const pending=d.renderActivity();assert.equal(pending.history,before.history);assert.equal(pending.drawing,before.drawing);assert.equal(d.loader.get().presentation,presentation);
+    await flush();assert.equal(h.requests.length,0,'excluded evidence requires no replacement read');
+  }finally{d?.close();await h.close();publishDataFilters(null,false);}
+});
 
 test('native quota can complete before selected work without publishing an empty Activity replacement',async t=>{
   t.mock.method(Date,'now',()=>NOW);

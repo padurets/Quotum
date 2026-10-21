@@ -29,6 +29,19 @@ function nodes(value:unknown):Node[] {
   return [node,...nodes(node.props.children)];
 }
 
+test('the source menu names the selected measurement count without an extra read',()=>{
+  const card=code('../components/SourceCard.tsx'),start=card.indexOf('function SourceSettings('),end=card.indexOf('\n/**',start);
+  let historical=false,missing=false;const hidden=new Set<string>();
+  const windows=Array.from({length:5},(_,i)=>({id:String(i),kind:'weekly',label:'Model '+i,minutes:10080}));
+  const source={id:'s',provider:'antigravity',windows};
+  const context={exports:{} as {draw:(props:unknown)=>Node},require:()=>runtime,t,num,quotaPeriods,isWindowHidden:(_view:unknown,_source:string,id:string)=>hidden.has(id),
+    useDataFilters:()=>{},usePeriodValues:()=>({value:missing?null:source,loading:false,error:null}),useTimeRange:()=>historical?{from:0,to:1}:null,useMine:()=>false,useState:(initial:unknown)=>[initial,()=>{}],planOf:()=>null,Popover:'popover',SlidersIcon:'icon',MeasurementDetails:'details',Frequency:'frequency',RefreshAction:'refresh'};
+  runInNewContext(ts.transpileModule(card.slice(start,end)+'\nexports.draw=SourceSettings;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
+  const label=()=>String(context.exports.draw({source,title:'Account',arrange:{owner:false,view:EMPTY_VIEW},boardId:'b',takeOff:false}).props.label);
+  for(const locale of ['en','ru'] as const){setLocale(locale);assert.ok(label().includes(t('source.selectedMeasurements',{count:5})));hidden.add('1');assert.ok(label().includes(t('source.selectedMeasurements',{count:4})));historical=true;missing=true;assert.ok(!label().includes(t('source.selectedMeasurements',{count:0})),'unknown evidence is never a zero selection');historical=false;missing=false;hidden.clear();}
+  setLocale('en');
+});
+
 test('multi-model cards keep the reported session and weekly pair visible through fine measurements',()=>{
   const window=(id:string,kind:Win['kind'],label:string|null):Win=>({id,kind,label,minutes:kind==='weekly'?10080:300,used:25,remaining:75,resetAt:null});
   const source={id:'native',provider:'antigravity',successAt:1,windows:[window('gemini:session','session','Gemini Pro'),window('gemini:weekly','weekly','Gemini'),window('claude:weekly','weekly','Claude')]};
@@ -56,6 +69,9 @@ test('multi-model cards keep the reported session and weekly pair visible throug
   }
   source.windows.push(window('claude:session','session','Claude'));
   assert.deepEqual(labels(render()),pair,'a second session family does not displace the weekly slot');
+  source.windows.reverse();
+  assert.deepEqual(labels(render()),pair,'identical facts keep the same pair regardless of reply order');
+  source.windows.reverse();
   hidden.add('gemini:weekly');
   assert.deepEqual(labels(render()),[pair[0],windowName(source.windows[2])],'a selected replacement weekly limit keeps the session slot');
   source.windows.push(window('session','session',null),window('weekly','weekly',null));

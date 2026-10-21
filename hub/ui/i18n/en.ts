@@ -711,6 +711,7 @@ export const en = {
   'card.freeResetsNever': 'no end date',
 
   'source.menu': 'Card menu: {source}',
+  'source.selectedMeasurements': 'Selected measurements: {count}',
   'source.show': 'Show limits',
   'source.plan': 'Spending plan',
   'source.color': 'Colour',
@@ -1217,6 +1218,7 @@ export const en = {
   "money.granted": "Granted credits",
   "money.toppedUp": "Top-up balance",
   "money.breakdown": "Balance breakdown",
+  'money.selectedAllowances': 'Selected allowances: {count}',
   "money.noBalance": "No balance data",
   "money.balanceUnavailable": "DeepSeek reports insufficient funds for API calls.",
   "money.balancePartial": "Some balance data are missing. Last valid values are retained as stale.",
