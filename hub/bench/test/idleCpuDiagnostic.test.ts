@@ -465,6 +465,21 @@ test('only fixed rendering, animation, lifecycle and commit-wait envelopes join 
   for(const name of names)assert.equal((receipt.events as any[]).filter(row=>row.name===name).length,1);
   assert.doesNotMatch(JSON.stringify(receipt),/private-extra-canary/);assert.equal(receipt.status,'unqualified');
 });
+test('native raster observations preserve fixed envelopes and numeric preparation fields only',async()=>{
+  const names=['TileManager::PrepareTiles','TileManager::ScheduleTasks','RasterizerTaskImpl::RunOnWorkerThread',
+    'TileManager::DidFinishRunningTileTasksRequiredForActivation','TileManager::CheckPendingGpuWorkAndIssueSignals','LayerTreeHostImpl::ActivateSyncTree'];
+  const args={prepare_tiles_id:7,source_prepare_tiles_id:7,count:12,pending_gpu_work_tiles:0,private:'private-raster-canary'};
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:[...names,'private-raster-canary'].map(name=>({name,ph:'X',ts:2_000_000,dur:20,pid:101,tid:105,args}))}));
+  const rows=(record(safeEvidence(receipt)).events as any[]).filter(row=>names.includes(row.name));
+  assert.equal(rows.length,6);assert.ok(rows.every(row=>row.duration===20&&row.pid===101&&row.tid===105));
+  assert.deepEqual(rows.map(row=>[row.prepareId??null,row.rasterTasks??null,row.pendingGpuTasks??null]),
+    [[7,null,null],[null,12,null],[7,null,null],[null,null,null],[null,null,0],[null,null,null]]);
+  assert.doesNotMatch(JSON.stringify(receipt),/private-raster-canary/);assert.equal(receipt.status,'unqualified');
+  const invalid=[undefined,-1,.5,'7',Number.MAX_SAFE_INTEGER+1,Infinity];
+  const {receipt:missing}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:invalid.flatMap(value=>names.slice(0,3).map(name=>({name,ph:'X',ts:2_000_000,dur:20,pid:101,tid:105,args:{prepare_tiles_id:value,source_prepare_tiles_id:value,count:value}})))}));
+  const unknown=(missing.events as any[]).filter(row=>names.includes(row.name));
+  assert.equal(unknown.length,18);assert.ok(unknown.every(row=>row.prepareId===null||row.rasterTasks===null));
+});
 test('native commit observations keep exact exported edge IDs and host numbers without rounded uint64 IDs',async()=>{
   const names=['ProxyMain::BeginMainFrame','ProxyMain::BeginMainFrame::commit','ProxyImpl::ReadyToCommit','ProxyImpl::Commit'];
   const slices=names.map((name,i)=>({name,ph:'X',pid:101,tid:i<2?101:105,ts:2_000_000+i*100,dur:90,

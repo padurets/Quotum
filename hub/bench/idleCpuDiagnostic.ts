@@ -9,7 +9,7 @@ import {ScriptBinding} from './scriptBinding.js';
 import type {Reading} from './probe.js';
 
 type Client={status:'available';name:string;bytes:number;sha256:string}|{status:'unavailable'};
-type RawEvent={name:string;ph:string;id?:unknown;bp?:unknown;ts?:number;dur?:number;tts?:number;tdur?:number;pid?:number;tid?:number;args?:{name?:unknown;layerTreeId?:unknown;cc_scheduler_state?:{state_machine?:{minor_state?:Record<string,unknown>}};data?:{frame?:string;frameId?:unknown;id?:number;timerId?:number;timeout?:number;singleShot?:boolean;scriptId?:string|number;lineNumber?:number;columnNumber?:number;stackTrace?:unknown;message?:string;frames?:{frame?:string;processId?:number;isOutermostMainFrame?:boolean;isInPrimaryMainFrame?:boolean}[]}}};
+type RawEvent={name:string;ph:string;id?:unknown;bp?:unknown;ts?:number;dur?:number;tts?:number;tdur?:number;pid?:number;tid?:number;args?:{name?:unknown;layerTreeId?:unknown;prepare_tiles_id?:unknown;source_prepare_tiles_id?:unknown;count?:unknown;pending_gpu_work_tiles?:unknown;cc_scheduler_state?:{state_machine?:{minor_state?:Record<string,unknown>}};data?:{frame?:string;frameId?:unknown;id?:number;timerId?:number;timeout?:number;singleShot?:boolean;scriptId?:string|number;lineNumber?:number;columnNumber?:number;stackTrace?:unknown;message?:string;frames?:{frame?:string;processId?:number;isOutermostMainFrame?:boolean;isInPrimaryMainFrame?:boolean}[]}}};
 type CounterWindow={before:Record<string,number>;after:Record<string,number>;instrumentMs:number;seconds:number};
 type Save=(name:string,value:unknown,large?:boolean)=>void;
 type Profile=Parameters<typeof numericProfile>[0];
@@ -25,12 +25,14 @@ const location=(value:any)=>{
 };
 
 type NativeRow={name:string;phase:string;ts:number|null;duration:number|null;threadTs:number|null;threadDuration:number|null;pid:number;tid:number;frame:number|null;
-  source:ReturnType<typeof location>;id:number|null;marker:number|null;kind?:string;processId?:number|null;outermost?:boolean;primary?:boolean;flowId?:number;flowEnd?:true;hostId?:number;sourceFrame?:number;scheduler?:Record<typeof SCHEDULER_FIELDS[number],boolean>};
+  source:ReturnType<typeof location>;id:number|null;marker:number|null;kind?:string;processId?:number|null;outermost?:boolean;primary?:boolean;flowId?:number;flowEnd?:true;hostId?:number;sourceFrame?:number;prepareId?:number|null;rasterTasks?:number|null;pendingGpuTasks?:number|null;scheduler?:Record<typeof SCHEDULER_FIELDS[number],boolean>};
 const SCHEDULER_FIELDS=['has_pending_tree','pending_tree_is_ready_for_activation','active_tree_needs_first_draw','active_tree_is_ready_to_draw',
   'processing_animation_worklets_for_pending_tree','processing_paint_worklets_for_pending_tree','current_pending_tree_is_impl_side','can_draw'] as const;
 const PIPELINE_NAMES=new Set(['ProxyMain::BeginMainFrame','ProxyMain::BeginMainFrame::commit','ProxyImpl::ReadyToCommit','ProxyImpl::Commit']);
 const NATIVE_NAMES=new Set(['RunTask','FunctionCall','FireAnimationFrame','RequestAnimationFrame','CancelAnimationFrame','MinorGC','MajorGC','Layout','UpdateLayoutTree','RunMicrotasks','EventDispatch','TimerFire','TimeStamp','PrePaint','Paint','Layerize','CompositeLayers',
-  'PageAnimator::serviceScriptedAnimations','WebFrameWidgetImpl::UpdateLifecycle','LayerTreeHost::WaitForCommitCompletion',...PIPELINE_NAMES,'BeginMainThreadFrame','HoldCommit','ReleaseCommitbyActivation','SchedulerStateMachine']);
+  'PageAnimator::serviceScriptedAnimations','WebFrameWidgetImpl::UpdateLifecycle','LayerTreeHost::WaitForCommitCompletion',...PIPELINE_NAMES,'BeginMainThreadFrame','HoldCommit','ReleaseCommitbyActivation','SchedulerStateMachine',
+  'TileManager::PrepareTiles','TileManager::ScheduleTasks','RasterizerTaskImpl::RunOnWorkerThread',
+  'TileManager::DidFinishRunningTileTasksRequiredForActivation','TileManager::CheckPendingGpuWorkAndIssueSignals','LayerTreeHostImpl::ActivateSyncTree']);
 
 /** Compiled positions are valid only for the bytes the page actually received. */
 export function clientIdentity(directory=path.join(import.meta.dirname,'../dist/client/assets')):Client {
@@ -188,6 +190,12 @@ export class IdleCpuDiagnostic {
         if(event.ph!=='X'||!state||SCHEDULER_FIELDS.some(key=>typeof state[key]!=='boolean')){this.rejectNative(event,'scheduler-metadata');continue;}
         row.scheduler=Object.fromEntries(SCHEDULER_FIELDS.map(key=>[key,state[key]])) as NonNullable<NativeRow['scheduler']>;
       }
+      if(event.name==='TileManager::PrepareTiles'||event.name==='RasterizerTaskImpl::RunOnWorkerThread'){
+        const id=event.name==='TileManager::PrepareTiles'?event.args?.prepare_tiles_id:event.args?.source_prepare_tiles_id;
+        row.prepareId=integer(id)?id:null;
+      }
+      if(event.name==='TileManager::ScheduleTasks')row.rasterTasks=integer(event.args?.count)?event.args.count:null;
+      if(event.name==='TileManager::CheckPendingGpuWorkAndIssueSignals')row.pendingGpuTasks=integer(event.args?.pending_gpu_work_tiles)?event.args.pending_gpu_work_tiles:null;
       if(event.name==='thread_name')row.kind=event.args?.name==='CrRendererMain'?'renderer-main':'other';
       if(event.name==='TracingStartedInBrowser'){
         if(!Array.isArray(data?.frames)){this.rejectNative(event,'frame-metadata');continue;}

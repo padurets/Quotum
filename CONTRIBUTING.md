@@ -124,6 +124,10 @@ target to collect bounded stack locations. Its report marks that intervention;
 mandatory resume and owned-target cleanup follow, and the original failure is retained.
 An explicit diagnostic replay may also intervene. Neither can provide a passing
 canonical result.
+The optional native trace retains fixed raster, tile preparation and activation scopes
+from its existing `cc` category, with numeric preparation IDs and task counts. These
+IDs are local to a tile manager; completed CPU tasks do not prove GPU readiness or
+identify the owner of a blocked commit.
 The observer credits input after its coalesced position reaches the actual data layers
 in the production RAF. Stationary input-free gaps are excluded; delayed pending input
 remains measurable. A last input committed on release waits for the final geometry and
