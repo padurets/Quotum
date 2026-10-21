@@ -521,10 +521,10 @@ function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;
   return <MeasurementClock.Provider value={historical?reading.basis?.range.to??selected.to:null}>
     <div className={`limits card-primary${wallet?' is-wallet':''}`}>
       {!caps&&wallet&&budgetVisible(source)&&<MoneyCard source={source} board={boardId} view={arrange.view} measurement={historical?value:undefined}/>}
-      {primary.map(period=>{const w=visible.find(w=>w.id===period.id),measurement=historical?value:source;return w?<Limit key={w.id} w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={weekly}/>:caps&&measurement?<QuotaCard key={period.id} source={measurement} ids={[period.id]}/>:null;})}
+      {!noEvidence&&primary.map(period=>{const w=visible.find(w=>w.id===period.id),measurement=historical?value:source;return w?<Limit key={w.id} w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={weekly}/>:caps&&measurement?<QuotaCard key={period.id} source={measurement} ids={[period.id]}/>:null;})}
       {noEvidence&&<div className="card-empty">{t('period.noEvidence')}</div>}
       {!historical&&!caps&&!source.windows.length&&!budgetVisible(source)&&!source.meters&&<div className="card-empty">{errorText(source.error??'waiting')}</div>}
-      {!!periods.length&&!shownPeriods.length&&<AllHidden/>}
+      {!noEvidence&&!!periods.length&&!shownPeriods.length&&<AllHidden/>}
     </div>
   </MeasurementClock.Provider>;
 }

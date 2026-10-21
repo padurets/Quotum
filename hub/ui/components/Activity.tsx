@@ -140,7 +140,7 @@ function useActivitySubset(history:History|null,by:ActivityDimension,muted:Recor
   const configure=useRef(()=>{});
   configure.current=()=>{
     const off=activityMutedKeys(muted,by),board=page.get().board;
-    reader.configure(scoped&&!allOff&&off.length&&history&&board&&history.board===board.id?{board:board.id,authority:JSON.stringify([authority,board.workAuthority]),workAuthority:board.workAuthority,by,muted:off,filters:workFilter(effectiveFilters()??defaultFilters()),
+    reader.configure(scoped&&!allOff&&off.length&&history&&board&&history.board===board.id?{board:board.id,authority:JSON.stringify([authority,board.workAuthority,page.get().hubEpoch]),workAuthority:board.workAuthority,by,muted:off,filters:workFilter(effectiveFilters()??defaultFilters()),
       selection:selected?{mode:'range',...selected}:{mode:'live',periodMs:periodOf(range).ms},rangeKey:selected?timeRangeKey(selected):range,barMs:history.activity.barMs}:null);
   };
   useLayoutEffect(()=>configure.current());
@@ -154,8 +154,7 @@ function useActivitySubset(history:History|null,by:ActivityDimension,muted:Recor
           if(change.retired)reader.invalidate();
           else if(change.since!==Infinity||event.event.data.workAuthority!==undefined)reader.changed(change.since,event.event.data.workAuthority);
           configure.current();
-        }else if(['snapshot','mine','lineup'].includes(event.event.type)){reader.reset();configure.current();}
-        else if(event.event.type==='hello')reader.reset();
+        }else if(['hello','snapshot','mine','lineup'].includes(event.event.type)){configure.current();reader.baseline();}
       }
     })];
     return()=>{stops.forEach(stop=>stop());reader.reset();};

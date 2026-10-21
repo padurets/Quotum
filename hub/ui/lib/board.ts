@@ -105,6 +105,8 @@ export type BoardState = {
 };
 
 export type PageState = {
+  /** The current hub run is known before any widget mounts or receives a reconnect. */
+  hubEpoch?: string;
   projectColorsGeneration?:number;
   deviceContacts?: Record<string,number|null>;
   /** Owner-device invalidation; snapshots also refresh a disclosure after reconnecting. */
@@ -245,7 +247,7 @@ function hub(state: PageState, event: HubEvent): PageState {
       return changed ? {...state,deviceContacts:boundedContacts(contacts)} : state;
     }
     case 'hello':
-      return {...patch(state, board => ({...board,presenceConfirmed:false,projectColorsBaselineReady:false})),projectColorsGeneration:(state.projectColorsGeneration??0)+1};
+      return {...patch(state, board => ({...board,presenceConfirmed:false,projectColorsBaselineReady:false})),hubEpoch:event.data.epoch,projectColorsGeneration:(state.projectColorsGeneration??0)+1};
     case 'devices':
       return {...state, devicesRevision: (state.devicesRevision ?? 0)+1};
     case 'snapshot':

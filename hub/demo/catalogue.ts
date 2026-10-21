@@ -162,6 +162,7 @@ export const SESSION_ACTIVITY_SCENES=[
  * and the held final pose are checked by ui/test/prepare.test.ts, history.test.ts and
  * timeAxisMotion.test.ts; they add no lasting demo state.
  * Activity's atomic X/Y cancellation frame is held by ui/test/activityAxisCancel.test.ts.
+ * Same-run baseline refresh and new-run retirement are held by ui/test/activityBaseline.test.ts.
  * Native catalogue changes retain selected work in ui/test/activityCoherence.test.ts;
  * selected wallet reads in flight are held by ui/test/moneyDisclosure.test.ts.
  *

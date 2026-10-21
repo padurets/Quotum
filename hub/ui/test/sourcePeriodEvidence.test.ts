@@ -11,7 +11,7 @@ import {Directory} from '../../server/store/directory';
 import {periodValues} from '../../server/periodValues';
 import {defaultCurrencyContext,currencySymbol} from '../../server/domain/currency';
 import {observationDeadline} from '../../server/domain/resources';
-import {providerOf} from '../../server/domain/providers';
+import {providerOf,QUOTA_IDS} from '../../server/domain/providers';
 import {EMPTY_VIEW} from '../../server/domain/view';
 import * as money from '../lib/money';
 import {quotaPeriods,primaryQuotaPeriods} from '../lib/subscription';
@@ -30,6 +30,39 @@ function nodes(value:unknown):Node[] {
   if(typeof node.type==='function')return nodes(node.type(node.props));
   return [node,...nodes(node.props.children),...nodes(node.props.trigger)];
 }
+
+test('a historical subscription without observations uses one primary empty state instead of stacking quota placeholders',()=>{
+  const now=1_800_000_000_000,at=now-600_000,store=new Store(':memory:',now-3_600_000);
+  try{
+    const directory=new Directory(store.db),user=directory.createUser('quota-evidence@example.test','Evidence','unused',now-3_600_000),board=directory.boards(user.id)[0].id;
+    const id=store.source('zai','capped-evidence',now-3_600_000);store.hold(id,user.id,now-3_600_000);
+    const cap={id:QUOTA_IDS[0],kind:'cap' as const,amount:'3000000',unit:'credits:zai',limit:'10000000',at,staleAfterMs:3_600_000,stale:false,resetAt:null,minutes:300,scope:null,label:null};
+    assert.ok(store.record(id,{type:'meters',observedAt:at,staleAfterMs:3_600_000,meters:[cap],keys:[],inventoryComplete:true,inventoryError:null}).accepted);
+    const read=(to:number)=>periodValues(store,store.sources(board),user.id,to,()=>{})[0];
+    const source:Card={...read(now),windows:[],successAt:at,plan:'',error:null,stale:false,owners:[],staleAfterMs:3_600_000,measureIntervalMs:null,resets:null};
+    let hidden=false;
+    const reading={value:read(at),basis:{range:{from:now-3_600_000,to:at}},loading:false,error:null as string|null};
+    const context={selectedAllowanceIds,usePref:()=>({unit:'USD'}),useDataFilters:()=>({current:null}),exports:{} as {draw:(props:unknown)=>Node},require:()=>runtime,t,
+      usePeriodValues:()=>reading,useTimeRange:()=>reading.basis.range,quotaPeriods,primaryQuotaPeriods,hasSubscriptionCaps,providerOf,budgetVisible:money.budgetVisible,
+      isWindowHidden:()=>hidden,planOf:()=>null,MeasurementClock:{Provider:'clock'},QuotaCard:'quota',Limit:'limit',AllHidden:'hidden'};
+    const card=code('../components/SourceCard.tsx'),start=card.indexOf('function CardMeasurements(');
+    runInNewContext(ts.transpileModule(card.slice(start,card.indexOf('/** Every reader',start))+'\nexports.draw=CardMeasurements;',{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
+    const draw=()=>nodes(context.exports.draw({source,arrange:{view:EMPTY_VIEW},boardId:board}));
+    assert.deepEqual(reading.value.meters,[],'the historical endpoint precedes the first observation');
+    for(const locale of ['en','ru'] as const){setLocale(locale);for(hidden of [false,true]){
+      const tree=draw();assert.equal(tree.filter(node=>node.props.children===t('period.noEvidence')).length,1);
+      assert.equal(tree.filter(node=>node.type==='quota'||node.type==='limit'||node.type==='hidden').length,0,'no competing scales or all-hidden state are appended to the empty state');
+    }}
+    hidden=false;reading.value=read(now);reading.basis.range.to=now;
+    assert.equal(reading.value.meters.find(meter=>meter.id===QUOTA_IDS[0])?.amount,cap.amount);
+    assert.equal(draw().filter(node=>node.type==='quota').length,2,'a partially observed subscription still shows its two supported periods');
+    assert.equal(draw().some(node=>node.props.children===t('period.noEvidence')),false);
+    reading.value=read(at);reading.loading=true;
+    assert.equal(draw().some(node=>node.props.children===t('period.noEvidence')),false,'an unfinished read is not confirmed missing evidence');
+    reading.loading=false;reading.error='history_failed';
+    assert.equal(draw().some(node=>node.props.children===t('period.noEvidence')),false,'a failed read is not confirmed missing evidence');
+  }finally{setLocale('en');store.close();}
+});
 
 test('retained unlimited credits and confirmed zero are measurements in the card and footer in both languages',()=>{
   const now=1_800_000_000_000,at=now-600_000,edge=now-300_000,store=new Store(':memory:',now-3_600_000);

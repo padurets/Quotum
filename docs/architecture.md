@@ -2169,7 +2169,11 @@ results never borrow wider-cohort totals. All-visible and all-off choices need n
 additional reader request.
 An ordinary same-context refresh retains one complete, coherent set of all four
 metrics, including while replacement preparation fails; its retained model remains
-charged to the shared pool. Source-free zero work cutoffs, relevant quota zero
+charged to the shared pool. Same-run greetings and compatible snapshots, ownership
+and lineup baselines retain that model; a fixed subset replaces its complete cell
+range, while live subsets follow the board's replacement evidence. The page records
+the hub run before widgets mount, so a new run immediately retires the old subset.
+Source-free zero work cutoffs, relevant quota zero
 cutoffs and compatible legacy zero cutoffs retire it synchronously even when the
 authority token is unchanged. Financial and unrelated-source news do not. Retry
 belongs to the failed owner: upstream work transport, local preparation, or the
@@ -2298,6 +2302,8 @@ of supplier reply order or remaining amounts. Every selected native window
 remains in their existing measurement disclosure. Wallet cards show one available
 balance, or the first selected cap when the balance is excluded; other caps and exact
 amounts remain in the balance disclosure.
+A successful historical read before any observation shows one empty state inside
+the primary area, replacing empty quota scales rather than appending a row.
 Loading extra selected caps never adds a card row or an inventory-wide lookup.
 The allowance count and disclosure use the logical wallet selection shared with
 analytics. Explicit choices remain named with an unavailable value when their cap

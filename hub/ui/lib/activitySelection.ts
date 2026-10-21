@@ -68,6 +68,11 @@ export class ActivitySelection implements HistoryMember {
     }
     if(reading.trace!==this.source||this.waitingForBoard){this.waitingForBoard=false;this.source=reading.trace;this.awaiting=null;this.news++;this.dirty=-Infinity;this.publish({model:this.state.model,loading:true,error:null});this.schedule();}
   };
+  /** A baseline can replace every fixed cell without withdrawing compatible evidence. */
+  baseline(){
+    if(this.scope?.selection.mode==='range')this.changed(-Infinity);
+    else this.refresh();
+  }
   invalidate(){
     const scope=this.scope;
     this.reset();
