@@ -31,6 +31,7 @@ export class PageClock {
   private skew = 0;
   private readonly watches = new Set<Watch>();
   private timer: {handle: unknown; at: number} | null = null;
+  private nearest: number | null = null;
 
   constructor(private readonly env: ClockEnv) {}
 
@@ -56,17 +57,20 @@ export class PageClock {
   subscribe(watch: Watch, listener: () => void) {
     watch.listener = listener;
     this.watches.add(watch);
+    this.nearest = null;
     this.arm();
     return () => {
       watch.listener = null;
       this.watches.delete(watch);
+      this.nearest = null;
       this.arm();
     };
   }
 
   /** What a part shows now changes at `at` (hub time), or never by itself (null). */
   due(watch: Watch, at: number | null, now: number) {
-    watch.due = at === null ? null : at > now ? at : now + MISSED;
+    const next = at === null ? null : at > now ? at : now + MISSED;
+    if (watch.due !== next) {watch.due = next; this.nearest = null;}
     this.arm();
   }
 
@@ -82,6 +86,7 @@ export class PageClock {
       watch.due = null;
       watch.wakes++;
     }
+    if (woken.length) this.nearest = null;
     for (const watch of woken) watch.listener?.();
     this.arm();
   }
@@ -89,8 +94,14 @@ export class PageClock {
   /** One timer, for the nearest moment any part changes; none on a hidden tab. */
   private arm() {
     let nearest = Infinity;
-    if (this.env.visible()) for (const watch of this.watches) {
-      if (watch.due !== null && watch.due < nearest) nearest = watch.due;
+    if (this.env.visible()) {
+      // History may publish many times between deadlines. Only a changed watch
+      // invalidates the nearest moment; visibility and skew still retarget the timer.
+      if (this.nearest === null) {
+        this.nearest = Infinity;
+        for (const watch of this.watches) if (watch.due !== null && watch.due < this.nearest) this.nearest = watch.due;
+      }
+      nearest = this.nearest;
     }
     const now = this.env.now();
     const at = Number.isFinite(nearest) ? now + Math.min(Math.max(nearest - this.hubNow(now), NEAREST), FURTHEST) : null;

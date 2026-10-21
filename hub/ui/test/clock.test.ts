@@ -116,6 +116,34 @@ test('later labels and unchanged deadlines keep the timer; an earlier label and 
   assert.deepEqual(c.woken, ['minute']);
 });
 
+test('repeated history deadlines do not reread the other labels on the page', () => {
+  const c = pageClock();
+  let reads = 0;
+  for (let i = 0; i < 400; i++) {
+    const watch = c.clock.watch();
+    let due: number | null = null;
+    Object.defineProperty(watch, 'due', {get: () => {reads++; return due;}, set: value => {due = value;}});
+    c.clock.subscribe(watch, () => {});
+    c.clock.due(watch, T0 + HOUR + i, c.now());
+  }
+  const history = c.part('history', () => T0 + MIN);
+  const timer = c.timers[0].id;
+  reads = 0;
+  for (let frame = 0; frame < 200; frame++) {
+    c.jump(16);
+    c.clock.due(history, T0 + MIN, c.now());
+  }
+  assert.equal(reads, 0, 'unchanged history cannot scan every card and chart clock on each publication');
+  assert.equal(c.timers[0].id, timer);
+  c.clock.due(history, T0 + 2 * MIN, c.now());
+  assert.equal(c.timers[0].at, T0 + 2 * MIN);
+  assert.ok(reads > 0, 'a changed deadline still considers every other label');
+  c.hide(); assert.equal(c.timers.length, 0);
+  c.jump(3 * MIN); c.show();
+  assert.deepEqual(c.woken, ['history']);
+  assert.equal(c.timers.length, 1);
+});
+
 test('a moment that is not after now is a mistake of its part: taken as a minute on, never a spin', () => {
   const c = pageClock();
   c.part('wrong', now => now);
