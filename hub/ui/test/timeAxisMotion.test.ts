@@ -221,7 +221,7 @@ test('committed axis ticks reuse shaped widths across frames and measure only ch
   const {tickPresentation,tickVisible}=await import('../lib/axisTicks');let reads=0;
   const tick=(text:string,x:number)=>({textContent:text,x,style:{visibility:'',transform:''},getAttribute:()=>String(x),getComputedTextLength:()=>{reads++;return 44;}});
   const ticks=[tick('14 Oct',60),tick('15 Oct',200)];
-  const context={box:{current:{querySelectorAll:()=>ticks}},tickWidths:{current:new Map()},paintTicks:{current:()=>{}},pose:{current:{a:1,b:0,offset:0}},scale:.73,left:48,right:12,width:920,tickPresentation,tickVisible,
+  const context={box:{current:{querySelectorAll:()=>ticks}},tickWidths:{current:new Map()},tickGlyphs:{current:new WeakMap()},paintTicks:{current:()=>{}},pose:{current:{a:1,b:0,offset:0}},scale:.73,left:48,right:12,width:920,tickPresentation,tickVisible,
     useLayoutEffect:(run:()=>void)=>run(),measure:null as unknown as ()=>void};
   const source=readFileSync(new URL('../components/timeAxis.ts',import.meta.url),'utf8'),start=source.indexOf('  useLayoutEffect(() => {\n    // Measure only after DOM commit.');
   const body=source.slice(start,source.indexOf('\n  return {box, svg',start));
@@ -239,16 +239,16 @@ test('committed axis ticks reuse shaped widths across frames and measure only ch
 test('native tick movement never reparses unchanged glyph transforms after CSS rounds their coordinates',async()=>{
   const {tickPresentation,tickVisible}=await import('../lib/axisTicks');
   let writes=0,gets=0,presentations=0,wanted='',serialized='';
-  const tick=(x:number)=>({textContent:'14 Oct',style:{visibility:'',get transform(){gets++;return serialized;},set transform(value:string){writes++;wanted=value;serialized=value.replace(/-?\d+(?:\.\d+)?/g,n=>String(Number(Number(n).toPrecision(6))));}},getAttribute:()=>String(x),getComputedTextLength:()=>44});
+  const tick=(x:number)=>({x,textContent:'14 Oct',style:{visibility:'',get transform(){gets++;return serialized;},set transform(value:string){writes++;wanted=value;serialized=value.replace(/-?\d+(?:\.\d+)?/g,n=>String(Number(Number(n).toPrecision(6))));}},getAttribute(){return String(this.x);},getComputedTextLength:()=>44});
   const ticks=[tick(500.123456789)],pose={current:{a:.731231231,b:4.123456789,offset:0}};
-  const context={box:{current:{querySelectorAll:()=>ticks}},tickWidths:{current:new Map()},paintTicks:{current:()=>{}},pose,scale:.73,left:48,right:12,width:920,tickVisible,tickPresentation:(...args:Parameters<typeof tickPresentation>)=>{presentations++;return tickPresentation(...args);},
+  const context={box:{current:{querySelectorAll:()=>ticks}},tickWidths:{current:new Map()},tickGlyphs:{current:new WeakMap()},paintTicks:{current:()=>{}},pose,scale:.73,left:48,right:12,width:920,tickVisible,tickPresentation:(...args:Parameters<typeof tickPresentation>)=>{presentations++;return tickPresentation(...args);},
     useLayoutEffect:(run:()=>void)=>run(),measure:null as unknown as ()=>void};
   const source=readFileSync(new URL('../components/timeAxis.ts',import.meta.url),'utf8'),start=source.indexOf('  useLayoutEffect(() => {\n    // Measure only after DOM commit.');
   const body=source.slice(start,source.indexOf('\n  return {box, svg',start));
   runInNewContext(ts.transpileModule('globalThis.measure=()=>{'+body+'};',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
   context.measure();assert.notEqual(wanted,serialized,'the browser normalizes a fractional CSS transform');
   assert.equal(writes,1);
-  for(let i=0;i<100;i++){pose.current.offset=-i*4;context.paintTicks.current();}
+  for(let i=0;i<100;i++){pose.current.offset=-i*4;context.paintTicks.current();context.measure();}
   assert.equal(writes,1,'translation changes visibility, not the glyph scale');
   assert.equal(presentations,1,'translation does not rebuild the unchanged glyph transform string');
   assert.equal(gets,0,'native frames do not read a normalized string just to write its equivalent again');
@@ -256,4 +256,10 @@ test('native tick movement never reparses unchanged glyph transforms after CSS r
   pose.current.a=1.23456789;context.paintTicks.current();assert.equal(writes,2,'a changed projection replaces the glyph transform');
   assert.equal(wanted,tickPresentation(500.123456789,44,pose.current,.73,48,908).transform);
   ticks[0]=tick(600.987654321);context.measure();assert.equal(writes,3,'new committed tick coordinates receive their own transform');
+  ticks[0].x=610.123456789;context.measure();assert.equal(writes,4,'a reused node follows its new committed coordinate');
+  assert.equal(wanted,tickPresentation(ticks[0].x,44,pose.current,.73,48,908).transform);
+  pose.current.a=1;context.paintTicks.current();assert.equal(writes,5);
+  ticks[0].x+=4;context.measure();assert.equal(writes,5,'identity glyph transforms do not depend on their new coordinate');
+  pose.current.a=.5;context.paintTicks.current();assert.equal(writes,6);
+  assert.equal(wanted,tickPresentation(ticks[0].x,44,pose.current,.73,48,908).transform);
 });

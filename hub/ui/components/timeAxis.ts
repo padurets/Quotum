@@ -114,6 +114,7 @@ export function useTimeAxis({
   const paintTicks = useRef(() => {});
   // Strips replace nodes; their shared axis font keeps the same shaped glyphs.
   const tickWidths=useRef(new Map<string,number>());
+  const tickGlyphs=useRef(new WeakMap<SVGTextElement,{x:number;a:number;transform:string}>());
   useEffect(()=>{
     const fonts=document.fonts;
     const changed=()=>{tickWidths.current.clear();present(value=>value+1);};
@@ -511,16 +512,18 @@ export function useTimeAxis({
       }
       return {element,x:Number(element.getAttribute('x')),length};
     });
-    let glyphScale:number|null=null;
     paintTicks.current=()=>{
-      const changed=glyphScale!==pose.current.a;
-      glyphScale=pose.current.a;
       for(const {element,x,length} of ticks){
         const visibility=tickVisible(x,length,pose.current,scale,left,width-right)?'':'hidden';
         if(element.style.visibility!==visibility)element.style.visibility=visibility;
         // CSS rounds fractional transforms; comparing its serialization would
         // parse the same glyph transform again on every translated frame.
-        if(changed)element.style.transform=tickPresentation(x,length,pose.current,scale,left,width-right).transform;
+        const glyph=tickGlyphs.current.get(element);
+        if(glyph?.a!==pose.current.a||glyph.x!==x){
+          const transform=tickPresentation(x,length,pose.current,scale,left,width-right).transform;
+          if(glyph?.transform!==transform)element.style.transform=transform;
+          tickGlyphs.current.set(element,{x,a:pose.current.a,transform});
+        }
       }
     };
     paintTicks.current();
