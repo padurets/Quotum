@@ -21,6 +21,19 @@ type Numbers={agentMs:number;activeMs:number;agents:number};
 type Body={id:string;requestBytes:number;decoded:number;encoded:number;cancelled:boolean;body:PeriodRequest};
 type Sample={numbers:Numbers;activity:History['activity'];tiles:[number,number,number][];bytes:number;flights:number;advances:number;jobsStarted:number;fetches:number;preparationMs:number;failedReservations:number;preferenceWrites:number};
 
+/** Each update owns one shared work attempt; only a native cells-only follow-up may overlap it. */
+export function assertActivityOverlap(requests:readonly PeriodRequest[],updates:number) {
+  const work=requests.filter(body=>body.sessions),native=requests.filter(body=>!body.sessions);
+  assert.equal(work.length,updates,'overlapping updates cannot add another work reader');
+  assert.ok(native.length<=1,'overlapping updates allow at most one native chart follow-up');
+  for(const body of native){
+    assert.equal(body.quota?.evidence,'skip','the follow-up reads native drawing cells only');
+    assert.notEqual(body.quota?.cells,'skip');
+    assert.ok(!body.budget&&!body.funds&&!body.values&&!body.facets&&!body.calendar&&!body.sourceWork);
+    assert.deepEqual(body.selection,work[0].selection);
+  }
+}
+
 /** Independent endpoint sweep: no group aggregate, PeriodActivity or new selection helper. */
 export function activityOracle(trace:WorkTrace,from:number,to:number):Numbers {
   const events:[number,number][]=[],identities=new Set<string>();let agentMs=0;
@@ -179,7 +192,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         }
         return current;
       };
-      const phase=async(name:string,run:()=>Promise<void>,expected:number|null,superseded=false)=>{
+      const phase=async(name:string,run:()=>Promise<void>,expected:number|null,overlap=false)=>{
         const start=bodies.bodies.length;await cdp.evaluate('window.__quotumFixedActivity.reset()');const at=Date.now();
         referenceReceipt={requests:0,requestBytes:0,decodedBytes:0,encodedBytes:0};
         const metrics=async()=>{const {metrics}=await cdp.send<{metrics:{name:string;value:number}[]}>('Performance.getMetrics');return Object.fromEntries(metrics.map(metric=>[metric.name,metric.value]));};
@@ -198,11 +211,8 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         const report={days,name,excluded,requests:reads.length,preparationLimit,requestBytes:reads.reduce((n,row)=>n+row.requestBytes,0),decoded,encoded:reads.reduce((n,row)=>n+row.encoded,0),cancelled,attempts,coherentMs:coherentAt-at,verificationMs:Date.now()-coherentAt,reference:referenceReceipt,scriptMs:(after.ScriptDuration-before.ScriptDuration)*1000,taskMs:(after.TaskDuration-before.TaskDuration)*1000,...current,numbers:current.numbers,activity:undefined,tiles:undefined};
         reports.push(report);console.error('bench: fixed Activity '+JSON.stringify(report));
         if(expected!==null){
-          if(superseded){
-            // Two work updates may cancel their first shared native request.
-            // Charge that attempt, without granting another completed read or preparation budget.
-            assert.ok(cancelled<=1&&reads.length>=expected&&reads.length<=expected+cancelled,name+' counts at most one superseded attempt');
-          }else assert.equal(reads.length,expected,name+' shared requests; no legend allowance');
+          if(overlap)assertActivityOverlap(reads.map(row=>row.body),expected);
+          else assert.equal(reads.length,expected,name+' shared requests; no legend allowance');
         }
         assert.ok(current.flights<=2&&current.bytes<=FIXED_ACTIVITY_BUDGET.pool&&!current.failedReservations&&current.tiles.length<=8);
         assert.ok(current.advances<=preparationLimit);
