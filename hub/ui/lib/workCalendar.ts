@@ -52,7 +52,7 @@ export class WorkCalendar {
   needed=false;
   generation=0;
   state:CalendarReading={window:calendarWindow(Date.now()),value:null,basis:null,loading:false,error:null};
-  presentationKey=()=>this.context;
+  presentationKey=()=>JSON.stringify([this.context,periodKey(this.selection)]);
   private listeners=new Set<()=>void>();
   private accountedState:CalendarReading|null=null;
   private accountedBytes=0;

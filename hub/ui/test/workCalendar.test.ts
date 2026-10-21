@@ -11,6 +11,16 @@ import {expandPeriod} from '../../server/domain/periodWire.js';
 import {fixture,flush,NOW,M} from './periodRuntimeFixture.js';
 const H=3_600_000,DAY=24*H;
 const row=(from:number,to:number):Stretch=>({session:1,source:null,device:'d',user:'u',origin:'terminal',project:null,folder:null,startedAt:from,from,to});
+test('calendar presentation identity separates live periods without changing on ordinary clock movement',()=>{
+  const calendar=new WorkCalendar(),now=Date.UTC(2035,1,10,12);
+  calendar.configure(true,'authority',now,false,{mode:'live',periodMs:DAY});const day=calendar.presentationKey();
+  calendar.tick(now+60_000);assert.equal(calendar.presentationKey(),day);
+  calendar.configure(true,'authority',now,false,{mode:'live',periodMs:30*DAY});const month=calendar.presentationKey();
+  assert.notEqual(month,day,'cached evidence for another live duration cannot retain the previous grid');
+  calendar.configure(true,'authority',now,false,{mode:'range',from:now-DAY,to:now});const fixed=calendar.presentationKey();
+  assert.notEqual(fixed,day);assert.notEqual(fixed,month);
+  calendar.configure(true,'replacement',now,false,{mode:'range',from:now-DAY,to:now});assert.notEqual(calendar.presentationKey(),fixed);
+});
 function reading(from:number,to:number,zone='UTC'){
   const window=calendarWindow(to,zone,{mode:'range',from,to}),cells=drain(calendarCells([row(from,to)],window.edges,window.edges.slice(1).map((_,i)=>i),to,from,from,90*DAY,{from,to})).map(([,c])=>c);
   return {window,value:{zone,edges:window.edges,cells,availableFrom:from,retainedFrom:from,cursor:'cursor'},basis:null,loading:false,error:null};
