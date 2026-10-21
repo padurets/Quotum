@@ -1,5 +1,8 @@
+import ast
+from contextlib import ExitStack
 import os
 import hashlib
+import inspect
 import json
 from pathlib import Path
 import subprocess
@@ -14,6 +17,82 @@ from native_evidence import Evidence, identity, paused
 
 
 class PauseTests(unittest.TestCase):
+    def test_panel_wait_pauses_before_observer_work_and_resumes_after_snapshot_failure(self):
+        source = Path(__file__).with_name('panel.py')
+        wait = next(node for node in ast.walk(ast.parse(source.read_text()))
+                    if isinstance(node, ast.FunctionDef) and node.name == 'wait')
+        code = compile(ast.Module(body=[wait], type_ignores=[]), str(source), 'exec')
+        for failing_snapshot in (False, True):
+            with self.subTest(failing_snapshot=failing_snapshot), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                ready = root / 'ready'
+                with patch.dict(os.environ, {'QUOTUM_SMOKE_DIAGNOSTICS_DIR': str(root / 'evidence')}):
+                    evidence = Evidence(sys.executable)
+                child = subprocess.Popen([sys.executable, '-c',
+                    "import sys,time;from pathlib import Path;print('waiting',flush=True);"
+                    "sys.stdin.buffer.read(1);Path(sys.argv[1]).write_text('ready');time.sleep(60)",
+                    str(ready)], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+                try:
+                    self.assertEqual(child.stdout.readline(), b'waiting\n')
+                    writes = []
+                    original = RuntimeError('controlled snapshot failure')
+                    write_bytes, write_text = Path.write_bytes, Path.write_text
+
+                    def checked_write(method, path, *args, **kwargs):
+                        self.assertEqual(native_evidence._pause_depth, 0, 'evidence published before resume')
+                        writes.append(path.name)
+                        return method(path, *args, **kwargs)
+
+                    def snapshot(stage):
+                        self.assertEqual(writes, [], 'observer writes preceded the engine pause')
+                        until = time.monotonic() + 1
+                        while identity(child.pid)['state'] != 'T' and time.monotonic() < until:
+                            time.sleep(.001)
+                        self.assertEqual(identity(child.pid)['state'], 'T')
+                        child.stdin.write(b'x')
+                        child.stdin.flush()
+                        time.sleep(.05)
+                        self.assertFalse(ready.exists(), 'observer work let the engine finish before the assertion')
+                        evidence.record(stage)
+                        if failing_snapshot:
+                            raise original
+
+                    context = dict(time=time, inspect=inspect, child=child, evidence=evidence,
+                                   snapshot=snapshot, scenario='controlled-panel-wait', paused=paused,
+                                   identity=identity, controller=identity(os.getpid()))
+                    exec(code, context)
+
+                    def observe():
+                        with ExitStack() as pausing:
+                            self.assertEqual(context['wait'](lambda: child.pid, pausing), child.pid)
+                            self.assertFalse(ready.exists())
+
+                    with patch.object(native_evidence, '_pause_depth', 0), \
+                         patch.object(native_evidence, '_resume_failed', False), \
+                         patch.object(Path, 'write_bytes', lambda path, *a, **kw: checked_write(write_bytes, path, *a, **kw)), \
+                         patch.object(Path, 'write_text', lambda path, *a, **kw: checked_write(write_text, path, *a, **kw)):
+                        if failing_snapshot:
+                            with self.assertRaisesRegex(RuntimeError, 'controlled snapshot failure') as caught:
+                                observe()
+                            self.assertIs(caught.exception, original)
+                        else:
+                            observe()
+                    until = time.monotonic() + 1
+                    while not ready.exists() and time.monotonic() < until:
+                        time.sleep(.001)
+                    self.assertTrue(ready.exists(), 'the same engine resumes after observation')
+                    self.assertEqual(writes, ['timeline.json.tmp', 'manifest.json.tmp'])
+                    saved = json.loads((evidence.directory / 'timeline.json').read_text())
+                    self.assertEqual([row['stage'] for row in saved['records']],
+                                     ['paused', 'wait-complete', 'resumed'])
+                finally:
+                    if child.poll() is None:
+                        child.send_signal(signal.SIGCONT)
+                        child.terminate()
+                    child.wait(timeout=3)
+                    child.stdin.close()
+                    child.stdout.close()
+
     def test_partial_evidence_hashes_safe_events_before_cleanup(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)

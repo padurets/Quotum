@@ -1,5 +1,6 @@
 """Native popup lifecycle, on tray.sh's private bus and an isolated Xvfb display."""
 import ctypes as C
+from contextlib import ExitStack
 import inspect
 import re
 import subprocess
@@ -114,14 +115,18 @@ def check_panel(bus, item, child, root, env, evidence):
                         engine=identity(pid) if pid else None, controllerWindows=windows(child.pid),
                         engineWindows=windows(pid))
 
-    def wait(predicate):
+    def wait(predicate, pausing=None):
         until = time.monotonic() + 10
-        evidence.record('wait-start', scenario=scenario, line=inspect.currentframe().f_back.f_lineno)
+        # Stop the engine before diagnostic I/O can let its startup progress.
+        if pausing is None:
+            evidence.record('wait-start', scenario=scenario, line=inspect.currentframe().f_back.f_lineno)
         while time.monotonic() < until:
             if child.poll() is not None:
                 raise RuntimeError('controller exited during the native panel check')
             value = predicate()
             if value:
+                if pausing is not None:
+                    pausing.enter_context(paused(identity(value), controller, evidence.record))
                 snapshot('wait-complete')
                 return value
             time.sleep(.01)
@@ -157,10 +162,10 @@ def check_panel(bus, item, child, root, env, evidence):
         for cancel in [False, True]:
             scenario = 'initial-cancel' if cancel else 'initial-handoff'
             activate()
-            loader = wait(lambda: visible(child.pid))
-            assert len(loader) == 1 and loader[0].skip_taskbar, 'loader must stay out of the taskbar'
-            pid = wait(engine)
-            with paused(identity(pid), controller, evidence.record):
+            with ExitStack() as pausing:
+                pid = wait(engine, pausing)
+                loader = wait(lambda: visible(child.pid))
+                assert len(loader) == 1 and loader[0].skip_taskbar, 'loader must stay out of the taskbar'
                 assert visible(child.pid), 'the loader cannot wait for Chromium'
                 if cancel:
                     activate()
