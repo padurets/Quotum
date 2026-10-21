@@ -1,10 +1,10 @@
+import {workChange} from '../lib/workChanges';
 import * as periodValueClockBindings from '../../server/domain/periodValues';
 import {WorkCalendar} from '../lib/workCalendar';
 import {AGENT_HOURS_HEATMAP} from '../../server/domain/widgets';
 import * as filterModelBindings from '../../server/domain/dataFilters';
 import * as filterRuntimeBindings from '../lib/filterSelection';
 import * as filterCurveBindings from '../../server/domain/periodCurves';
-import {chartSeriesMuted} from '../lib/prefs';
 import * as retention from '../../server/domain/periodRetention';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -96,12 +96,12 @@ export async function fixture({heatmap=false,personal=false,ownerDevice=false,tr
   let wait:Promise<void>|null=null,preparer:Preparations|null=null;
   const pageClock=new PageClock({now:()=>now,visible:()=>true,setTimeout:(run,ms)=>{const token={};timers.set(token,{at:now+ms,run});return token;},clearTimeout:token=>{timers.delete(token as object);}});
   const pan=new Pan({now:()=>now,commit:()=>{},requestFrame:run=>{run();return null;},cancelFrame:()=>{},setTimeout:()=>null,clearTimeout:()=>{}});
-  const context={exports:{} as any,hubNow:clocked?pageClock.hubNow:()=>now,retention,historyPool:pool,clock:clocked?pageClock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,
+  const context={workChange,exports:{} as any,hubNow:clocked?pageClock.hubNow:()=>now,retention,historyPool:pool,clock:clocked?pageClock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,
     fetchPeriod:async(_board:string,body:PeriodRequest)=>{requests.push(body);const reply=expandPeriod(JSON.parse(reader.read(board,alice.id,JSON.parse(JSON.stringify(body)))));const pending=wait;wait=null;await pending;return reply;},
     periodTextChangesAt,page,pan,preparations:()=>preparer,prepareAsync:(owner:object,work:Parameters<typeof drain>[0],valid:()=>boolean)=>prepareAsync(owner,work,valid,preparer),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,
     packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,
     WorkCalendar,AGENT_HOURS_HEATMAP,timeRange:()=>selectedRange,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
-  runInNewContext(ts.transpileModule(code.slice(code.indexOf('class BoardPeriod'),code.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  runInNewContext(ts.transpileModule(code.slice(code.indexOf('class BoardPeriod'),code.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,{workChange},periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   if(initialFilters)filterRuntimeBindings.publishDataFilters(initialFilters);
   const period=new context.exports.BoardPeriod();pan.onPhase(()=>period.refreshWorkClock());page.listen((event,state)=>period.changed(event,state));period.activate(true);await flush();
   const limited=!!initialFilters&&!filterModelBindings.executableWorkFilters(initialFilters);
@@ -123,7 +123,7 @@ export async function fixture({heatmap=false,personal=false,ownerDevice=false,tr
 import * as React from 'react';
 import {preparationFixture} from './preparationFixture';
 import {activityScale,
-  activityEmpty,groupColors,mutedKey} from '../lib/activity';
+  activityEmpty,groupColors,activitySeriesKey} from '../lib/activity';
 import {plotGroupsPrepared} from '../lib/historyPlot';
 import {StackPaths} from '../lib/stackPaths';
 import {groupRegistry} from '../lib/plotRegistry';
@@ -140,19 +140,19 @@ export function consumer(h: any) {
   const titles=Object.fromEntries(Object.values(h.page.get().board!.cards).map((c:any)=>[c.id,{provider:c.provider,title:'Shared source'}]));
   let panning:number|null=null;
   const prefs={range:'1h',activityBy:'project',muted:{}};
-  const context={chartSeriesMuted,ACTIVITY,
+  const context={ACTIVITY,
     exports:{} as any,React,...parent,memo:(f:any)=>f,useMemo:(f:any,deps:any[])=>{const slot=parent.useRef(null) as any;if(!slot.current||deps.some((v,i)=>!Object.is(v,slot.current.deps[i])))slot.current={deps,value:f()};return slot.current.value;},
-    activityMutedKeys:()=>[],useActivitySubset:()=>({}),useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useHistory:()=>h.render(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
+    useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useActivityHistory:()=>h.renderActivity(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
     useLineup:()=>h.page.get().board!.lineup,usePersonalBoard:()=>false,useTitles:()=>titles,
-    useChartMuted:()=>prefs.muted,usePref:(key:keyof typeof prefs)=>prefs[key],useLocale:()=> 'en',useTimeRange:()=>h.selectedRange(),useBoardId:()=>h.board,
+    usePref:(key:keyof typeof prefs)=>prefs[key],useLocale:()=> 'en',useTimeRange:()=>h.selectedRange(),useBoardId:()=>h.board,
     axisNavigation:()=>({context:'b',range:'1h'}),useClock:()=>NOW,usePanning:()=>panning,
     pan:{get:()=>null,active:()=>null,subscribe:()=>()=>{}},useHistoryBegins:()=>0,frameOf:()=>({from:NOW-H,to:NOW,live:true}),measuredTo:()=>NOW,
-    activityEmpty,groupColors,groupRegistry,mutedKey,plotGroupsPrepared,StackPaths,stacksHeight:()=>160,activityScale,niceTicks,cellStart,MINUTE:60_000,EMPTY_ACTIVITY,groupName:(g:any)=>g.name??g.key,cardId,isHidden,t:(s:any)=>s,
+    activityEmpty,groupColors,groupRegistry,activitySeriesKey,plotGroupsPrepared,StackPaths,stacksHeight:()=>160,activityScale,niceTicks,cellStart,MINUTE:60_000,EMPTY_ACTIVITY,groupName:(g:any)=>g.name??g.key,cardId,isHidden,t:(s:any)=>s,
     quotaHistory:{retry:()=>{}},AnalyticsPanel:()=>null,ActivitySettings:()=>null,Totals:()=>null,LegendItem:()=>null,
     setTimeRange:()=>{},timeRangeKey,navigationKey,useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),
     PlotLayer:()=>null,PlotOverlay:()=>null,Tooltip:()=>null,clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',
     CSS:{escape:(id:any)=>id},Stacks:null as any};
-  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,Object.assign(context,{workChange},periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   function find(node:any,type:any):any{if(Array.isArray(node))return node.map(n=>find(n,type)).find(Boolean);if(!React.isValidElement(node))return null;if(node.type===type)return node;return find((node.props as any).children,type);}
   const pathsOf=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(pathsOf);if(!React.isValidElement(node))return [];const p=node.props as any;return p.className==='activity-stack'&&p.d!==undefined?[p.d]:pathsOf(p.children);};
   let latestParent:any;const renderParent=()=>{Object.assign(context,parent);parent.begin();latestParent=context.exports.Activity({arrange:{view:h.page.get().board!.view}});return find(latestParent,context.Stacks).props;};
@@ -178,14 +178,15 @@ export async function drawings(h:any,activity=true,scope:'quota'|'budget'='quota
  const stop=follow(loader,h.page);loader.setActivityActive(activity);loader.choose(h.settings.range,h.selectedRange());loader.open(h.board);loader.setWorkFilter(JSON.stringify(filterRuntimeBindings.effectiveFilters()?filterModelBindings.workFilter(filterRuntimeBindings.effectiveFilters()!):null),filterRuntimeBindings.effectiveFilters()??undefined);loader.hello(h.events.epoch);
  loader.setMeters(readerContext.selected(h.page.get(),scope));
  const board=h.page.get().board;loader.snapshot(board.lineup,Object.values(board.cards).flatMap((c:any)=>c.windows.map((w:any)=>`${c.id} ${w.id}`)),board.historyStart,board.workAuthority);await flush();
- const selectedSlots:any[]=[],financialSlots:any[]=[];let slots=selectedSlots,cursor=0;
+ const selectedSlots:any[]=[],financialSlots:any[]=[],activitySlots:any[]=[];let slots=selectedSlots,cursor=0;
  const useRef=(current:any)=>slots[cursor++]??(slots[cursor-1]={current});
  const useMemo=(read:any,deps:any[])=>{const box=useRef(null);if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;};
  const context={useRef,useMemo,useSyncExternalStore:(_s:any,read:any)=>read(),pan:{active:()=>null,onPhase:()=>()=>{}},hubNow:()=>NOW,planEventsAt,planEventsDeadline,shallowEqual,useClock:()=>NOW,fundsHistory:{},page:h.page,timeRange:h.selectedRange,timeRangeKey,prefs:()=>h.settings,boardPeriod:h.period,read:null as any};
- runInNewContext(ts.transpileModule(source.slice(source.indexOf('function usePeriodHistory('),source.indexOf('export function useHistory('))+'\nglobalThis.read=usePeriodHistory;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+ runInNewContext(ts.transpileModule(source.slice(source.indexOf('function usePeriodHistory('),source.indexOf('export function useHistory('))+'\nglobalThis.read=usePeriodHistory;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,Object.assign(context,{workChange},periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
  const render=()=>{slots=selectedSlots;cursor=0;return context.read(loader,true);};
  const renderFinancial=()=>{slots=financialSlots;cursor=0;return context.read(loader,false,true);};
- return {loader,render,renderFinancial,close:()=>{stop();loader.close();}};
+ const renderActivity=()=>{slots=activitySlots;cursor=0;return context.read(loader,true,false,true);};
+ return {loader,render,renderFinancial,renderActivity,close:()=>{stop();loader.close();}};
 }
 import {subscriptionLinesOf} from '../lib/subscription';
 import {lineWork,workText} from '../lib/work';

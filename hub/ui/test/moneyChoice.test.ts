@@ -25,13 +25,10 @@ test('ordinary funds retain a global legacy subset through boards, hidden resour
   for(const ids of [['a','b'],['c','d'],['a','b']]){
     const cohort=ids.map(id=>card(id));
     assert.deepEqual(selection.moneySelection(cohort,[],settings,undefined,'funds').selection!.ids.map(([id])=>id),ids);
-    assert.deepEqual(ids.filter(id=>!selection.fundsLegacyMuted(settings,id,'balance:credits')),ids.filter(id=>id==='a'||id==='c'));
     selection.moneySelection(cohort,['source:'+ids[0]],settings,undefined,'funds');
   }
   const reloaded=selection.readMoney(JSON.parse(JSON.stringify(settings)),'funds');
   assert.deepEqual(reloaded,settings);
-  assert.equal(selection.fundsLegacyMuted(reloaded,'c','balance:credits'),false);
-  assert.equal(selection.fundsLegacyMuted(reloaded,'b','balance:credits'),true);
 });
 
 test('bounded funds admission uses immutable priority and retains explicit data choices at 33→32',()=>{
@@ -56,7 +53,6 @@ test('funds migration priority belongs to the filter codec after reset, Restore 
     first.reset('funds','all');assert.equal(first.get().current!.legacy?.fundsPreferredByUnit,undefined);check(first,false);
     first.restore();check(first,false);check(open(1),false);
     publishDataFilters(null,false);assert.equal(cohort().some(([id])=>id==='32'),true,'the compatibility reader keeps its old priority before filter activation');
-    assert.equal(selection.fundsLegacyMuted(legacy,'31','balance:credits'),true,'the old legend intent remains independent');
     assert.deepEqual(legacy,original);
   }finally{publishDataFilters(null,false);}
 });
@@ -98,22 +94,14 @@ function preferences(saved:object){
   return {...context.exports,saved:()=>JSON.parse(raw)};
 }
 
-test('scoped legend overrides isolate sibling charts, preserve explicit unmute and never alter data choices',()=>{
-  const p=preferences({spendingSort:{column:'value',descending:true},kind:'session',money:{view:'spending',unit:'USD',selected:{USD:[['wallet','balance']]}},funds:{selected:{USD:[['a','balance:credits']]}},muted:{'["budget-spending-history","wallet","balance"]':true,'["wallet","balance","balance","USD"]':true},moneySort:{column:'value',descending:true}});
-  assert.equal(Object.hasOwn(p.prefs(),'kind'),false);assert.equal(Object.hasOwn(p.prefs().money,'view'),false);
-  assert.equal(Object.hasOwn(p.prefs(),'spendingSort'),false);
-  assert.ok(!Object.keys(p.prefs().muted).some(key=>key.includes('budget-spending')));
-  const sibling=p.useChartMuted(widgets.SUBSCRIPTION_FUNDS),before=p.prefs().money;
-  const key=p.chartMuteKey(widgets.BUDGET_HISTORY,'wallet','balance');
-  p.setMuted(key,false);
-  assert.equal(p.chartMuteKey(widgets.BUDGET_HISTORY,'wallet','fx:EUR:balance'),key,'display conversion keeps the native visibility identity');
-  assert.equal(p.chartSeriesMuted(p.useChartMuted(widgets.BUDGET_HISTORY),widgets.BUDGET_HISTORY,'wallet','balance',true),false);
-  assert.equal(p.useChartMuted(widgets.SUBSCRIPTION_FUNDS),sibling);
-  assert.equal(p.prefs().money,before);assert.equal(p.prefs().funds.selected.USD,undefined);
-  const reloaded=preferences(p.saved());
-  assert.equal(reloaded.chartSeriesMuted(reloaded.prefs().muted,widgets.BUDGET_HISTORY,'wallet','balance',true),false);
-  assert.equal(selection.fundsLegacyMuted(reloaded.prefs().funds,'b','balance:credits'),true);
-  assert.equal(selection.fundsLegacyMuted(reloaded.prefs().funds,'a','fx:EUR:balance:credits'),false);
+test('old legend masks are ignored while data choices and unrelated preferences survive reload',()=>{
+  const p=preferences({money:{unit:'USD',selected:{USD:[['wallet','balance']]}},funds:{selected:{USD:[['a','balance:credits']]}},muted:{'["budget-history","wallet","balance"]':true,'["wallet","balance","balance","USD"]':true},moneySort:{column:'value',descending:true}});
+  assert.equal(Object.hasOwn(p.prefs(),'muted'),false);
+  assert.deepEqual(JSON.parse(JSON.stringify(p.prefs().money.selected.USD)),[['wallet','balance']]);
+  assert.equal(p.prefs().moneySort?.column,'value');
   p.setPrefs({sessionSort:null});
-  assert.equal(Object.hasOwn(preferences(p.saved()).prefs(),'spendingSort'),false);
+  const reloaded=preferences(p.saved());
+  assert.equal(Object.hasOwn(reloaded.prefs(),'muted'),false);
+  assert.deepEqual(JSON.parse(JSON.stringify(reloaded.prefs().money.selected.USD)),[['wallet','balance']]);
+  assert.equal(reloaded.prefs().moneySort?.column,'value');
 });

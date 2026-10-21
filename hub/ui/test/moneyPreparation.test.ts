@@ -1,5 +1,4 @@
 import * as widgets from '../../server/domain/widgets';
-import {chartSeriesMuted} from '../lib/prefs';
 import {moneyBalanceSeries} from '../lib/moneyTable';
 import {defaultCurrencyContext} from '../../server/domain/currency';
 import {test} from 'node:test';
@@ -19,7 +18,7 @@ import * as currency from '../../server/domain/currency';
 import * as moneyView from '../lib/moneyView';
 import * as money from '../lib/money';
 import * as moneyTable from '../lib/moneyTable';
-import {moneySelection,fundsLegacyMuted} from '../lib/moneySelection';
+import {moneySelection} from '../lib/moneySelection';
 import {EMPTY_VIEW} from '../../server/domain/view';
 import type {Card, History} from '../lib/types';
 import type {Chart as ChartComponent} from '../components/Chart';
@@ -102,7 +101,7 @@ for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'reso
       '../../server/domain/providers': providers, '../../server/domain/currency': currency, '../../server/domain/meterHistory': {composeMetersPrepared},
       '../lib/board': {useBoardId: () => 'board', useCurrencyContext: () => defaultCurrencyContext, useNamed: () => sources},
       '../lib/history': {useBudgetFinancialHistory: () => ({history,drawing:history,loading:!history,presentation}),useBudgetHistory: () => ({history, drawing: history, loading: !history, presentation}), useBudgetHistoryPlot: () => null, useHistoryBegins: () => 0, budgetHistory: {retry: () => {}}},
-      '../lib/prefs': {useChartMuted:()=>prefs.muted,chartSeriesMuted,usePref: (key:keyof typeof prefs) => prefs[key]}, '../lib/moneySelection': {moneySelection,fundsLegacyMuted}, '../lib/moneyView': moneyView, '../lib/money': money,
+      '../lib/prefs': {usePref: (key:keyof typeof prefs) => prefs[key]}, '../lib/moneySelection': {moneySelection}, '../lib/moneyView': moneyView, '../lib/money': money,
       '../lib/view': {...widgets,colorOf: () => '#fff'}, '../lib/periods': {frameOf: () => ({from: 0, to: 120000, live: true}), measuredTo: () => 60000},
       '../lib/timeRange': {useTimeRange: () => null}, '../lib/clock': {useClock: () => 60000}, '../lib/pan': {usePanning: () => null},
       '../lib/axisNavigation': {axisNavigation: () => ({context: 'board'})}, '../i18n': {t: (key: string) => key, useLocale: () => 'en'},

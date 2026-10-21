@@ -51,10 +51,9 @@ history cells and rendering no other card nor the header. A mixed Codex subscrip
 credit changes and unchanged-value heartbeats update its card and funds history while
 quota and wallet analytics remain unchanged. A live machine report crediting
 work makes at most one small history read and renders only its card, agents and
-analytics. A historical Activity chart with a local legend subset may add one
-bounded exact read for a relevant late-work update, reusing clean cells. Its separate
-24h/30d fixed-subset benchmark counts all traffic, cancelled responses and preparation
-under the same transport and memory limits. Run it when you change the dashboard and
+analytics. Its separate 24h/30d Activity benchmark exercises shared filters, exact work, late
+updates and cancelled responses within the same transport, preparation and memory
+limits. Legend emphasis adds no reader and has no extra-read allowance. Run it when you change the dashboard and
 have Chrome (`QUOTUM_CHROME`, one on `PATH`, or `--cdp` to one already running); CI fails over budget. After the readings,
 it also checks consecutive measuring-frequency saves with native arrow keys and fails
 if saving loses focus.
@@ -173,20 +172,29 @@ and platform smoke checks still apply.
   scrolling inside (`sideOf` in `hub/ui/lib/place.ts`); a chart's tooltip keeps to the
   window too (`placeOf`, and `edgeOf` for its labels past the edge). A chart along the
   analytics' time reads and moves through `useTimeAxis` (`hub/ui/components/timeAxis.ts`),
-  keeps its own options in its settings, and has its legend under it, each entry switched
-  off and on by a click.
+  keeps its own options in its settings, and has its legend under it. Clicking entries independently emphasizes several series.
 - Scrollbars have one style, set once at the top of `hub/ui/style.css`; nothing styles its own.
 - Sortable tables reuse `hub/ui/components/TableWidget.tsx` for their headers and menu
   choices, including active colour, arrow spacing and keyboard behavior. Reader sorting
   stays separate from the owner's column controls.
-- Chart legends share `hub/ui/components/seriesFocus.ts` to highlight a series under
-  the pointer or keyboard focus. Apply it to every plot layer for that series;
-  highlighting changes paint, never the data, selection or prepared geometry. One local
-  controller arbitrates pointer, keyboard and touch for the paint and the information
-  area under the heading. Activity summaries and bar numbers describe the intersection
-  of board filters and enabled legend series, including exact interval union and distinct
-  sessions. Legend previews replace that summary in the same reserved area. Monetary
-  legend details use this area too; quota charts gain no empty strip or aggregate.
+- Chart legends share `hub/ui/components/seriesFocus.ts`: click, Enter/Space and
+  touch toggle independent in-memory choices; pointer or focus-visible previews one
+  series with pointer priority. Preview/chosen/other opacity multipliers are
+  1/0.65/0.25; without a preview, chosen series are 1, and an empty choice restores
+  every series. Apply the multiplier once to every associated plot/legend layer,
+  preserving intrinsic opacity and colours. Emphasis changes paint only: no filtering,
+  preparation, history reads, preference writes or data-consumer renders.
+  Dates, pan and ordinary updates preserve choices, including dormant identities.
+  Only the corresponding canonical applied selection resets a legend: Activity's
+  grouping dimension, each quota kind's source/window choices, or money's relevant
+  source and active-unit wallet/funds rule. Equivalent refs, unrelated edits and
+  presentation revisions do not reset. Board/grouping changes and real revocation
+  clear the affected context; late replies never restore reset choices.
+  Activity summaries and bar numbers always describe the board-filtered cohort,
+  including exact interval union and distinct sessions. Preview temporarily replaces
+  the useful summary in the same stable area. Monetary details and provenance use
+  the shared glass tooltip anchored to their legend button, without a hidden content
+  reserve. Quota charts gain no empty information strip or aggregate.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the list of agents, agent activity, the chart, the table).
 - Board widgets never add a vertical scroller inside the page. Table widgets share
   `TableWidget` for responsive layout, whole-row height fitting and the compact pager

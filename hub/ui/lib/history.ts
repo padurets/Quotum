@@ -2,6 +2,7 @@ import {onDataFilters,filtersReady,effectiveFilters} from './filterSelection';
 import {executableWorkFilters,workFilter,type WorkFilter} from '../../server/domain/dataFilters';
 import {HistoryPool,historyPool} from './historyPool';
 import {boardPeriod,followPeriod} from './period';
+import {workChange} from './workChanges';
 import type {HistoryScope} from '../../server/domain/history';
 import {widgetVisible, QUOTA_WIDGETS, BUDGET_WIDGETS, SUBSCRIPTION_FUNDS, ACTIVITY} from '../../server/domain/widgets';
 import {useMemo,useRef,useSyncExternalStore} from 'react';
@@ -1112,7 +1113,8 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>,
         const selected=scope==='budget'?new Set(selection(state)?.ids.map(([source])=>source)):new Set(state.board?.lineup??[]);
         const changes=hub.data.changes?.filter(change=>change.scope===scope&&selected.has(change.source)&&(scope!=='budget'||change.workSince===undefined||change.since<change.workSince));
         const workSince = scope==='quota'?hub.data.workSince : undefined;
-        if(changes?.length || workSince !== undefined)loader.news(Math.min(...(changes ?? []).map(change=>change.since), workSince ?? Infinity), hub.data.workAuthority);
+        const retired=scope==='quota'&&workChange(hub.data,[...selected]).retired;
+        if(retired||changes?.length || workSince !== undefined)loader.news(retired?0:Math.min(...(changes ?? []).map(change=>change.since), workSince ?? Infinity), hub.data.workAuthority);
         else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since, hub.data.workAuthority);
       }
     }
@@ -1157,7 +1159,7 @@ if (typeof window !== 'undefined') {
   };
   onPrefs(chosen);onTimeRange(chosen);chosen();
 }
-function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false):Shown&{drawing:History|null} {
+function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false,activity=false):Shown&{drawing:History|null} {
   const shown=useSyncExternalStore(financial?loader.subscribeFinancial:loader.subscribe,financial?loader.getFinancial:loader.get,financial?loader.getFinancial:loader.get);
   const panning=pan.active();
   const revision=useSyncExternalStore(listener=>boardPeriod.subscribeProjection(loader===fundsHistory?'funds':loader.scope??'quota',listener),()=>(financial?boardPeriod.getFinancialProjectionRevision:boardPeriod.getProjectionRevision)(loader===fundsHistory?'funds':loader.scope??'quota'));
@@ -1175,7 +1177,9 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false):Sho
     const shownNow=(financial?loader.getFinancial:loader.get)(),revisionNow=(financial?boardPeriod.getFinancialProjectionRevision:boardPeriod.getProjectionRevision)(loader===fundsHistory?'funds':loader.scope??'quota'),panning=pan.active();
     const board=page.get().board?.id??'';
     const selected=timeRange(),target=board+':'+(selected?timeRangeKey(selected):prefs().range);
-    const inputs=[shownNow,revisionNow,loader,panning,now,board,target],previous=snapshot.current,validAt=hubNow();
+    const workState=activity?boardPeriod.activityProjectionState(shownNow.history):null;
+    if(workState?.retired)retained.current=null;
+    const inputs=[shownNow,revisionNow,loader,panning,now,board,target,workState?.retired],previous=snapshot.current,validAt=hubNow();
     // A retained frame can outlive the raw tiles that scheduled its expiry.
     // Retire its plan facts before even the stable-snapshot fast path.
     const held=retained.current,expired=!!held&&validAt>=held.deadline;
@@ -1194,7 +1198,7 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false):Sho
       // complete accounting frame until release, including its full opacity.
       if(panning!==null&&retained.current)return {...shownNow,history:retained.current.history,loading:false,error:shownNow.error};
       if(!shownNow.history)return shownNow;
-      const scope=loader===fundsHistory?'funds':loader.scope??'quota',state=boardPeriod.projectionState(shownNow.history,scope);
+      const scope=loader===fundsHistory?'funds':loader.scope??'quota',state=workState??boardPeriod.projectionState(shownNow.history,scope);
       if(!state.ready)return {...shownNow,history:retained.current?.history??null,loading:!folding&&!state.error&&!shownNow.error,error:state.error??shownNow.error};
       const projected=boardPeriod.project(shownNow.history,scope,at),deadline=held?.history.events===projected.events?held.deadline:planEventsDeadline(projected.events);
       const events=validAt>=deadline?planEventsAt(projected.events,validAt):projected.events,history=events===projected.events?projected:{...projected,events};
@@ -1203,7 +1207,7 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false):Sho
     })();
     snapshot.current={inputs,phase:panning,phaseRevision:(previous?.phaseRevision??0)+(previous&&previous.phase!==panning?1:0),value:previous&&shallowEqual(previous.value,value)?previous.value:value};
     return snapshot.current.value;
-  },[shown,revision,loader,now,financial]);
+  },[shown,revision,loader,now,financial,activity]);
   const result=useSyncExternalStore(pan.onPhase,read,read);
   // Rolling totals change with the endpoints; their unchanged drawing evidence
   // must not restart line and stack preparation on the same clock wake.
@@ -1211,6 +1215,7 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false):Sho
   return {...result,drawing};
 }
 export function useHistory(rolling=false) {return usePeriodHistory(quotaHistory,rolling);}
+export function useActivityHistory(){return usePeriodHistory(quotaHistory,true,false,true);}
 export function useQuotaFinancialHistory(){return usePeriodHistory(quotaHistory,false,true);}
 export function useBudgetHistory(family:MoneyFamily='budget',rolling=false) {return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory,rolling);}
 export function useBudgetFinancialHistory(family:MoneyFamily='budget',rolling=false){return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory,rolling,true);}

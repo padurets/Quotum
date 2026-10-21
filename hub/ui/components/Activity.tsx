@@ -2,14 +2,14 @@ import {AnalyticsPanel} from './AnalyticsPanel';
 import {memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps} from 'react';
 import type {Activity as ActivityData, ActivityDimension, ActivityGroup} from '../lib/types';
 import {clock, num, shortDay, stamp, workHours} from '../lib/format';
-import {activityEmpty, activityScale, activityGroupName as groupName, atOnce, groupColors, mutedKey} from '../lib/activity';
-import {ACTIVITY_BY, setMuted, setPrefs, usePref, useChartMuted, chartMuteKey, chartSeriesMuted} from '../lib/prefs';
+import {activityEmpty, activityScale, activityGroupName as groupName, atOnce, groupColors, activitySeriesKey} from '../lib/activity';
+import {ACTIVITY_BY, setPrefs, usePref} from '../lib/prefs';
 import {setTimeRange, timeRangeKey, useTimeRange, type TimeRange} from '../lib/timeRange';
-import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks, periodOf} from '../lib/periods';
+import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks} from '../lib/periods';
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
-import {page, usePersonalBoard, useBoardId, useLineup, useTitles} from '../lib/board';
-import {useClock,hubNow} from '../lib/clock';
-import {quotaHistory, useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
+import {usePersonalBoard, useBoardId, useLineup, useTitles} from '../lib/board';
+import {useClock} from '../lib/clock';
+import {quotaHistory, useActivityHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {boardPeriod} from '../lib/period';
 import type {History} from '../../server/domain/history';
 import {plotBar, plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
@@ -30,20 +30,13 @@ import {usePlot} from './sizing';
 import {clipPlot, PlotLayer, PlotOverlay} from './PlotLayer';
 import {seriesFocusStyle, useSeriesFocus, type SeriesFocus} from './seriesFocus';
 
-import {ActivitySelection} from '../lib/activitySelection';
-import {effectiveFilters,onDataFilters} from '../lib/filterSelection';
-import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
-import {fetchPeriod} from '../lib/periodTransport';
-import {historyPool} from '../lib/historyPool';
-import {UNAUTHORIZED} from '../lib/http';
-
 const MINUTE = 60_000;
 const EMPTY_ACTIVITY: ActivityData = {since: 0, known: null, barMs: MINUTE, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}};
 
 const LABELS: Record<ActivityDimension, Key> = {source: 'activity.bySource', project: 'activity.byProject', device: 'activity.byDevice'};
 
 /** The widget's own settings, as the chart has its own: what its stacks are split by, and (for the board's owner) hiding it. */
-function ActivitySettings({arrange}: {arrange: Arrange}) {
+function ActivitySettings({arrange,since}: {arrange: Arrange;since:number|null}) {
   const activityBy=usePref('activityBy');
   const [open,setOpen]=useState(false);
   return (
@@ -56,6 +49,7 @@ function ActivitySettings({arrange}: {arrange: Arrange}) {
         </div>
       </div>
       <div className="popover-section"><button className="popover-row" onClick={()=>{setOpen(false);navigate(settingsHref('/settings/projects'));}}><span>{t('projects.manage')}</span></button></div>
+      {since!==null&&<div className="popover-note">{t('activity.since',{time:stamp(since)})}</div>}
       {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, ACTIVITY, true))}>{t('widget.hide')}</HideRow>}
     </Popover>
     </>
@@ -87,8 +81,8 @@ const metricsText = (value: {agentMs:number;activeMs:number;agents:number}) => [
 /** Small numerical consumers follow formatted changes, independently of the drawing grid. */
 function useActivityNumbers(history:History|null,by:ActivityDimension,read:(activity:ActivityData)=>string,enabled=true,bar?:number,key?:string) {
   const panning=usePanning();
-  const at=(now:number)=>history?boardPeriod.activityAt(history,by,now,bar,key):null;
-  const now=useClock(now=>history&&enabled&&panning===null?boardPeriod.activityChangesAt(history,by,now,at=>read(boardPeriod.activityAt(history,by,at,bar,key)),key):null);
+  const at=(now:number)=>history?boardPeriod.activityAt(history,by,now,bar,key,!boardPeriod.activityProjectionState(history).ready):null;
+  const now=useClock(now=>history&&enabled&&panning===null&&boardPeriod.activityProjectionState(history).ready?boardPeriod.activityChangesAt(history,by,now,time=>read(at(time)!),key):null);
   return panning===null&&enabled?at(now):bar===undefined?history?.activity??null:null;
 }
 
@@ -106,84 +100,35 @@ function LegendMetrics({history,by,groupKey,group,active}:{history:History|null;
 }
 
 /** Keyboard descriptions belong to their own entry even when the pointer wins visually. */
-const LegendItem = memo(function LegendItem({history,group,groupKey,by,name,color,muted}:{history:History|null;group:ActivityGroup|null;groupKey:string;by:ActivityDimension;name:string;color:string;muted:boolean}) {
+const LegendItem = memo(function LegendItem({history,group,groupKey,by,name,color}:{history:History|null;group:ActivityGroup|null;groupKey:string;by:ActivityDimension;name:string;color:string}) {
   useLocale();const id=useId(),[focused,setFocused]=useState(false);
   return <div className="activity-legend-item">
-    <button type="button" className="legend-item" data-series-key={mutedKey(by,groupKey)} data-agent-ms={group?.agentMs} style={seriesFocusStyle(mutedKey(by,groupKey))}
-      aria-describedby={id} aria-pressed={!muted} onFocus={()=>setFocused(true)} onBlur={()=>setFocused(false)}
-      onClick={()=>setMuted(chartMuteKey(ACTIVITY,by,groupKey),!muted)}>
+    <button type="button" className="legend-item" data-series-key={activitySeriesKey(by,groupKey)} data-agent-ms={group?.agentMs} style={seriesFocusStyle(activitySeriesKey(by,groupKey))}
+      aria-describedby={id} aria-pressed={false} onFocus={()=>setFocused(true)} onBlur={()=>setFocused(false)}>
       <i className="activity-swatch" style={{background:color}}/><span>{name}</span><LegendAmount history={history} by={by} groupKey={groupKey} group={group}/>
     </button>
-    <span id={id} className="sr-only">{muted?t('activity.seriesHidden'):focused?<LegendMetrics history={history} by={by} groupKey={groupKey} group={group} active/>:null}</span>
+    <span id={id} className="sr-only">{focused?<LegendMetrics history={history} by={by} groupKey={groupKey} group={group} active/>:null}</span>
   </div>;
 });
 
-/** Keep dormant exclusions so a newly arriving group follows the saved legend choice. */
-export function activityMutedKeys(muted:Record<string,boolean>,by:ActivityDimension) {
-  const keys=new Set<string>(),prefix=`activity:${by}:`;
-  for(const [key,on] of Object.entries(muted))if(key.startsWith(prefix)&&on)keys.add(key.slice(prefix.length));
-  for(const [key,on] of Object.entries(muted))try{const parts=JSON.parse(key);if(Array.isArray(parts)&&parts.length===3&&parts[0]===ACTIVITY&&parts[1]===by&&typeof parts[2]==='string'){if(on)keys.add(parts[2]);else keys.delete(parts[2]);}}catch{/* Legacy keys were read above. */}
-  return [...keys].sort();
-}
-
-function useActivitySubset(history:History|null,by:ActivityDimension,muted:Record<string,boolean>,authority:number,allOff:boolean,scoped:boolean) {
-  const [reader]=useState(()=>new ActivitySelection({pool:historyPool,now:hubNow,send:fetchPeriod,
-    read:()=>{const value=boardPeriod.get();return {trace:value.value,ready:!value.loading&&!value.error&&!!value.value,error:value.error};},
-    accessLost:()=>{page.dispatch({type:'board-close'});window.dispatchEvent(new Event(UNAUTHORIZED));},
-  }));
-  const selected=useTimeRange(),range=usePref('range');
-  const configure=useRef(()=>{});
-  configure.current=()=>{
-    const off=activityMutedKeys(muted,by),board=page.get().board;
-    reader.configure(scoped&&!allOff&&off.length&&history&&board&&history.board===board.id?{board:board.id,authority:JSON.stringify([authority,board.workAuthority]),workAuthority:board.workAuthority,by,muted:off,filters:workFilter(effectiveFilters()??defaultFilters()),
-      selection:selected?{mode:'range',...selected}:{mode:'live',periodMs:periodOf(range).ms},rangeKey:selected?timeRangeKey(selected):range,barMs:history.activity.barMs}:null);
-  };
-  useLayoutEffect(()=>configure.current());
-  useEffect(()=>{
-    const stops=[boardPeriod.subscribe(reader.refresh),onDataFilters(()=>configure.current()),page.listen((event,state)=>{
-      if(!state.board||event.type==='board-close')reader.reset();
-      else if(event.type==='hub'){
-        if(event.event.type==='history'&&event.event.data.workSince!==undefined){
-          reader.changed(event.event.data.workSince,event.event.data.workAuthority);
-          configure.current();
-        }else if(['snapshot','mine','lineup'].includes(event.event.type)){reader.reset();configure.current();}
-        else if(event.event.type==='hello')reader.reset();
-      }
-    })];
-    return()=>{stops.forEach(stop=>stop());reader.reset();};
-  },[reader]);
-  return reader;
-}
-
-function useSubsetNumbers(reader:ActivitySelection,history:History|null,enabled:boolean,bar?:number) {
-  const state=useSyncExternalStore(reader.subscribe,reader.get),panning=usePanning();
-  const at=(now:number)=>state.model?.rangeKey===history?.range?reader.numbers(now,bar):null;
-  const frozen=useRef<ReturnType<typeof at>>(null);
-  const now=useClock(now=>enabled&&panning===null?reader.changesAt(now,at=>{const value=reader.numbers(at,bar);return JSON.stringify([value?.available,!!value?.known,...metricsText(value??EMPTY_ACTIVITY)]);}):null);
-  if(!enabled||!state.model)frozen.current=null;
-  else if(panning===null)frozen.current=at(now);
-  return {activity:enabled?(panning===null?at(now):state.model?frozen.current:null):null,state};
-}
-
 /** Only this small region hears legend preview changes. Its reserved geometry is constant. */
-const Totals=memo(function Totals({history,by,subset,scoped,allOff,since,focus,groups}:{history:History|null;by:ActivityDimension;subset:ActivitySelection;scoped:boolean;allOff:boolean;since:number|null;focus:SeriesFocus;groups:ActivityGroup[]}) {
+const Totals=memo(function Totals({history,by,since,focus,groups}:{history:History|null;by:ActivityDimension;since:number|null;focus:SeriesFocus;groups:ActivityGroup[]}) {
   useLocale();const selected=useSyncExternalStore(focus.subscribe,focus.get);
-  const group=groups.find(group=>mutedKey(by,group.key)===selected),key=group?.key;
-  const base=useActivityNumbers(history,by,value=>JSON.stringify([!!value.known,...metricsText(value)]),!scoped||!!group,undefined,key);
-  const local=useSubsetNumbers(subset,history,scoped&&!group);
+  const group=groups.find(group=>activitySeriesKey(by,group.key)===selected),key=group?.key;
+  const base=useActivityNumbers(history,by,value=>JSON.stringify([!!value.known,...metricsText(value)]),true,undefined,key);
   const preview=group&&base?.by[by].find(part=>part.key===group.key);
-  const activity=group&&base?{...base,agentMs:preview?.agentMs??0,activeMs:preview?.activeMs??0,agents:preview?.agents??0}:scoped?local.activity:base;
-  const text=allOff?t('activity.noSeries'):scoped&&!group&&local.state.error?t(local.state.error==='history_limit'?'money.historyLimit':'analytics.failed'):!activity?t('activity.pendingRange'):activity.available===false?t('activity.noSessions'):!activity.known?t('activity.knownFrom',{time:stamp(activity.since)}):null;
+  const activity=group&&base?{...base,agentMs:preview?.agentMs??0,activeMs:preview?.activeMs??0,agents:preview?.agents??0}:base;
+  const text=activity?.available===false?t('activity.noSessions'):activity&&!activity.known?t('activity.knownFrom',{time:stamp(activity.since)}):null;
   return <div className="chart-info activity-info" data-time="activity-info" data-series-context={group?selected:undefined}>
     <div className="activity-totals" data-time="activity-totals" data-agent-ms={!text?activity?.agentMs:undefined}>
-      {text?<span>{text}{local.state.error&&<button className="button" onClick={subset.retry}>{t('analytics.retry')}</button>}</span>:activity&&<>
-        <span title={t('activity.agentHoursHint')}>{t('activity.agentHours')} <b>{workHours(activity.agentMs)}</b></span>
-        <span title={t('activity.activeHint')}>{t('activity.active')} <b>{workHours(activity.activeMs)}</b></span>
-        <span title={t('activity.agentsHint')}>{t('activity.agents')} <b>{num(activity.agents)}</b></span>
-        <span title={t('activity.atOnceHint')}>{t('activity.atOnce')} <b>{activity.activeMs>0?atOnce(activity.agentMs,activity.activeMs):'—'}</b></span>
+      {text?<span>{text}</span>:<>
+        <span title={t('activity.agentHoursHint')}><span className="activity-total-name">{t('activity.agentHours')}</span><b>{activity?workHours(activity.agentMs):'—'}</b></span>
+        <span title={t('activity.activeHint')}><span className="activity-total-name">{t('activity.active')}</span><b>{activity?workHours(activity.activeMs):'—'}</b></span>
+        <span title={t('activity.agentsHint')}><span className="activity-total-name">{t('activity.agents')}</span><b>{activity?num(activity.agents):'—'}</b></span>
+        <span title={t('activity.atOnceHint')}><span className="activity-total-name">{t('activity.atOnce')}</span><b>{activity&&activity.activeMs>0?atOnce(activity.agentMs,activity.activeMs):'—'}</b></span>
       </>}
     </div>
-    <div className="activity-since">{since!==null?t('activity.since',{time:stamp(since)}):'\u00a0'}</div>
+    <span className="sr-only">{since!==null?t('activity.since',{time:stamp(since)}):null}</span>
   </div>;
 });
 
@@ -194,7 +139,7 @@ const Totals=memo(function Totals({history,by,subset,scoped,allOff,since,focus,g
  * render it. The unknown part of the period is hatched rather than drawn as idle.
  */
 export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
-  const {history,drawing,loading,error,presentation:authority} = useHistory(true);
+  const {history,drawing,loading,error,presentation:authority} = useActivityHistory();
   const strip = useHistoryPlot(true);
   const registry = useRef<{authority: number; token: number; by: ActivityDimension; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
   if (registry.current?.authority !== authority) registry.current = null;
@@ -204,11 +149,10 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const lineup = useLineup();
   const personal = usePersonalBoard();
   const titles = useTitles(arrange.view.names);
-  const range=usePref('range'),horizon=usePref('horizon'),activityBy=usePref('activityBy'),muted=useChartMuted(ACTIVITY);
-  const prefs=useMemo(()=>({range,horizon,activityBy,muted}),[range,horizon,activityBy,muted]);
-  const groupMuted=(key:string)=>chartSeriesMuted(muted,ACTIVITY,activityBy,key,!!muted[mutedKey(activityBy,key)]);
+  const range=usePref('range'),horizon=usePref('horizon'),activityBy=usePref('activityBy');
+  const prefs=useMemo(()=>({range,horizon,activityBy}),[range,horizon,activityBy]);
   const by = prefs.activityBy;
-  const focus=useSeriesFocus(panel,`${authority}:${drawing?.range}:${by}`);
+  const focus=useSeriesFocus(panel,`${useBoardId()}:${by}`,{kind:by},`${authority}:${drawing?.range}`);
   const locale = useLocale();
   const selected = useTimeRange();
   const navigation = axisNavigation(useBoardId(), selected, prefs);
@@ -223,16 +167,15 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const from = frame.from;
   const to = measuredTo(frame, history, selected, prefs.range);
   const activity = history?.activity ?? null,drawnActivity=drawing?.activity??null;
-  // What the groups look like changes with the answer, the board and the legend, not with time: the same objects as the clock moves the frame.
+  // What the groups look like changes with the answer and the board, not with emphasis or time: the same objects as the clock moves the frame.
   const {groups, colors, shown} = useMemo(() => {
     const groups = drawnActivity?.by[by] ?? [];
     const colors = groupColors(groups, by, arrange.view, source => titles[source]?.provider ?? '');
     const names = groups.map(group => groupName(group, by, titles));
-    const muted = groups.map(group => groupMuted(group.key));
-    const shown = groups.flatMap((group, i) => (muted[i] ? [] : [{group, color: colors[i], name: names[i]}]));
-    return {groups, colors, names, muted, shown};
+    const shown = groups.map((group, i) => ({group, color: colors[i], name: names[i]}));
+    return {groups, colors, names, shown};
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drawnActivity, by, arrange.view, titles, prefs.muted, locale]);
+  }, [drawnActivity, by, arrange.view, titles, locale]);
   const prepared = usePrepared(function* () {
     const data = new Map<string, PlotGroup>();
     const found = new Map<string, Pick<PlotGroup, 'key' | 'name'>>();
@@ -245,18 +188,15 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     const previous = registry.current?.authority === authority && registry.current.token === strip.token && registry.current.by === by ? registry.current : {authority, token: strip.token, by, seed, groups: seed};
     const identities = groupRegistry(previous.seed, previous.groups, [...found.values()], by === 'source' ? key => key==='unknown'||key==='notProvided'?'var(--other)' : colorOf(arrange.view, key, titles[key]?.provider ?? '') : undefined);
     const plotted: {group: PlotGroup; color: string; name: string}[] = [];
-    for (const identity of identities) {if (!groupMuted(identity.key)) plotted.push({group: data.get(identity.key) ?? {key: identity.key, name: identity.name, cells: EMPTY_CELLS}, color: identity.color, name: groupName(identity, by, titles)}); yield;}
+    for (const identity of identities) {plotted.push({group: data.get(identity.key) ?? {key: identity.key, name: identity.name, cells: EMPTY_CELLS}, color: identity.color, name: groupName(identity, by, titles)}); yield;}
     return {identities, shown: plotted, strip, registry: {authority, token: strip.token, by, seed: previous.seed, groups: identities}};
-  }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted, locale], `${authority}:${history?.board}:${by}`);
+  }, [strip, groups, colors, shown, by, arrange.view, titles, locale], `${authority}:${history?.board}:${by}`);
   const presentation = prepared.value ?? {identities: [], shown: [], strip: null};
   useLayoutEffect(() => {if (prepared.value) registry.current = prepared.value.registry;}, [prepared.value]);
   // Numerical consumers keep the evidence basis and own their exact clock wakes.
   const currentGroups=drawnActivity?.by[by]??[];
   const shownSources = lineup.filter(id => titles[id] && !isHidden(arrange.view, cardId(id)));
   // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).
-  const allOff=presentation.identities.length>0&&presentation.identities.every(identity=>groupMuted(identity.key));
-  const scoped=currentGroups.some(group=>groupMuted(group.key));
-  const subset=useActivitySubset(drawing,by,muted,authority,allOff,scoped);
   const since = history && activity?.known && activity.known.from > history.since ? activity.known.from : null;
 
   const said = activityEmpty(history, shownSources.length, personal);
@@ -271,15 +211,13 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const emptyFrame = answered && panning === null && !strip ? empty : null;
 
   return (
-    <AnalyticsPanel ref={panel} className="activity" title={t('activity.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
-      settings={<ActivitySettings arrange={arrange}/>}
+    <AnalyticsPanel ref={panel} className="activity" title={t('activity.title')} chart history={history} loading={loading} error={error} retry={()=>{boardPeriod.retry();quotaHistory.retry();}}
+      settings={<ActivitySettings arrange={arrange} since={since}/>}
     >
-      <Totals history={drawing} by={by} subset={subset} scoped={scoped} allOff={allOff} since={since} focus={focus} groups={currentGroups}/>
+      <Totals history={drawing} by={by} since={since} focus={focus} groups={currentGroups}/>
       <>
           <Stacks
             history={history}
-            subset={subset}
-            scoped={scoped}
             activity={drawnActivity ?? EMPTY_ACTIVITY}
             currentActivity={activity ?? EMPTY_ACTIVITY}
             origin={drawing?.since ?? from}
@@ -295,12 +233,11 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             authority={authority}
             navigation={navigation}
             by={by}
-            allMuted={!emptyFrame && presentation.identities.length > 0 && presentation.shown.length === 0}
             empty={!history ? empty : emptyFrame}
           />
           <div className="legend">
             {(emptyFrame ? [] : presentation.identities).map(identity => (
-              <LegendItem key={identity.key} history={drawing} groupKey={identity.key} by={by} group={currentGroups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} muted={!!groupMuted(identity.key)} />
+              <LegendItem key={identity.key} history={drawing} groupKey={identity.key} by={by} group={currentGroups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} />
             ))}
           </div>
       </>
@@ -320,13 +257,12 @@ export const stacksHeight = (width: number) => (width < 560 ? 160 : 200);
 const EMPTY_CELLS: PlotGroup['cells'] = [];
 
 /** A stationary readout advances its clipped numbers without waking the SVG. */
-function ActivityReadout({history,by,hover,barMs,bar,parts,tipProps,subset,scoped}:{subset:ActivitySelection;scoped:boolean;history:History|null;by:ActivityDimension;hover:number;barMs:number;bar:number[];parts:{key:string;name:string;color:string;ms:number}[];tipProps:Omit<ComponentProps<typeof Tooltip>,'children'>}) {
+function ActivityReadout({history,by,hover,barMs,bar,parts,tipProps}:{history:History|null;by:ActivityDimension;hover:number;barMs:number;bar:number[];parts:{key:string;name:string;color:string;ms:number}[];tipProps:Omit<ComponentProps<typeof Tooltip>,'children'>}) {
   const values=(activity:ActivityData)=>parts.map(part=>({...part,ms:activity.by[by].find(group=>group.key===part.key)?.agentMs??0})).filter(part=>part.ms>0);
-  const base=useActivityNumbers(history,by,value=>JSON.stringify([...metricsText(value),...values(value).map(part=>[part.key,workHours(part.ms)])]),!scoped,hover);
-  const local=useSubsetNumbers(subset,history,scoped,hover);
-  const activity=scoped?local.activity:base;
+  const base=useActivityNumbers(history,by,value=>JSON.stringify([...metricsText(value),...values(value).map(part=>[part.key,workHours(part.ms)])]),true,hover);
+  const activity=base;
   const current=activity?values(activity):parts,agentMs=activity?.agentMs??bar[2],activeMs=activity?.activeMs??bar[1],agents=activity?.agents??bar[3];
-  if(!current.length||scoped&&!activity)return null;
+  if(!current.length)return null;
   return <Tooltip {...tipProps}>
     <div className="tooltip-time">{cellLabel(hover,barMs)}</div>
     <div data-time="activity-readout"><Metrics agentMs={agentMs} activeMs={activeMs} agents={agents}/>
@@ -340,8 +276,6 @@ function ActivityReadout({history,by,hover,barMs,bar,parts,tipProps,subset,scope
 
 const Stacks = memo(function Stacks({
   history,
-  subset,
-  scoped,
   activity: incomingActivity,
   currentActivity,
   origin: incomingOrigin,
@@ -357,18 +291,15 @@ const Stacks = memo(function Stacks({
   authority,
   navigation,
   by,
-  allMuted,
   empty,
 }: {
   history?: History|null;
-  subset:ActivitySelection;
-  scoped:boolean;
   activity: ActivityData;
   /** Exact boundary bars and readout advance without rebuilding interior stacks. */
   currentActivity?: ActivityData;
   /** Where the answer begins: the bars are drawn from there, so their numbers stay small however old the hub. */
   origin: number;
-  /** The groups switched on in the legend, bottom to top, each with its colour and name. */
+  /** The groups admitted by board filters, bottom to top, each with its colour and name. */
   groups: {group: PlotGroup; color: string; name: string}[];
   from: number;
   to: number;
@@ -382,7 +313,6 @@ const Stacks = memo(function Stacks({
   authority: number;
   navigation: AxisNavigation;
   by: ActivityDimension;
-  allMuted: boolean;
   empty: string | null;
 }) {
   const locale = useLocale();
@@ -569,14 +499,14 @@ const Stacks = memo(function Stacks({
         <g clipPath={(strip || currentActivity) && !active ? `url(#${CSS.escape(innerClip)})` : undefined}>
           <g transform={`translate(${(left + (pathOrigin - basis.from) * perMs).toFixed(1)} 0)`}>
             {groups.map(({group, color}, i) => (
-              <path key={group.key} d={paths[i]} fill={color} className="activity-stack" style={seriesFocusStyle(mutedKey(by, group.key))}/>
+              <path key={group.key} d={paths[i]} fill={color} className="activity-stack" style={seriesFocusStyle(activitySeriesKey(by, group.key))}/>
             ))}
           </g>
         </g>
       </PlotLayer>
       {(strip || currentActivity) && (
         <PlotLayer width={width} height={height} scale={scale} left={left} right={right}>
-          <g ref={edges}>{groups.map(({group, color}) => <path key={group.key} fill={color} className="activity-stack" style={seriesFocusStyle(mutedKey(by, group.key))}/>)}</g>
+          <g ref={edges}>{groups.map(({group, color}) => <path key={group.key} fill={color} className="activity-stack" style={seriesFocusStyle(activitySeriesKey(by, group.key))}/>)}</g>
         </PlotLayer>
       )}
       <PlotOverlay width={width} height={height}>
@@ -586,9 +516,8 @@ const Stacks = memo(function Stacks({
         )}
       </PlotOverlay>
       {empty && <div className="chart-empty">{empty}</div>}
-      {allMuted && <div className="chart-empty">{t('activity.allOff')}</div>}
       {hover !== null && bar && parts.length > 0 && !drag && (
-        <ActivityReadout subset={subset} scoped={scoped} history={history??null} by={by} hover={hover} barMs={barMs} bar={bar} parts={parts} tipProps={{tip,className:narrow?'is-below':'',style:tipStyle}}/>
+        <ActivityReadout history={history??null} by={by} hover={hover} barMs={barMs} bar={bar} parts={parts} tipProps={{tip,className:narrow?'is-below':'',style:tipStyle}}/>
       )}
     </div>
   );

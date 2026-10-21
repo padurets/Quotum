@@ -12,11 +12,10 @@ import * as money from '../lib/money';
 import * as moneyTable from '../lib/moneyTable';
 import * as periods from '../lib/periods';
 import * as i18n from '../i18n';
-import {DEFAULT_MONEY,moneySelection,fundsLegacyMuted} from '../lib/moneySelection';
+import {DEFAULT_MONEY,moneySelection} from '../lib/moneySelection';
 import {PeriodAccounting} from '../../server/domain/periodAccounting';
 import * as meterHistory from '../../server/domain/meterHistory';
 import * as widgets from '../../server/domain/widgets';
-import {chartMuteKey,chartSeriesMuted} from '../lib/prefs';
 import * as views from '../../server/domain/view';
 import * as preparation from './preparationFixture';
 import type {Card,History} from '../lib/types';
@@ -54,10 +53,9 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
     let now=NOW,index=new PeriodAccounting(tape(false),null);
     let history:History|null=index.project(base,{from:NOW-H,to:NOW}),drawing:History|null=history;
     let sources=cards,context=currency.defaultCurrencyContext,locale:i18n.Locale='en',authority=0;
-    let prefs:Pick<Prefs,'money'|'funds'|'muted'|'range'|'horizon'>={money:{...DEFAULT_MONEY,unit:'USD'},funds:{...DEFAULT_MONEY},muted:{},range:'1h',horizon:'auto'};
+    let prefs:Pick<Prefs,'money'|'funds'|'range'|'horizon'>={money:{...DEFAULT_MONEY,unit:'USD'},funds:{...DEFAULT_MONEY},range:'1h',horizon:'auto'};
     let view=views.EMPTY_VIEW,calls=0,activeLeaf:Leaf|null=null;
-    const toggles:{key:string;value:boolean}[]=[];
-    const Chart=()=>null,SeriesLegendItem=()=>null,MoneyChartSettings=()=>null;
+        const Chart=()=>null,SeriesLegendItem=()=>null,MoneyChartSettings=()=>null;
     const useMemo=(f:()=>unknown,deps:unknown[])=>{const r=hooks.useRef(null) as {current:{deps:unknown[];value:unknown}|null};if(!r.current||deps.length!==r.current.deps.length||deps.some((v,i)=>!Object.is(v,r.current!.deps[i])))r.current={deps,value:f()};return r.current.value;};
     const useLocale=()=>{if(activeLeaf)activeLeaf.subscribesLocale=true;return locale;};
     const modules:Record<string,unknown>={
@@ -65,10 +63,10 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
       '../../server/domain/providers':providers,'../../server/domain/currency':currency,'../../server/domain/meterHistory':{composeMetersPrepared:meterHistory.composeMetersPrepared},
       '../lib/board':{useBoardId:()=> 'b',useCurrencyContext:()=>context,useNamed:()=>sources},
       '../lib/history':{useBudgetFinancialHistory:()=>({history,drawing,loading:!history,presentation:authority}),useBudgetHistoryPlot:()=>null,useHistoryBegins:()=>0,budgetHistory:{retry(){}},fundsHistory:{retry(){}}},
-      '../lib/prefs':{useChartMuted:()=>prefs.muted,chartMuteKey,chartSeriesMuted,usePref:(key:keyof typeof prefs)=>prefs[key],setMuted:(key:string,value:boolean)=>toggles.push({key,value})},
+      '../lib/prefs':{usePref:(key:keyof typeof prefs)=>prefs[key]},
       '../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},
       './MoneySettings':{MoneyChartSettings},
-      '../lib/moneySelection':{moneySelection,fundsLegacyMuted},'../lib/moneyView':moneyView,'../lib/money':{...money,money:(...args:Parameters<typeof money.money>)=>{calls++;return money.money(...args);}},
+      '../lib/moneySelection':{moneySelection},'../lib/moneyView':moneyView,'../lib/money':{...money,money:(...args:Parameters<typeof money.money>)=>{calls++;return money.money(...args);}},
       '../lib/view':{...widgets,colorOf:()=> '#fff'},'../lib/periods':periods,'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>now},'../lib/pan':{usePanning:()=>null},
       '../lib/axisNavigation':{axisNavigation:()=>({context:'b'})},'../i18n':{t:i18n.t,useLocale},'./prepared':{usePrepared:hooks.usePrepared},'./sizing':{usePlot:()=>({plot:160,onBase(){}})},'./Chart':{Chart},'./AnalyticsPanel':{SeriesLegendItem},
     };
@@ -113,7 +111,6 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
       if(phase==='rename')sources=sources.map((s,i)=>i?s:{...s,title:'Renamed'});
       if(phase==='currency')context={...context,definitions:context.definitions.map(d=>d.id==='USD'?{...d,symbol:'USDx'}:d)};
       if(phase==='locale')locale='ru';
-      if(phase==='mute')prefs={...prefs,muted:{[chartMuteKey(widgets.BUDGET_HISTORY,'wallet0','balance')]:true}};
       if(phase==='zero')replaceFirst({end:'0',spent:'0',coveredMs:history!.to-history!.since,unlocated:[]});
       if(phase==='unknown')replaceFirst({end:null,spent:null,coveredMs:0});
       if(phase==='unavailable')replaceFirst({end:'0',spent:null,coveredMs:history!.to-history!.since});
@@ -126,20 +123,15 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
       if(phase==='revoke'){history=null;drawing=null;authority++;}
       return render();
     }
-    return {render,settle,update,toggle:(r:ReturnType<typeof render>)=>{
-      const callback=nodeOf(r.legend.props.children[0])?.props.onToggle;
-      assert.equal(typeof callback,'function');
-      if(typeof callback==='function')callback();
-      return toggles.at(-1);
-    }};
+    return {render,settle,update};
   }
   const h=harness(),rows:{phase:string;moneyCalls:number;prepared:ChartProps['prepared'];lines:number}[]=[];
   const first=h.settle();
   let retained=first.chart.props.lines;
   for(let n=0;n<50;n++)assert.equal(h.update('frame').legend,first.legend,'frame-only renders retain the actual legend JSX');
-  for(const phase of['stable','clock','clock','clock','data','nonrolling','nonrollingAmount','rename','currency','locale','mute','zero','unknown','unavailable','partial','cap','zero','unknown','hide','restore','unit','resetunit','revoke']) {
+  for(const phase of['stable','clock','clock','clock','data','nonrolling','nonrollingAmount','rename','currency','locale','zero','unknown','unavailable','partial','cap','zero','unknown','hide','restore','unit','resetunit','revoke']) {
     const r=phase==='stable'?h.render():h.update(phase);
-    if(['stable','clock','rename','mute'].includes(phase))assert.equal(r.calls,0,phase+' reuses identical formatted amounts');
+    if(['stable','clock','rename'].includes(phase))assert.equal(r.calls,0,phase+' reuses identical formatted amounts');
     if(phase==='clock'){assert.equal(r.chart.props.prepared,true);assert.strictEqual(r.chart.props.lines,retained,'clock keeps the exact prepared drawing');}
     if(['data','nonrollingAmount'].includes(phase)){assert.equal(r.calls,1,phase+' reformats only revised amount');assert.equal(r.chart.props.prepared,false,'pending numerical preparation remains pending');}
     if(phase==='data')assert.strictEqual(r.chart.props.lines,retained,'pending new data retains the prior authorized drawing');
@@ -147,7 +139,6 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
     if(phase==='rename')assert.match(r.display,/Renamed/);
     if(phase==='currency')assert.match(r.display,/USDx/);
     if(phase==='locale')assert.match(r.display,/12,35 USDx/);
-    if(phase==='mute')assert.equal(h.toggle(r)!.value,false,'callback uses current muted state');
     if(['hide','unit','revoke'].includes(phase)){assert.equal(r.chart.props.lines.length,0);assert.equal(r.legend.props.children.length,0,'no stale amount survives cleared history/unit/authority');}
     if(phase==='zero')assert.match(r.display,/0,00 USDx/);
     if(phase==='unknown')assert.match(r.display,/—/);

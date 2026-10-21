@@ -1,4 +1,5 @@
 import {WorkCalendar} from './workCalendar';
+import {workChange} from './workChanges';
 import {AGENT_HOURS_HEATMAP} from '../../server/domain/widgets';
 import {effectiveFilters,filtersReady,onDataFilters} from './filterSelection';
 import {executableWorkFilters,matchesSource,workFilter} from '../../server/domain/dataFilters';
@@ -190,10 +191,10 @@ class BoardPeriod {
     return result;
   }
   private selectedPending(){return !!effectiveFilters()&&(this.workLimit||this.work.loading||!!this.work.error||!this.work.value);}
-  activityAt(history:History,by:import('./types').ActivityDimension,now:number,bar?:number,key?:string) {
-    let fallback=effectiveFilters()&&(this.workLimit||this.work.loading||this.work.error||!this.work.value)?{...history.activity,known:null,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}:history.activity;
+  activityAt(history:History,by:import('./types').ActivityDimension,now:number,bar?:number,key?:string,retained=false) {
+    let fallback=!retained&&effectiveFilters()&&(this.workLimit||this.work.loading||this.work.error||!this.work.value)?{...history.activity,known:null,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}:history.activity;
     if(bar!==undefined){const cell=fallback.cells.find(([at])=>at===bar);fallback={...fallback,activeMs:cell?.[1]??0,agentMs:cell?.[2]??0,agents:cell?.[3]??0,by:{...fallback.by,[by]:fallback.by[by].map(group=>({...group,agentMs:group.cells.find(([at])=>at===bar)?.[1]??0}))}};}
-    if(!this.activity||this.workRangeKey!==history.range||!this.work.basis||this.workSelection.mode==='range')return fallback;
+    if(retained||!this.activity||this.workRangeKey!==history.range||!this.work.basis||this.workSelection.mode==='range')return fallback;
     const range=this.workRange(now)!;
     if(bar!==undefined){range.from=Math.max(range.from,bar);range.to=Math.min(range.to,bar+history.activity.barMs);}
     return this.activity.numbers(fallback,range,by,key);
@@ -266,6 +267,12 @@ class BoardPeriod {
     return periodTextChangesAt(now,at=>{const next=Math.min(tape.accounting.changesAt(at,period,source)??Infinity,scope==='quota'?this.workBoundary(at,undefined,source)??Infinity:Infinity,extra?.(at)??Infinity);return Number.isFinite(next)?next:null;},read);
   }
   projectionState(history:History,scope:PeriodScope){const tape=this.tapes.get(scope),range=evaluatedRange(this.selection,this.evaluatedAt);return {ready:!!tape&&tape.queryKey===this.scopeKeys[scope]&&tape.rangeKey===history.range&&this.tapeCovers(tape,range),error:this.projectionErrors[scope]};}
+  /** Native quota readiness cannot confirm a still-pending selected work answer. */
+  activityProjectionState(history:History|null){
+    const native=history?this.projectionState(history,'quota'):{ready:false,error:undefined};
+    const error=this.workLimit?'filters_limit' as const:this.work.error==='history_limit'?'history_limit' as const:this.work.error?'history_failed' as const:native.error;
+    return {ready:native.ready&&!this.work.loading&&!error&&!!this.work.value&&!!this.activity&&this.workRangeKey===history?.range,error,retired:!this.work.basis};
+  }
   getSource=(id:string)=>this.rowsBySource.get(id)??noSessions;
   getWorkEvidence=()=>this.workEvidence;
   getValue=(id:string)=>this.values.get(id)??noValue;
@@ -483,7 +490,7 @@ class BoardPeriod {
         if(relevant){
           this.resourceGeneration++;
           if(own)this.invalidateFacets();
-          const retired=own&&hub.data.workSince===0||included&&(hub.data.changes?hub.data.changes.some(c=>sources.includes(c.source)&&c.scope==='quota'&&(c.since===0||c.workSince===0)):hub.data.since===0);
+          const {retired}=workChange(hub.data,sources,selection.mode==='live'?Infinity:selection.to);
           if(retired)this.retireWork();
           if(included&&selection.mode==='range')this.valuesNeeded=true;
           for(const scope of PERIOD_SCOPES){
@@ -630,7 +637,7 @@ class BoardPeriod {
     }
     if(reply.sessions) {
       const section=reply.sessions;
-      if(section.state==='error'){this.workNeeded=false;this.work={...this.work,loading:false,error:section.error};this.publishWork();}
+      if(section.state==='error'){changed.add('quota');this.workNeeded=false;this.work={...this.work,loading:false,error:section.error};this.publishWork();}
       else {
         const value=prepared.work!;
         this.workEvidence++;
@@ -790,7 +797,7 @@ class BoardPeriod {
   }
   retry=()=>{
     let needed=!!this.calendar.state.error&&this.calendar.dirty();
-    if(this.work.error&&this.wantsWork){needed=this.workNeeded=true;this.work={...this.work,loading:true,error:null};this.publishWork();}
+    if(this.work.error&&this.wantsWork){needed=this.workNeeded=true;this.work={...this.work,loading:true,error:null};this.publishWork();this.publishProjection(['quota']);}
     if(this.selection.mode==='range'&&[...this.values.values()].some(value=>value.error)){
       needed=this.valuesNeeded=true;for(const id of this.sourceIds)this.setValue(id,{...this.getValue(id),loading:true,error:null});
     }

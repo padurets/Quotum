@@ -86,12 +86,6 @@ export function moneySelection(cards:readonly Card[],_hidden:readonly string[],s
   return {selection:{...selectionOf(limited?[]:admitted.slice(0,MAX_METERS),unit),...(shown.some(c=>c.provider==='codex')?{resourceRevision:JSON.stringify(shown.filter(c=>c.provider==='codex').map(c=>[c.id,c.budget]))}:{}),...(unit===DEFAULT_CURRENCY&&(context.target.id!==DEFAULT_CURRENCY||shown.some(c=>c.provider==='codex'))?{displayCurrency:context.target.id,...(context.revision?{displayRevision:context.revision}:{})}:{})},omitted:Math.max(0,admitted.length-MAX_METERS),removed:unique.length-admitted.length,...(limited?{limited:true}:{})};
 }
 
-/** The old global subset is visibility intent, including accounts on other boards. */
-export const fundsLegacyMuted=(settings:MoneyPrefs,source:string,meter:string)=>{
-  const selected=settings.legacySelected?.[settings.unit??DEFAULT_CURRENCY];
-  return !!selected&&!selected.some(([id,key])=>id===source&&(conversionOrigin(key)?.meter??key)===(conversionOrigin(meter)?.meter??meter));
-};
-
 /** Membership is checked against the inventory, not against the visible page. */
 export const keyMeter=(meter:string)=>/^key:([^:]+):(usage|cap)$/.exec(conversionOrigin(meter)?.meter??meter);
 

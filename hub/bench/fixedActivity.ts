@@ -11,21 +11,14 @@ import {openTab,type Browser,type Cdp} from './cdp.js';
 import {historyPoolReceiptScript} from './historyPoolReceipt.js';
 import {probeScript,type Reading} from './probe.js';
 
-/** Compact fixed summaries include exact neighboring-position programs, even on a one-cell read.
- * The mixed analytics reference measured 33/146 KiB cold and 28/145 KiB warm at 24h/30d.
- * The controlled browser profile measured 42/156 KiB for a selected update and 480/1185 KiB
- * combined at 24h/30d, with at most 333k preparation advances across a phase.
- * Dense canonical work measured 539k advances per coherent C/S update at 30d; held news
- * legitimately completes two updates (1.079m advances). The preparation cap is per update;
- * all attempted reads and their raw preparation counts remain in each phase's report.
- * These independent caps retain the hard 7 MiB body,
- * 76 KiB request, 15 MiB pool and two-slot ceilings. Live budgets are unchanged. */
+/** The supported shared-filter path keeps the existing combined transport/preparation
+ * ceilings. Emphasis owns no reader and receives no extra-read allowance. */
 export const FIXED_ACTIVITY_BUDGET={request:76*1024,body:7*1024*1024,pool:15*1024*1024,
-  subset24h:256*1024,subset30d:1024*1024,combined24h:1024*1024,combined30d:4*1024*1024,advancesPerUpdate:1_000_000} as const;
+  combined24h:1024*1024,combined30d:4*1024*1024,advancesPerUpdate:1_000_000} as const;
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 type Numbers={agentMs:number;activeMs:number;agents:number};
-type Body={id:string;subset:boolean;requestBytes:number;decoded:number;encoded:number;cancelled:boolean;body:PeriodRequest};
-type Sample={numbers:Numbers;activity:History['activity'];tiles:[number,number][];bytes:number;flights:number;subsetFlights:number;advances:number;subsetAdvances:number;preparationMs:number;failedReservations:number;preferenceWrites:number};
+type Body={id:string;requestBytes:number;decoded:number;encoded:number;cancelled:boolean;body:PeriodRequest};
+type Sample={numbers:Numbers;activity:History['activity'];tiles:[number,number,number][];bytes:number;flights:number;advances:number;preparationMs:number;failedReservations:number;preferenceWrites:number};
 
 /** Independent endpoint sweep: no group aggregate, PeriodActivity or new selection helper. */
 export function activityOracle(trace:WorkTrace,from:number,to:number):Numbers {
@@ -40,17 +33,23 @@ export function activityOracle(trace:WorkTrace,from:number,to:number):Numbers {
 }
 
 function observationScript(period:string){return historyPoolReceiptScript()+`;(() => {
-  localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d',activityBy:'project'}));
+  localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d',activityBy:'project',filtersVisible:true}));
   const original=window.__quotumInspectHistoryPool,ids=new WeakMap();let serial=0,pool,stats;
-  const reset=()=>stats={bytes:0,flights:0,subsetFlights:0,advances:0,subsetAdvances:0,preparationMs:0,failedReservations:0,preferenceWrites:0};reset();
+  const reset=()=>stats={bytes:0,flights:0,advances:0,preparationMs:0,failedReservations:0,preferenceWrites:0};reset();
   const save=Storage.prototype.setItem;Storage.prototype.setItem=function(key,...args){if(key==='quotum.prefs')stats.preferenceWrites++;return save.call(this,key,...args);};
-  const reader=()=>[...pool.members].find(m=>m.tiles instanceof Map&&typeof m.numbers==='function');
+  const reader=()=>[...pool.members].find(m=>m.transport&&typeof m.activityAt==='function');
+  const chart=()=>[...pool.members].find(m=>m.scope==='quota'&&m.grids instanceof Map);
   window.__quotumInspectHistoryPool=p=>{original(p);pool=p;
     const reserve=p.reserve;p.reserve=function(...args){const result=reserve.apply(this,args);stats.bytes=Math.max(stats.bytes,this.estimatedBytes);if(!result)stats.failedReservations++;return result;};
-    const request=p.request;p.request=function(owner,flight,start,cancel){return request.call(this,owner,flight,()=>{stats.flights=Math.max(stats.flights,this.active.size);stats.subsetFlights=Math.max(stats.subsetFlights,[...this.active.values()].filter(f=>typeof f.owner.numbers==='function').length);start();},cancel);};
+    const request=p.request;p.request=function(owner,flight,start,cancel){return request.call(this,owner,flight,()=>{stats.flights=Math.max(stats.flights,this.active.size);start();},cancel);};
   };
-  window.__quotumInspectPreparations=scheduler=>{const replace=scheduler.replace;scheduler.replace=function(owner,work,...rest){const next=work.next;work.next=function(...args){const start=performance.now();try{stats.advances++;if(reader()?.owner===owner)stats.subsetAdvances++;return next.apply(this,args);}finally{stats.preparationMs+=performance.now()-start;}};return replace.call(this,owner,work,...rest);};};
-  window.__quotumFixedActivity={reset,reader,status:()=>{const r=reader(),s=r?.get();return {registered:!!r,error:s?.error,loading:s?.loading,model:!!s?.model,flights:pool.activeFlights,bytes:pool.estimatedBytes};},holdDispatch:()=>{const r=reader(),schedule=r.schedule;r.schedule=()=>{};return window.__quotumFixedActivity.resumeDispatch=()=>{r.schedule=schedule;schedule.call(r);};},sample:()=>{const r=reader(),a=r?.numbers(Date.now());return a?{...stats,numbers:{agentMs:a.agentMs,activeMs:a.activeMs,agents:a.agents},activity:a,tiles:[...r.tiles].map(([key,tile])=>{if(!ids.has(tile))ids.set(tile,++serial);return[key,ids.get(tile)];})}:null;},ready:()=>{const r=reader();return !!r?.get().model&&!r.flight&&pool.activeFlights===0&&!document.querySelector('.chart>svg[data-draw-ready="false"],.activity.is-loading,.history.is-loading');}};
+  window.__quotumInspectPreparations=scheduler=>{const replace=scheduler.replace;scheduler.replace=function(owner,work,...rest){const next=work.next;work.next=function(...args){const start=performance.now();try{stats.advances++;return next.apply(this,args);}finally{stats.preparationMs+=performance.now()-start;}};return replace.call(this,owner,work,...rest);};};
+  const status=()=>{const p=reader(),h=chart()?.get().history,s=p?.activityProjectionState(h);return {registered:!!p,error:s?.error,loading:p?.get().loading,ready:s?.ready,flights:pool.activeFlights,bytes:pool.estimatedBytes,members:pool.members.size};};
+  window.__quotumFixedActivity={reset,reader,status,holdDispatch:()=>{const t=reader().transport,schedule=t.schedule;t.schedule=()=>{};return window.__quotumFixedActivity.resumeDispatch=()=>{t.schedule=schedule;schedule.call(t);};},sample:()=>{
+    const p=reader(),c=chart(),h=c?.get().history;if(!h||!p.activityProjectionState(h).ready)return null;
+    const a=p.project(h,'quota',Date.now()).activity;
+    return {...stats,numbers:{agentMs:a.agentMs,activeMs:a.activeMs,agents:a.agents},activity:a,tiles:[...c.grids.values()].flatMap(grid=>[...grid.values()].map(tile=>{if(!ids.has(tile))ids.set(tile,++serial);return[tile.from,tile.to,ids.get(tile)];}))};
+  },ready:()=>{const s=status();return s.ready&&s.flights===0&&!document.querySelector('.chart>svg[data-draw-ready="false"],.activity.is-loading,.history.is-loading');}};
 })();`;}
 
 /** Physical requests are retained through cancellation and their final response-body accounting. */
@@ -59,8 +58,7 @@ function traffic(cdp:Cdp){
   cdp.on<{requestId:string;request:{url:string;postData?:string}}>('Network.requestWillBeSent',event=>{
     if(!/\/api\/boards\/[^/]+\/period(?:\/sessions)?$/.test(new URL(event.request.url).pathname))return;
     const body=JSON.parse(event.request.postData??'{}') as PeriodRequest;
-    const subset=body.quota?.sources==='[]'&&body.quota?.meters==='[]'&&body.quota?.evidence==='skip'&&!!body.sessions&&!body.values&&!body.budget&&!body.funds&&!body.sourceWork;
-    const row={id:event.requestId,subset,requestBytes:Buffer.byteLength(event.request.postData??''),decoded:0,encoded:0,cancelled:false,body};bodies.push(row);active.set(row.id,row);
+    const row={id:event.requestId,requestBytes:Buffer.byteLength(event.request.postData??''),decoded:0,encoded:0,cancelled:false,body};bodies.push(row);active.set(row.id,row);
   });
   cdp.on<{requestId:string;dataLength:number;encodedDataLength:number}>('Network.dataReceived',event=>{const row=active.get(event.requestId);if(row){row.decoded+=event.dataLength;row.encoded+=event.encodedDataLength;}});
   cdp.on<{requestId:string}>('Network.loadingFailed',event=>{const row=active.get(event.requestId);if(row){row.cancelled=true;active.delete(row.id);}});
@@ -72,7 +70,7 @@ function traffic(cdp:Cdp){
   return {bodies,active,pending,errors};
 }
 
-/** Actual mounted widget, production reader/HTTP parser/pool and one synthetic interval writer. */
+/** Actual mounted widget and shared work filters, including late work and retired responses. */
 export async function fixedActivity(browser:Browser,stand:Stand){
   const owner=stand.people.get(people(stand.set)[0].id)!,card=cards(stand.set).find(card=>card.id==='antigravity')!,reports:Record<string,unknown>[]=[];
   for(const days of [1,30]){
@@ -88,24 +86,43 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       await cdp.send('Page.navigate',{url:owner.base+`/?from=${selection.from}&to=${selection.to}`});
       const waitFor=async(test:string)=>{const deadline=Date.now()+30_000;while(!await cdp.evaluate<boolean>(test)){if(Date.now()>deadline){const state=await cdp.evaluate('window.__quotumFixedActivity?.status()').catch(()=>null);throw Error(`fixed Activity ${days}d did not become coherent: ${JSON.stringify(state)}`);}await pause(30);}};
       await waitFor(`document.querySelectorAll('.activity .legend-item').length>2&&!document.querySelector('.activity.is-loading')`);
-      const excluded=await cdp.evaluate<string>(`(()=>{const button=[...document.querySelectorAll('.activity .legend-item')].find(b=>!b.textContent.includes('Observed benchmark'));const key=button.dataset.seriesKey.slice('activity:project:'.length);button.click();return JSON.parse(key);})()`);
+      const filterRoot=`document.querySelector('[data-filter="filters.projects"]')`;
+      await cdp.evaluate(`${filterRoot}.querySelector('button').click()`);
+      await waitFor(`${filterRoot}.querySelectorAll('[role="switch"]').length>2`);
+      const excluded=await cdp.evaluate<string>(`(()=>{const button=[...${filterRoot}.querySelectorAll('[role="switch"]')].find(b=>!b.textContent.includes('Observed benchmark'));const name=button.querySelector('span').textContent;button.click();return name;})()`);
+      await cdp.evaluate(`${filterRoot}.querySelector('button').click()`);
       const settled=()=>waitFor(`window.__quotumFixedActivity?.ready()===true`);
       await settled();
       const sample=()=>cdp.evaluate<Sample>('window.__quotumFixedActivity.sample()');
       const baseline=await sample();assert.ok(baseline.activity.known);assert.ok(baseline.tiles.length<=8);
-      const geometry=()=>cdp.evaluate<string>(`JSON.stringify([...document.querySelectorAll('.widgets>.widget,.activity .chart,.activity .activity-stack')].map(e=>{const b=e.getBoundingClientRect();return[b.x,b.y,b.width,b.height,e.getAttribute('d')];}))`);
+      const selectedFilter=[...bodies.bodies].reverse().find(row=>row.body.workFilter)!.body.workFilter;assert.ok(selectedFilter);
+      assert.equal(await cdp.evaluate('window.__quotumFixedActivity.status().members'),4,'emphasis adds no history reader');
+      const geometry=()=>cdp.evaluate<string>(`JSON.stringify([...document.querySelectorAll('.widgets>.widget,.panel[data-time="chart"] .chart,.activity-stack,[data-series] path,.plan-line,.forecast-line')].map(e=>{const b=e.getBoundingClientRect();return[b.x,b.y,b.width,b.height,e.getAttribute('d')];}))`);
       const beforeHover=await geometry(),hoverStart=bodies.bodies.length;
       await cdp.evaluate('window.__quotumFixedActivity.reset();__quotumBench.reset()');
-      await cdp.evaluate(`(()=>{const b=document.querySelector('.activity .legend-item[aria-pressed="true"]');b.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));})()`);
-      await pause(40);
+      const emphasis=await cdp.evaluate<{name:string;matrix:number[][]}[]>(`(async()=>{
+        const reports=[],pause=()=>new Promise(r=>setTimeout(r,180));
+        for(const panel of document.querySelectorAll('.panel[data-time="chart"]')){
+          const buttons=[...panel.querySelectorAll('.legend-item')];if(buttons.length<3)throw Error('emphasis fixture needs three series in every chart');
+          const matrix=[],read=()=>buttons.slice(0,3).map(button=>Number(getComputedStyle(button).opacity));
+          const assert=(expected)=>{const got=read();if(got.some((value,i)=>Math.abs(value-expected[i])>.001))throw Error('emphasis matrix '+JSON.stringify({got,expected}));matrix.push(got);};
+          const hover=button=>button.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));
+          const leave=button=>button.dispatchEvent(new PointerEvent('pointerout',{bubbles:true,pointerType:'mouse'}));
+          buttons[0].click();buttons[1].click();await pause();assert([1,1,.25]);
+          hover(buttons[2]);await pause();assert([.65,.65,1]);if(buttons[2].getAttribute('aria-pressed')!=='false')throw Error('preview changed membership');
+          leave(buttons[2]);await pause();assert([1,1,.25]);hover(buttons[0]);await pause();assert([1,.65,.25]);
+          buttons[0].click();await pause();assert([1,.65,.25]);leave(buttons[0]);await pause();assert([.25,1,.25]);
+          buttons[1].click();await pause();assert([1,1,1]);reports.push({name:panel.querySelector('h2').textContent,matrix});
+        }return reports;
+      })()`);
+      assert.equal(emphasis.length,5);
       const hovered=await sample(),paint=await cdp.evaluate<Reading>('__quotumBench.read()');
-      assert.equal(bodies.bodies.length,hoverStart,'hover cannot request history');assert.equal(hovered.advances,0,'hover cannot prepare paths or accounting');assert.equal(hovered.preferenceWrites,0);assert.equal(await geometry(),beforeHover);
-      assert.ok(!paint.renders.some(part=>part.widget==='activity'&&part.kind==='chart'),'hover cannot render Activity or its plot');
-      await cdp.evaluate(`document.querySelector('.activity .legend-item[aria-pressed="true"]').dispatchEvent(new PointerEvent('pointerout',{bubbles:true,pointerType:'mouse'}))`);
-      const subsetRequest=[...bodies.bodies].reverse().find(body=>body.subset)!.body;
+      assert.equal(bodies.bodies.length,hoverStart,'emphasis cannot request history');assert.equal(hovered.advances,0,'emphasis cannot prepare paths or accounting');assert.equal(hovered.preferenceWrites,0);assert.equal(await geometry(),beforeHover);assert.deepEqual(hovered.numbers,baseline.numbers);
+      assert.ok(!paint.renders.some(part=>part.kind==='chart'),'emphasis cannot render chart consumers');
+      reports.push({days,name:'emphasis',charts:emphasis,requests:0,preparationAdvances:hovered.advances,preferenceWrites:hovered.preferenceWrites});
       let referenceReceipt={requests:0,requestBytes:0,decodedBytes:0,encodedBytes:0};
       const reference=async()=>{
-        const request:PeriodRequest={version:1,selection:{mode:'live',periodMs:Date.now()-selection.from+60_000},evaluatedAt:Date.now(),workFilter:subsetRequest.workFilter,sessions:{}};
+        const request:PeriodRequest={version:1,selection:{mode:'live',periodMs:Date.now()-selection.from+60_000},evaluatedAt:Date.now(),workFilter:selectedFilter,sessions:{}};
         const body=JSON.stringify(request),response=await fetch(`${owner.base}/api/boards/${owner.personalBoard}/period`,{method:'POST',headers:{cookie:owner.cookie,origin:new URL(process.env.QUOTUM_PUBLIC_URL??owner.base).origin,'content-type':'application/json','accept-encoding':'identity'},body,signal:AbortSignal.timeout(12_000)});
         assert.equal(response.status,200,'raw interval reference');assert.ok(!response.headers.get('content-encoding'));
         const text=await response.text(),bytes=Buffer.byteLength(text);assert.ok(bytes<=FIXED_ACTIVITY_BUDGET.body);
@@ -115,6 +132,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       };
       const check=async()=>{
         const current=await sample(),trace=await reference();assert.deepEqual(current.numbers,activityOracle(trace,selection.from,selection.to));
+        assert.equal(await cdp.evaluate('Number(document.querySelector(\'.activity-totals\').dataset.agentMs)'),current.numbers.agentMs,'the mounted summary reads that same cohort');
         for(const [at,activeMs,agentMs,agents] of current.activity.cells)assert.deepEqual({activeMs,agentMs,agents},activityOracle(trace,Math.max(selection.from,at),Math.min(selection.to,at+current.activity.barMs)));
         for(let at=cellStart(selection.from,current.activity.barMs);at<selection.to;at+=current.activity.barMs){
           const expected=activityOracle(trace,Math.max(selection.from,at),Math.min(selection.to,at+current.activity.barMs));
@@ -128,30 +146,30 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         const metrics=async()=>{const {metrics}=await cdp.send<{metrics:{name:string;value:number}[]}>('Performance.getMetrics');return Object.fromEntries(metrics.map(metric=>[metric.name,metric.value]));};
         const before=await metrics();
         await run();
-        if(expected){const deadline=Date.now()+30_000;while(bodies.bodies.slice(start).filter(row=>row.subset).length<expected){if(Date.now()>deadline)throw Error(name+' did not dispatch its subset reads');await pause(30);}}
+        if(expected){const deadline=Date.now()+30_000;while(bodies.bodies.length-start<expected){if(Date.now()>deadline)throw Error(name+' did not dispatch its shared reads');await pause(30);}}
         await pause(350);await settled();while(bodies.active.size||bodies.pending.size){await Promise.allSettled([...bodies.pending]);await pause(20);}
         const coherentAt=Date.now();
-        const current=await check(),reads=bodies.bodies.slice(start),subset=reads.filter(row=>row.subset);
+        const current=await check(),reads=bodies.bodies.slice(start);
         const after=await metrics();assert.deepEqual(bodies.errors,[],'every completed response must remain accounted');
         assert.ok(Number.isFinite(after.ScriptDuration-before.ScriptDuration)&&Number.isFinite(after.TaskDuration-before.TaskDuration));
-        const decoded=reads.reduce((n,row)=>n+row.decoded,0),selectedBytes=subset.reduce((n,row)=>n+row.decoded,0);
-        const preparationLimit=FIXED_ACTIVITY_BUDGET.advancesPerUpdate*Math.max(1,subset.length);
-        const report={days,name,excluded,requests:reads.length,subset:subset.length,preparationLimit,requestBytes:reads.reduce((n,row)=>n+row.requestBytes,0),decoded,selectedBytes,encoded:reads.reduce((n,row)=>n+row.encoded,0),cancelled:reads.filter(row=>row.cancelled).length,coherentMs:coherentAt-at,verificationMs:Date.now()-coherentAt,reference:referenceReceipt,scriptMs:(after.ScriptDuration-before.ScriptDuration)*1000,taskMs:(after.TaskDuration-before.TaskDuration)*1000,...current,numbers:current.numbers,activity:undefined,tiles:undefined};
+        const decoded=reads.reduce((n,row)=>n+row.decoded,0);
+        const preparationLimit=FIXED_ACTIVITY_BUDGET.advancesPerUpdate*Math.max(1,reads.length);
+        const report={days,name,excluded,requests:reads.length,preparationLimit,requestBytes:reads.reduce((n,row)=>n+row.requestBytes,0),decoded,encoded:reads.reduce((n,row)=>n+row.encoded,0),cancelled:reads.filter(row=>row.cancelled).length,coherentMs:coherentAt-at,verificationMs:Date.now()-coherentAt,reference:referenceReceipt,scriptMs:(after.ScriptDuration-before.ScriptDuration)*1000,taskMs:(after.TaskDuration-before.TaskDuration)*1000,...current,numbers:current.numbers,activity:undefined,tiles:undefined};
         reports.push(report);console.error('bench: fixed Activity '+JSON.stringify(report));
-        if(expected!==null)assert.equal(subset.length,expected,name+' subset requests');
-        assert.ok(current.flights<=2&&current.subsetFlights<=1&&current.bytes<=FIXED_ACTIVITY_BUDGET.pool&&!current.failedReservations&&current.tiles.length<=8);
+        if(expected!==null)assert.equal(reads.length,expected,name+' shared requests; no legend allowance');
+        assert.ok(current.flights<=2&&current.bytes<=FIXED_ACTIVITY_BUDGET.pool&&!current.failedReservations&&current.tiles.length<=8);
         assert.ok(current.advances<=preparationLimit);
-        if(expected&&expected>0)assert.ok(current.advances>0&&current.subsetAdvances>0,'real C/S preparation must be observed');
+        if(expected&&expected>0)assert.ok(current.advances>0,'real shared preparation must be observed');
         for(const row of reads)assert.ok(row.requestBytes<=FIXED_ACTIVITY_BUDGET.request&&row.decoded<=FIXED_ACTIVITY_BUDGET.body);
-        if(expected===1){assert.ok(selectedBytes<=(days===1?FIXED_ACTIVITY_BUDGET.subset24h:FIXED_ACTIVITY_BUDGET.subset30d));assert.ok(decoded<=(days===1?FIXED_ACTIVITY_BUDGET.combined24h:FIXED_ACTIVITY_BUDGET.combined30d));}
-        return {current,subset};
+        if(expected===1)assert.ok(decoded<=(days===1?FIXED_ACTIVITY_BUDGET.combined24h:FIXED_ACTIVITY_BUDGET.combined30d));
+        return {current,reads};
       };
       const isolated=await phase('isolated',async()=>{await actor.through(actor.floorAt+100);},1);
       const cell=cellOf(days*DAY),dirty=cellStart(actor.floorAt,cell);
-      assert.equal(Number(isolated.subset[0].body.quota!.from),dirty);
-      assert.deepEqual(isolated.subset[0].body.selection,selection);
-      const clean=baseline.tiles.filter(([key])=>(key+1)*cell*60<=dirty);
-      assert.ok(clean.length);for(const row of clean)assert.deepEqual(isolated.current.tiles.find(([key])=>key===row[0]),row);
+      assert.equal(isolated.reads[0].body.quota!.cells,'skip','the coordinator reuses native cells for its compact work summary');
+      assert.deepEqual(isolated.reads[0].body.selection,selection);
+      const clean=baseline.tiles.filter(([,to])=>to<=dirty);
+      assert.ok(clean.length);for(const row of clean)assert.deepEqual(isolated.current.tiles.find(([from,to])=>from===row[0]&&to===row[1]),row);
       assert.equal(isolated.current.activity.barMs,baseline.activity.barMs);
       await phase('burst before dispatch',async()=>{
         await cdp.evaluate('window.__quotumFixedActivity.holdDispatch()');
@@ -164,13 +182,13 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         let held=false;
         const intercept=(event:{requestId:string;networkId?:string;request:{postData?:string}})=>{
           const body=JSON.parse(event.request.postData??'{}') as PeriodRequest;
-          if(!held&&body.quota?.sources==='[]'&&body.quota?.evidence==='skip'&&body.sessions){held=true;release(event);}
+          if(!held&&body.sessions){held=true;release(event);}
           else void cdp.send('Fetch.continueResponse',{requestId:event.requestId}).catch(()=>{});
         };
         cdp.on('Fetch.requestPaused',intercept);
         await cdp.send('Fetch.enable',{patterns:[{urlPattern:'*/api/boards/*/period',requestStage:'Response'}]});
         try{
-          await trigger();const event=await paused;assert.ok(event.requestId,'a real subset response must be held');
+          await trigger();const event=await paused;assert.ok(event.requestId,'a real shared-work response must be held');
           const payload=await cdp.send<{body:string;base64Encoded:boolean}>('Fetch.getResponseBody',{requestId:event.requestId});
           const row=bodies.bodies.find(row=>row.id===event.networkId);assert.ok(row);row.decoded=payload.base64Encoded?Buffer.from(payload.body,'base64').length:Buffer.byteLength(payload.body);
           await whileHeld();await cdp.send('Fetch.continueResponse',{requestId:event.requestId}).catch(()=>{});
@@ -178,19 +196,21 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       };
       const during=await phase('news during response',()=>intercepted(async()=>{await actor.through(actor.floorAt+500);},async()=>{
         await actor.through(actor.floorAt+600);await pause(350);
-        assert.equal(await cdp.evaluate('window.__quotumFixedActivity.sample()'),null,'pending news cannot borrow the held summary');
+        assert.equal(await cdp.evaluate('window.__quotumFixedActivity.status().ready'),false,'pending news cannot publish the held summary as the new answer');
       }),2);
-      assert.ok(during.current.subsetFlights<=1);
-      const generations=await phase('cancelled A to B to A',()=>intercepted(async()=>{await cdp.evaluate(`window.__quotumFixedActivity.reader().changed(${actor.floorAt})`);},async()=>{
-        await cdp.evaluate(`document.querySelectorAll('.activity .legend-item')[1].click()`);
-        await cdp.evaluate(`document.querySelectorAll('.activity .legend-item')[1].click()`);
+      assert.ok(during.current.flights<=2);
+      const generations=await phase('cancelled A to B to A',()=>intercepted(async()=>{await actor.through(actor.floorAt+700);},async()=>{
+        await cdp.evaluate(`${filterRoot}.querySelector('button').click()`);
+        await cdp.evaluate(`${filterRoot}.querySelectorAll('[role="switch"]')[1].click()`);
+        await cdp.evaluate(`${filterRoot}.querySelectorAll('[role="switch"]')[1].click()`);
+        await cdp.evaluate(`${filterRoot}.querySelector('button').click()`);
         assert.equal(await cdp.evaluate('window.__quotumFixedActivity.sample()'),null);
       }),null);
-      assert.ok(generations.subset.length>=2&&generations.subset.length<=3,'cancelled attempts remain counted');
+      assert.ok(generations.reads.length>=2&&generations.reads.length<=3,'cancelled attempts remain counted');
       await phase('through upper bound',async()=>{await actor.through(selection.to);},1);
       await phase('outside range',async()=>{await actor.through(selection.to+100);},0);
       const receipt=await cdp.evaluate<{status:string;members:{kind:string}[]}>(`(()=>{__quotumHistoryPoolReceipt.mark(2,3);return __quotumHistoryPoolReceipt.read();})()`);
-      assert.equal(receipt.status,'complete');assert.ok(receipt.members.some(member=>member.kind==='activity'));
+      assert.equal(receipt.status,'complete');assert.equal(receipt.members.length,4);assert.ok(!receipt.members.some(member=>member.kind==='activity'));
     }finally{await tab.close();await actor.close();}
   }
   return {reports,problems:[] as string[]};

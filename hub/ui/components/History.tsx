@@ -6,7 +6,7 @@ import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLinePrepared} from '../lib/plan';
 import {announcedOf, forecastLinePrepared, type Context} from '../lib/forecast';
 import {PROVIDERS} from '../lib/providers';
-import {setMuted, setPrefs, usePref, useChartMuted, chartMuteKey, chartSeriesMuted} from '../lib/prefs';
+import {setPrefs, usePref} from '../lib/prefs';
 import {setTimeRange, timeRangeKey, useTimeRange} from '../lib/timeRange';
 import {frameChangesAt, frameOf, measuredTo} from '../lib/periods';
 import {QUOTA_HISTORY, QUOTA_SESSION_HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
@@ -73,16 +73,15 @@ const WindowHistory = memo(function WindowHistory({arrange,kind='weekly'}: {arra
   const registry = useRef<{authority: number; token: number; seed: PlotLine[]; lines: PlotLine[]} | null>(null);
   if (registry.current?.authority !== authority) registry.current = null;
   const panel = useRef<HTMLElement>(null);
-  useSeriesFocus(panel);
+  useSeriesFocus(panel, `${useBoardId()}:${kind}`, {kind});
   // Made taller by its owner, the widget gives the room to the plot, not to empty space under the legend.
   const {plot, onBase} = usePlot(panel);
   const sources = useNamed(arrange.view.names,'quota');
   const lineup = useLineup();
   const hubForecasts = useForecastsOf(lineup);
   const news = useResetNews();
-  const range=usePref('range'),horizon=usePref('horizon'),showPlan=usePref('showPlan',kind==='weekly'),showForecast=usePref(kind==='session'?'showSessionForecast':'showForecast'),muted=useChartMuted(widget);
-  const prefs=useMemo(()=>({range,kind,horizon,showPlan:kind==='weekly'&&showPlan,showForecast,muted}),[range,kind,horizon,showPlan,showForecast,muted]);
-  const mutedLine=(line:{sourceId:string;windowId:string;key:string})=>chartSeriesMuted(muted,widget,line.sourceId,line.windowId,!!muted[line.key]);
+  const range=usePref('range'),horizon=usePref('horizon'),showPlan=usePref('showPlan',kind==='weekly'),showForecast=usePref(kind==='session'?'showSessionForecast':'showForecast');
+  const prefs=useMemo(()=>({range,kind,horizon,showPlan:kind==='weekly'&&showPlan,showForecast}),[range,kind,horizon,showPlan,showForecast]);
   const {view} = arrange;
   const omitted=subscriptionOverflow(sources,view);
   // Series names and markers are text: they are rebuilt when the language changes.
@@ -125,8 +124,7 @@ const WindowHistory = memo(function WindowHistory({arrange,kind='weekly'}: {arra
       lines = lineRegistry(eligibleSeed, previous.lines, yield* subscriptionPlotLinesPrepared(strip, sources, view, prefs.kind));
       nextRegistry = {authority, token: strip.token, seed: previous.seed, lines};
     }
-    const visible: PlotLine[] = [];
-    for (const line of lines) {if (!mutedLine(line)) visible.push(line); yield;}
+    const visible = lines;
     const scheduled = visible.some(line => line.provider === 'codex') ? (futureCodex?.scheduled?.scheduledFor ?? null) : null;
     const announced = frame.live ? scheduled : null;
     const planAvailable = prefs.kind === 'weekly' && visible.some(line => !line.capCells&&planOf(view, line.sourceId) !== null);
@@ -191,13 +189,13 @@ const WindowHistory = memo(function WindowHistory({arrange,kind='weekly'}: {arra
   const legend = useMemo(() => (
     <div className="legend">
       {lines.map(line => (
-        <SeriesLegendItem key={line.key} seriesKey={line.key} name={line.name} color={line.color} dash={line.dash} muted={mutedLine(line)} onToggle={() => setMuted(chartMuteKey(widget,line.sourceId,line.windowId), !mutedLine(line))}>
+        <SeriesLegendItem key={line.key} seriesKey={line.key} name={line.name} color={line.color} dash={line.dash}>
           <b>{line.current === null ? '—' : `${num(line.current)}%`}</b>
         </SeriesLegendItem>
       ))}
       {!!history && !lines.length && !error && <span className="legend-empty">{t('history.noLines')}</span>}
     </div>
-  ), [lines, muted, widget, locale, history, error, authority, board]);
+  ), [lines, widget, locale, history, error, authority, board]);
 
   return (
     <AnalyticsPanel ref={panel} className="history" title={t(kind==='session'?'history.sessionTitle':'history.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
@@ -219,7 +217,7 @@ const WindowHistory = memo(function WindowHistory({arrange,kind='weekly'}: {arra
           strip={model?.strip ?? null}
           prepared={prepared.ready && (panning !== null || answered || !!error)}
           modelContext={`${authority}:${history?.board}:${prefs.kind}`}
-          empty={error ? null : !history ? t('history.loading') : lines.length ? t('analytics.allMuted') : t('history.noLines')}
+          empty={error ? null : !history ? t('history.loading') : t('history.noLines')}
           onSelect={setTimeRange}
           plot={plot}
           onBase={onBase}

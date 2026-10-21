@@ -569,13 +569,12 @@ td.muted, small.muted { color: var(--text-3); }
 
 /* Under its chart, as on either chart. */
 .legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 12px 0 0; font-size: 12.5px; }
-.legend-item { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; border: 0; background: none; font-size: inherit; color: var(--text-2); text-align: left; opacity: calc(var(--series-focus, 1) * var(--legend-opacity, 1)); transition: opacity .15s; }
+.legend-item { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; border: 0; background: none; font-size: inherit; color: var(--text-2); text-align: left; opacity: var(--series-focus, 1); transition: opacity .15s; }
 /* A long name (a project's path) breaks anywhere rather than widening the row; its value stays whole. */
 .legend-item span { min-width: 0; overflow-wrap: anywhere; }
 .legend-item b { color: var(--text); font-weight: 500; white-space: nowrap; }
 .series-focus { opacity: var(--series-focus, 1); }
-.legend-item[aria-pressed=false] { --legend-opacity: .35; }
-.legend-item:hover { --legend-opacity: 1; color: var(--text); }
+.legend-item:hover { color: var(--text); }
 .legend-empty { color: var(--text-4); padding: 4px 0; }
 
 .chart { position: relative; margin-top: 18px; }
@@ -598,17 +597,14 @@ td.muted, small.muted { color: var(--text-3); }
 .chart-empty { position: absolute; inset: 0; min-height: 0; pointer-events: none; }
 /* One information area explains the enabled series without moving the plot on hover. */
 .chart-info { margin-top: 6px; color: var(--text-3); font-size: 12.5px; container-type: inline-size; }
-.chart-info-name { height: 20px; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
 .chart-info + .chart { margin-top: 12px; }
-.activity-totals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 16px; min-height: 40px; font-variant-numeric: tabular-nums; }
-.activity-totals > span { white-space: normal; }
+.activity-totals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, 36px); gap: 2px 16px; font-variant-numeric: tabular-nums; }
+.activity-totals > span { display: flex; flex-direction: column; min-width: 0; }
+.activity-total-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .activity-totals > span:only-child { grid-column: 1 / -1; white-space: normal; }
 .activity-totals b { color: var(--text); font-weight: 500; white-space: nowrap; }
-.activity-since { height: 16px; line-height: 16px; font-size: 11px; color: var(--text-2); }
-@container (min-width: 650px) { .activity-totals { grid-template-columns: repeat(4, minmax(0, 1fr)); min-height: 20px; } }
-.chart-info-detail { display: grid; white-space: pre-line; overflow-wrap: anywhere; }
-.chart-info-detail > div { grid-area: 1 / 1; }
-.chart-info-variant { visibility: hidden; pointer-events: none; }
+@container (min-width: 650px) { .activity-totals { grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: 36px; } }
+.series-tip { display: grid; gap: 4px; white-space: pre-line; overflow-wrap: anywhere; }
 .activity .chart-loading { min-height: 200px; }
 .activity-legend-item { min-width: 0; }
 

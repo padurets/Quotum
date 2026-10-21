@@ -72,7 +72,7 @@ export function activityEmpty(history: Pick<History, 'since' | 'activity'> | nul
  * switched off in the chart's (`Prefs.muted`): its own for each way of splitting, so
  * switching off a project leaves the machines as they are.
  */
-export const mutedKey = (by: ActivityDimension, key: string) => `activity:${by}:${key}`;
+export const activitySeriesKey = (by: ActivityDimension, key: string) => `activity:${by}:${key}`;
 
 /** The mean number of agents working while any worked, rounded only for display. */
 export const atOnce = (agentMs: number, activeMs: number) => num(activeMs > 0 ? agentMs / activeMs : 0, 1);

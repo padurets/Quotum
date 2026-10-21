@@ -1,4 +1,3 @@
-import {chartSeriesMuted} from '../lib/prefs';
 import {ACTIVITY} from '../../server/domain/widgets';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,7 +7,7 @@ import {createRequire} from 'node:module';
 import ts from 'typescript';
 import {PageClock} from '../lib/clock';
 import {num,workHours,stamp} from '../lib/format';
-import {atOnce,mutedKey} from '../lib/activity';
+import {atOnce,activitySeriesKey} from '../lib/activity';
 import {t,setLocale} from '../i18n';
 import {cellLabel} from '../lib/periods';
 import {PeriodActivity} from '../lib/periodActivity';
@@ -18,9 +17,6 @@ import type {WorkTrace} from '../../server/domain/periodWork';
 import {fixture,drawings,NOW,H,M} from './periodRuntimeFixture';
 import {preparationFixture} from './preparationFixture';
 import {activityEmpty,groupColors,activityGroupName as groupName} from '../lib/activity';
-import {ActivitySelection} from '../lib/activitySelection';
-import {HistoryPool} from '../lib/historyPool';
-import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
 import {flush} from './periodRuntimeFixture';
 import {CHART_SERIES_SCENES} from '../../demo/catalogue';
 
@@ -32,25 +28,25 @@ const compile=(code:string)=>ts.transpileModule(code,{compilerOptions:{target:ts
 /** Persistent hook slots, real PageClock subscriptions and the production numerical renderer. */
 function consumer(name:string,clock:PageClock,period:any,initial:any,panning:()=>number|null=()=>null) {
   let cursor=0,dirty=true,renders=0,props=initial,output='',node:any;
-  const blank={model:null,loading:false,error:null},subset={get:()=>blank,subscribe:()=>()=>{},numbers:()=>null,changesAt:()=>null,retry:()=>{}},focus={get:()=>null,subscribe:()=>()=>{}};
-  props={subset,scoped:false,allOff:false,focus,groups:[],titles:{},...props};
+  const focus={get:()=>null,subscribe:()=>()=>{}};
+  props={focus,groups:[],titles:{},...props};
   const slots:any[]=[],effects:(()=>void)[]=[],stops:(()=>void)[]=[];
   const slot=(create:()=>any)=>{const at=cursor++;return slots[at]??(slots[at]=create());};
   const useRef=(current:any)=>slot(()=>({current}));
-  const context:any={chartSeriesMuted,ACTIVITY,exports:{},require,memo:(value:any)=>value,useLocale:()=>{},usePanning:panning,boardPeriod:period,
+  const context:any={ACTIVITY,exports:{},require,memo:(value:any)=>value,useLocale:()=>{},usePanning:panning,boardPeriod:period,
     useId:()=> 'legend-description',seriesFocusStyle:()=>({}),useRef,useState:(initial:any)=>{const box=slot(()=>({value:typeof initial==='function'?initial():initial}));return [box.value,(value:any)=>{box.value=value;dirty=true;}];},
     useSyncExternalStore:(subscribe:any,read:any)=>{const box=slot(()=>{const value={current:read()};stops.push(subscribe(()=>{const next=read();if(!Object.is(next,value.current)){value.current=next;dirty=true;}}));return value;});return box.current=read();},
-    LABELS:{source:'activity.bySource',project:'activity.byProject',device:'activity.byDevice'},groupName,useLayoutEffect:(effect:any)=>effects.push(effect),clock,hubNow:clock.hubNow,num,workHours,stamp,atOnce,mutedKey,t,cellLabel,
+    LABELS:{source:'activity.bySource',project:'activity.byProject',device:'activity.byDevice'},groupName,useLayoutEffect:(effect:any)=>effects.push(effect),clock,hubNow:clock.hubNow,num,workHours,stamp,atOnce,activitySeriesKey,t,cellLabel,
     Tooltip:({children}:any)=>React.createElement('div',{className:'tooltip'},children),
   };
   runInNewContext(compile(clockSource.slice(clockSource.indexOf('export function useClock'))),context);context.useClock=context.exports.useClock;
   const numbers=source.slice(source.indexOf('function Metrics('),source.indexOf('/** Keyboard descriptions'));
   const totals=source.slice(source.indexOf('const Totals=memo'),source.indexOf('/**\n * Agent-hours'));
   const readout=source.slice(source.indexOf('function ActivityReadout('),source.indexOf('const Stacks ='));
-  const legend=source.slice(source.indexOf('const LegendItem = memo'),source.indexOf('/** Keep dormant'));
-  runInNewContext(compile(numbers+legend+source.slice(source.indexOf('function useSubsetNumbers('),source.indexOf('/** Only this small region'))+totals+readout+`\nexports.component=${name};`),context);
+  const legend=source.slice(source.indexOf('const LegendItem = memo'),source.indexOf('/** Only this small region'));
+  runInNewContext(compile(numbers+legend+totals+readout+`\nexports.component=${name};`),context);
   const render=()=>{if(dirty){dirty=false;cursor=0;node=context.exports.component(props);output=renderToStaticMarkup(node);renders++;while(effects.length)effects.shift()!();}return output;};
-  return {render,focus:(visible:boolean)=>node.props.children[0].props.onFocus({currentTarget:{matches:()=>visible}}),update:(next:any)=>{props={subset,scoped:false,allOff:false,focus,groups:[],titles:{},...next};dirty=true;return render();},get renders(){return renders;},close:()=>stops.forEach(stop=>stop())};
+  return {render,focus:(visible:boolean)=>node.props.children[0].props.onFocus({currentTarget:{matches:()=>visible}}),update:(next:any)=>{props={focus,groups:[],titles:{},...next};dirty=true;return render();},get renders(){return renders;},close:()=>stops.forEach(stop=>stop())};
 }
 
 test('a mouse-focused legend keeps its own metric description when keyboard modality changes',async test=>{
@@ -58,7 +54,7 @@ test('a mouse-focused legend keeps its own metric description when keyboard moda
   const history=d.render().history!,group=history.activity.by.project[0],clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}});
   const props={history,by:'project',groupKey:group.key,group,name:'Work project',color:'red',muted:true},view=consumer('LegendItem',clock,h.period,props);
   try{
-    assert.ok(view.render().includes(t('activity.seriesHidden')));view.focus(false);
+    assert.ok(view.render().includes('aria-pressed="false"'));view.focus(false);
     const enabled=view.update({...props,muted:false});
     for(const key of ['activity.agentHours','activity.active','activity.agents','activity.atOnce'] as const)assert.ok(enabled.includes(t(key)),key);
     assert.ok(enabled.includes('aria-describedby="legend-description"'));
@@ -81,11 +77,11 @@ for(const periodName of ['1h','30d'])test(`${periodName}: PageClock updates fina
   const render=()=>readers.map(reader=>reader.render());
   const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=next[1].at;h.advance(now);timers.delete(next[0]);next[1].run();render();}now=at;h.advance(now);render();};
   try {
-    const before=render();assert.match(before[0],/Recorded sessions <b>1/);assert.match(before[2],/>1<\/strong>/);assert.ok(before[3]);
+    const before=render();assert.match(before[0],/Recorded sessions<\/span><b>1/);assert.match(before[2],/>1<\/strong>/);assert.ok(before[3]);
     h.requests.length=0;
     advance(to+periodMs+250);
     assert.equal(h.period.get().rows.length,0);
-    assert.match(totals.render(),/Recorded sessions <b>0/,'expired work leaves a confirmed zero in the stable information area');
+    assert.match(totals.render(),/Recorded sessions<\/span><b>0/,'expired work leaves a confirmed zero in the stable information area');
     assert.match(amount.render(),new RegExp('>'+workHours(0)+'</b>'));
     assert.ok(!metrics.render().includes('>1</strong>'),'the already open legend metrics retire membership');
     assert.equal(readout.render(),'','a stationary readout retires its clipped work');
@@ -102,8 +98,8 @@ test('numerical labels freeze during a gesture and retire on an authority replac
   try {
     const before=totals.render();assert.ok(before);assert.equal(timers.size,0);
     now=NOW+H;h.advance(now);assert.equal(totals.render(),before);
-    panning=null;assert.ok(!totals.update(props).includes('Recorded sessions <b>1'));
-    assert.ok(!totals.update({...props,history:null}).includes('Recorded sessions <b>1'),'retired input cannot retain old numerical work');
+    panning=null;assert.ok(!totals.update(props).includes('Recorded sessions</span><b>1'));
+    assert.ok(!totals.update({...props,history:null}).includes('Recorded sessions</span><b>1'),'retired input cannot retain old numerical work');
   }finally{totals.close();d.close();await h.close();}
 });
 
@@ -127,44 +123,41 @@ test('many legend groups read only their own contexts rather than every session 
   }finally{WorkTimeline.prototype.read=read;WorkTimeline.prototype.next=next;}
 });
 
-test('the actual summary uses one selected or preview cohort in EN/RU, including pending and all-off states',async test=>{
+test('the actual summary always describes the board cohort; transient preview describes one exact group in EN/RU',async test=>{
   test.mock.method(Date,'now',()=>NOW);const h=await fixture({personal:true}),d=await drawings(h),seen=new Set<string>();
-  const reader=new ActivitySelection({pool:new HistoryPool(),now:()=>NOW,read:()=>({trace:h.period.get().value,ready:true,error:null}),scheduler:()=>null,send:async()=>{throw Error('live hover must not request');}});
   let selected:string|null=null;
   try{
     for(const [project,from,to] of [['A',NOW-50*M,NOW-30*M],['B',NOW-40*M,NOW-20*M],['C',NOW-20*M,NOW-10*M]] as const){
       h.store.creditWork(h.device,from,to,[{source:h.source,client:'codex',origin:'terminal',project,folder:'',startedAt:NOW-H,identity:{kind:'stable',sessionId:project}}]);
     }
     h.events.flush();await flush();
-    reader.configure({board:h.board,authority:'one',by:'project',muted:['"C"','"Work project"'],filters:workFilter(defaultFilters()),selection:{mode:'live',periodMs:H},rangeKey:'1h',barMs:M});await flush();
     const history=d.render().history!,clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}});
-    const focus={get:()=>selected,subscribe:()=>()=>{}},props={history,by:'project',subset:reader,scoped:true,allOff:false,since:null,focus,groups:history.activity.by.project};
+    const focus={get:()=>selected,subscribe:()=>()=>{}},props={history,by:'project',since:null,focus,groups:history.activity.by.project};
+    const expected=history.activity;
     for(const locale of ['en','ru'] as const){
       setLocale(locale);const view=consumer('Totals',clock,h.period,props);
       try{
-        const html=view.render();assert.ok(html.includes('data-agent-ms="2400000"'));assert.ok(html.includes(workHours(40*M)));assert.ok(html.includes(workHours(30*M)));assert.ok(html.includes(t('activity.agents')+' <b>2'));
-        seen.add('selected-summary');seen.add('exact-union');seen.add('distinct-sessions');
-        selected=mutedKey('project','"A"');const preview=view.update(props);assert.ok(preview.includes('data-series-context='));assert.ok(preview.includes('data-agent-ms="1200000"'));assert.ok(preview.includes(t('activity.agents')+' <b>1'));seen.add('one-group-preview');
-        selected=null;const allOff=view.update({...props,allOff:true});assert.ok(allOff.includes(t('activity.noSeries')));assert.ok(!allOff.includes('data-agent-ms='));seen.add('no-selected-series');
-        const pending=view.update({...props,subset:{get:()=>({model:null,loading:true,error:null}),subscribe:()=>()=>{},changesAt:()=>null,numbers:()=>null}});
-        assert.ok(pending.includes(t('activity.pendingRange')));assert.ok(!pending.includes('data-agent-ms='));seen.add('pending-without-wider-totals');
-        assert.ok(!html.includes(t('activity.noSeries'))&&!html.includes('activity-legend-tip'));
+        const html=view.render();assert.ok(html.includes('data-agent-ms="'+expected.agentMs+'"'));assert.ok(html.includes(workHours(expected.activeMs)));assert.ok(html.includes(t('activity.agents')+'</span><b>'+expected.agents));
+        seen.add('board-summary');seen.add('exact-union');seen.add('distinct-sessions');
+        selected=activitySeriesKey('project','"A"');const preview=view.update(props);assert.ok(preview.includes('data-series-context='));assert.ok(preview.includes('data-agent-ms="1200000"'));assert.ok(preview.includes(t('activity.agents')+'</span><b>1'));seen.add('one-group-preview');
+        selected=null;assert.equal(view.update(props),html,'leaving preview restores the complete board cohort');
+        seen.add('restored-summary');
       }finally{view.close();}
     }
     for(const scene of CHART_SERIES_SCENES)for(const code of scene.expect)assert.ok(seen.has(code),scene.id+': '+code);
-  }finally{setLocale('en');reader.reset();d.close();await h.close();}
+  }finally{setLocale('en');d.close();await h.close();}
 });
 
 test('the Activity clock advances the plot without invalidating unchanged numerical consumers',async test=>{
   test.mock.method(Date,'now',()=>NOW);const h=await fixture(),d=await drawings(h),hooks=preparationFixture();
   let now=NOW,shown={...d.render(),presentation:0};
   const prefs={range:'1h',activityBy:'project',muted:{}},titles={},view=h.page.get().board!.view;
-  const context:any={chartSeriesMuted,ACTIVITY,exports:{},require,memo:(value:any)=>value,...hooks,
+  const context:any={ACTIVITY,exports:{},require,memo:(value:any)=>value,...hooks,
     useMemo:(read:any,deps:any[])=>{const box=hooks.useRef(null) as any;if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;},
-    useActivitySubset:()=>({}),useHistory:()=>shown,useHistoryPlot:()=>null,usePlot:()=>({}),useLineup:()=>[],usePersonalBoard:()=>false,useTitles:()=>titles,
-    useChartMuted:()=>prefs.muted,usePref:(key:keyof typeof prefs)=>prefs[key],useSeriesFocus:()=>{},useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=>h.board,useClock:()=>now,usePanning:()=>null,useHistoryBegins:()=>0,
+    useActivityHistory:()=>shown,useHistoryPlot:()=>null,usePlot:()=>({}),useLineup:()=>[],usePersonalBoard:()=>false,useTitles:()=>titles,
+    usePref:(key:keyof typeof prefs)=>prefs[key],useSeriesFocus:()=>{},useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=>h.board,useClock:()=>now,usePanning:()=>null,useHistoryBegins:()=>0,
     axisNavigation:()=>({context:h.board,range:'1h'}),frameOf:()=>({from:now-H,to:now}),measuredTo:()=>now,
-    activityEmpty,groupColors,groupName:(group:any)=>group.name,mutedKey,stamp,t,useLayoutEffect:hooks.useLayoutEffect,
+    activityEmpty,groupColors,groupName:(group:any)=>group.name,activitySeriesKey,stamp,t,useLayoutEffect:hooks.useLayoutEffect,
     isHidden:()=>false,cardId:(id:string)=>id,quotaHistory:{},setTimeRange:()=>{},pan:{get:()=>null},
     AnalyticsPanel:()=>null,ActivitySettings:()=>null,Totals:()=>null,Stacks:()=>null,LegendItem:()=>null,EMPTY_ACTIVITY:shown.history!.activity,
   };
