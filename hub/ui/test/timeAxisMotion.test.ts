@@ -27,7 +27,7 @@ test('the actual axis publishes committed HTML owners and applies the captured C
   const panLayers = {current: [] as ReturnType<typeof makeLayer>[]};
   const captured = {current: null};
   const paintPan = {current: () => {}};
-  const context = {pan, source, svg, box, panLayers, captured, paintPan, wanted: {current: {navigation: {context: 'test', range: 'range'}}}, motion: {current: null}, finished: {current: null}, foldTicket: {current: 0},
+  const context = {navigationAt,paintTicks:{current:()=>{}},pan, source, svg, box, panLayers, captured, paintPan, wanted: {current: {navigation: {context: 'test', range: 'range'}}}, motion: {current: null}, finished: {current: null}, foldTicket: {current: 0},
     drawing: {current: {...selected, end: selected.to}}, pose: {current: {a: 1, b: 0, offset: 0}}, finalFrame: {current: null}, folding: false,
     visualGeometry: () => ({...selected, end: selected.to}), freezeSlides: () => {}, setFolding: () => {}, cancelSlides: () => {},
     width: 600, left: 40, right: 20, scale: .5, panPointer: {current: null as {id: number} | null}, wheelBounds: {current: null},
@@ -139,7 +139,7 @@ test('the actual slide owner cancels replacements and releases only its own comp
   assert.equal(context.animations.current.size, 0, 'unmount releases every owned animation');
 });
 
-test('the actual drawing commit holds pending geometry and starts its final fold at the previous composed pixels', () => {
+test('the actual drawing commit preserves two landmarks through pending, replacement and the completed handoff', () => {
   const H = 3_600_000, width = 600, left = 40, right = 20, scale = .5, inner = width - left - right;
   const old = {from: 0, to: 2 * H, end: H}, initial = {a: .7, b: 5, offset: 13};
   const inverse = (px: number) => (((px - initial.offset) / scale - initial.b) / initial.a - left) / inner * 2 * H;
@@ -148,9 +148,9 @@ test('the actual drawing commit holds pending geometry and starts its final fold
   const layers = [{style: {transform: 'held'}}], slides = [{style: {transform: 'frozen'}}];
   const frames: Keyframe[][] = [];
   const pose = {current: {...initial, offset: initial.offset - delta / (visual.to - visual.from) * inner * scale}};
-  const known = H / 2;
-  const before = scale * (pose.current.a * (left + known / (old.to - old.from) * inner) + pose.current.b) + pose.current.offset;
-  const context = {shown: {current: old}, drawing: {current: old}, svg: {current: {dataset: {} as Record<string, string>}}, box: {current: {querySelectorAll: () => slides}},
+  const known = [H / 2, H];
+  const before = known.map(at => scale * (pose.current.a * (left + at / (old.to - old.from) * inner) + pose.current.b) + pose.current.offset);
+  const context = {paintTicks:{current:()=>{}},shown: {current: old}, drawing: {current: old}, svg: {current: {dataset: {} as Record<string, string>}}, box: {current: {querySelectorAll: () => slides}},
     panLayers: {current: layers}, pose, pan: {active: () => null}, paintPan: {current: () => {}},
     navigationKey, wanted: {current: {navigation: {context: 'test', range: 'range'}, projection: {from: selected.from, to: selected.to, end: selected.to}}}, requestedNavigation: {context: 'test', range: 'range'}, motion: {current: null}, captured: {current: null},
     finished: {current: {navigation: {context: 'test', range: 'range'}, visual, stop: {range: selected, canceled: false}} as {navigation: {context: string; range: string}; visual: typeof visual; stop: {range: typeof selected; canceled: boolean}} | null},
@@ -169,10 +169,13 @@ test('the actual drawing commit holds pending geometry and starts its final fold
   context.finalFrame.current = null;
   const next = {from: selected.from, to: selected.to, end: selected.to};
   context.commit(next, true);
-  assert.equal(context.finished.current, null); assert.equal(layers[0].style.transform, ''); assert.equal(frames.length, 1);
-  const matrix = String(frames[0][0].transform).match(/translateX\(([-.\de+]+)px\) scaleX\(([-.\de+]+)\)/)!;
-  const after = scale * (Number(matrix[2]) * (left + (known - next.from) / (next.to - next.from) * inner) + Number(matrix[1]));
-  assert.ok(Math.abs(after - before) < 1e-9, 'numeric model, SVG matrix and HTML reset must preserve a known time’s pixel');
+  assert.equal(context.finished.current, null); assert.equal(layers[0].style.transform, '');
+  const point = (at: number) => scale * (pose.current.a * (left + (at - next.from) / (next.to - next.from) * inner) + pose.current.b) + pose.current.offset;
+  // The old oracle checked only the first animation keyframe, missing its final zoom.
+  known.forEach((at,i) => assert.ok(Math.abs(point(at) - before[i]) < 1e-9, 'the fully settled matrix preserves both timestamps'));
+  assert.equal(frames.length, 0, 'replacement is a change of numeric basis, not another navigation');
+  context.commit(next, true);
+  known.forEach((at,i) => assert.ok(Math.abs(point(at) - before[i]) < 1e-9, 'later ordinary commits cannot reframe the positioned view'));
 });
 
 test('sampling and freezing an owned fold keeps its matrix after cancelling the animation', () => {
@@ -196,7 +199,7 @@ test('the actual last-input RAF uses the gesture CSS scale rather than the mount
   const token = pan.begin({source: Symbol('chart'), input: 'pointer', selected, length: H, now, historyStart: 0, span: H, width: 270})!;
   pan.move(token, -27); inputFrames.shift()!();
   const layer = {style: {transform: 'translateX(44px)'}};
-  const context = {pan, navigationAt, drawing: {current: {...selected, end: selected.to}}, box: {current: null}, width: 900, left: 40, right: 20, scale: 1,
+  const context = {paintTicks:{current:()=>{}},pan, navigationAt, drawing: {current: {...selected, end: selected.to}}, box: {current: null}, width: 900, left: 40, right: 20, scale: 1,
     captured: {current: {token, ...selected, end: selected.to, visual: {...selected, end: selected.to}, pose: {a: 1, b: 0, offset: 17}, pixelsPerMs: 270 / H, navigation: {context: 'test', range: 'range'}, innerWidth: 540, cssScale: .5, left: 40}},
     finished: {current: null}, pose: {current: {a: 1, b: 0, offset: 44}}, finalFrame: {current: null}, panLayers: {current: [layer]},
     setFolding: () => {}, present: () => {}, requestAnimationFrame: (run: () => void) => {finalFrames.push(run); return finalFrames.length;},

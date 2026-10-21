@@ -1,3 +1,5 @@
+import {plotBar} from '../lib/historyPlot';
+import {targetOf} from '../../server/domain/history';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -24,7 +26,7 @@ test('the actual activity edge painter advances clipped bars without preparing t
     currentActivity: {}, activity: {by: {source: [{key: 's', cells: [[0, 25_000], [60_000, 60_000], [120_000, 5_000]]}]}},
     strip: null, groups: [{group: {key: 's'}}], from: 15_000, to: 135_000, by: 'source', barMs: 60_000, vertical: {max: 60_000}, height: 100, perMs: 0.001,
     left: 0, right: 0, width: 120, scale: 1, x: (at: number) => at / 1000, y: (ms: number) => 100 - ms / 1000,
-    axis: {held: false, visualGeometry: () => ({})}, pan: {get: () => draft}, painted: {current: ''}, clipPlot: (_node: unknown, ...bounds: number[]) => clips.push(bounds), cellStart,
+    axis: {held: false, visualGeometry: () => ({})}, pan: {get: () => draft}, painted: {current: ''}, clipPlot: (_node: unknown, ...bounds: number[]) => clips.push(bounds), cellStart,plotBar,targetOf,
     paint: null as unknown as () => void,
   };
   runInNewContext(ts.transpileModule(region + '\nglobalThis.paint=paintEdges;', {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
@@ -50,7 +52,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
   const buffer = (start: number): PlotBuffer => {
     const activityCells: PlotBuffer['activityCells'] = new Map();
     for (let i = 0; i < 480; i++) {
-      const at = start + i * barMs, parts = new Map(Array.from({length: 30}, (_, j) => [`s${j}`, {ms: (j + 1) * 60_000, name: null}]));
+      const at = start + i * barMs, parts = new Map(Array.from({length: 30}, (_, j) => [`s${j}`, {ms: at>=length?60*3_600_000:(j + 1) * 60_000, name: null}]));
       activityCells.set(at, {at, agentMs: 465 * 60_000, activeMs: 0, refs: new Set(), parts: {source: parts, project: parts, device: parts}});
     }
     return {token: 1, epoch: 1, version: start, from: start, to: start + 480 * barMs, cell: barMs, length, barMs, coverage: [[start, start + 480 * barMs]], activityCells, series: [], events: [], knownFrom: start};
@@ -67,7 +69,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
     EMPTY_CELLS: [], registry: {current: null}, groups: [], colors: [], shown: [], strip: buffer(0), by: 'project', prefs: {muted: {}}, locale: 'en', history: {board: 'b'}, authority: 0, arrange: {view: {}}, titles: {},
     groupMuted:()=>false,groupRegistry, groupName: (group: {key: string}) => group.key, mutedKey: (_by: string, key: string) => key,
     plotGroupsPrepared: function* (...args: Parameters<typeof plotGroupsPrepared>) {aggregates++; return yield* plotGroupsPrepared(...args);},
-    StackPaths: CountedPaths, stacksHeight: () => 160, activityScale, niceTicks: (...args: Parameters<typeof niceTicks>) => {tickFrame = [args[0], args[1]]; return niceTicks(...args);}, cellStart, MINUTE: 60_000,
+    StackPaths: CountedPaths, stacksHeight: () => 160, activityScale, niceTicks: (...args: Parameters<typeof niceTicks>) => {tickFrame = [args[0], args[1]]; return niceTicks(...args);}, cellStart,plotBar,targetOf, MINUTE: 60_000,
     CSS: {escape: (id: string) => id}, pan: {active: () => 1, subscribe: () => () => {}}, useLocale: () => 'en',
     useTimeAxis: () => axis,
     useTip: () => ({tip: {current: null}, style: {}}), PlotLayer: () => null, PlotOverlay: () => null, Tooltip: () => null,

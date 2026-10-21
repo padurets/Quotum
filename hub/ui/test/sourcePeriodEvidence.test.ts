@@ -11,7 +11,7 @@ import {observationDeadline} from '../../server/domain/resources';
 import {providerOf} from '../../server/domain/providers';
 import {EMPTY_VIEW} from '../../server/domain/view';
 import * as money from '../lib/money';
-import {quotaPeriods} from '../lib/subscription';
+import {quotaPeriods,primaryQuotaPeriods} from '../lib/subscription';
 import {hasSubscriptionCaps} from '../lib/providers';
 import {t,setLocale} from '../i18n';
 
@@ -39,7 +39,7 @@ test('retained unlimited credits and confirmed zero are measurements in the card
     const source={...value,budget:{enabled:true}};
     const context={usePref:()=>({unit:'USD'}),matchesSelection:()=>true,fundsRule:()=>({mode:'exclude',values:[]}),matchesWallet:()=>true,walletRule:()=>({mode:'auto',include:[],exclude:[]}),useDataFilters:()=>({current:null}),exports:{} as Record<string,(props:unknown)=>Node>,components:{} as Record<string,(props:unknown)=>Node>,require:()=>runtime,...money,t,observationDeadline,
       useMeasurementClock:()=>edge,stamp:String,day:String,rateText:String,currencySymbol,StatusMark:'status',Popover:'popover',MoneyCard:'money-card',ErrorLine:'error',BudgetKeyMetrics:'keys',
-      usePeriodValues:()=>reading,useTimeRange:()=>reading.basis.range,useCurrencyContext:()=>defaultCurrencyContext,quotaPeriods,hasSubscriptionCaps,providerOf,
+      usePeriodValues:()=>reading,useTimeRange:()=>reading.basis.range,useCurrencyContext:()=>defaultCurrencyContext,quotaPeriods,primaryQuotaPeriods,hasSubscriptionCaps,providerOf,
       isWindowHidden:()=>false,planOf:()=>null,keyShown:()=>true,MeasurementClock:{Provider:'clock'},PeriodStatus:'period-status',QuotaCard:'quota',Limit:'limit',AllHidden:'hidden',
       MoneyValues:undefined as unknown,CardTray:({funds}:{funds:unknown})=>({type:'footer',props:{children:funds}}),
     };

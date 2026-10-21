@@ -39,7 +39,9 @@ export {CODEX_CREDIT_SCENES} from './codexCredits.js';
 export {CURRENCY_SCENES} from './currencies.js';
 export {LINK_SCENES} from './links.js';
 
-/** Mixed analytics stays visible; loading and read failures are held by history tests.
+/** Mixed analytics stays visible; transient reads, errors, hard cutoffs and retries
+ * are held by analyticsPanel, activitySelection and moneyKeys UI tests. Stable
+ * intermediate plot/table geometry is checked on the real demo in the browser.
  * Legend mutes, table-only views and explicit empty Add are exercised on this set in
  * both languages. The shared range and all five charts use the native-input bench.
  * Plan-event access and retention expiry are held in server/test/planHistory.test.ts

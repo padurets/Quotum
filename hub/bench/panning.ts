@@ -145,19 +145,19 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
           if(!probe.running)return;
           const now=performance.now(),demand=probe.pending.length,layers=owners(),active=!!root.dataset.panEnd,folding=!active&&slides[0].getAnimations().some(a=>a.playState==='running');
           probe.sizeStable&&=connected()&&charts.every((svg,i)=>svg.isConnected&&size(svg)===sizes[i]);
-          const matrices=layers.map((layer,i)=>{const transform=active?layer.style.transform:folding&&i===0?getComputedStyle(slides[i]).transform:'none',matrix=matrixOf(transform);return folding?{a:matrix.a,e:matrix.e*scales[i]}:matrix;}),current=matrices.map(matrix=>matrix.e+':'+matrix.a);
+          const matrices=layers.map((layer,i)=>{const outer=matrixOf(layer.style.transform),inner=matrixOf(folding&&i===0?getComputedStyle(slides[i]).transform:slides[i].style.transform);return {a:inner.a,e:outer.e+inner.e*scales[i]};}),current=active?charts.map((svg,i)=>{const p=presentation(svg,layers[i],i,gesture?.origin);return p.x+':'+p.perMs;}):matrices.map(matrix=>matrix.e+':'+matrix.a);
           const nextPhase=active?'pan':folding?'fold':'idle';
           // The wheel's intentional 200 ms rest is stationary, before the fold begins.
-          if(nextPhase!==phase||active&&paintedToken!==root.dataset.panToken){probe.last=0;lastFrame=null;previous=nextPhase==='pan'?charts.map(svg=>(Number(svg.dataset.panBase||0))+':1'):current;phase=nextPhase;paintedToken=root.dataset.panToken;}
+          if(nextPhase!==phase||active&&paintedToken!==root.dataset.panToken){probe.last=0;lastFrame=null;previous=nextPhase==='pan'&&gesture?gesture.shown.map(p=>p.x+':'+p.perMs):current;phase=nextPhase;paintedToken=root.dataset.panToken;}
           const moved=current.map((value,i)=>value!==previous[i]);
-          if(active){probe.synchronized&&=connected()&&charts.every((svg,i)=>{const shown=gesture?.shown[i],actual=presentation(svg,layers[i],i,gesture?.origin),delta=(Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin));return svg.dataset.panEnd===root.dataset.panEnd&&Math.abs(delta/Number(svg.dataset.panScale)+matrices[i].e-Number(svg.dataset.panBase||0))<.01&&shown&&Number.isFinite(actual.x)&&Math.abs(actual.perMs*Number(svg.dataset.panScale)-1)<1e-6&&Math.abs(actual.perMs/shown.perMs-1)<1e-6&&Math.abs(actual.x-(shown.x-delta*shown.perMs))<.1;})&&bands.every(layer=>layer.isConnected!==false&&Math.abs(matrixOf(layer.style.transform).e-matrices[1].e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
+          if(active){probe.synchronized&&=connected()&&charts.every((svg,i)=>{const shown=gesture?.shown[i],actual=presentation(svg,layers[i],i,gesture?.origin),delta=(Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin));return svg.dataset.panEnd===root.dataset.panEnd&&Math.abs(delta/Number(svg.dataset.panScale)+matrixOf(layers[i].style.transform).e-Number(svg.dataset.panBase||0))<.01&&shown&&Number.isFinite(actual.x)&&Math.abs(actual.perMs*Number(svg.dataset.panScale)-1)<1e-6&&Math.abs(actual.perMs/shown.perMs-1)<1e-6&&Math.abs(actual.x-(shown.x-delta*shown.perMs))<.1;})&&bands.every(layer=>layer.isConnected!==false&&Math.abs(matrixOf(layer.style.transform).e-matrixOf(layers[1].style.transform).e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
           // Each input reaches all five plots. Activity has no future, so only the
           // remaining-share chart must move during the final future fold.
           if(active&&probe.synchronized&&(moved.every(Boolean)||afterCallback)){
             // Coalesced input reaches its final position together. A newer event
             // cannot be credited by the artwork of an earlier event.
             let reached=-1;
-            for(let i=0;i<probe.pending.length;i++){const input=probe.pending[i];if(input.gesture===gesture&&Math.abs(input.gesture.baseline+input.pixels-matrices[driver].e)<.1)reached=i;}
+            for(let i=0;i<probe.pending.length;i++){const input=probe.pending[i];if(input.gesture===gesture&&Math.abs(input.gesture.baseline+input.pixels-matrixOf(layers[driver].style.transform).e)<.1)reached=i;}
             if(reached>=0)consume(reached+1,now);
           }
           if(active&&moved.every(Boolean)||folding&&moved[0]){
@@ -165,10 +165,13 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
           }
           if(!active&&!folding&&probe.pending.length&&charts.every(svg=>svg.dataset.drawReady==='true'&&!svg.classList.contains('is-panning'))){
             // Release may commit the last coalesced input before its own RAF.
-            // Its effect is observable only after the final geometry and fold.
+            // Its effect is observable only in the committed geometry. A historical
+            // handoff retains its SVG pose instead of resetting it to identity.
             const ends=charts.map(svg=>Number(svg.parentElement.dataset.axisEnd)),selected=new URLSearchParams(location.search).has('to');
             let reached=-1;
-            for(let i=0;i<probe.pending.length;i++){const input=probe.pending[i],g=input.gesture;const tolerance=selected?1.1:8*g.scale+1.1;if(g.started&&g.scale>0&&ends.every(end=>Math.abs(end-(g.origin-input.pixels*g.scale))<=tolerance))reached=i;}
+            for(let i=0;i<probe.pending.length;i++){const input=probe.pending[i],g=input.gesture;const tolerance=selected?1.1:8*g.scale+1.1;
+              const landmarks=!selected||charts.every((svg,j)=>{const actual=presentation(svg,layers[j],j,g.origin),shown=g.shown[j],shift=input.pixels*g.scale;return [0,-g.scale*views[driver]*scales[driver]/2].every(offset=>Math.abs(actual.x+offset*actual.perMs-(shown.x+(offset+shift)*shown.perMs))<=1);});
+              if(g.started&&g.scale>0&&ends.every(end=>Math.abs(end-(g.origin-input.pixels*g.scale))<=tolerance)&&landmarks)reached=i;}
             if(reached>=0)consume(reached+1,now);
           }
           if(!active&&!folding)probe.last=0;

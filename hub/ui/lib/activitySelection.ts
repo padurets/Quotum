@@ -15,9 +15,9 @@ import type {ActivityDimension} from './types';
 export type ActivityScope = {board:string;authority:string;workAuthority?:string;by:ActivityDimension;muted:readonly string[];filters:WorkFilter;selection:PeriodSelection;rangeKey:string;barMs:number};
 type Reading={trace:WorkTrace|null;ready:boolean;error:string|null};
 type Model={projector:PeriodActivity;activity:History['activity'];selection:PeriodSelection;rangeKey:string};
-export type ActivitySelectionState={model:Model|null;loading:boolean;error:string|null};
+export type ActivitySelectionState={model:Model|null;loading:boolean;error:string|null;errorOwner?:'upstream-work'|'local-preparation'|'subset-read'};
 type Flight={role:'visible';controller:AbortController;generation:number};
-export type ActivitySelectionEnv={pool:HistoryPool;now():number;read():Reading;send(board:string,request:PeriodRequest,signal:AbortSignal,reserve:(bytes:number)=>boolean):Promise<PeriodReply>;scheduler?:()=>Preparations|null;accessLost?():void};
+export type ActivitySelectionEnv={pool:HistoryPool;now():number;read():Reading;send(board:string,request:PeriodRequest,signal:AbortSignal,reserve:(bytes:number)=>boolean):Promise<PeriodReply>;scheduler?:()=>Preparations|null;accessLost?():void;retryWork?():void};
 
 /** One local numerical consumer. Board evidence and supplier accounting remain untouched. */
 export class ActivitySelection implements HistoryMember {
@@ -64,18 +64,29 @@ export class ActivitySelection implements HistoryMember {
     const reading=this.env.read();
     if(!reading.ready){
       if(!this.waitingForBoard){this.waitingForBoard=true;this.generation++;this.flight?.controller.abort();this.scheduler()?.cancel(this.owner);}
-      this.publish({model:null,loading:!reading.error,error:reading.error});return;
+      this.publish({model:this.state.model,loading:!reading.error,error:reading.error,errorOwner:reading.error?'upstream-work':undefined});return;
     }
-    if(reading.trace!==this.source||this.waitingForBoard){this.waitingForBoard=false;this.source=reading.trace;this.awaiting=null;this.news++;this.dirty=-Infinity;this.publish({model:null,loading:true,error:null});this.schedule();}
+    if(reading.trace!==this.source||this.waitingForBoard){this.waitingForBoard=false;this.source=reading.trace;this.awaiting=null;this.news++;this.dirty=-Infinity;this.publish({model:this.state.model,loading:true,error:null});this.schedule();}
   };
+  invalidate(){
+    const scope=this.scope;
+    this.reset();
+    if(scope)this.configure(scope);
+  }
   changed(since:number,workAuthority?:string){
     if(!this.scope)return;
     if(workAuthority!==undefined&&workAuthority!==this.scope.workAuthority){this.reset();return;}
+    if(since===Infinity)return;
     if(this.scope.selection.mode==='range'&&since>=this.scope.selection.to)return;
     if(this.scope.selection.mode==='live')this.awaiting=this.env.read().trace;
-    this.news++;this.dirty=Math.min(this.dirty,since);this.publish({...this.state,model:null,loading:true,error:null});this.schedule();
+    this.news++;this.dirty=Math.min(this.dirty,since);this.publish({model:this.state.model,loading:true,error:null});this.schedule();
   }
-  retry=()=>{if(this.scope){this.dirty=-Infinity;this.publish({model:null,loading:true,error:null});this.schedule();}};
+  retry=()=>{
+    if(!this.scope)return;
+    if(this.state.errorOwner==='upstream-work'){this.env.retryWork?.();this.refresh();return;}
+    if(this.scope.selection.mode==='live'||this.dirty===Infinity)this.dirty=-Infinity;
+    this.publish({model:this.state.model,loading:true,error:null});this.schedule();
+  };
   private schedule(){if(this.scheduled)return;this.scheduled=true;queueMicrotask(()=>queueMicrotask(()=>{this.scheduled=false;this.flush();}));}
   private flush(){
     const scope=this.scope;if(!scope||this.flight||this.dirty===Infinity)return;
@@ -95,7 +106,7 @@ export class ActivitySelection implements HistoryMember {
       let build:Preparation<{model:Model;tiles:Map<number,HistoryTile>;bytes:number}>;
       if(scope.selection.mode==='live'){
         const reading=this.env.read(),trace=reading.trace;
-        if(!reading.ready||!trace||trace.fixed){this.publish({model:null,loading:!reading.error,error:reading.error});return;}
+        if(!reading.ready||!trace||trace.fixed){this.publish({model:this.state.model,loading:!reading.error,error:reading.error,errorOwner:reading.error?'upstream-work':undefined});return;}
         this.source=trace;
         const self=this;
         build=(function*(){
@@ -147,7 +158,7 @@ export class ActivitySelection implements HistoryMember {
     }catch(error){
       if(valid()){
         if(error&&typeof error==='object'&&'status' in error&&[401,403,404].includes(Number(error.status))){this.reset();this.env.accessLost?.();return;}
-        this.publish({model:null,loading:false,error:error instanceof Error&&error.message==='history_limit'?'history_limit':'history_failed'});
+        this.publish({model:this.state.model,loading:false,error:error instanceof Error&&error.message==='history_limit'?'history_limit':'history_failed',errorOwner:scope.selection.mode==='live'?'local-preparation':'subset-read'});
         // Failed cells remain dirty. A later event cannot confirm the failed prefix.
       }
     }finally{

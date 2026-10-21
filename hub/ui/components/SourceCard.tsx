@@ -4,6 +4,7 @@ import {openClientLinks} from './ClientLinks';
 import {MeasurementClock,useMeasurementClock,useMeasurementTime} from '../lib/measurementClock';
 import {usePeriodValues,useSourcePeriodSessions} from '../lib/period';
 import {useTimeRange} from '../lib/timeRange';
+import {timeRangeLabel} from '../lib/timeRange';
 import {PeriodStatus} from './PeriodStatus';
 import {MoneyValues} from './MoneyCard';
 import {useCurrencyContext} from '../lib/board';
@@ -32,7 +33,7 @@ import {RefreshAction} from './RefreshAction';
 import {refreshChangesAt, refreshPending, refreshText} from '../lib/refresh';
 import {ErrorLine, Segmented} from './Kit';
 import {useBubble} from './Tooltip';
-import {quotaPeriods} from '../lib/subscription';
+import {quotaPeriods,primaryQuotaPeriods} from '../lib/subscription';
 import {navigate, measurementDevicesHref} from '../lib/router';
 import {app, inApp} from '../lib/app';
 
@@ -85,12 +86,12 @@ export function LimitMeter({w, children}: {w: Win; children?: ReactNode}) {
   return <MeterBar remaining={w.remaining} label={windowName(w).replaceAll(' · ', '\n')}>{children}</MeterBar>;
 }
 
-function Limit({w, measuredAt, weekly}: {w: Win & {stale?:boolean;observedAt?:number}; measuredAt: number | null; weekly: WeeklyPlan | null}) {
-  return <PercentLimit name={windowName(w)} remaining={w.remaining}
+function Limit({w, measuredAt, weekly,details=false}: {w: Win & {stale?:boolean;observedAt?:number}; measuredAt: number | null; weekly: WeeklyPlan | null;details?:boolean}) {
+  return <><PercentLimit name={details?windowName(w).replaceAll(' · ','\n'):windowName(w)} remaining={w.remaining} precise={details}
     valueTitle={w.observedAt===undefined?undefined:[t('source.measured',{at:stamp(w.observedAt)}),w.stale?t('money.stale'):null].filter(Boolean).join('\n')}
     status={w.observedAt!==undefined&&<small className="key-status" role="img" aria-hidden={!w.stale} title={w.stale?`${t('money.stale')}\n${stamp(w.observedAt)}`:undefined}/>}
-    reset={<ResetLine w={w}/>} note={<PlanNote w={w} measuredAt={measuredAt} weekly={weekly}/>}
-  ><PlanMark w={w} measuredAt={measuredAt} weekly={weekly}/></PercentLimit>;
+    reset={details?<span>{w.resetAt===null?t('limit.resetUnknown'):stamp(w.resetAt)}</span>:<ResetLine w={w}/>} note={<PlanNote w={w} measuredAt={measuredAt} weekly={weekly}/>}
+  ><PlanMark w={w} measuredAt={measuredAt} weekly={weekly}/></PercentLimit>{details&&(w.observedAt??measuredAt)!=null&&<small>{t('source.measured',{at:stamp((w.observedAt??measuredAt)!)})}{w.stale?`\n${t('money.stale')}`:''}</small>}</>;
 }
 
 /**
@@ -283,6 +284,9 @@ function Frequency({source, board}: {source: Card; board: string}) {
 
 /** A card's menu: holders choose frequency, readers refresh, and the board's owner arranges its view. */
 function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Card; title: string; arrange: Arrange; boardId: string; takeOff: boolean}) {
+  const reading=usePeriodValues(source.id),selected=useTimeRange();
+  const pending=!!selected&&(reading.loading||!!reading.error);
+  const status=pending?[t(reading.error?'period.failed':'period.loading'),reading.basis?t('analytics.retainedRange',{range:timeRangeLabel(reading.basis.range)}):null].filter(Boolean).join('\n'):'';
   const mine = useMine(source.id);
   const [error, setError] = useState<unknown>(null);
   const [open, setOpen] = useState(false);
@@ -299,7 +303,8 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
   };
 
   return (
-    <Popover label={t('source.menu', {source: title})} icon={<SlidersIcon />} open={open} onOpenChange={setOpen} width={288}>
+    <Popover label={[t('source.menu', {source: title}),status].filter(Boolean).join('\n')} icon={<span className="source-settings-icon"><SlidersIcon />{pending&&<i className={reading.error?'is-error':undefined}/>}</span>} open={open} onOpenChange={setOpen} width={288}>
+      <MeasurementDetails source={source} arrange={arrange}/>
       {owner && (
         <>
           <div className="popover-title popover-section">{t('source.name')}</div>
@@ -486,7 +491,7 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
           <div className="card-title"><h2 title={title}>{title}</h2>
             {source.plan&&<span className="plan">{source.plan.replace(/^Claude\s+/i,'')}</span>}
           </div>
-          {(source.meters||providerOf(source.provider))&&<small className="resource-type">{t(providerOf(source.provider)?.funding==='wallet'?'resource.budget':'resource.subscription')}</small>}
+          <small className="resource-type">{t(providerOf(source.provider)?.funding==='wallet'?'resource.budget':'resource.subscription')}</small>
         </div>
         <SourceSettings key={boardId} source={source} title={title} arrange={arrange} boardId={boardId} takeOff={takeOff} />
       </div>
@@ -506,20 +511,40 @@ function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;
   const windows=historical?value?.windows??[]:source.windows;
   const periods=quotaPeriods({provider:source.provider,windows}),shownPeriods=periods.filter(w=>!isWindowHidden(arrange.view,source.id,w.id));
   const visible=windows.filter(w=>!isWindowHidden(arrange.view,source.id,w.id)),weekly=planOf(arrange.view,source.id),caps=hasSubscriptionCaps(source.provider);
+  const primary=primaryQuotaPeriods(shownPeriods);
+  const wallet=providerOf(source.provider)?.funding==='wallet';
   const noEvidence=historical&&!!value&&!reading.loading&&!reading.error&&!windows.length&&!value.meters.length&&value.creditBalance?.status!=='unlimited';
   return <MeasurementClock.Provider value={historical?reading.basis?.range.to??selected.to:null}>
-    <div className="limits">
+    <div className={`limits card-primary${wallet?' is-wallet':''}`}>
       {historical?<>
-        {caps&&value&&<QuotaCard source={value} ids={shownPeriods.map(w=>w.id)}/>}
         {!caps&&providerOf(source.provider)?.funding==='wallet'&&value&&value.meters.length>0&&<MoneyValues source={value} keys={value.keys.filter(k=>keyShown(arrange.view,source.id,k.id,value.keys))} meters={value.meters} context={historicalContext}/>}
-      </>:caps?<QuotaCard source={source} ids={shownPeriods.map(w=>w.id)}/>:budgetVisible(source)&&providerOf(source.provider)?.funding==='wallet'&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
-      {visible.map(w=><Limit key={w.id} w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={weekly}/>)}
+      </>:budgetVisible(source)&&wallet&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
+      {primary.map(period=>{const w=visible.find(w=>w.id===period.id),measurement=historical?value:source;return w?<Limit key={w.id} w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={weekly}/>:caps&&measurement?<QuotaCard key={period.id} source={measurement} ids={[period.id]}/>:null;})}
       {noEvidence&&<div className="card-empty">{t('period.noEvidence')}</div>}
       {!historical&&!caps&&!source.windows.length&&!budgetVisible(source)&&!source.meters&&<div className="card-empty">{errorText(source.error??'waiting')}</div>}
       {!!periods.length&&!shownPeriods.length&&<AllHidden/>}
-      {historical&&<PeriodStatus {...reading}/>}
     </div>
   </MeasurementClock.Provider>;
+}
+
+/** Every reader can inspect all selected quota windows through the existing menu. */
+function MeasurementDetails({source,arrange}:{source:Card;arrange:Arrange}) {
+  useDataFilters();
+  const reading=usePeriodValues(source.id),selected=useTimeRange(),value=selected?reading.value:source;
+  const windows=value?.windows.filter(w=>!isWindowHidden(arrange.view,source.id,w.id))??[];
+  const periods=quotaPeriods({provider:source.provider,windows}).filter(w=>!isWindowHidden(arrange.view,source.id,w.id));
+  const empty=!!selected&&!!value&&!value.windows.length&&!value.meters?.length&&value.creditBalance?.status!=='unlimited';
+  if(!periods.length&&!empty&&(!selected||!reading.loading&&!reading.error))return null;
+  return <div className="popover-section">
+    <div className="popover-title">{t('source.measurements')}</div>
+    <div className="popover-pad measurement-details">
+      {selected&&<PeriodStatus {...reading}/>}
+      <MeasurementClock.Provider value={selected?reading.basis?.range.to??selected.to:null}>
+        {periods.map(period=>{const w=windows.find(w=>w.id===period.id);return w?<div key={w.id}><Limit w={w} measuredAt={source.successAt} weekly={planOf(arrange.view,source.id)} details/></div>:hasSubscriptionCaps(source.provider)&&value?<QuotaCard key={period.id} source={value} ids={[period.id]} details/>:null;})}
+      </MeasurementClock.Provider>
+      {empty&&!reading.loading&&!reading.error&&<p>{t('period.noEvidence')}</p>}
+    </div>
+  </div>;
 }
 
 /** Historical funds share the value basis; the tray's actions and reset news stay live. */

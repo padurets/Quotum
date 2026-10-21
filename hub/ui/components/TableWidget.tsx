@@ -1,5 +1,5 @@
 /** @jsxRuntime automatic */
-import {useLayoutEffect,useMemo,useRef,useState,type RefObject,type ReactNode} from 'react';
+import {useLayoutEffect,useMemo,useRef,useState,type RefObject,type ReactNode,type CSSProperties} from 'react';
 import {tableLayout,tablePages,TABLE_PAGE_ROWS,TABLE_MEASURE_MIN_ROWS,type TableSort} from '../lib/table';
 import {t,useLocale} from '../i18n';
 import {Popover} from './Popover';
@@ -41,11 +41,11 @@ function TableFooter({table,count,metrics=[],columns,still=false,single=false,bo
   const shown=aligned?metrics.filter(metric=>columns!.includes(metric.column??metric.id)):metrics;
   // The table reaches the panel edges; the footer's last column ends at its inner padding.
   const gridColumns=aligned?`minmax(0, 1fr) ${table.columnWidths.map((width,index)=>index===table.columnWidths.length-1?`calc(${width}px - var(--panel-pad))`:width+'px').join(' ')}`:undefined;
-  return <footer ref={body} className={`table-footer${table.layout==='list'?' is-list':''}`} aria-label={t('table.summary')}>
+  return <footer ref={body} className={`table-footer${table.layout==='list'?' is-list':''}`} style={{'--metric-rows':Math.ceil(table.footerMetrics/2)} as CSSProperties} aria-label={t('table.summary')}>
     {shown.length>0&&<div className={`table-summary${aligned?' is-aligned':''}`} style={gridColumns?{gridTemplateColumns:gridColumns}:undefined}><div className="table-summary-heading" title={t('table.summaryHint')}>{t('table.summary')}</div>
       {shown.length>0&&<dl>{shown.map(metric=><div key={metric.id} style={aligned?{gridColumn:columns!.indexOf(metric.column??metric.id)+1,gridRow:1}:undefined}><dt className={aligned?'sr-only':undefined} title={metric.label}>{table.layout==='list'?metric.compactLabel??metric.label:metric.label}</dt>{tableCell(metric.id,metric.cell,(cell,time)=><dd data-time={time} data-table-metric={metric.id} className={cell.className} title={cell.title}>{cell.content}</dd>,still)}</div>)}</dl>}
     </div>}
-    <div className="table-footer-pages"><small title={t('table.summaryHint')}>{t('table.rows',{count})}</small>{!single&&<TablePages page={still?0:table.page} pages={still?2:table.pages} onPage={table.onPage} range={`${table.from+1}–${table.to} / ${count}`}/>}</div>
+    <div className="table-footer-pages"><small title={t('table.summaryHint')}>{t('table.rows',{count})}</small>{!single&&<TablePages page={still?0:table.page} pages={still?2:table.pages} onPage={table.onPage} reserve range={`${table.from+1}–${table.to} / ${count}`}/>}</div>
   </footer>;
 }
 
@@ -64,20 +64,20 @@ export function useTableLayout(box:RefObject<HTMLElement|null>,columns:readonly 
   return model;
 }
 /** All board tables share width, height, row measurement and page ownership. */
-export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonly number[],nameWidth:number,keys:readonly string[],resetKey:string,edges?:number){
-  useLocale();
-  const sizing=useSizing(),{layout,width}=useTableLayout(panel,columns,nameWidth,edges,sizing?.width);
-  const live=useRef<HTMLElement>(null),measured=useRef<HTMLElement>(null),footer=useRef<HTMLElement>(null),measuredFooter=useRef<HTMLElement>(null),measuredSingleFooter=useRef<HTMLElement>(null);
-  const scope=JSON.stringify([layout,width,columns,nameWidth,edges]);
+export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonly number[],nameWidth:number,keys:readonly string[],resetKey:string,edges?:number,structure:readonly number[]=columns,footerMetrics=0){
+  const locale=useLocale();
+  const sizing=useSizing(),{layout,width}=useTableLayout(panel,structure,nameWidth,edges,sizing?.width);
+  const live=useRef<HTMLElement>(null),measured=useRef<HTMLElement>(null),footer=useRef<HTMLElement>(null),measuredFooter=useRef<HTMLElement>(null),measuredSingleFooter=useRef<HTMLElement>(null),surface=useRef<HTMLDivElement>(null);
+  const scope=JSON.stringify([layout,width,structure,nameWidth,edges,locale,footerMetrics]);
   const [measurement,setMeasurement]=useState<Measurement|null>(null),[position,setPosition]=useState({key:resetKey,page:0});
   const seen=useRef<{key:string;outer:number;live:number;layer:number;footer:number;singleFooter:number}|null>(null);
   const sizes=measurement?.scope===scope?measurement:null;
-  const fallback=sizes?.fallback??(layout==='table'?44:90),heights=sizes?.heights??new Map<string,number>();
+  const rowBudget=layout==='table'?60:Math.max(90,44+Math.ceil(Math.max(0,structure.length-1)/2)*36),head=layout==='table'?56:18;
+  const fallback=rowBudget,heights=sizes?.heights??new Map<string,number>();
   let starts:number[];
   if(sizing?.manual&&sizes){
     const room=sizing.allocated-sizes.shell;
-    starts=tablePages(keys,heights,fallback,room-sizes.singleFooter,sizes.border);
-    if(starts.length>1)starts=tablePages(keys,heights,fallback,room-sizes.footer,sizes.border);
+    starts=tablePages(keys,heights,fallback,room-sizes.footer,sizes.border);
   }else starts=Array.from({length:Math.max(1,Math.ceil(keys.length/TABLE_PAGE_ROWS))},(_,i)=>i*TABLE_PAGE_ROWS);
   const page=Math.min(position.key===resetKey?position.page:0,starts.length-1),from=starts[page],to=starts[page+1]??keys.length;
   useLayoutEffect(()=>{if(position.key!==resetKey||((sizes||!sizing?.manual)&&position.page!==page))setPosition({key:resetKey,page});},[resetKey,page,position,!!sizes,sizing?.manual]);
@@ -92,26 +92,21 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     if(last&&last.key===signal.key&&same(last.outer,signal.outer)&&same(last.live,signal.live)&&same(last.layer,signal.layer)&&same(last.footer,signal.footer)&&same(last.singleFooter,signal.singleFooter))return;
     seen.current=signal;
     const items=[...(live.current?.children??[])].filter(e=>!(e as HTMLElement).hasAttribute('data-table-total')) as HTMLElement[];
-    if(!items.length){
-      sizing?.report({min:outer,natural:outer,shown:outer});if(measurement)setMeasurement(null);
-      if(position.page!==0||position.key!==resetKey)setPosition({key:resetKey,page:0});return;
-    }
     const layer=sizing?.manual?[...(measured.current?.children??[])] as HTMLElement[]:items;
-    if(!layer.length)return;
-    const border=layout==='table'?(parseFloat(getComputedStyle(items[0].firstElementChild!).borderBottomWidth)||0)/2:parseFloat(getComputedStyle(items[0]).borderBottomWidth)||0;
-    const area=items.at(-1)!.getBoundingClientRect().bottom-items[0].getBoundingClientRect().top;
-    const shell=pixels(outer-area-(footer.current?.getBoundingClientRect().height??0));
+    if(!surface.current)return;
+    const border=items.length?(layout==='table'?(parseFloat(getComputedStyle(items[0].firstElementChild!).borderBottomWidth)||0)/2:parseFloat(getComputedStyle(items[0]).borderBottomWidth)||0):0;
+    const shell=pixels(outer-surface.current.getBoundingClientRect().height-(footer.current?.getBoundingClientRect().height??0)+head);
     const {footer:multiFooter,singleFooter}=signal;
     const nextHeights=new Map(sizes?.heights??[]);
     for(let i=0;i<layer.length;i++){
       const rect=layer[i].getBoundingClientRect(),end=i+1<layer.length?layer[i+1].getBoundingClientRect().top:rect.bottom+border;
-      const key=keys[from+i];if(key!==undefined)nextHeights.set(key,pixels(end-rect.top));
+      const key=keys[from+i];if(key!==undefined)nextHeights.set(key,pixels(Math.min(rowBudget,end-rect.top)));
     }
     const retained=new Set(keys);for(const key of nextHeights.keys())if(!retained.has(key))nextHeights.delete(key);
-    const ordered=[...nextHeights.values()].sort((a,b)=>a-b),base=ordered[Math.floor(ordered.length/2)]??fallback;
-    const min=shell+Math.max(base,...ordered)-border+(keys.length>1?multiFooter:singleFooter);
-    const natural=shell+keys.slice(0,TABLE_PAGE_ROWS).reduce((sum,key)=>sum+(nextHeights.get(key)??base),0)-border+(keys.length>TABLE_PAGE_ROWS?multiFooter:singleFooter);
-    sizing?.report({min:pixels(min),natural:pixels(Math.max(min,natural)),shown:outer});
+    const base=rowBudget;
+    const min=shell+rowBudget+multiFooter;
+    const natural=shell+TABLE_PAGE_ROWS*rowBudget+multiFooter;
+    sizing?.report({min:pixels(min),natural:pixels(Math.max(min,natural)),shown:outer,layout:scope});
     if(!sizes||!same(sizes.shell,shell)||!same(sizes.footer,multiFooter)||!same(sizes.singleFooter,singleFooter)||!same(sizes.border,border)||!same(sizes.fallback,base)||nextHeights.size!==sizes.heights.size||[...nextHeights].some(([key,height])=>!same(sizes.heights.get(key),height)))
       setMeasurement({scope,heights:nextHeights,fallback:base,shell,footer:multiFooter,singleFooter,border});
   };
@@ -119,16 +114,20 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
   useLayoutEffect(()=>update.current(),[layout,scope,keysKey,resetKey,page,from,to,sizing?.manual,sizing?.allocated,columnsKey]);
   useLayoutEffect(()=>{
     const observer=new ResizeObserver(()=>update.current());
-    for(const element of [panel.current,live.current,measured.current,footer.current,measuredFooter.current,measuredSingleFooter.current])if(element)observer.observe(element);
+    for(const element of [panel.current,surface.current,live.current,measured.current,footer.current,measuredFooter.current,measuredSingleFooter.current])if(element)observer.observe(element);
     return ()=>observer.disconnect();
   },[panel,layout,!!keys.length,sizing?.manual]);
   const report=sizing?.report;useLayoutEffect(()=>()=>report?.(null),[report]);
-  return useMemo(()=>({layout,columnWidths:columns,from,to,page,count:keys.length,pages:starts.length,onPage:(page:number)=>setPosition({key:resetKey,page}),live,measured,footer,measuredFooter,measuredSingleFooter,
-    measureFrom:from,measureTo:sizing?.manual?Math.min(keys.length,Math.max(from+TABLE_MEASURE_MIN_ROWS,to+1)):from}),[layout,columnsKey,from,to,page,starts.length,resetKey,sizing?.manual,keys.length]);
+  const surfaceHeight=sizing?.manual&&sizes?Math.max(head+rowBudget,sizing.allocated-sizes.shell+head-sizes.footer):head+TABLE_PAGE_ROWS*rowBudget;
+  return useMemo(()=>({layout,columnWidths:columns,from,to,page,count:keys.length,pages:starts.length,onPage:(page:number)=>setPosition({key:resetKey,page}),live,measured,footer,measuredFooter,measuredSingleFooter,surface,surfaceHeight,rowBudget,footerMetrics,
+    measureFrom:from,measureTo:sizing?.manual?Math.min(keys.length,Math.max(from+TABLE_MEASURE_MIN_ROWS,to+1)):from}),[layout,columnsKey,from,to,page,starts.length,resetKey,sizing?.manual,keys.length,surfaceHeight,rowBudget,footerMetrics]);
 }
 export type TableWidget=ReturnType<typeof useTableWidget>;
+export function TableSurface({table,children}:{table:TableWidget;children:ReactNode}){
+  return <div ref={table.surface} className="table-surface" style={{height:table.surfaceHeight,'--row-budget':`${table.rowBudget}px`} as CSSProperties}>{children}</div>;
+}
 export function TableMeasure({table,children,metrics,columns}:{table:TableWidget;children:ReactNode;metrics?:readonly TableMetric[];columns?:readonly string[]}){
-  return <div className="table-measure" aria-hidden="true" inert>{children}<TableFooter table={table} count={table.count} metrics={metrics} columns={columns} still body={table.measuredFooter}/><TableFooter table={table} count={table.count} metrics={metrics} columns={columns} still single body={table.measuredSingleFooter}/></div>;
+  return <div className="table-measure" style={{'--row-budget':`${table.rowBudget}px`} as CSSProperties} aria-hidden="true" inert>{children}<TableFooter table={table} count={table.count} metrics={metrics} columns={columns} still body={table.measuredFooter}/><TableFooter table={table} count={table.count} metrics={metrics} columns={columns} still single body={table.measuredSingleFooter}/></div>;
 }
 export function WidgetPages({table,count,metrics,columns}:{table:TableWidget;count:number;metrics?:readonly TableMetric[];columns?:readonly string[]}){
   return <TableFooter table={table} count={count} metrics={metrics} columns={columns} body={table.footer}/>;

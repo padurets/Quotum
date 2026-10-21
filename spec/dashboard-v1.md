@@ -1279,7 +1279,7 @@ cacheable. The page tracks each tile's read interval, so its omitted head stays 
 Ordinary discrete navigation fills that head once for subsequent frames. A `history` event makes
 cells from `since` stale and reads only what the frame needs. Reconnect, a changed lineup or `since: 0` makes all
 tiles stale. Answers of another `run` are discarded. The shown frame stays undimmed
-while its own cells refresh; an ordinary change of period keeps the previous one dimmed
+while its own cells refresh; an ordinary change of period keeps the previous one undimmed
 until all of its cells have been read. Continuous panning has a separate partial plot:
 read cells stay visible, unread intervals are empty, and an activity bar is drawn only
 when all its contributing whole cells have been read. The previous complete answer
@@ -1305,6 +1305,12 @@ committed. Active partial plots still progress; final drawing readiness requires
 complete answer for the requested range. A newer user navigation supersedes that held pose immediately and projects
 the retained data in the requested frame while preparation continues. The retained
 data keeps its own coverage; a ready replacement cannot revive the old navigation.
+After a historical gesture, completion adopts its final time-to-pixel projection
+without refitting the range or removing the carried future margin. Two fixed times
+therefore keep their screen positions through pending and complete states. Presets,
+Back, horizon changes and authority changes explicitly establish a new projection.
+Readiness, errors, empty results and filters never change a widget's shell, plot,
+table viewport or neighbouring placement; evidence and retry use existing disclosures.
 Ordinary clock movement reprojects that ready drawing without rebuilding unchanged
 numeric series. Crossing its bounded overscan margin rebases geometry in slices;
 clipped future outlines retain their complete facts. Its factual data cutoff stays

@@ -9,7 +9,7 @@ import {timeRangeLabel} from '../lib/timeRange';
 import {t} from '../i18n';
 import {EMPTY_VIEW} from '../../server/domain/view';
 import {providerOf} from '../../server/domain/providers';
-import {quotaPeriods} from '../lib/subscription';
+import {quotaPeriods,primaryQuotaPeriods} from '../lib/subscription';
 import {hasSubscriptionCaps} from '../lib/providers';
 import type {WorkedSession} from '../../server/domain/periodWork';
 import type {SessionPeriod} from '../lib/period';
@@ -139,13 +139,13 @@ test('the actual card tray keeps an accessible loading/error disclosure and retr
 test('card measurements distinguish a failed first read from a successful absence',()=>{
   let reading:{value:null|{windows:[];meters:[];keys:[]};basis:typeof basis|null;loading:boolean;error:string|null}={value:null,basis:null,loading:false,error:'unavailable'};
   const draw=component('../components/SourceCard.tsx','CardMeasurements','function CardMeasurements(','/** Historical funds',{
-    usePeriodValues:()=>reading,useTimeRange:()=>basis.range,useCurrencyContext:()=>({sources:{}}),historicalCurrencyContext,quotaPeriods,hasSubscriptionCaps,
+    usePeriodValues:()=>reading,useTimeRange:()=>basis.range,useCurrencyContext:()=>({sources:{}}),historicalCurrencyContext,quotaPeriods,primaryQuotaPeriods,hasSubscriptionCaps,
     isWindowHidden:()=>false,planOf:()=>null,MeasurementClock:{Provider:'clock'},providerOf,
     MoneyValues:'money',MoneyCard:'money',QuotaCard:'quota',Limit:'limit',AllHidden:'hidden',PeriodStatus:'period-status',
   });
   const render=()=>nodes(draw({source:{id:'s',provider:'claude',windows:[]},arrange:{view:EMPTY_VIEW},boardId:'b'}));
   assert.equal(render().some(node=>node.props.children===t('period.noEvidence')),false);
-  assert.equal(render().find(node=>node.type==='period-status')?.props.error,'unavailable');
+  assert.equal(render().some(node=>node.type==='period-status'),false,'errors use the existing disclosure instead of inserting a body row');
   reading={value:{windows:[],meters:[],keys:[]},basis,loading:false,error:null};
   assert.ok(render().some(node=>node.props.children===t('period.noEvidence')));
   reading={...reading,error:'history_limit'};
@@ -161,7 +161,7 @@ test('historical card consumers accept the recorded Codex conversion through the
   assert.ok(value);assert.equal(value.meters.find((m:any)=>m.unit==='USD')?.amount,'2000000000');
   const bindings={usePeriodValues:()=>h.period.getValue(h.source),useTimeRange:h.selectedRange,useCurrencyContext:()=>h.page.get().board!.currencies,
     budgetVisible,subscriptionFundsVisible,historicalCurrencyContext,MeasurementClock:{Provider:'clock'},CardTray:'tray',MoneyValues:'money',
-    quotaPeriods,hasSubscriptionCaps,isWindowHidden:()=>false,planOf:()=>null,providerOf,Limit:'limit',PeriodStatus:'status'};
+    quotaPeriods,primaryQuotaPeriods,hasSubscriptionCaps,isWindowHidden:()=>false,planOf:()=>null,providerOf,Limit:'limit',PeriodStatus:'status'};
   const footer=component('../components/SourceCard.tsx','CardFooter','function CardFooter(',undefined,bindings);
   const measurements=component('../components/SourceCard.tsx','CardMeasurements','function CardMeasurements(','/** Historical funds',bindings);
   const props={source:h.page.get().board!.cards[h.source],arrange:{view:EMPTY_VIEW},boardId:h.board};

@@ -41,7 +41,7 @@ test('server-derived partition is bounded and colour thresholds name their resol
   assert.deepEqual([0,1,H/2,H,2*H,4*H].map(n=>calendarLevel(n,H)),[0,1,2,3,4,5]);assert.equal(calendarLevel(4*H,4*H),calendarLevel(H,H));assert.equal(exactAgentHours(1,'en'),'0.000000278');
 });
 test('compact calendar fits all selected dates without separate date rows',()=>{
-  const r=reading(NOW-30*DAY,NOW);for(const width of [248,318,538,1138]){const l=heatmapLayout(r,width,'calendar','en');assert.ok(l.height<=204);assert.equal(l.cells.reduce((n,c)=>n+(c.cell.agentMs??0),0),30*DAY);assert.ok(l.cells.every(c=>c.x>=0&&c.x+c.width<=width));}
+  const r=reading(NOW-30*DAY,NOW);for(const width of [248,318,538,1138]){const l=heatmapLayout(r,width,'calendar','en');assert.equal(l.height,300);assert.equal(l.cells.reduce((n,c)=>n+(c.cell.agentMs??0),0),30*DAY);assert.ok(l.cells.every(c=>c.x>=0&&c.x+c.width<=width));}
 });
 test('optional heatmap keeps its string codec identity on source-free boards',()=>{
   assert.equal(widgetVisible(EMPTY_VIEW,AGENT_HOURS_HEATMAP,0),false);const v=showWidgets(EMPTY_VIEW,[AGENT_HOURS_HEATMAP]);assert.deepEqual(decodeView(encodeView(v)),v);
@@ -163,4 +163,20 @@ test('a baseline with the same partition cannot replace the selected period with
   const part={state:'complete' as const,basis:{run:'r',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range,calendarKey:'k',workAuthority:'a',filterKey:'f'},value:{zone:window.zone,edges:window.edges,availableFrom:range.from,retainedFrom:0,cursor:'c',cells:drain(calendarCells([],window.edges,window.edges.slice(1).map((_,i)=>i),NOW,range.from,0,90*DAY,range)).map(([,cell])=>cell)}};
   c.receive(part,c.generation,()=>true);const accepted=c.get();
   c.receive({...part,basis:{...part.basis,revision:'2',range:{from:range.from+M,to:range.to}}},c.generation,()=>true);assert.equal(c.get(),accepted);
+});
+
+test('31 exact days spanning 32 civil dates fit a stable height at every density without dropping evidence',()=>{
+  for(const zone of ['UTC','Europe/Moscow','America/New_York','Australia/Lord_Howe']){
+    const to=Date.parse('2026-11-08T17:50:06.430Z'),r=reading(to-31*DAY,to,zone);
+    assert.equal(r.window.dates.length,32);
+    for(const locale of ['en','ru'])for(const width of [248,318,538,1138])for(const height of [160,300,520])for(const view of ['matrix','calendar'] as const){
+      const l=heatmapLayout(r,width,view,locale,height);
+      assert.equal(l.height,height);assert.equal(l.naturalHeight,300);
+      assert.deepEqual([...new Set(l.cells.map(c=>c.date))],r.window.dates,'both partial boundary dates survive responsive thinning');
+      assert.equal(l.cells.reduce((n,c)=>n+(c.cell.agentMs??0),0),31*DAY);
+      assert.ok(l.cells.every(c=>c.width>0&&c.height>0&&c.x>=0&&c.x+c.width<=width+.01&&c.y>=0&&c.y+c.height<=height));
+      assert.ok(l.labels.every(label=>label.x>=0&&label.x<=width&&label.y>=0&&label.y<=height),'all label anchors stay in the assigned plot');
+      assert.equal(l.cells.reduce((n,c)=>n+c.parts.reduce((sum,part)=>sum+(part.agentMs??0),0),0),31*DAY,'coarser geometry retains exact fine contributions');
+    }
+  }
 });

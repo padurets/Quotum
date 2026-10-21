@@ -2,7 +2,7 @@ import {memo,useMemo,useLayoutEffect,useRef,useState,useSyncExternalStore,type C
 import {createPortal} from 'react-dom';
 import {boardPeriod} from '../lib/period';
 import {CALENDAR_OPACITY,calendarLevel,exactAgentHours} from '../lib/workCalendar';
-import {heatmapLayout,heatCellAt,heatCellChangesAt,type HeatCell} from '../lib/heatmap';
+import {heatmapLayout,heatCellAt,heatCellChangesAt,HEATMAP_MIN,HEATMAP_NATURAL,type HeatCell} from '../lib/heatmap';
 import {useClock} from '../lib/clock';
 import {AGENT_HOURS_HEATMAP,withHidden,type Arrange} from '../lib/view';
 import {CATEGORY_COLORS} from '../lib/providers';
@@ -13,7 +13,7 @@ import {num} from '../lib/format';
 import {HideRow,Popover,PopoverHeading,SlidersIcon} from './Popover';
 import {Segmented} from './Kit';
 import {useBubble} from './Tooltip';
-import {HistoryFailure} from './HistoryFailure';
+import {ReadState} from './ReadState';
 import {fillOf,pixels,same,useSizing} from './sizing';
 
 function Details({heading,label,interval,item}:{heading:boolean;label:string;interval:string;item:HeatCell}){
@@ -60,8 +60,8 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
   const measure=useRef(()=>{});
   measure.current=()=>{
     const node=root.current,plot=matrix.current;if(!node||!plot)return;setWidth(plot.clientWidth);
-    if(sizing){const shown=pixels(node.getBoundingClientRect().height-fillOf(node)),chrome=shown-plot.getBoundingClientRect().height,min=pixels(chrome+layout.naturalHeight);
-      sizing.report({min,natural:min,shown});const next=sizing.manual?pixels(Math.max(layout.naturalHeight,sizing.allocated-chrome)):0;setHeight(was=>same(was,next)?was:next);
+    if(sizing){const shown=pixels(node.getBoundingClientRect().height-fillOf(node)),chrome=shown-plot.getBoundingClientRect().height,min=pixels(chrome+HEATMAP_MIN);
+      sizing.report({min,natural:pixels(chrome+HEATMAP_NATURAL),shown,layout:JSON.stringify([width,locale,view])});const next=sizing.manual?pixels(Math.max(HEATMAP_MIN,sizing.allocated-chrome)):0;setHeight(was=>same(was,next)?was:next);
     }
   };
   useLayoutEffect(()=>measure.current(),[sizing?.manual,sizing?.allocated,sizing?.width,sizing?.report,loading,error,locale,layout.naturalHeight]);
@@ -88,17 +88,14 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
   };
   const unit=layout.span<3_600_000?60_000:3_600_000,thresholds=[0,0,layout.span*.5,layout.span,layout.span*2,layout.span*4];
   return <section ref={root} className={`panel agent-hours-heatmap${loading?' is-loading':''}`} aria-label={t('calendar.title')} aria-busy={loading} data-calendar-ready={!!value}>
-    <div className="panel-head"><h2 className="panel-heading">{t('calendar.title')}</h2><Popover label={t('calendar.settings')} icon={<SlidersIcon/>} open={settings} onOpenChange={setSettings}>
+    <div className="panel-head"><h2 className="panel-heading">{t('calendar.title')}</h2><div className="panel-controls"><ReadState error={error} loading={loading&&!!selection&&!!value} range={reading.basis?.range} retry={boardPeriod.retry}/><Popover label={t('calendar.settings')} icon={<SlidersIcon/>} open={settings} onOpenChange={setSettings}>
       <div className="popover-section"><div className="popover-title">{t('calendar.view')}</div><div className="popover-pad"><Segmented value={view} onChange={heatmapView=>setPrefs({heatmapView})} options={['matrix','calendar'].map(key=>[key as 'matrix'|'calendar',t(key==='matrix'?'calendar.matrix':'calendar.calendar')])} label={t('calendar.view')}/></div></div>
       {arrange.owner&&<HideRow onHide={()=>arrange.update(view=>withHidden(view,AGENT_HOURS_HEATMAP,true))}>{t('widget.hide')}</HideRow>}
-    </Popover></div>
-    <HistoryFailure error={error==='history_limit'?'history_limit':error==='filters_limit'?'filters_limit':error?'history_failed':undefined} retry={boardPeriod.retry}/>
+    </Popover></div></div>
     <div className="heatmap-plot" ref={matrix} role="grid" aria-label={t('calendar.registered')} aria-description={t('calendar.observations')} style={{height:layout.height} as CSSProperties} data-heatmap-view={layout.kind}>
       {layout.labels.map((label,i)=><span key={i} aria-hidden="true" className="heatmap-axis" style={{left:label.x,top:label.y,transform:label.align==='end'?'translate(-100%,-100%)':label.align==='middle'?'translate(-50%,-100%)':'translateY(-100%)'}}>{label.text}</span>)}
       {[...new Set(layout.cells.map(c=>c.row))].sort((a,b)=>a-b).map(row=><div role="row" className="heatmap-row" key={row}>{layout.cells.filter(c=>c.row===row).sort((a,b)=>a.column-b.column||a.from-b.from).map(item=><TimedBucket key={item.key} item={item} span={layout.span} zone={window.zone} selected={selection?.from===item.from&&selection?.to===item.to} tab={item.key===tab?.key} focus={setFocused} openRange={openRange} panel={root} onKey={key}/>)}</div>)}
     </div>
     <div className="legend calendar-legend"><span className="heatmap-unit">{t(unit===60_000?'calendar.scaleMinutes':'calendar.scaleHours')}</span>{thresholds.map((value,level)=><span className="heatmap-key" key={level}><svg width="10" height="8" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="4" fill={level?CATEGORY_COLORS[0]:'var(--hair)'} fillOpacity={level?CALENDAR_OPACITY[level]:1}/></svg>{level===1?'>0':level===5?'≥ '+num(value/unit,2):num(value/unit,2)}</span>)}</div>
-    {value&&value.cells.every(c=>c.agentMs===null)&&<p className="analytics-note">{t('calendar.unavailable')}</p>}
-    {!value&&!error&&<p className="analytics-note" role="status">{t(loading?'calendar.loading':'calendar.pending')}</p>}
   </section>;
 });

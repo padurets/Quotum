@@ -1553,7 +1553,11 @@ and share one sparse extraction with other work consumers; they read neither
 financial history nor a full session ledger just for the heatmap. Browser geometry
 aggregates those fine cells into a chronological strip, day/hour matrix or compact
 calendar as the duration and width require, without new reads or inner scrolling.
-Its cells fill a manually chosen height while labels and gaps keep their size.
+The plot has a natural height of 300 CSS pixels and a minimum of 160, independent
+of the selected duration. A chosen height changes orientation, cell grouping and
+label density; it never removes a civil date or divides a coarse amount to invent
+fine evidence. Repeated DST hours retain separate lanes. Its cells fill the assigned
+plot while labels remain legible and gaps fit the available pitch.
 Its legend inherits the same typography as the other charts and keeps the
 agent-hours unit beside its scale.
 Anonymous aggregate hour patterns share the history budget and preserve exact
@@ -1974,9 +1978,11 @@ composite and detail reads, cancellations and responses that finish after measur
 Quota history, wallet budgets, subscription funds and agent activity read and move along time alike
 (`ui/components/timeAxis.ts`), each with its legend under it. Pointing to a legend
 entry or focusing it with the keyboard highlights that series and dims its peers.
-Monetary legend details and currency provenance appear in the reserved heading area,
-using the existing exact money presentation. They do not open native tooltips over the
-plot. Limit charts without such details reserve no information strip.
+Monetary legend details and currency provenance appear beside the active entry in
+the shared glass tooltip, using the existing exact money presentation. Names and
+amounts remain in the legend; hover, keyboard focus and touch preview reserve no
+blank information strip. Activity keeps its useful four-metric summary at rest and
+replaces it with the focused cohort in the same area.
 The common Resources filter selects accounts, key caps and subscription funds
 across cards, charts and tables. An account selects its total balance; a key selects
 its reported remaining cap within the shared 32-meter bound. Balance components
@@ -2005,17 +2011,19 @@ backgrounds retain their measured offsets when only their anchor moves. The char
 container owns pointer capture and
 wheel input, projected through its fixed SVG viewport, including labels in another
 surface. Surface geometry and painters become visible only after their DOM commits.
-The future moves with the strip during the gesture, then folds away over 160 ms on
-release in the past, or unfolds on returning to live. Reduced motion skips this final
-transition. Release within eight source pixels of now restores the chosen live preset.
+The future moves with the strip during the gesture. Historical release retains the
+last displayed time-to-pixel mapping, including its future margin, through pending
+reads, the complete answer and later ordinary updates. Returning to live can unfold
+the future over 160 ms; reduced motion skips that transition. Release within eight
+source pixels of now restores the chosen live preset.
 One changed gesture creates one address entry; cancellation or returning to the exact
 origin creates none. A horizontal wheel ends after a 200 ms pause. Shift-wheel keeps
 one captured scale across pauses and ends when Shift is released, like a held drag;
 a pointer can continue that transaction. Neither adds inertia. Holding Shift hides
 chart and activity-legend readouts even before movement starts. The plot and legend
-keep their height through the gesture, final fold and resulting range; extra legend
-entries scroll inside. Ordinary range navigation or a layout/language change measures
-them again. Changing the time frame by hand therefore cannot resize the chart.
+keep their height through gestures and range changes; extra legend entries scroll
+inside their bounded viewport. Only structural layout, width or language changes
+establish another shell allocation. Data filters and readiness never resize the plot.
 An answered activity frame without work keeps its time axis and legend viewport;
 its empty message sits inside the plot, which still accepts the next gesture.
 
@@ -2028,7 +2036,9 @@ band; a counter-translation keeps its artwork in place. The clip boundaries use
 compositor transforms while the SVG's coordinate system stays unchanged. Two short
 edge bars in their own SVG are recomputed when the draft crosses a cell; moving within
 a cell only translates the prepared artwork
-and updates its clip. The final 160 ms fold stays inside SVG to preserve stroke widths.
+and updates its clip. A historical completed drawing adopts the held SVG projection
+without a release-time zoom. Activity's vertical scale uses the selected visible
+interval and exact boundary bars, excluding its overscan and unread cells.
 A temporary shared registry keeps plot interiors, edge bars, legend markers and readouts
 consistent in colour and dash, adding new groups with a pending total. Surviving groups
 keep their colours through rank changes and reversal; new projects and machines take
@@ -2085,6 +2095,13 @@ The reader shares the preparation scheduler, two transport slots and 15 MiB pool
 Changing its mask, range or authority retires earlier generations; pending or failed
 results never borrow wider-cohort totals. All-visible and all-off choices need no
 additional reader request.
+An ordinary same-context refresh retains one complete, coherent set of all four
+metrics, including while replacement preparation fails; its retained model remains
+charged to the shared pool. Source-free zero work cutoffs, relevant quota zero
+cutoffs and compatible legacy zero cutoffs retire it synchronously even when the
+authority token is unchanged. Financial and unrelated-source news do not. Retry
+belongs to the failed owner: upstream work transport, local preparation, or the
+bounded fixed-subset request. Evidence dates and recovery use existing disclosures.
 For a warmed fixed subset, a relevant late-work event may add one bounded local request
 beyond the board's ordinary update. It retains clean cells and reads the potentially
 dirty tail on the full range's cell grid, together with a fresh compact exact summary
@@ -2117,12 +2134,13 @@ Each chart replaces one typed drawing model whole after preparation, then publis
 its geometry and painters after the DOM commits. Input keeps the displayed model and
 its composed SVG matrix and CSS offset until that handoff. Finishing a gesture commits
 the address immediately and presents its last pending delta on RAF; the final pose
-stays held until the matching drawing model is ready. The SVG fold and CSS offset
-reset then start from the same displayed coordinates. A new gesture samples that
+stays held until the matching drawing model is ready, then remains the historical
+projection. The SVG matrix and CSS offset compose to the same displayed coordinates
+before and after adoption. A new gesture samples that
 actual presentation, including an interrupted fold, separately from its URL origin.
 Partial plots continue to publish during the gesture. Its final drawing readiness
 also requires the complete history answer for the requested range, so a partial
-strip cannot start the fold before that answer replaces it.
+strip cannot complete the handoff before that answer replaces it.
 User navigation owns the requested projection separately from drawing readiness.
 Back, a preset or a horizon change retires an older held pose and its pending RAF or
 fold; all five charts immediately place their retained data in the requested projection.
@@ -2190,6 +2208,17 @@ values and top-ups compare exact integer millionths from the same accounting
 model as their cells. Unknown values stay last in either direction. Hidden columns
 temporarily use default without losing the saved choice. Default preserves the budget
 series order; live accounting boundaries use the shared page clock and retain cells.
+Each table owns a stable content viewport and footer for its structural column
+configuration. Empty, pending, retained, failed and complete results occupy that
+same viewport; grouping, sorting and paging do not change its capacity or neighbours.
+Rows use a bounded preview, with oversized text and complete values reachable through
+the shared Popover. Whole rows page through the full loaded index without an inner
+vertical scroller or another history read.
+Subscription cards keep two primary percentage slots, preferring general five-hour
+and weekly limits. Every selected native window remains in their existing measurement
+disclosure. Wallet cards show one available balance, or the first selected cap when
+the balance is excluded; other caps and exact amounts remain in the balance disclosure.
+Loading extra selected caps never adds a card row or an inventory-wide lookup.
 The budget chart, legend and table name a total balance by its account rather than
 repeating "Available balance". Scoped key limits keep their names; balance components,
 roles and currency provenance remain reachable in card details.

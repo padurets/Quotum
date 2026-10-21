@@ -1,3 +1,4 @@
+/** @jsxRuntime automatic */
 import {createPortal} from 'react-dom';
 import {useCallback, useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type FocusEvent, type ReactNode, type RefObject} from 'react';
 import {barsOf, coverOf, crampedOf, roomOf, shiftOf, sideOf} from '../lib/place';

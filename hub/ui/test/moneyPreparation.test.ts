@@ -100,7 +100,7 @@ for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'reso
     const modules: Record<string, unknown> = {
       'react/jsx-runtime': jsx, react: {memo: reactMemo, useRef: outer.useRef, useMemo: memo},
       '../../server/domain/providers': providers, '../../server/domain/currency': currency, '../../server/domain/meterHistory': {composeMetersPrepared},
-      '../lib/board': {useBoardId: () => 'board', useCurrencyContext: () => defaultCurrencyContext, useNamed: () => sources},
+      '../lib/board': {useServerView:()=>undefined,useBoardId: () => 'board', useCurrencyContext: () => defaultCurrencyContext, useNamed: () => sources},
       '../lib/history': {useBudgetFinancialHistory: () => ({history,drawing:history,loading:!history,presentation}),useBudgetHistory: () => ({history, drawing: history, loading: !history, presentation}), useBudgetHistoryPlot: () => null, useHistoryBegins: () => 0, budgetHistory: {retry: () => {}}},
       '../lib/prefs': {useChartMuted:()=>prefs.muted,chartSeriesMuted,usePref: (key:keyof typeof prefs) => prefs[key]}, '../lib/moneySelection': {moneySelection,fundsLegacyMuted}, '../lib/moneyView': moneyView, '../lib/money': money,
       '../lib/view': {...widgets,colorOf: () => '#fff'}, '../lib/periods': {frameOf: () => ({from: 0, to: 120000, live: true}), measuredTo: () => 60000},

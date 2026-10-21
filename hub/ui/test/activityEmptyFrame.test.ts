@@ -64,6 +64,6 @@ test('the actual empty activity result keeps its time axis and legend container 
   assert.equal(authorities.at(-1),4,'the empty axis also receives the retired presentation lifetime');
   context.error='history_failed';
   const failed=markup();
-  assert.ok(failed.includes('history-error'));assert.ok(!failed.includes('history.loading'));
+  assert.ok(failed.includes('reader-error'));assert.ok(!failed.includes('history.loading'));
   assert.ok(failed.includes('viewBox="0 0 400 160"'),'a failed reader retains a usable empty axis');
 });

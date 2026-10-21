@@ -113,7 +113,7 @@ function drawing(h:Awaited<ReturnType<typeof creditHistory>>,initial:Update,page
   const modules:Record<string,unknown>={
     'react/jsx-runtime':jsx,react:{memo:reactMemo,useRef:outer.useRef,useMemo:memo},
     '../../server/domain/providers':providers,'../../server/domain/currency':currency,'../../server/domain/meterHistory':{composeMetersPrepared},
-    '../lib/board':{useBoardId:()=> 'board',useCurrencyContext:()=>currency.defaultCurrencyContext,useNamed:()=>sources},
+    '../lib/board':{useServerView:()=>undefined,useBoardId:()=> 'board',useCurrencyContext:()=>currency.defaultCurrencyContext,useNamed:()=>sources},
     '../lib/history':{useBudgetFinancialHistory:()=>({history:shown,drawing:shown,loading:false,presentation}),useBudgetHistoryPlot:()=>null,useHistoryBegins:()=>current.historyStart,fundsHistory:{retry(){}}},
     '../lib/prefs':{useChartMuted:()=>prefs.muted,chartSeriesMuted,usePref:(key:keyof typeof prefs)=>prefs[key]},'../lib/moneySelection':{moneySelection,fundsLegacyMuted},'../lib/moneyView':moneyView,'../lib/money':money,'../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},
     '../lib/view':{...widgets,colorOf:()=> '#fff'},'../lib/periods':periods,'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>current.now},'../lib/pan':{usePanning:()=>null},

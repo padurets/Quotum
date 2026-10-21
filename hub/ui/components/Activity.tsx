@@ -1,16 +1,18 @@
 import {AnalyticsPanel} from './AnalyticsPanel';
+import {ReadState} from './ReadState';
 import {memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps} from 'react';
 import type {Activity as ActivityData, ActivityDimension, ActivityGroup} from '../lib/types';
 import {clock, num, shortDay, stamp, workHours} from '../lib/format';
 import {activityEmpty, activityScale, activityGroupName as groupName, atOnce, groupColors, mutedKey} from '../lib/activity';
 import {ACTIVITY_BY, setMuted, setPrefs, usePref, useChartMuted, chartMuteKey, chartSeriesMuted} from '../lib/prefs';
-import {setTimeRange, timeRangeKey, useTimeRange, type TimeRange} from '../lib/timeRange';
+import {setTimeRange, timeRange, timeRangeKey, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks, periodOf} from '../lib/periods';
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
 import {page, usePersonalBoard, useBoardId, useLineup, useTitles} from '../lib/board';
 import {useClock,hubNow} from '../lib/clock';
 import {quotaHistory, useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {boardPeriod} from '../lib/period';
+import {workChange} from '../lib/workChanges';
 import type {History} from '../../server/domain/history';
 import {plotBar, plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
 import {usePrepared, usePreparationBasis} from './prepared';
@@ -32,7 +34,7 @@ import {seriesFocusStyle, useSeriesFocus, type SeriesFocus} from './seriesFocus'
 
 import {ActivitySelection} from '../lib/activitySelection';
 import {effectiveFilters,onDataFilters} from '../lib/filterSelection';
-import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
+import {defaultFilters,workFilter,matchesSource} from '../../server/domain/dataFilters';
 import {fetchPeriod} from '../lib/periodTransport';
 import {historyPool} from '../lib/historyPool';
 import {UNAUTHORIZED} from '../lib/http';
@@ -43,7 +45,7 @@ const EMPTY_ACTIVITY: ActivityData = {since: 0, known: null, barMs: MINUTE, acti
 const LABELS: Record<ActivityDimension, Key> = {source: 'activity.bySource', project: 'activity.byProject', device: 'activity.byDevice'};
 
 /** The widget's own settings, as the chart has its own: what its stacks are split by, and (for the board's owner) hiding it. */
-function ActivitySettings({arrange}: {arrange: Arrange}) {
+function ActivitySettings({arrange,since}: {arrange: Arrange;since?:number|null}) {
   const activityBy=usePref('activityBy');
   const [open,setOpen]=useState(false);
   return (
@@ -56,6 +58,7 @@ function ActivitySettings({arrange}: {arrange: Arrange}) {
         </div>
       </div>
       <div className="popover-section"><button className="popover-row" onClick={()=>{setOpen(false);navigate(settingsHref('/settings/projects'));}}><span>{t('projects.manage')}</span></button></div>
+      {since!=null&&<div className="popover-note">{t('activity.since',{time:stamp(since)})}</div>}
       {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, ACTIVITY, true))}>{t('widget.hide')}</HideRow>}
     </Popover>
     </>
@@ -130,6 +133,7 @@ function useActivitySubset(history:History|null,by:ActivityDimension,muted:Recor
   const [reader]=useState(()=>new ActivitySelection({pool:historyPool,now:hubNow,send:fetchPeriod,
     read:()=>{const value=boardPeriod.get();return {trace:value.value,ready:!value.loading&&!value.error&&!!value.value,error:value.error};},
     accessLost:()=>{page.dispatch({type:'board-close'});window.dispatchEvent(new Event(UNAUTHORIZED));},
+    retryWork:()=>boardPeriod.retry(),
   }));
   const selected=useTimeRange(),range=usePref('range');
   const configure=useRef(()=>{});
@@ -143,8 +147,11 @@ function useActivitySubset(history:History|null,by:ActivityDimension,muted:Recor
     const stops=[boardPeriod.subscribe(reader.refresh),onDataFilters(()=>configure.current()),page.listen((event,state)=>{
       if(!state.board||event.type==='board-close')reader.reset();
       else if(event.type==='hub'){
-        if(event.event.type==='history'&&event.event.data.workSince!==undefined){
-          reader.changed(event.event.data.workSince,event.event.data.workAuthority);
+        if(event.event.type==='history'){
+          const board=state.board,filters=effectiveFilters(),range=timeRange();
+          const change=workChange(event.event.data,board.lineup.filter(id=>!filters||matchesSource(filters,id)),range?.to??Infinity);
+          if(change.retired)reader.invalidate();
+          else if(change.since!==Infinity||event.event.data.workAuthority!==undefined)reader.changed(change.since,event.event.data.workAuthority);
           configure.current();
         }else if(['snapshot','mine','lineup'].includes(event.event.type)){reader.reset();configure.current();}
         else if(event.event.type==='hello')reader.reset();
@@ -173,17 +180,18 @@ const Totals=memo(function Totals({history,by,subset,scoped,allOff,since,focus,g
   const local=useSubsetNumbers(subset,history,scoped&&!group);
   const preview=group&&base?.by[by].find(part=>part.key===group.key);
   const activity=group&&base?{...base,agentMs:preview?.agentMs??0,activeMs:preview?.activeMs??0,agents:preview?.agents??0}:scoped?local.activity:base;
-  const text=allOff?t('activity.noSeries'):scoped&&!group&&local.state.error?t(local.state.error==='history_limit'?'money.historyLimit':'analytics.failed'):!activity?t('activity.pendingRange'):activity.available===false?t('activity.noSessions'):!activity.known?t('activity.knownFrom',{time:stamp(activity.since)}):null;
+  const text=allOff?t('activity.noSeries'):activity?.available===false?t('activity.noSessions'):activity&&!activity.known?t('activity.knownFrom',{time:stamp(activity.since)}):null;
   return <div className="chart-info activity-info" data-time="activity-info" data-series-context={group?selected:undefined}>
     <div className="activity-totals" data-time="activity-totals" data-agent-ms={!text?activity?.agentMs:undefined}>
-      {text?<span>{text}{local.state.error&&<button className="button" onClick={subset.retry}>{t('analytics.retry')}</button>}</span>:activity&&<>
-        <span title={t('activity.agentHoursHint')}>{t('activity.agentHours')} <b>{workHours(activity.agentMs)}</b></span>
-        <span title={t('activity.activeHint')}>{t('activity.active')} <b>{workHours(activity.activeMs)}</b></span>
-        <span title={t('activity.agentsHint')}>{t('activity.agents')} <b>{num(activity.agents)}</b></span>
-        <span title={t('activity.atOnceHint')}>{t('activity.atOnce')} <b>{activity.activeMs>0?atOnce(activity.agentMs,activity.activeMs):'—'}</b></span>
+      {text?<span>{text}</span>:<>
+        <span title={t('activity.agentHoursHint')}><span className="activity-total-name">{t('activity.agentHours')}</span><b>{activity?workHours(activity.agentMs):'—'}</b></span>
+        <span title={t('activity.activeHint')}><span className="activity-total-name">{t('activity.active')}</span><b>{activity?workHours(activity.activeMs):'—'}</b></span>
+        <span title={t('activity.agentsHint')}><span className="activity-total-name">{t('activity.agents')}</span><b>{activity?num(activity.agents):'—'}</b></span>
+        <span title={t('activity.atOnceHint')}><span className="activity-total-name">{t('activity.atOnce')}</span><b>{activity&&activity.activeMs>0?atOnce(activity.agentMs,activity.activeMs):'—'}</b></span>
       </>}
     </div>
-    <div className="activity-since">{since!==null?t('activity.since',{time:stamp(since)}):'\u00a0'}</div>
+    {since!==null&&<span className="sr-only">{t('activity.since',{time:stamp(since)})}</span>}
+    {scoped&&!group&&<ReadState error={local.state.error} retry={subset.retry}/>}
   </div>;
 });
 
@@ -211,7 +219,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const focus=useSeriesFocus(panel,`${authority}:${drawing?.range}:${by}`);
   const locale = useLocale();
   const selected = useTimeRange();
-  const navigation = axisNavigation(useBoardId(), selected, prefs);
+  const baseNavigation=axisNavigation(useBoardId(),selected,prefs),navigation={...baseNavigation,context:JSON.stringify([baseNavigation.context,authority])};
   const clockNow = useClock(now => frameChangesAt(selected, history?.cellMs ?? 60_000, now), [history, strip, prefs, selected, titles, arrange.view, locale]);
   const panning = usePanning();
   const captured = useRef<{authority: number; token: number; now: number} | null>(null);
@@ -263,7 +271,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const empty = error || !said
     ? null
     : said.key === 'loading'
-      ? t('history.loading')
+      ? null
       : said.key === 'knownFrom' || said.key === 'noneSince'
         ? t(`activity.${said.key}`, {time: stamp(said.at)})
         : t(`activity.${said.key}`);
@@ -272,7 +280,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
 
   return (
     <AnalyticsPanel ref={panel} className="activity" title={t('activity.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
-      settings={<ActivitySettings arrange={arrange}/>}
+      settings={<ActivitySettings arrange={arrange} since={since}/>}
     >
       <Totals history={drawing} by={by} subset={subset} scoped={scoped} allOff={allOff} since={since} focus={focus} groups={currentGroups}/>
       <>
@@ -394,8 +402,8 @@ const Stacks = memo(function Stacks({
   const height = plot === undefined ? base : Math.max(base, plot / scale);
   useLayoutEffect(() => onBase(base * scale), [base, scale, onBase]);
   const top = 12, bottom = 28;
-  const cache = useRef({authority, maximum: 0, paths: new StackPaths()});
-  if (cache.current.authority !== authority) cache.current = {authority, maximum: 0, paths: new StackPaths()};
+  const cache = useRef({authority, paths: new StackPaths()});
+  if (cache.current.authority !== authority) cache.current = {authority, paths: new StackPaths()};
   const inputs = [incomingGroups, incomingStrip, incomingActivity, incomingOrigin, incomingUnknownTo, by, width, height, navigationKey(navigation)];
   const requested = usePreparationBasis(axis.basis, inputs, active, incomingReady, authority);
   const prepared = usePrepared(function* () {
@@ -407,17 +415,21 @@ const Stacks = memo(function Stacks({
       keys.add(group.key);
       for (const [at, ms] of group.cells) {heights.set(at, (heights.get(at) ?? 0) + ms); yield;}
     }
-    const bars = new Map<number, number>();
-    if (incomingStrip) for (const [at, row] of incomingStrip.activityCells) {
-      const bar = cellStart(at, barMs);
-      let ms = 0;
-      for (const [key, part] of row.parts[by]) {if (keys.has(key)) ms += part.ms; yield;}
-      bars.set(bar, (bars.get(bar) ?? 0) + ms);
+    const draft=active?pan.get():null,visual=draft?axis.visualGeometry():null;
+    const selected=draft&&visual?{from:visual.from,to:visual.from+draft.length}:{from,to};
+    const target=incomingStrip?targetOf(selected.to-selected.from,draft?.now??to,'scale',selected):null;
+    let maximum = 0;
+    for (const [at,value] of heights) {
+      // Only complete drawn bars set the scale. Raw strip cells may be unread,
+      // or outside the selected period, and cannot supply a phantom maximum.
+      if(incomingStrip?at>=selected.from&&at+barMs<=selected.to:at<selected.to&&at+barMs>selected.from)maximum=Math.max(maximum,value);
+      yield;
     }
-    let busiest = 0;
-    for (const value of heights.values()) {busiest = Math.max(busiest, value); yield;}
-    for (const value of bars.values()) {busiest = Math.max(busiest, value); yield;}
-    const maximum = active ? Math.max(cache.current.maximum, busiest) : busiest;
+    if(incomingStrip&&target)for(const at of new Set([cellStart(selected.from,barMs),cellStart(selected.to-1,barMs)])){
+      const edge=plotBar(incomingStrip,at,target,by);
+      if(edge)maximum=Math.max(maximum,[...edge.groups].reduce((sum,[key,part])=>sum+(keys.has(key)?part.ms:0),0));
+      yield;
+    }
     const vertical = activityScale(maximum);
     const perMs = (width - left - right) / span;
     const pathOrigin = incomingStrip ? basis.from : incomingOrigin;
@@ -445,7 +457,7 @@ const Stacks = memo(function Stacks({
   const hover = incomingReady && prepared.ready ? axis.hover : null;
   const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
   const {ticks, daily} = niceTicks(tickFrom, tickTo, (narrow ? 4 : 7) * (tickTo - tickFrom) / span);
-  useLayoutEffect(() => {if (model) cache.current.maximum = model.maximum; axis.commitDrawing(basis, incomingReady && prepared.ready);});
+  useLayoutEffect(() => {axis.commitDrawing(basis, incomingReady && prepared.ready);});
 
   const innerClip = `${clip}-inner`;
   const bandClip = useRef<HTMLDivElement>(null);

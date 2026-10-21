@@ -37,7 +37,7 @@ function consumer(name:string,clock:PageClock,period:any,initial:any,panning:()=
   const slots:any[]=[],effects:(()=>void)[]=[],stops:(()=>void)[]=[];
   const slot=(create:()=>any)=>{const at=cursor++;return slots[at]??(slots[at]=create());};
   const useRef=(current:any)=>slot(()=>({current}));
-  const context:any={chartSeriesMuted,ACTIVITY,exports:{},require,memo:(value:any)=>value,useLocale:()=>{},usePanning:panning,boardPeriod:period,
+  const context:any={ReadState:()=>null,chartSeriesMuted,ACTIVITY,exports:{},require,memo:(value:any)=>value,useLocale:()=>{},usePanning:panning,boardPeriod:period,
     useId:()=> 'legend-description',seriesFocusStyle:()=>({}),useRef,useState:(initial:any)=>{const box=slot(()=>({value:typeof initial==='function'?initial():initial}));return [box.value,(value:any)=>{box.value=value;dirty=true;}];},
     useSyncExternalStore:(subscribe:any,read:any)=>{const box=slot(()=>{const value={current:read()};stops.push(subscribe(()=>{const next=read();if(!Object.is(next,value.current)){value.current=next;dirty=true;}}));return value;});return box.current=read();},
     LABELS:{source:'activity.bySource',project:'activity.byProject',device:'activity.byDevice'},groupName,useLayoutEffect:(effect:any)=>effects.push(effect),clock,hubNow:clock.hubNow,num,workHours,stamp,atOnce,mutedKey,t,cellLabel,
@@ -147,7 +147,7 @@ test('the actual summary uses one selected or preview cohort in EN/RU, including
         selected=mutedKey('project','"A"');const preview=view.update(props);assert.ok(preview.includes('data-series-context='));assert.ok(preview.includes('data-agent-ms="1200000"'));assert.ok(preview.includes(t('activity.agents')+' <b>1'));seen.add('one-group-preview');
         selected=null;const allOff=view.update({...props,allOff:true});assert.ok(allOff.includes(t('activity.noSeries')));assert.ok(!allOff.includes('data-agent-ms='));seen.add('no-selected-series');
         const pending=view.update({...props,subset:{get:()=>({model:null,loading:true,error:null}),subscribe:()=>()=>{},changesAt:()=>null,numbers:()=>null}});
-        assert.ok(pending.includes(t('activity.pendingRange')));assert.ok(!pending.includes('data-agent-ms='));seen.add('pending-without-wider-totals');
+        assert.ok(!pending.includes(t('activity.pendingRange')));assert.equal((pending.match(/<b>—<\/b>/g)??[]).length,4);assert.ok(!pending.includes('data-agent-ms='));seen.add('pending-without-wider-totals');
         assert.ok(!html.includes(t('activity.noSeries'))&&!html.includes('activity-legend-tip'));
       }finally{view.close();}
     }

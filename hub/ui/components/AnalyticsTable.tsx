@@ -5,6 +5,7 @@ import {t} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 import {TableHeading,type TableSorting} from './TableWidget';
 import {tableCell as shown,type Cell,type TimedCell} from './TableCell';
+import {TablePreview} from './TablePreview';
 export type {Cell,TimedCell} from './TableCell';
 
 export type AnalyticsColumn<Id extends string> = {id: Id; title: string; hint?: string; width: number; align?: 'right'};
@@ -35,7 +36,7 @@ export function AnalyticsTable<Id extends string>({columns, rows, name, lead, so
 }) {
   const rowName=(row:AnalyticsRow<Id>)=>onOpen&&!still?<button type="button" className="agents-open" data-activity-group={row.key} onClick={()=>onOpen(row.key)}>{row.name}</button>:<span>{row.name}</span>;
   const openRow=(row:AnalyticsRow<Id>,target:EventTarget)=>{if(onOpen&&!(target as Element).closest('button'))onOpen(row.key);};
-  if (layout === 'list') return <ul ref={body as RefObject<HTMLUListElement|null>} className="analytics-compact">{rows.map(row => <li key={row.key} onClick={event=>openRow(row,event.target)}>
+  if (layout === 'list') return <ul ref={body as RefObject<HTMLUListElement|null>} className="analytics-compact">{rows.map(row => <li key={row.key} onClick={event=>openRow(row,event.target)}><TablePreview label={row.name} still={still}>
     <div className="analytics-compact-main">
       {row.color && <span className="swatch" style={{background: row.color}}/>}
       <span className="analytics-compact-name" title={row.hint}>{rowName(row)}</span>
@@ -44,13 +45,13 @@ export function AnalyticsTable<Id extends string>({columns, rows, name, lead, so
     </div>
     {columns.some(column => column.id !== lead) && <div className="analytics-compact-details">{columns.filter(column => column.id !== lead).map(column => shown(column.id, row.cells[column.id], (cell, time) =>
       <span data-time={time} title={cell.title}>{column.title} <span className={cell.className}>{cell.content}</span></span>,still))}</div>}
-  </li>)}</ul>;
+  </TablePreview></li>)}</ul>;
   return <div className="table-wrap"><table className="analytics-table">
     <colgroup><col/>{columns.map(column => <col key={column.id} style={{width: column.width}}/>)}</colgroup>
     <thead><tr><TableHeading id={'name' as Id|'name'} title={name} sorting={sorting}/>{columns.map(column => <TableHeading key={column.id} {...column} sorting={sorting}/>)}</tr></thead>
     <tbody ref={body as RefObject<HTMLTableSectionElement|null>}>{rows.map(row => <tr key={row.key} onClick={event=>openRow(row,event.target)}>
-      <td><span className="analytics-name" title={row.hint}>{row.color && <span className="swatch" style={{background: row.color}}/>}{rowName(row)}</span></td>
-      {columns.map(column => shown(column.id, row.cells[column.id], (cell, time) => <td data-time={time} className={[cell.className, column.align && 'is-' + column.align].filter(Boolean).join(' ') || undefined} title={cell.title}>{cell.content}</td>,still))}
+      <td><TablePreview label={row.name} still={still}><span className="analytics-name" title={row.hint}>{row.color && <span className="swatch" style={{background: row.color}}/>}{rowName(row)}</span></TablePreview></td>
+      {columns.map(column => shown(column.id, row.cells[column.id], (cell, time) => <td data-time={time} className={[cell.className, column.align && 'is-' + column.align].filter(Boolean).join(' ') || undefined} title={cell.title}><TablePreview label={column.title} still={still}>{cell.content}</TablePreview></td>,still))}
     </tr>)}</tbody>
   </table></div>;
 }

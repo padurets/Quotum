@@ -20,7 +20,7 @@ for(const family of ['quota','budget'] as const)test(`${family} sorts the comple
     boardPeriod:{moneyWorkAt:()=>undefined},clock:{watch:()=>({}),due:()=>{}},hubNow:()=>3_600_000,FORECAST_WIDTHS:{limit:180},sortValue,forecastComparator,nextForecastSort,visibleForecastSort,moneyTableValues,moneyComparator,nextMoneySort,visibleMoneySort,
     AnalyticsPanel:'panel',AnalyticsTable:'table',WidgetPages:'footer',TableMeasure:'measurement',TableSortMenu:'sort',t:()=> 'Value',
     setPrefs:(value:any)=>{sort=value[family==='quota'?'forecastSort':'moneySort'];},
-    useTableWidget:(_panel:unknown,_widths:unknown,_name:unknown,all:string[],key:string)=>{
+    TableSurface:'surface',useTableWidget:(_panel:unknown,_widths:unknown,_name:unknown,all:string[],key:string)=>{
       if(reset!==key){reset=key;page=0;}keys=all;
       return {layout:'table',from:page*TABLE_PAGE_ROWS,to:(page+1)*TABLE_PAGE_ROWS,measureFrom:0,measureTo:Math.min(all.length,50)};
     },
@@ -29,7 +29,7 @@ for(const family of ['quota','budget'] as const)test(`${family} sorts the comple
   const source=readFileSync(new URL(`../components/${file}.tsx`,import.meta.url),'utf8'),start=source.indexOf(`const ${component}=`);
   const end=family==='quota'?source.indexOf('/**',start):source.indexOf('const pointAt=',start);
   runInNewContext(ts.transpileModule('export '+source.slice(start,end),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
-  const render=()=>context.exports[component](props).props.children[1].props.children;
+  const render=()=>{const [surface,footer,measurement]=context.exports[component](props).props.children;return [surface.props.children[1],footer,measurement];};
   let [table,footer,measurement]=render();
   assert.equal(footer.props.count,rows.length);assert.equal(measurement.props.children.props.still,true);
   assert.equal(measurement.props.children.props.sorting,table.props.sorting,'static measurement keeps the visible sortable header geometry');

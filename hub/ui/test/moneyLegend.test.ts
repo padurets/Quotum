@@ -63,14 +63,14 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
     const modules:Record<string,unknown>={
       'react/jsx-runtime':jsx,react:{useRef:hooks.useRef,useMemo,memo:reactMemo},
       '../../server/domain/providers':providers,'../../server/domain/currency':currency,'../../server/domain/meterHistory':{composeMetersPrepared:meterHistory.composeMetersPrepared},
-      '../lib/board':{useBoardId:()=> 'b',useCurrencyContext:()=>context,useNamed:()=>sources},
+      '../lib/board':{useServerView:()=>undefined,useBoardId:()=> 'b',useCurrencyContext:()=>context,useNamed:()=>sources},
       '../lib/history':{useBudgetFinancialHistory:()=>({history,drawing,loading:!history,presentation:authority}),useBudgetHistoryPlot:()=>null,useHistoryBegins:()=>0,budgetHistory:{retry(){}},fundsHistory:{retry(){}}},
       '../lib/prefs':{useChartMuted:()=>prefs.muted,chartMuteKey,chartSeriesMuted,usePref:(key:keyof typeof prefs)=>prefs[key],setMuted:(key:string,value:boolean)=>toggles.push({key,value})},
       '../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},
       './MoneySettings':{MoneyChartSettings},
       '../lib/moneySelection':{moneySelection,fundsLegacyMuted},'../lib/moneyView':moneyView,'../lib/money':{...money,money:(...args:Parameters<typeof money.money>)=>{calls++;return money.money(...args);}},
       '../lib/view':{...widgets,colorOf:()=> '#fff'},'../lib/periods':periods,'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>now},'../lib/pan':{usePanning:()=>null},
-      '../lib/axisNavigation':{axisNavigation:()=>({context:'b'})},'../i18n':{t:i18n.t,useLocale},'./prepared':{usePrepared:hooks.usePrepared},'./sizing':{usePlot:()=>({plot:160,onBase(){}})},'./Chart':{Chart},'./AnalyticsPanel':{SeriesLegendItem},
+      '../lib/axisNavigation':{axisNavigation:()=>({context:'b'})},'../i18n':{t:i18n.t,useLocale},'./prepared':{usePrepared:hooks.usePrepared},'./sizing':{usePlot:()=>({plot:160,onBase(){}})},'./Chart':{Chart},'./SeriesDetails':{SeriesDetails:()=>null},'./AnalyticsPanel':{SeriesLegendItem},
     };
     const vm={exports:{} as {MoneyHistory:(props:unknown)=>ReactElement<{children:unknown[]}>},require:(n:string)=>modules[n]??{}};
     runInNewContext(ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,vm);

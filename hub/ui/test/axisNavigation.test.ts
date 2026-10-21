@@ -39,17 +39,36 @@ test('Back supersedes a held final owner including its unpainted RAF and never r
   assert.equal(h.context.svg.current.dataset.drawReady, 'true');
 });
 
-test('preset or horizon changes supersede a fold even when the URL range stays the same', async () => {
+test('preset or horizon changes retire a positioned projection even when the URL range stays the same', async () => {
   for (const updated of [{...prefs, range: '30d'}, {...prefs, horizon: '7d' as const}]) {
     const a = axisNavigation('board', A, prefs), b = axisNavigation('board', A, updated);
     const h = axisPresentationFixture(A, a);
     h.context.finished.current = {visual: {...A, to: A.to + H}, navigation: a, stop: {range: A, canceled: false}};
-    h.context.commit(A, true); assert.ok(h.context.motion.current);
+    h.context.commit(A, true); assert.ok(h.context.wanted.current.positioned);
     h.navigate(A, b); assert.equal(h.context.motion.current, null);
     for (const animation of h.animations) animation.finish();
     await Promise.resolve(); await Promise.resolve();
     assert.equal(h.context.motion.current, null); assert.ok(!h.classes.has('is-panning'));
     near(h.context.visualGeometry().from, A.from); near(h.context.visualGeometry().to, A.to);
+  }
+});
+
+test('ready commits and late projection hints cannot zoom a positioned historical view', () => {
+  const nav=axisNavigation('board',B,prefs),visual={...B,to:B.to+1.72*H};
+  for(const [width,scale,left] of [[600,.5,40],[920,.73,48]]){
+    const h=axisPresentationFixture(A,nav,width,scale,left);
+    h.context.finished.current={visual,navigation:nav,stop:{range:B,canceled:false}};
+    h.context.commit(B,true);
+    const points=[10*H,11*H].map(h.point);
+    for(const ready of [false,true,true]){
+      h.navigate({...B,to:B.to+H/3},nav);
+      h.context.commit({...B,to:B.to+H/3},ready);
+      [10*H,11*H].forEach((at,i)=>near(h.point(at),points[i]));
+    }
+    const next={...B,from:B.from-H,to:B.to-H},nextNav=axisNavigation('board',next,prefs);
+    h.navigate(next,nextNav);h.context.commit(next,true);
+    assert.equal(h.context.wanted.current.positioned,false);
+    near(h.context.visualGeometry().from,next.from);near(h.context.visualGeometry().to,next.to);
   }
 });
 

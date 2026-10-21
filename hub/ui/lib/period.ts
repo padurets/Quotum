@@ -1,4 +1,5 @@
 import {WorkCalendar} from './workCalendar';
+import {workChange} from './workChanges';
 import {AGENT_HOURS_HEATMAP} from '../../server/domain/widgets';
 import {effectiveFilters,filtersReady,onDataFilters} from './filterSelection';
 import {executableWorkFilters,matchesSource,workFilter} from '../../server/domain/dataFilters';
@@ -483,7 +484,7 @@ class BoardPeriod {
         if(relevant){
           this.resourceGeneration++;
           if(own)this.invalidateFacets();
-          const retired=own&&hub.data.workSince===0||included&&(hub.data.changes?hub.data.changes.some(c=>sources.includes(c.source)&&c.scope==='quota'&&(c.since===0||c.workSince===0)):hub.data.since===0);
+          const {retired}=workChange(hub.data,sources,selection.mode==='live'?Infinity:selection.to);
           if(retired)this.retireWork();
           if(included&&selection.mode==='range')this.valuesNeeded=true;
           for(const scope of PERIOD_SCOPES){

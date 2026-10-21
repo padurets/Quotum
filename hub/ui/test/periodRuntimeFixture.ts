@@ -1,3 +1,6 @@
+import {plotBar} from '../lib/historyPlot';
+import {targetOf} from '../../server/domain/history';
+import {workChange} from '../lib/workChanges';
 import * as periodValueClockBindings from '../../server/domain/periodValues';
 import {WorkCalendar} from '../lib/workCalendar';
 import {AGENT_HOURS_HEATMAP} from '../../server/domain/widgets';
@@ -96,7 +99,7 @@ export async function fixture({heatmap=false,personal=false,ownerDevice=false,tr
   let wait:Promise<void>|null=null,preparer:Preparations|null=null;
   const pageClock=new PageClock({now:()=>now,visible:()=>true,setTimeout:(run,ms)=>{const token={};timers.set(token,{at:now+ms,run});return token;},clearTimeout:token=>{timers.delete(token as object);}});
   const pan=new Pan({now:()=>now,commit:()=>{},requestFrame:run=>{run();return null;},cancelFrame:()=>{},setTimeout:()=>null,clearTimeout:()=>{}});
-  const context={exports:{} as any,hubNow:clocked?pageClock.hubNow:()=>now,retention,historyPool:pool,clock:clocked?pageClock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,
+  const context={workChange,exports:{} as any,hubNow:clocked?pageClock.hubNow:()=>now,retention,historyPool:pool,clock:clocked?pageClock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,
     fetchPeriod:async(_board:string,body:PeriodRequest)=>{requests.push(body);const reply=expandPeriod(JSON.parse(reader.read(board,alice.id,JSON.parse(JSON.stringify(body)))));const pending=wait;wait=null;await pending;return reply;},
     periodTextChangesAt,page,pan,preparations:()=>preparer,prepareAsync:(owner:object,work:Parameters<typeof drain>[0],valid:()=>boolean)=>prepareAsync(owner,work,valid,preparer),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,
     packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,
@@ -147,7 +150,7 @@ export function consumer(h: any) {
     useChartMuted:()=>prefs.muted,usePref:(key:keyof typeof prefs)=>prefs[key],useLocale:()=> 'en',useTimeRange:()=>h.selectedRange(),useBoardId:()=>h.board,
     axisNavigation:()=>({context:'b',range:'1h'}),useClock:()=>NOW,usePanning:()=>panning,
     pan:{get:()=>null,active:()=>null,subscribe:()=>()=>{}},useHistoryBegins:()=>0,frameOf:()=>({from:NOW-H,to:NOW,live:true}),measuredTo:()=>NOW,
-    activityEmpty,groupColors,groupRegistry,mutedKey,plotGroupsPrepared,StackPaths,stacksHeight:()=>160,activityScale,niceTicks,cellStart,MINUTE:60_000,EMPTY_ACTIVITY,groupName:(g:any)=>g.name??g.key,cardId,isHidden,t:(s:any)=>s,
+    activityEmpty,groupColors,groupRegistry,mutedKey,plotGroupsPrepared,StackPaths,stacksHeight:()=>160,activityScale,niceTicks,cellStart,plotBar,targetOf,MINUTE:60_000,EMPTY_ACTIVITY,groupName:(g:any)=>g.name??g.key,cardId,isHidden,t:(s:any)=>s,
     quotaHistory:{retry:()=>{}},AnalyticsPanel:()=>null,ActivitySettings:()=>null,Totals:()=>null,LegendItem:()=>null,
     setTimeRange:()=>{},timeRangeKey,navigationKey,useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),
     PlotLayer:()=>null,PlotOverlay:()=>null,Tooltip:()=>null,clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',

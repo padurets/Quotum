@@ -20,7 +20,7 @@ test('heatmap rows follow physical order and an explicit drill focuses the new g
   const context={exports:{} as any,require:()=>({jsx,jsxs:jsx}),memo:(f:unknown)=>f,useMemo:(read:()=>unknown)=>read(),...hooks,
     useSyncExternalStore:(_subscribe:unknown,read:()=>unknown)=>read(),usePref:()=> 'matrix',useLocale:()=> 'en',formatLocale:()=> 'en',useTimeRange:()=>selection,useSizing:()=>null,
     heatmapLayout,boardPeriod:{calendar:{subscribe:()=>()=>{},get:()=>reading}},t:(key:string)=>key,num:String,CATEGORY_COLORS:['blue'],CALENDAR_OPACITY:[0,.2,.4,.6,.8,1],
-    setTimeRange:(range:{from:number;to:number})=>{selection=range;},ResizeObserver:class{observe(){}disconnect(){}},Popover:'popover',Segmented:'segmented',SlidersIcon:'icon',HistoryFailure:'failure',
+    setTimeRange:(range:{from:number;to:number})=>{selection=range;},ResizeObserver:class{observe(){}disconnect(){}},Popover:'popover',Segmented:'segmented',SlidersIcon:'icon',ReadState:'state',
   };
   const source=readFileSync(new URL('../components/AgentHoursHeatmap.tsx',import.meta.url),'utf8').replace(/^import .*;$/mg,'');
   runInNewContext(ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);

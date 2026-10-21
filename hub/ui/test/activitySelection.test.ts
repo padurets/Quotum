@@ -15,6 +15,8 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {effectiveFilters,publishDataFilters,onDataFilters} from '../lib/filterSelection';
+import {workChange} from '../lib/workChanges';
+import {matchesSource} from '../../server/domain/dataFilters';
 
 const deferred=()=>{let resolve!:()=>void;const promise=new Promise<void>(yes=>{resolve=yes;});return {promise,resolve};};
 
@@ -24,7 +26,7 @@ test('the mounted subset accepts ordinary history events carrying unchanged work
   const add=(from:number,to:number)=>{h.store.creditWork(h.device,from,to,[{source:h.source,client:'codex',origin:'terminal',project:'A',folder:'',startedAt:NOW-H,identity:{kind:'stable',sessionId:'A'}}]);h.events.flush();};
   add(NOW-20*M,NOW-10*M);
   const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
-  const context={exports:{} as any,ActivitySelection,historyPool:pool,hubNow:()=>NOW,page:h.page,boardPeriod:h.period,
+  const context={exports:{} as any,ActivitySelection,workChange,matchesSource,timeRange:()=>({from:NOW-H,to:NOW}),historyPool:pool,hubNow:()=>NOW,page:h.page,boardPeriod:h.period,
     fetchPeriod:async(_board:string,body:PeriodRequest)=>{requests.push(body);return expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,body)));},
     useState:(init:()=>unknown)=>[init()],useRef:(current:unknown)=>({current}),useTimeRange:()=>({from:NOW-H,to:NOW}),usePref:()=> '1h',
     useLayoutEffect:(effect:()=>void)=>effect(),useEffect:(effect:()=>()=>void)=>cleanups.push(effect()),
@@ -50,7 +52,7 @@ for(const fixed of [false,true])test(`the mounted ${fixed?'fixed':'live'} subset
   const h=await fixture({personal:true,initialFilters:defaultFilters()}),pool=new HistoryPool(),requests:PeriodRequest[]=[],cleanups:(()=>void)[]=[];
   h.store.creditWork(h.device,NOW-20*M,NOW-10*M,[{source:h.source,client:'codex',origin:'terminal',project:'A',folder:'',startedAt:NOW-H,identity:{kind:'stable',sessionId:'A'}}]);h.events.flush();await flush();
   const stopPeriod=onDataFilters(()=>h.period.changed()),source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
-  const context={exports:{} as any,ActivitySelection,historyPool:pool,hubNow:()=>NOW,page:h.page,boardPeriod:h.period,
+  const context={exports:{} as any,ActivitySelection,workChange,matchesSource,timeRange:()=>fixed?{from:NOW-H,to:NOW}:null,historyPool:pool,hubNow:()=>NOW,page:h.page,boardPeriod:h.period,
     fetchPeriod:async(_board:string,body:PeriodRequest)=>{requests.push(body);return expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,body)));},
     useState:(init:()=>unknown)=>[init()],useRef:(current:unknown)=>({current}),useTimeRange:()=>fixed?{from:NOW-H,to:NOW}:null,usePref:()=> '1h',
     useLayoutEffect:(effect:()=>void)=>effect(),useEffect:(effect:()=>()=>void)=>cleanups.push(effect()),
@@ -96,9 +98,10 @@ for(const days of [1,30])test(`production fixed subset ${days}d replaces dirty c
     reader.changed(NOW+1);await flush();assert.equal(requests.length,2,'an event after the upper bound reads nothing');
     add('B',NOW-6*M,NOW-5*M);reader.changed(NOW-6*M);reader.changed(NOW-5*M);await flush();assert.equal(requests.length,3,'queued news coalesces');
     gate=deferred();const waiting=gate;reader.changed(NOW-10*M);await flush();assert.equal(requests.length,4);
-    add('A',NOW-4*M,NOW-3*M);reader.changed(NOW-4*M);assert.equal(reader.numbers(NOW),null,'an older answer cannot label newer work');waiting.resolve();await flush();
+    const retained=reader.get().model;
+    add('A',NOW-4*M,NOW-3*M);reader.changed(NOW-4*M);assert.equal(reader.get().model,retained,'the last complete answer stays visible while newer work is pending');assert.equal(reader.get().loading,true);waiting.resolve();await flush();
     assert.equal(peak,1);assert.equal(requests.length,5);assert.deepEqual([reader.numbers(NOW)!.agentMs,reader.numbers(NOW)!.activeMs],[47*M,37*M]);
-    fail=true;add('A',NOW-10*H,NOW-10*H+5*M,'late-A');reader.changed(NOW-10*H);await flush();assert.equal(reader.get().error,'history_failed');assert.equal(reader.numbers(NOW),null);
+    fail=true;add('A',NOW-10*H,NOW-10*H+5*M,'late-A');reader.changed(NOW-10*H);await flush();assert.equal(reader.get().error,'history_failed');assert.equal(reader.numbers(NOW)?.agentMs,47*M,'a failed replacement keeps its complete evidence');
     add('A',NOW-2*M,NOW-M);reader.changed(NOW-2*M);await flush();
     assert.equal(Number(requests.at(-1)!.quota!.from),Math.floor((NOW-10*H)/cellOf(days*24*H))*cellOf(days*24*H),'a later event must also replace the earlier failed cells');
     assert.deepEqual([reader.numbers(NOW)!.agentMs,reader.numbers(NOW)!.activeMs],[53*M,43*M]);
@@ -131,10 +134,11 @@ test('a live work event waits for replacement board evidence and empty coverage 
   try{
     reader.configure(scope);await flush();assert.ok(reader.numbers(100)?.known);
     assert.equal(reader.changesAt(100,at=>String(!!reader.numbers(at)?.known)),150);
-    reader.changed(90);await flush();assert.equal(reader.numbers(100),null,'the event cannot publish the pre-event C intervals again');
+    const model=reader.get().model;
+    reader.changed(90);await flush();assert.equal(reader.get().model,model,'retain pre-event evidence without republishing it as a ready replacement');assert.equal(reader.get().loading,true);
     trace={...trace,cut:110};reader.refresh();await flush();assert.ok(reader.numbers(100)?.known);
     assert.equal(reader.changesAt(100,at=>String(!!reader.numbers(at)?.known)),160);
-    ready=false;reader.refresh();assert.equal(reader.numbers(100),null);
+    ready=false;reader.refresh();assert.ok(reader.numbers(100)?.known);assert.equal(reader.get().loading,true);
     ready=true;reader.refresh();await flush();assert.ok(reader.numbers(100)?.known,'the same trace can recover after its board dependency waits');
   }finally{reader.reset();await flush();assert.equal(pool.estimatedBytes,0);}
 });
@@ -201,4 +205,76 @@ for(const fixed of [false,true])for(const returnToA of [false,true])test(`queued
     assert.equal(reader.numbers(NOW)?.agentMs,(returnToA?5:10)*M,'the current generation starts when a shared slot is released');
     assert.equal(requests,fixed?1:0,'retired queued generations never reach HTTP');assert.equal(pool.activeFlights,0);
   }finally{reader.reset();for(const flight of blockers)pool.release(flight);await flush();assert.equal(pool.estimatedBytes,0);await h.close();}
+});
+
+for(const fixed of [false,true])for(const kind of ['own','quota','legacy','budget','unrelated'] as const)test(`mounted ${fixed?'fixed':'live'} Activity handles ${kind} cutoffs before a replacement`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const h=await fixture({personal:true}),pool=new HistoryPool(),cleanups:(()=>void)[]=[];
+  const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
+  let fail=false,reads=0;
+  const context={exports:{} as any,ActivitySelection,workChange,matchesSource,historyPool:pool,hubNow:()=>NOW,page:h.page,boardPeriod:h.period,
+    fetchPeriod:async(_board:string,body:PeriodRequest)=>{reads++;if(fail)throw Error('unavailable');return expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,body)));},
+    useState:(init:()=>unknown)=>[init()],useRef:(current:unknown)=>({current}),useTimeRange:()=>fixed?{from:NOW-H,to:NOW}:null,timeRange:()=>fixed?{from:NOW-H,to:NOW}:null,usePref:()=> '1h',
+    useLayoutEffect:(effect:()=>void)=>effect(),useEffect:(effect:()=>()=>void)=>cleanups.push(effect()),activityMutedKeys:()=>['"Other"'],
+    effectiveFilters:()=>defaultFilters(),workFilter,defaultFilters,timeRangeKey:()=> 'fixed',periodOf:()=>({ms:H}),onDataFilters:()=>()=>{},
+    UNAUTHORIZED:'unauthorized',window:{dispatchEvent:()=>{throw Error('unexpected access loss');}}};
+  runInNewContext(ts.transpileModule(source.slice(source.indexOf('function useActivitySubset('),source.indexOf('function useSubsetNumbers('))+'\nexports.hook=useActivitySubset;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  const reader:ActivitySelection=context.exports.hook({board:h.board,activity:{barMs:M}},'project',{},1,false,true);
+  try{
+    await flush();assert.equal(reader.numbers(NOW)?.agentMs,M);
+    const old=reader.get().model,previousReads=reads;
+    fail=true;
+    const data=kind==='own'?{sources:[],since:0,workSince:0}:kind==='legacy'?{sources:[h.source],since:0}:{sources:[kind==='unrelated'?'other':h.source],since:0,changes:[{source:kind==='unrelated'?'other':h.source,scope:kind==='budget'?'budget' as const:'quota' as const,since:0}]};
+    const gate=h.hold();
+    h.event({type:'history',data});
+    if(kind==='budget'||kind==='unrelated'){
+      assert.equal(reader.get().model,old,'independent resource evidence does not retire the subset');
+      await flush();assert.equal(reads,previousReads);
+    }else{
+      assert.equal(reader.numbers(NOW),null,'retirement is synchronous, before microtasks or HTTP');
+      await flush();assert.equal(reader.numbers(NOW),null);
+      if(fixed)assert.equal(reader.get().errorOwner,'subset-read');
+    }
+    reader.reset();gate.release();await flush();assert.equal(reader.numbers(NOW),null,'a late baseline cannot restore the retired lifetime');
+  }finally{cleanups.forEach(stop=>stop());reader.reset();await flush();await h.close();}
+});
+
+test('ordinary live replacement retains one accounted complete model through pending, failure and local retry',async()=>{
+  const pool=new HistoryPool();let trace:WorkTrace={anchor:0,knownFrom:0,cut:100,refs:[],spans:[]},ready=true,error:string|null=null,network=0;
+  const reader=new ActivitySelection({pool,now:()=>100,read:()=>({trace,ready,error}),scheduler:()=>null,send:async()=>{network++;throw Error('unexpected');},retryWork:()=>{error=null;ready=true;trace={...trace,cut:110};}});
+  const scope:ActivityScope={board:'b',authority:'same',by:'project',muted:['"other"'],filters:workFilter(defaultFilters()),selection:{mode:'live',periodMs:50},rangeKey:'live',barMs:10};
+  try{
+    reader.configure(scope);await flush();const old=reader.get().model,bytes=pool.estimatedBytes;assert.ok(old&&bytes>0);
+    const publications:ReturnType<typeof reader.get>[]=[];reader.subscribe(()=>publications.push(reader.get()));
+    reader.changed(90);ready=false;reader.refresh();await flush();
+    assert.equal(reader.get().model,old);assert.ok(pool.estimatedBytes>=bytes,'the retained projector remains charged');
+    error='history_failed';reader.refresh();assert.equal(reader.get().errorOwner,'upstream-work');assert.equal(reader.get().model,old);
+    reader.retry();await flush();assert.equal(reader.get().error,null);assert.notEqual(reader.get().model,old);
+    assert.ok(publications.every(state=>state.model),'no intermediate subscriber observes a missing complete model');assert.equal(network,0);
+    const complete=reader.get().model;
+    const reserve=pool.reserve.bind(pool);pool.reserve=()=>false;
+    trace={...trace,cut:120};reader.refresh();await flush();assert.equal(reader.get().model,complete);assert.equal(reader.get().errorOwner,'local-preparation');
+    pool.reserve=reserve;reader.retry();await flush();assert.equal(reader.get().error,null);assert.equal(network,0,'local preparation retry has no transport');
+  }finally{reader.reset();await flush();assert.equal(pool.estimatedBytes,0);assert.equal(pool.activeFlights,0);}
+});
+
+test('mounted live Activity retry repeats failed upstream work before preparing its retained subset',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({personal:true}),pool=new HistoryPool(),cleanups:(()=>void)[]=[];
+  const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');let subsetReads=0;
+  const context={exports:{} as any,ActivitySelection,workChange,matchesSource,historyPool:pool,hubNow:()=>NOW,page:h.page,boardPeriod:h.period,
+    fetchPeriod:async()=>{subsetReads++;throw Error('live subset must reuse upstream evidence');},
+    useState:(init:()=>unknown)=>[init()],useRef:(current:unknown)=>({current}),useTimeRange:()=>null,timeRange:()=>null,usePref:()=> '1h',periodOf:()=>({ms:H}),
+    useLayoutEffect:(effect:()=>void)=>effect(),useEffect:(effect:()=>()=>void)=>cleanups.push(effect()),activityMutedKeys:()=>['"Other"'],
+    effectiveFilters:()=>defaultFilters(),workFilter,defaultFilters,timeRangeKey:()=> 'fixed',onDataFilters:()=>()=>{},UNAUTHORIZED:'unauthorized',window:{dispatchEvent:()=>{throw Error('unexpected access loss');}}};
+  runInNewContext(ts.transpileModule(source.slice(source.indexOf('function useActivitySubset('),source.indexOf('function useSubsetNumbers('))+'\nexports.hook=useActivitySubset;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  const reader:ActivitySelection=context.exports.hook({board:h.board,activity:{barMs:M}},'project',{},1,false,true);
+  try{
+    await flush();const old=reader.get().model;assert.ok(old);assert.equal(reader.numbers(NOW)?.agentMs,M);
+    const gate=h.hold();h.credit(NOW-M,NOW);h.events.flush();await flush();assert.equal(reader.get().model,old);assert.equal(reader.get().loading,true);
+    gate.reject(Error('upstream unavailable'));await flush();assert.equal(h.period.get().error,'unavailable');assert.equal(reader.get().errorOwner,'upstream-work');assert.equal(reader.get().model,old);
+    const before=h.requests.length;reader.retry();await flush();assert.equal(h.requests.length,before+1,'retry reaches the real upstream period transport');assert.equal(h.period.get().error,null);assert.equal(reader.get().error,null);assert.notEqual(reader.get().model,old);assert.equal(reader.numbers(NOW)?.agentMs,2*M);assert.equal(subsetReads,0);
+    const complete=reader.get().model,reads=h.requests.length;
+    h.event({type:'history',data:{sources:[h.source],since:0,workAuthority:h.page.get().board!.workAuthority,changes:[{source:h.source,scope:'budget',since:0}]}});await flush();
+    assert.equal(reader.get().model,complete);assert.equal(reader.get().loading,false);assert.equal(h.requests.length,reads,'same-authority financial news never strands local work as pending');
+  }finally{cleanups.forEach(stop=>stop());reader.reset();await flush();await h.close();}
 });

@@ -1,3 +1,4 @@
+import {TablePreview} from '../components/TablePreview';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -48,7 +49,7 @@ function renderer(input:WorkTrace=trace){
     '../i18n':i18n,'../lib/prefs':{setPrefs:(change:{agentsSort?:agents.AgentsSort})=>{if('agentsSort' in change)savedSort=change.agentsSort!;},usePref:(key:string)=>key==='agentsBy'?by:key==='agentsSort'?savedSort:'1h'},
     '../lib/board':{useLineup:()=>['s'],useTitles:()=>({s:{provider:'codex',title:'Subscription'}})},'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>now,hubNow:()=>now},
     '../lib/period':{boardPeriod:period,usePeriodSessions:()=>({rows:model().rows,basis:{range},loading:false,error:null})},'./sizing':{useSizing:()=>null},'./PeriodStatus':{PeriodStatus:()=>null},
-    './Popover':{Popover:()=>null},'./Kit':{Modal:({children}:{children:React.ReactNode})=>React.createElement('div',null,children)}};
+    './TablePreview':{TablePreview},'./ReadState':{ReadState:()=>null},'./Popover':{Popover:()=>null},'./Kit':{Modal:({children}:{children:React.ReactNode})=>React.createElement('div',null,children)}};
   const compile=(file:string)=>{const context={exports:{} as Record<string,React.ComponentType<any>>,require:(name:string)=>modules[name]??{}};runInNewContext(ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);return context.exports;};
   modules['./TableCell']=compile('../components/TableCell.tsx');
   modules['./Time']=compile('../components/Time.tsx');

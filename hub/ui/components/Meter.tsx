@@ -23,9 +23,9 @@ export function ResetText({resetAt,now,short=false}:{resetAt:number|null;now:num
 }
 
 /** Every subscription uses the same remaining-percent row in both board views. */
-export function PercentLimit({name,remaining,reset,note,status,valueTitle,compact=false,children}:{name:string;remaining:number|null;reset:ReactNode;note?:ReactNode;status?:ReactNode;valueTitle?:string;compact?:boolean;children?:ReactNode}) {
+export function PercentLimit({name,remaining,reset,note,status,valueTitle,compact=false,precise=false,children}:{name:string;remaining:number|null;reset:ReactNode;note?:ReactNode;status?:ReactNode;valueTitle?:string;compact?:boolean;precise?:boolean;children?:ReactNode}) {
   const label=status?<span className="cap-label"><span>{name}</span>{status}</span>:name;
-  const value=remaining===null?'—':num(remaining),tone=remaining===null?'ok':level(remaining);
+  const value=remaining===null?'—':num(remaining,precise?2:0),tone=remaining===null?'ok':level(remaining);
   const bar=<MeterBar remaining={remaining} label={name.replaceAll(' · ','\n')}>{children}</MeterBar>;
   if(compact)return <div className="compact-limit">
     <div className="compact-window-name"><span title={name.replaceAll(' · ','\n')}>

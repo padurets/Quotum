@@ -209,6 +209,9 @@ test('unpainted final input is credited only after its geometry commits', () => 
   f.runFrame(33.4);
   assert.equal(f.reading.latency.length, 0, 'all five charts must publish the final geometry');
   f.sessionSvg.parentElement.dataset.axisEnd=f.activitySvg.parentElement.dataset.axisEnd = f.budgetSvg.parentElement.dataset.axisEnd = f.fundsSvg.parentElement.dataset.axisEnd = '12'; f.runFrame(50.1);
+  assert.equal(f.reading.latency.length,0,'matching endpoints without painted data still cannot credit input');
+  f.sessionLayer.slides.style.transform=f.historyLayer.slides.style.transform=f.budgetLayer.slides.style.transform=f.fundsLayer.slides.style.transform='translateX(-24px)';
+  f.activityLayer.slides.style.transform='translateX(-14px)';f.runFrame(50.1);
   assert.equal(f.reading.latency[0], 50.1);
   assert.equal(f.reading.updated, 0, 'final metadata cannot manufacture moving frames');
 });
@@ -257,8 +260,20 @@ test('a pending drawing model cannot credit the final input from the URL or axis
   f.historySvg.parentElement.dataset.axisEnd = f.sessionSvg.parentElement.dataset.axisEnd=f.activitySvg.parentElement.dataset.axisEnd = f.budgetSvg.parentElement.dataset.axisEnd = f.fundsSvg.parentElement.dataset.axisEnd = '12';
   f.activitySvg.dataset.drawReady = 'false'; f.runFrame(16.7);
   assert.equal(f.reading.latency.length, 0);
+  f.sessionLayer.slides.style.transform=f.historyLayer.slides.style.transform=f.budgetLayer.slides.style.transform=f.fundsLayer.slides.style.transform='translateX(-24px)';
+  f.activityLayer.slides.style.transform='translateX(-14px)';
   f.activitySvg.dataset.drawReady = 'true'; f.runFrame(33.4);
   assert.equal(f.reading.latency[0], 33.4);
+});
+
+test('final credit rejects a ready zoom around a matching endpoint until both time landmarks match',()=>{
+  const f=fixture();f.wheel(0,0);f.context.location.search='?from=0&to=12';
+  for(const svg of [f.historySvg,f.sessionSvg,f.activitySvg,f.budgetSvg,f.fundsSvg]){delete svg.dataset.panEnd;svg.parentElement.dataset.axisEnd='12';}
+  for(const layer of [f.historyLayer,f.sessionLayer,f.budgetLayer,f.fundsLayer])layer.slides.style.transform='translateX(-24px)';
+  f.activityLayer.slides.style.transform='translateX(-14px)';
+  f.historyLayer.slides.style.transform='translateX(-16px) scaleX(0.8)';
+  f.runFrame(16.7);assert.equal(f.reading.latency.length,0,'the origin agrees, but a second timestamp exposes the zoom');
+  f.historyLayer.slides.style.transform='translateX(-24px)';f.runFrame(33.4);assert.equal(f.reading.latency[0],33.4);
 });
 
 test('the actual probe rejects a wrong frozen SVG scale or a changed domain behind matching HTML movement', () => {

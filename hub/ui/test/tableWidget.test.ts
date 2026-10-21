@@ -38,7 +38,7 @@ function widgetFixture(){
   const modules:Record<string,unknown>={react:hooks,'react/jsx-runtime':{},'../lib/table':tables,'../i18n':{useLocale:()=> 'en'},'./Popover':{},'./sizing':{
     useSizing:()=>sizing,fillOf:()=>root.fill,pixels:(n:number)=>Math.round(n*64)/64,same:(a:number|undefined,b:number|undefined)=>a===b||a!==undefined&&b!==undefined&&Math.abs(a-b)<1,
   }};
-  const context={exports:{} as {useTableWidget:typeof import('../components/TableWidget').useTableWidget},require:(name:string)=>modules[name],
+  const context={exports:{} as {TableSurface:'surface',useTableWidget:typeof import('../components/TableWidget').useTableWidget},require:(name:string)=>modules[name],
     getComputedStyle:()=>({paddingLeft:'22',paddingRight:'22',borderBottomWidth:'0'}),ResizeObserver:class {
       record:{callback:()=>void;targets:Set<unknown>};constructor(callback:()=>void){this.record={callback,targets:new Set()};observers.push(this.record);}
       observe(target:unknown){this.record.targets.add(target);}disconnect(){this.record.targets.clear();}
@@ -52,8 +52,10 @@ function widgetFixture(){
     for(let i=0;i<20;i++){
       changed=false;cursor=0;effects.length=0;
       widget=context.exports.useTableWidget({current:root as unknown as HTMLElement},[120,120,180,180],180,keys,key);
-      const current=keys.slice(widget.from,widget.to),footer=widget.pages>1?80:46;
-      const natural=140+current.reduce((sum,id)=>sum+height(id),0)+footer;
+      const current=keys.slice(widget.from,widget.to),footer=80;
+      const head=widget.layout==='table'?56:18;
+      const natural=140-head+widget.surfaceHeight+footer;
+      widget.surface.current={getBoundingClientRect:()=>({height:widget.surfaceHeight})} as HTMLDivElement;
       root.height=Math.max(sizing.allocated,natural);root.fill=root.height-natural;
       widget.live.current=body(current) as unknown as HTMLElement;
       widget.measured.current=body(keys.slice(widget.measureFrom,widget.measureTo)) as unknown as HTMLElement;

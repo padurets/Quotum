@@ -275,10 +275,12 @@ export function QuotaCard({
   source,
   ids = QUOTA_IDS,
   compact = false,
+  details = false,
 }: {
   source: Pick<Card,'meters'>;
   ids?: readonly string[];
   compact?: boolean;
+  details?: boolean;
 }) {
   return (
     <>
@@ -288,17 +290,16 @@ export function QuotaCard({
         const detail = cap
           ? `${money(capLeft(cap), cap.unit, true)}\n${t('money.of', {amount: money(cap.limit, cap.unit, true)})}\n${cap.resetAt === null ? t('limit.resetUnknown') : stamp(cap.resetAt)}${used === null ? `\n${t('money.exhausted')}` : ''}`
           : t('quota.unavailable');
-        return (
-          <PercentLimit
-            key={id}
+        const limit=<PercentLimit key={id}
             name={capName({id, scope: null, label: null})}
             remaining={used === null ? null : 100 - used}
             valueTitle={detail}
             status={<CapStatus cap={cap} />}
             reset={<QuotaReset resetAt={cap?.resetAt ?? null} short={compact} />}
             compact={compact}
-          />
-        );
+            precise={details}
+          />;
+        return details?<div key={id}>{limit}<small className="measurement-proof">{detail}{cap?`\n${t('source.measured',{at:stamp(cap.at)})}`:''}{cap?.stale?`\n${t('money.stale')}`:''}</small></div>:limit;
       })}
     </>
   );
@@ -335,12 +336,12 @@ export function MoneyCard({
   tray?: boolean;
 }) {
   const context = useCurrencyContext(source.id);
-  const {keys, meters, error} = useShownKeys(source, view, board);
-  return <MoneyValues source={source} keys={keys} meters={meters} error={error} compact={compact} tray={tray} context={context}/>;
+  const {keys, meters, error,loading,selected,retry} = useShownKeys(source, view, board);
+  return <MoneyValues source={source} keys={keys} meters={meters} error={error} loading={loading} selected={selected} retry={retry} compact={compact} tray={tray} context={context}/>;
 }
 
 type MoneySource=Pick<Card,'id'|'provider'|'meters'|'currencyUnavailable'|'creditBalance'>;
-export function MoneyValues({source,keys,meters,error=null,compact=false,tray=false,context}:{source:MoneySource;keys:KeyPart[];meters:Meter[];error?:unknown;compact?:boolean;tray?:boolean;context:CurrencyContext}) {
+export function MoneyValues({source,keys,meters,error=null,loading=false,selected=false,retry,compact=false,tray=false,context}:{source:MoneySource;keys:KeyPart[];meters:Meter[];error?:unknown;loading?:boolean;selected?:boolean;retry?:()=>void;compact?:boolean;tray?:boolean;context:CurrencyContext}) {
   const filters=useDataFilters().current,moneyPrefs=usePref('money'),fundsPrefs=usePref('funds');
   const showBalance=!filters||matchesWallet(walletRule(filters,moneyPrefs.unit??undefined),{source:source.id,kind:'balance'},true);
   const {remaining, limits} = budgetView(source, keys, meters, context),
@@ -416,6 +417,11 @@ export function MoneyValues({source,keys,meters,error=null,compact=false,tray=fa
           {approximate && conversion && <p className="popover-note">{conversion}</p>}
         </section>
       ))}
+      {limits.length>0&&<section className="measurement-details">{limits.map(limit=><div key={limit.scope.id}><BudgetKeyMetrics limit={limit} context={context} compact={compact}/><small className="measurement-proof">{[money(capLeft(limit.native),limit.native.unit,true,context),t('money.of',{amount:money(limit.native.limit,limit.native.unit,true,context)}),t('source.measured',{at:stamp(limit.native.at)}),limit.native.resetAt!==null?stamp(limit.native.resetAt):null].filter(Boolean).join('\n')}</small></div>)}</section>}
+      <ErrorLine error={error}/>
+      {loading&&<p>{t('period.loading')}</p>}
+      {selected&&!limits.length&&!loading&&!error&&<p>{t('quota.unavailable')}</p>}
+      {!!error&&retry&&!(error instanceof ApiError&&error.code==='filters_limit')&&<button type="button" className="button" onClick={retry}>{t('period.retry')}</button>}
     </div>
   );
   if(tray)return filters&&!matchesSelection(fundsRule(filters,fundsPrefs.unit??undefined),source.id)?null:<FundsMark source={source} groups={groups} context={context} native={native} rateSources={rateSources} quoteDate={quoteDate} displayUnavailable={!!displayUnavailable}/>;
@@ -426,7 +432,7 @@ export function MoneyValues({source,keys,meters,error=null,compact=false,tray=fa
         <div className="money-balance-values">
           <CreditBalanceValue source={source} breakdown={breakdown}>
           {!groups.length ? (
-            <span
+            <Popover label={t('money.breakdown')} triggerClass="money-balance-trigger" trigger={<span
               className="limit-value"
               title={
                 displayUnavailable
@@ -435,7 +441,7 @@ export function MoneyValues({source,keys,meters,error=null,compact=false,tray=fa
               }
             >
               —<small>{context.target.symbol}</small>
-            </span>
+            </span>}>{breakdown}</Popover>
           ) : (
             groups.map(({total, approximate}) => {
               const formatted = money(total.amount, total.unit, false, context, total.scale),
@@ -460,7 +466,7 @@ export function MoneyValues({source,keys,meters,error=null,compact=false,tray=fa
                   <small>{symbol}</small>
                 </span>
               );
-              return composition.length || credit ? (
+              return composition.length || credit || limits.length || error ? (
                 <Popover
                   key={total.id}
                   label={`${t('money.breakdown')}: ${approximate ? '≈ ' : ''}${formatted}`}
@@ -478,13 +484,8 @@ export function MoneyValues({source,keys,meters,error=null,compact=false,tray=fa
           </CreditBalanceValue>
         </div>
       </div>}
-      {!showBalance&&!limits.length&&<div className="card-empty"><span>{t('filters.emptyMetrics')}</span><button type="button" className="text-button" onClick={openDataFilters}>{t('header.filters')}</button></div>}
-      <div className="limits money-limits">
-        {limits.map((limit) => (
-          <BudgetKeyMetrics key={limit.scope.id} limit={limit} context={context} compact={compact} />
-        ))}
-      </div>
-      <ErrorLine error={error} />
+      {!showBalance&&limits[0]&&<Popover label={t('money.breakdown')} trigger={<BudgetKeyMetrics limit={limits[0]} context={context} compact={compact}/>} triggerClass="money-primary-trigger">{breakdown}</Popover>}
+      {!showBalance&&!limits.length&&(selected||error?<Popover label={t('money.breakdown')} trigger={<span className="limit-value">—</span>} triggerClass="money-primary-trigger">{breakdown}</Popover>:<div className="card-empty"><span>{t('filters.emptyMetrics')}</span><button type="button" className="text-button" onClick={openDataFilters}>{t('header.filters')}</button></div>)}
     </div>
   );
 }

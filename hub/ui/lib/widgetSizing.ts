@@ -1,7 +1,7 @@
 import {MAX_ROWS} from './grid';
 
 type Size = {min:number;natural:number};
-type Report = Size & {shown:number};
+type Report = Size & {shown:number;layout:string};
 
 /** Content measurements move grid boxes without rendering their contents. */
 export class WidgetSizing {
@@ -9,14 +9,17 @@ export class WidgetSizing {
   sizes:Record<string,Size>={};
   short=0;
   private readonly allocations=new Map<string,number>();
+  private readonly layouts=new Map<string,string>();
   private readonly listeners=new Map<string,Set<()=>void>>();
   constructor(private readonly same:(a:number|undefined,b:number|undefined)=>boolean){}
   report(id:string,size:Report|null) {
     const was=this.sizes[id];let changed=false;
-    if(size? !this.same(was?.min,size.min)||!this.same(was?.natural,size.natural):!!was){
+    const structural=!size||this.layouts.get(id)!==size.layout;
+    if(structural&&(size? !this.same(was?.min,size.min)||!this.same(was?.natural,size.natural):!!was)){
       if(size)this.sizes[id]={min:size.min,natural:size.natural};else delete this.sizes[id];
       changed=true;
     }
+    if(size)this.layouts.set(id,size.layout);else this.layouts.delete(id);
     if(size&&!this.same(this.heights[id],size.shown)){this.heights[id]=size.shown;changed=true;}
     return changed;
   }
