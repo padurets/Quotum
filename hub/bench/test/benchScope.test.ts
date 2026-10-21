@@ -24,7 +24,7 @@ const declarations=['parseArgs','main'].map(name=>{
 const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={main,parseArgs};',{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},
 }).outputText;
-type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'fixed-activity'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention';
+type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'fixed-activity'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace';
 async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),diagnosticFiles=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
   const listeners=new Map<string,()=>void>(),waits:number[]=[];let now=startedAt,phaseStart=now,metricReads=0,retentionReads=0;
@@ -72,8 +72,16 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   class Stop extends Error {}
   class ChromeLaunchError extends Error {}
   class IdleCpuDiagnostic {
-    constructor(_cdp:unknown,_save:unknown,_client:unknown,owned:boolean,mode:string,readonly signal:AbortSignal){assert.equal(owned,true);assert.ok(['native-trace','native-profile'].includes(mode));signal.throwIfAborted();mark('native-trace-created');}
-    async close(){assert.equal(this.signal.aborted,true);mark('native-trace-close');}
+    readonly binding={rememberInjected:(frame:number,source:string,label:string)=>{assert.equal(frame,1);assert.ok(source.length);assert.equal(label,'idle-probe');mark('idle-trace-injected');}};
+    constructor(_cdp:unknown,_save:unknown,_client:unknown,owned:boolean,readonly mode:string,readonly signal?:AbortSignal){
+      assert.equal(owned,true);assert.ok(['native-trace','native-profile','trace','profile'].includes(mode));
+      if(mode.startsWith('native-')){assert.ok(signal);signal.throwIfAborted();mark('native-trace-created');}else mark('idle-trace-created');
+    }
+    async start(){mark('idle-trace-start');}
+    async stop(window:{seconds:number}){assert.equal(window.seconds,120);assert.equal(metricReads,2);assert.equal(retentionReads,2);mark('idle-trace-stop');}
+    async bindAndClose(){mark('idle-trace-bind');}
+    traceReceipt(from:number,to:number,cellMs:number){assert.equal(to-from,120000);assert.equal(cellMs,300000);mark('idle-trace-receipt');return{status:fault==='idle-trace'?'insufficient-evidence':'complete'};}
+    async close(){if(this.mode.startsWith('native-')){assert.equal(this.signal?.aborted,true);mark('native-trace-close');}else mark('idle-trace-close');}
   }
   const panning=async(_cdp?:unknown,_pace?:unknown,_output?:unknown,_reload?:unknown,trace?:()=>IdleCpuDiagnostic)=>{mark('panning');trace?.();if(fault==='panning-throw')throw Error('panning-original');
     if(fault==='cancel'){listeners.get('SIGTERM')!();await exited;throw Error('cancelled-panning');}
@@ -202,9 +210,22 @@ test('retired aligned idle mode rejects before preparing or launching a browser'
   assert.deepEqual(result.calls,['freePort']);
 });
 const diagnostics={QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'profile',QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'1',QUOTUM_BENCH_DIAGNOSE_NATIVE:'1',QUOTUM_BENCH_REVERSAL_PROBE:'1'};
-for(const scope of ['history','dashboard'])for(const [key,value] of Object.entries(diagnostics))test('partial '+scope+' rejects '+key,async()=>{
+for(const scope of ['history','dashboard'])for(const [key,value] of Object.entries(diagnostics))if(scope!=='dashboard'||key!=='QUOTUM_BENCH_DIAGNOSE_IDLE_CPU')test('partial '+scope+' rejects '+key,async()=>{
   const result=await run(['--scope',scope],undefined,{[key]:value});
   assert.match(String(result.error),/scope/i);assert.deepEqual(result.calls,[]);assert.deepEqual(result.exits,[]);
+});
+for(const mode of ['trace','profile'])test('idle '+mode+' dashboard shares the canonical idle window and retains its guards',async()=>{
+  const canonical=await run(['--scope','dashboard']),diagnostic=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode});
+  assert.equal(diagnostic.error,undefined);assert.deepEqual(diagnostic.exits,[0],JSON.stringify({logs:diagnostic.logs,calls:diagnostic.calls}));assert.deepEqual(diagnostic.statuses,['diagnostic']);
+  assert.deepEqual(order(diagnostic.calls),['openTab']);
+  assert.deepEqual(JSON.parse(JSON.stringify(diagnostic.saved.get('idle'))),JSON.parse(JSON.stringify(canonical.saved.get('idle'))));
+  for(const name of ['idle-trace-injected','idle-trace-start','idle-trace-stop','idle-trace-bind','idle-trace-receipt','idle-trace-close','browser-close','demo-stop'])assert.equal(diagnostic.calls.filter(call=>call===name).length,1);
+  for(const fault of ['idle','idle-retention','opening-metrics','idle-trace'] as const){
+    const failed=await run(['--scope','dashboard'],fault,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode});
+    assert.equal(failed.error,undefined);assert.deepEqual(failed.exits,[1]);assert.deepEqual(failed.statuses,['failed']);
+    assert.ok(failed.calls.includes('idle-trace-stop'));assert.ok(failed.calls.includes('idle-trace-close'));
+  }
+  const history=await run(['--scope','history'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode});assert.match(String(history.error),/scope/i);assert.deepEqual(history.calls,[]);
 });
 for(const mode of ['PANNING','IDLE','IDLE_TIMING','STARTUP_WAITS'])test('removed '+mode+' diagnostic cannot silently run the canonical gate',async()=>{
   const result=await run([],undefined,{['QUOTUM_BENCH_DIAGNOSE_'+mode]:'1'});
@@ -239,6 +260,8 @@ test('the existing bench check requires success from both independent scopes',{s
     assert.ok(!job.includes('continue-on-error:'));
     assert.ok(!job.includes('\n    needs:'),'benchmark producers run independently');
   }
+  const control=workflow.split('  idle-cpu-control:\n')[1].split(/\n  [\w-]+:/)[0];
+  assert.ok(control.includes('timeout-minutes: 15'));assert.ok(control.includes('--ci --scope dashboard'));
 });
 
 
@@ -259,7 +282,7 @@ for(const fault of ['panning','panning-throw','cancel'] as const)test('native-tr
 for(const mode of ['native-trace','native-profile'])test('history still rejects '+mode+' before preparation',async()=>{
   const result=await run(['--scope','history'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode});assert.match(String(result.error),/scope/i);assert.deepEqual(result.calls,[]);
 });
-for(const mode of ['native-trace','native-profile'])test(mode+' refuses attached, non-CI and conflicting diagnostic runs before preparation',async()=>{
+for(const mode of ['native-trace','native-profile','trace','profile'])test(mode+' refuses attached, non-CI and conflicting diagnostic runs before preparation',async()=>{
   const cases:[string[],Record<string,string>,boolean][]=[
     [['--scope','dashboard','--cdp','http://example.test'],{},true],
     [['--scope','dashboard'],{},false],

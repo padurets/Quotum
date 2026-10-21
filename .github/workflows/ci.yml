@@ -213,7 +213,8 @@ jobs:
           EXPECTED_CLIENT_SHA256: ${{ inputs.expected_client_sha256 }}
           TRACE_ONLY: ${{ inputs.trace_only }}
           ORIGINAL_TIMING: ${{ inputs.original_timing }}
-      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
+      # Match the canonical dashboard; history traffic has its own independent job.
+      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope dashboard
         env:
           QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.trace_only && 'trace' || inputs.original_timing && 'profile' || '' }}
           QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
