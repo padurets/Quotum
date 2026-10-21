@@ -2083,7 +2083,7 @@ keep their colours through rank changes and reversal; new projects and machines 
 the next free Nord Warm colour, or neutral when all nine are in use. Present manual
 project pins reserve their distinct swatches first, including low-ranked groups and
 repeated choices. A reservation displaces only conflicting automatic groups. Absent
-pins reserve nothing; muted/offscreen registry entries retain their colours, and a
+pins reserve nothing; offscreen registry entries retain their colours, and a
 released slot does not promote surviving neutral groups. Current paint resolves after
 numeric preparation over both current and still displayed groups, so an in-flight
 drawing uses the latest accepted palette across interiors, edges, legends and
