@@ -8,7 +8,7 @@ import {PeriodStatus} from './PeriodStatus';
 import {MoneyValues} from './MoneyCard';
 import {useCurrencyContext} from '../lib/board';
 import {keyShown} from '../lib/view';
-import {budgetVisible, subscriptionFundsVisible} from '../lib/money';
+import {budgetVisible, subscriptionFundsVisible, historicalCurrencyContext} from '../lib/money';
 import {memo, useEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import type {Card, Win} from '../lib/types';
 import {MEASURE_INTERVAL, type MeasureIntervalMs} from '../lib/types';
@@ -502,7 +502,7 @@ function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;
   useDataFilters();
   const reading=usePeriodValues(source.id),selected=useTimeRange(),context=useCurrencyContext(source.id);
   const historical=!!selected,value=historical?reading.value:null;
-  const historicalContext=value?{...context,sources:{...context.sources,[source.id]:value.meters.flatMap(m=>m.conversion?[{from:m.conversion.original.unit,at:m.conversion.original.at,anchor:null,steps:m.conversion.steps??[m.conversion.rate]}]:[])}}:context;
+  const historicalContext=value?historicalCurrencyContext(context,source.id,value.meters):context;
   const windows=historical?value?.windows??[]:source.windows;
   const periods=quotaPeriods({provider:source.provider,windows}),shownPeriods=periods.filter(w=>!isWindowHidden(arrange.view,source.id,w.id));
   const visible=windows.filter(w=>!isWindowHidden(arrange.view,source.id,w.id)),weekly=planOf(arrange.view,source.id),caps=hasSubscriptionCaps(source.provider);
@@ -529,6 +529,6 @@ function CardFooter({source,arrange,boardId}:{source:Card;arrange:Arrange;boardI
   if(!selected)return <CardTray source={source} funds={subscriptionFundsVisible(source)?<MoneyCard source={source} board={boardId} view={arrange.view} tray/>:null}/>;
   const value=reading.value;
   if(!value||!budgetVisible(source)||!subscriptionFundsVisible(value))return <CardTray source={source}/>;
-  const historicalContext={...context,sources:{...context.sources,[source.id]:value.meters.flatMap(m=>m.conversion?[{from:m.conversion.original.unit,at:m.conversion.original.at,anchor:null,steps:m.conversion.steps??[m.conversion.rate]}]:[])}};
+  const historicalContext=historicalCurrencyContext(context,source.id,value.meters);
   return <CardTray source={source} funds={<MeasurementClock.Provider value={reading.basis?.range.to??selected.to}><MoneyValues source={value} meters={value.meters} keys={[]} context={historicalContext} tray/></MeasurementClock.Provider>}/>;
 }

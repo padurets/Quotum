@@ -13,6 +13,58 @@ import {shifted} from '../../server/domain/periodShift.js';
 import {periodTextChangesAt} from '../lib/periodClock.js';
 import {expandPeriod,periodDictionary} from '../../server/domain/periodWire.js';
 import {compactJSON} from '../../server/history.js';
+import {cellsOf} from '../../server/domain/cells.js';
+import {compose,type HistorySeries} from '../../server/domain/history.js';
+import {valueIn} from '../lib/lines.js';
+import {drain} from '../lib/prepare.js';
+import {observationRunsPrepared} from '../lib/plotPath.js';
+
+for(const cadence of [30_000,120_000])for(const kind of ['weekly','session'] as const)test(`fixed ${kind} retains producer cell support at ${cadence}ms cadence`,()=>{
+  const cell=60_000,range={from:30_000,to:390_000};
+  const samples=Array.from({length:Math.floor(420_000/cadence)+1},(_,i)=>({at:i*cadence,used:10+i,resetAt:600_000,staleAfterMs:180_000}));
+  const groups=[{source:'s',window:kind,samples}],known={work:0,sources:{s:0}};
+  const frame=compose(cellsOf(groups,[],{},cell,0,420_000,known).map(c=>({...c,activity:{...c.activity,sessions:[]}})),{now:420_000,historyStart:0,known},{cell,k0:0,k1:6,length:420_000,live:false,key:'fixed',now:420_000},new Set(['s '+kind]));
+  assert.ok(frame.series[0].points.every(p=>p.length===3),'the regression must use actual unbounded cells');
+  const evidence:PeriodTape={from:0,cut:420_000,replaceFrom:0,cursor:'c',quota:groups.map(g=>({...g,samples:packSamples(g.samples)})),money:[]};
+  const full=new PeriodAccounting(evidence,null),compact=new PeriodAccounting(fixedTape(evidence,null,range,cell,()=>{}),null);
+  for(const projected of [compact.project(frame,range),full.project(frame,range)]){
+    const line=projected.series[0];assert.equal(line.pointMode,'observation');
+    // Interior expectations come from the original cell contract, independently
+    // of either accounting implementation. Partial edges use raw observations.
+    for(let at=cell;at<360_000;at+=15_000){
+      const expected=valueIn(frame.series[0].points,Math.floor(at/cell)*cell,420_000,180_000);
+      assert.equal(valueIn(line.points,at,420_000,180_000,undefined,line.pointMode),expected,`interior ${at}`);
+    }
+    for(const at of [30_000,45_000,360_000,375_000,389_999]){
+      const raw=samples.filter(s=>s.at<=at).at(-1)!;
+      assert.equal(valueIn(line.points,at,420_000,180_000,undefined,line.pointMode),100-raw.used,`exact boundary ${at}`);
+    }
+    const drawing=drain(observationRunsPrepared(line.points,range.from,range.to,420_000));
+    assert.ok(drawing.runs.some(run=>run.some(([at])=>at>=120_000&&at<360_000)),'interior geometry survives');
+  }
+});
+
+test('fixed cell normalization respects exclusive deadlines, segment breaks and terminal coverage',()=>{
+  const range={from:30_000,to:570_000},cell=60_000;
+  const samples=[{at:0,used:10,resetAt:null,staleAfterMs:180_000,validUntil:180_000},{at:240_000,used:20,resetAt:null,staleAfterMs:60_000},{at:420_000,used:30,resetAt:null,staleAfterMs:60_000}];
+  const known={work:0,sources:{s:0}},groups=[{source:'s',window:'w',samples}];
+  const frame=compose(cellsOf(groups,[],{},cell,0,600_000,known).map(c=>({...c,activity:{...c.activity,sessions:[]}})),{now:600_000,historyStart:0,known},{cell,k0:0,k1:9,length:600_000,live:false,key:'fixed',now:600_000},new Set(['s w']));
+  const evidence:PeriodTape={from:0,cut:600_000,replaceFrom:0,cursor:'c',quota:groups.map(g=>({...g,samples:packSamples(g.samples)})),money:[]};
+  const compact=new PeriodAccounting(fixedTape(evidence,null,range,cell,()=>{}),null);
+  const line=compact.project(frame,range).series[0];
+  const read=(at:number)=>valueIn(line.points,at,600_000,180_000,undefined,line.pointMode);
+  assert.equal(read(179_999),90);assert.equal(read(180_000),undefined);assert.equal(read(239_999),undefined);
+  assert.equal(read(240_000),80);assert.equal(read(300_000),undefined,'a new segment cannot bridge the gap');
+  assert.equal(read(480_000),70,'the terminal cell keeps its existing inclusive cell hold');
+  assert.equal(read(540_000),undefined,'exact last boundary does not extend terminal support');
+  for(const deadline of [0,60_000]){
+    const invalid:HistorySeries={...frame.series[0],points:[[60_000,99,1,deadline],[240_000,80,1]]};
+    const projected=compact.project({...frame,series:[invalid]},range).series[0];
+    assert.equal(valueIn(projected.points,90_000,600_000,180_000,undefined,projected.pointMode),undefined);
+  }
+  assert.equal(compact.project(frame,{...range,to:range.to-1}),frame,'wrong fixed range is refused');
+  const wrongCell={...frame,cellMs:30_000};assert.equal(compact.project(wrongCell,range),wrongCell);
+});
 
 test('shared work curves match exact session sums and concurrent unions across hour boundaries',()=>{
   const refs=Array.from({length:5},(_,i)=>({ref:String(i),source:String(i%2),device:{id:String(i%3),name:'Laptop'},origin:'terminal' as const,project:i%2?'P':null,folder:null,startedAt:0}));

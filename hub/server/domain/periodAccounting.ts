@@ -17,6 +17,23 @@ const lower=lowerNumber;
 // Conservative JS storage reserves; typed numeric buffers use their byteLength.
 const arrayBytes=(length:number)=>32+length*16;
 const bigintBytes=(value:bigint)=>32+Math.max(1,Math.ceil((value<0n?-value:value).toString(16).length/16))*8;
+/** Preserve cell support before clipping it into an observation-mode interior. */
+function quotaInterior(series:HistorySeries|undefined,range:PeriodRange,cell:number,coverageTo:number):HistorySeries['points'] {
+  if(!series)return [];
+  const from=(Math.floor(range.from/cell)+1)*cell,to=Math.min(Math.floor((range.to-1)/cell)*cell,coverageTo);
+  if(from>=to)return [];
+  const result:HistorySeries['points']=[];
+  for(let i=0;i<series.points.length;i++){
+    const [at,value,segment,bound]=series.points[i],next=series.points[i+1];
+    if(series.pointMode==='observation'&&bound===undefined)continue;
+    // Sparse cells in the same run prove the intervening cells too. A break
+    // proves only this measured cell; the terminal run uses the cell readout hold.
+    const until=bound??(next?next[2]===segment?next[0]:at+cell:at+(Math.floor(Math.max(cell,series.staleAfterMs)/cell)+1)*cell);
+    const beginning=Math.max(at,from),end=Math.min(until,next?.[0]??Infinity,to);
+    if(end>beginning)result.push([beginning,value,segment,end]);
+  }
+  return result;
+}
 /** Interior cells retain their own spending, but a crossing step belongs to the exact frame. */
 function moneyInterior(points:MeterHistory['points'],range:PeriodRange,cell:number,previous:PeriodRange) {
   const leftEnd=(Math.floor(range.from/cell)+1)*cell,rightStart=Math.floor((range.to-1)/cell)*cell;
@@ -87,10 +104,10 @@ class QuotaIndex {
     return {slope:slope(right)-(left===now-period?slope(left):0),next};
   }
 
-  plot(range:PeriodRange,cell:number,previous:HistorySeries['points'],boundaryOnly=false):HistorySeries['points'] {
+  plot(range:PeriodRange,cell:number,previous:HistorySeries|undefined,coverageTo:number,boundaryOnly=false):HistorySeries['points'] {
     const leftEnd=(Math.floor(range.from/cell)+1)*cell,rightStart=Math.floor((range.to-1)/cell)*cell;
-    const points=previous.filter(([at])=>at>=leftEnd&&at<rightStart).map(([at,value,segment,validUntil])=>[at,value,segment,validUntil??at+cell] as HistorySeries['points'][number]);
-    if(!previous.length&&!boundaryOnly){
+    const points=quotaInterior(previous,range,cell,coverageTo);
+    if(!previous?.points.length&&!boundaryOnly){
       const cells=new Map<number,HistorySeries['points'][number]>();
       for(let i=lower(this.times,leftEnd);i<lower(this.times,rightStart);i++){const s=sampleAt(this.series.samples,i)!,at=Math.floor(s.at/cell)*cell,old=cells.get(at),value=100-s.used;if(!old||value<old[1])cells.set(at,[at,value,i+1,Math.min(at+cell,s.at+s.staleAfterMs+1,s.resetAt??Infinity,s.validUntil??Infinity)]);}
       points.push(...cells.values());
@@ -401,10 +418,8 @@ export class PeriodAccounting {
     const fixed=this.tape.fixed;
     if(fixed){
       if(range.from!==fixed.range.from||range.to!==fixed.range.to||history.cellMs!==fixed.cell)return history;
-      const leftEnd=(Math.floor(range.from/fixed.cell)+1)*fixed.cell,rightStart=Math.floor((range.to-1)/fixed.cell)*fixed.cell;
-      const interior=(at:number)=>at>=leftEnd&&at<rightStart;
       return {...history,exact:true,since:range.from,to:range.to,...(fixed.moneyWork?{moneyWork:fixed.moneyWork}:{}),
-        series:fixed.quota.map(({endValidUntil,...row})=>({...row,...(endValidUntil!==undefined&&(endValidUntil===null||stateAt>=endValidUntil)?{remainingAtEnd:null}:{}),points:[...(history.series.find(s=>s.sourceId===row.sourceId&&s.windowId===row.windowId)?.points??[]).filter(([at])=>interior(at)),...row.points].sort((a,b)=>a[0]-b[0])})),
+        series:fixed.quota.map(({endValidUntil,...row})=>({...row,...(endValidUntil!==undefined&&(endValidUntil===null||stateAt>=endValidUntil)?{remainingAtEnd:null}:{}),points:[...quotaInterior(history.series.find(s=>s.sourceId===row.sourceId&&s.windowId===row.windowId),range,fixed.cell,history.to),...row.points].sort((a,b)=>a[0]-b[0])})),
         meterSeries:fixed.money.map(({endValidUntil,...row})=>({...row,...(endValidUntil!==undefined&&(endValidUntil===null||stateAt>=endValidUntil)?{end:null}:{}),points:[...moneyInterior(history.meterSeries?.find(s=>s.sourceId===row.sourceId&&s.meterId===row.meterId&&s.unit===row.unit)?.points??[],range,fixed.cell,{from:history.since,to:history.to}),...row.points].sort((a,b)=>a.at-b.at)}))};
     }
     const previous=new Map(history.series.map(s=>[s.sourceId+'\n'+s.windowId,s]));
@@ -417,7 +432,7 @@ export class PeriodAccounting {
       const windowValue=membership?.windows.find(w=>w.id===row.window)??descriptor?.value;
       if(!history.live&&(membership?!membership.windows.some(w=>w.id===row.window):row.descriptors?numberAt(times,lower(times,range.to)-1)!==batches.get(row.source):row.member===false))continue;
       const old=previous.get(key);if(!old&&history.live)continue;
-      const summary={...this.quotaSummary(row.source,row.window,range)!,...index.at(range,stateAt)},points=!history.live?index.plot(range,history.cellMs,old?.points??[],boundaryOnly):old!.points;
+      const summary={...this.quotaSummary(row.source,row.window,range)!,...index.at(range,stateAt)},points=!history.live?index.plot(range,history.cellMs,old,history.to,boundaryOnly):old!.points;
       series.push({...old,sourceId:row.source,windowId:row.window,staleAfterMs:sampleAt(row.samples,sampleCount(row.samples)-1)?.staleAfterMs??0,...summary,points,...(!history.live?{pointMode:'observation' as const,windowValue:windowValue??row.windowValue}:{})});
     }
     return {...history,exact:true,since:range.from,to:range.to,series,...(this.moneyWork.size?{moneyWork:[...this.moneyWork.keys()].map(source=>this.moneyWorkSummary(source,range)!)}:{}),meterSeries:history.meterSeries?.map(series=>{const index=this.money.get(series.sourceId+'\n'+series.meterId+'\n'+series.unit);return index?{...series,...index.at(range),...(!history.live?{points:index.plot(range,history.cellMs,series.points,{from:history.since,to:history.to}),...(series.kind!=='cap'?{pointMode:'observation' as const}:{})}:{})}:series;})};

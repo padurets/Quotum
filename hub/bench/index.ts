@@ -22,6 +22,7 @@ import {overviewCards, quietAfter, stillProblems, stillSnapshot, warmUntil} from
 import {hear, type Heard} from './stream.js';
 import {frequencyKeys, moneyView, selectMoney} from './controls.js';
 import {panning} from './panning.js';
+import {panningProblems} from './panningBudget.js';
 import {seedPanningBudgets,panningSet} from './fixture.js';
 import {profilePanning} from './panningProfile.js';
 import {historyTraffic} from './historyTraffic.js';
@@ -203,7 +204,7 @@ async function main() {
       window.__quotumInspectHistoryPool=pool=>{window.__quotumWalletState=(source,authority)=>{
         const p=[...pool.members].find(m=>m.tapes),reader=[...pool.members].find(m=>m.scope==='budget'),tape=p?.tapes.get('budget');
         const work=p?.moneyWorkAt(source,Date.now()),group=tape?.tape.money.find(m=>m.source===source),shown=reader?.get();
-        return {authorityReady:authority===undefined?undefined:!!p&&p.workAuthority===authority,periodLoading:p?.get().loading,periodError:!!p?.get().error,workNeeded:p?.workNeeded,work:work?{activeMs:work.activeMs,knownFrom:work.knownFrom}:null,
+        return {selection:p?.selection,financialIdentity:p?.financialIdentity,authorityReady:authority===undefined?undefined:!!p&&p.workAuthority===authority,periodLoading:p?.get().loading,periodError:!!p?.get().error,workNeeded:p?.workNeeded,work:work?{activeMs:work.activeMs,knownFrom:work.knownFrom}:null,
           preparation:p?{generation:p.generation,revision:p.revision,retiring:p.retiring,retirementPreparing:p.retirementPreparing,quotaSeries:p.tapes.get('quota')?.tape.quota.length,
             flights:[...p.transport.flights].slice(0,6).map(f=>({generation:f.intent.generation,revision:f.intent.revision,preparing:!!f.preparing,aborted:f.controller.signal.aborted,extras:f.extras,sections:Object.keys(f.intent.request)}))}:null,
           recentPeriods:performance.getEntriesByType('resource').filter(r=>/\\/period$/.test(new URL(r.name).pathname)).slice(-4).map(r=>({start:r.startTime,duration:r.duration,responseEnd:r.responseEnd,bytes:r.decodedBodySize})),
@@ -322,6 +323,7 @@ async function main() {
     });
     problems.push(...panned.problems);
     say(`native panning: ${JSON.stringify({reports: panned.reports.map(report => ({initiator: report.initiator, period: report.period, frameP95Ms: round(percentile(report.frames, .95)), frameP99Ms: round(percentile(report.frames, .99)), inputP95Ms: round(percentile(report.latency, .95)),pushesDuring:report.pushesDuring,pushesAfter:report.pushesAfter,forbiddenMutations:report.forbiddenMutations})), problems: panned.problems})}`);
+    for(const report of panned.reports)if(panningProblems(report).length)say('native panning failure details: '+JSON.stringify(report));
     // A diagnostic replay must not consume the deadline of the remaining gates.
     if (panned.problems.length && process.env.QUOTUM_BENCH_PROFILE_PANNING==='1') {
       try {await profilePanning(cdp);}
@@ -689,12 +691,20 @@ async function currencyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cd
   const owner=stand.people.get(people(stand.set)[0].id)!,problems:string[]=[];
   const created=await owner.post<CurrencyDefinition>('/api/currencies',{name:'Bench points',symbol:'BP',fractionDigits:2,base:'JPY',rate:'2000000'});
   const command=async(url:string,body:object)=>{const state=await owner.get<CurrencyManagement>('/api/currencies/manage');return owner.post(url,{...body,expectedRevision:state.registryRevision,requestId:crypto.randomUUID()});};
-  const waitBalance=async(value:string|null)=>{
+  const waitBalance=async(value:string|null,stage:string)=>{
     const until=Date.now()+SHOWN_WITHIN;
-    while(await cdp.evaluate<string|null>(`document.querySelector('[data-card="${source}"] [data-money]')?.getAttribute('data-money')??null`)!==value){if(Date.now()>until)throw new Stop('personal currency balance did not reach '+value);await sleep(20);}
+    while(await cdp.evaluate<string|null>(`document.querySelector('[data-card="${source}"] [data-money]')?.getAttribute('data-money')??null`)!==value){
+      if(Date.now()>until){
+        const browser=await cdp.evaluate(`(()=>{const card=document.querySelector('[data-card="${source}"]');return{url:location.href,range:JSON.parse(localStorage.getItem('quotum.prefs')||'{}').range,card:card?{text:card.textContent?.slice(0,1200),values:Array.from(card.querySelectorAll('[data-money]')).map(node=>node.getAttribute('data-money'))}:null,series:document.querySelector('[data-series="${source} balance"]')?.getAttribute('data-last'),period:window.__quotumWalletState?.(${JSON.stringify(source)})??null};})()`).catch(()=>({status:'unavailable'}));
+        const snapshot=await owner.get<Snapshot>('/api/overview?board='+owner.personalBoard).catch(()=>null),card=snapshot?.sources.find(row=>row.id===source);
+        console.error('bench: personal currency state '+JSON.stringify({stage,expected:value,browser,server:snapshot?{target:snapshot.currencies?.target,revision:snapshot.currencies?.revision,source:card?{successAt:card.successAt,meters:card.meters,currencyUnavailable:card.currencyUnavailable}:null}:null}));
+        throw new Stop('personal currency balance did not reach '+value+' at '+stage);
+      }
+      await sleep(20);
+    }
   };
-  await owner.post('/api/currencies/display',{currency:created.id});await waitBalance(null);
-  const quote=await owner.post<RateSnapshot>('/api/currencies/'+created.id+'/rates',{base:'USD',rate:'2000000',date:0});await waitBalance('112800000');
+  await owner.post('/api/currencies/display',{currency:created.id});await waitBalance(null,'initial missing path');
+  const quote=await owner.post<RateSnapshot>('/api/currencies/'+created.id+'/rates',{base:'USD',rate:'2000000',date:0});await waitBalance('112800000','initial path recovery');
   const observation=(await owner.get<Snapshot>('/api/overview?board='+owner.personalBoard)).sources.find(row=>row.id===source)!.successAt!;
   await cdp.evaluate(`(async () => {
     const end = Date.now() + ${SHOWN_WITHIN};
@@ -705,7 +715,7 @@ async function currencyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cd
   })()`);
   const requests=new Requests(cdp),from=Date.now();requests.counting=true;await cdp.evaluate('__quotumBench.reset();__quotumBench.forgetCards()');
   writeFileSync(path.join(demo.dir,'money-control.json'),JSON.stringify({at:from,credits:90,usage:34}));
-  await owner.post('/api/credentials/'+credential,{secret:MONEY_KEY(1),allowNoExpiry:true});await waitBalance('112000000');
+  await owner.post('/api/credentials/'+credential,{secret:MONEY_KEY(1),allowNoExpiry:true});await waitBalance('112000000','converted measurement');
   const last=cellStart(from,cellOf(86_400_000))+':112000000',until=Date.now()+SHOWN_WITHIN;
   let chart:number|null=null;
   while(chart===null&&Date.now()<until){chart=await cdp.evaluate<number|null>(`__quotumBench.seriesChanged(${JSON.stringify(source+' balance')},${JSON.stringify(last)})`);if(chart===null)await sleep(20);}
@@ -715,13 +725,13 @@ async function currencyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cd
   if(requests.historyRequests>1||requests.historyBytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push('personal currency measurement exceeds the existing history traffic budget');
   await command('/api/currencies/'+created.id+'/rates/'+quote.id+'/archive',{base:'USD'});
   writeFileSync(path.join(demo.dir,'money-control.json'),JSON.stringify({at:Date.now(),credits:90,usage:34}));
-  await owner.post('/api/credentials/'+credential,{secret:MONEY_KEY(1),allowNoExpiry:true});await waitBalance(null);
-  await command('/api/currencies/'+created.id+'/archive',{replacement:'USD'});await waitBalance('56000000');
-  await command('/api/currencies/'+created.id+'/restore',{});await owner.post('/api/currencies/display',{currency:created.id});await waitBalance(null);
+  await owner.post('/api/credentials/'+credential,{secret:MONEY_KEY(1),allowNoExpiry:true});await waitBalance(null,'stopped path measurement');
+  await command('/api/currencies/'+created.id+'/archive',{replacement:'USD'});await waitBalance('56000000','archive replacement USD');
+  await command('/api/currencies/'+created.id+'/restore',{});await owner.post('/api/currencies/display',{currency:created.id});await waitBalance(null,'restored stopped path');
   await owner.post('/api/currencies/'+created.id+'/rates',{base:'USD',rate:'4000000'});
   writeFileSync(path.join(demo.dir,'money-control.json'),JSON.stringify({at:Date.now(),credits:90,usage:34}));
-  await owner.post('/api/credentials/'+credential,{secret:MONEY_KEY(1),allowNoExpiry:true});await waitBalance('224000000');
-  await owner.post('/api/currencies/display',{currency:'USD'});await waitBalance('56000000');
+  await owner.post('/api/credentials/'+credential,{secret:MONEY_KEY(1),allowNoExpiry:true});await waitBalance('224000000','resumed path measurement');
+  await owner.post('/api/currencies/display',{currency:'USD'});await waitBalance('56000000','final selection USD');
   return {historyRequests:requests.historyRequests,historyBytes:requests.historyBytes,cardMs:card===null?null:card-from,chartMs:chart===null?null:chart-from,problems};
 }
 

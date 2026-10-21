@@ -6,7 +6,7 @@ import ts from 'typescript';
 import {Store} from '../../server/store/store';
 import {Directory} from '../../server/store/directory';
 import {periodValues} from '../../server/periodValues';
-import {defaultCurrencyContext} from '../../server/domain/currency';
+import {defaultCurrencyContext,currencySymbol} from '../../server/domain/currency';
 import {observationDeadline} from '../../server/domain/resources';
 import {providerOf} from '../../server/domain/providers';
 import {EMPTY_VIEW} from '../../server/domain/view';
@@ -38,7 +38,7 @@ test('retained unlimited credits and confirmed zero are measurements in the card
     const reading={value,basis:{range:{from:now-3_600_000,to:edge}},loading:false,error:null};
     const source={...value,budget:{enabled:true}};
     const context={usePref:()=>({unit:'USD'}),matchesSelection:()=>true,fundsRule:()=>({mode:'exclude',values:[]}),matchesWallet:()=>true,walletRule:()=>({mode:'auto',include:[],exclude:[]}),useDataFilters:()=>({current:null}),exports:{} as Record<string,(props:unknown)=>Node>,components:{} as Record<string,(props:unknown)=>Node>,require:()=>runtime,...money,t,observationDeadline,
-      useMeasurementClock:()=>edge,stamp:String,day:String,rateText:String,StatusMark:'status',Popover:'popover',MoneyCard:'money-card',ErrorLine:'error',BudgetKeyMetrics:'keys',
+      useMeasurementClock:()=>edge,stamp:String,day:String,rateText:String,currencySymbol,StatusMark:'status',Popover:'popover',MoneyCard:'money-card',ErrorLine:'error',BudgetKeyMetrics:'keys',
       usePeriodValues:()=>reading,useTimeRange:()=>reading.basis.range,useCurrencyContext:()=>defaultCurrencyContext,quotaPeriods,hasSubscriptionCaps,providerOf,
       isWindowHidden:()=>false,planOf:()=>null,keyShown:()=>true,MeasurementClock:{Provider:'clock'},PeriodStatus:'period-status',QuotaCard:'quota',Limit:'limit',AllHidden:'hidden',
       MoneyValues:undefined as unknown,CardTray:({funds}:{funds:unknown})=>({type:'footer',props:{children:funds}}),
@@ -61,7 +61,9 @@ test('retained unlimited credits and confirmed zero are measurements in the card
     for(const locale of ['en','ru'] as const) {
       setLocale(locale);
       assert.equal(nodes(context.components.CardMeasurements(props)).some(node=>node.props.children===t('period.noEvidence')),false);
-      assert.ok(nodes(context.components.CardFooter(props)).some(node=>node.type==='b'&&node.props.children===money.money('0',zero.unit,true,defaultCurrencyContext,zero.scale)));
+      const footer=nodes(context.components.CardFooter(props));
+      assert.ok(footer.some(node=>node.type==='b'&&node.props.children==='≈ '+money.money('0','USD',false,defaultCurrencyContext)));
+      assert.ok(footer.some(node=>node.props.className==='tray-panel-lead'&&node.props.children===money.money('0',zero.unit,true,defaultCurrencyContext,zero.scale)),'native zero remains in the disclosure');
     }
     reading.value=read(at);reading.basis.range.to=at;
     assert.deepEqual(reading.value.meters,[]);assert.equal(reading.value.creditBalance,undefined);

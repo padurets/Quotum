@@ -156,7 +156,9 @@ export class PeriodTransport implements HistoryMember {
         }
       }).catch(error=>{
         if(flight.controller.signal.aborted)return;
-        if(error instanceof ApiError&&[401,403,404].includes(error.status)&&this.current(intent))this.accessLost();
+        // An archived display currency can disappear before its replacement event
+        // arrives. Its missing history target does not revoke access to the board.
+        if(error instanceof ApiError&&[401,403,404].includes(error.status)&&!(error.status===404&&error.code==='currency_not_found')&&this.current(intent))this.accessLost();
         if(extras){if(!deferredBaseline)this.failed=key;if(baseline&&this.baselineKey===key)for(const part of [...PERIOD_SCOPES,'values','sessions','facets','sourceWork','calendar'] as const)if(appliedIntent.request[part])this.baselineParts.add(part);}
         for(const demand of demands)demand.reject(error);
         if(extras){const current=this.intent();if(current?.generation===intent.generation&&current.revision===intent.revision){const section={state:'error' as const,error:error instanceof ApiError&&error.code==='history_limit'?'history_limit' as const:'unavailable' as const};this.receive({basis:{run:'',revision:'',evaluatedAt:intent.request.evaluatedAt,evidenceCut:0,range:{from:0,to:0}},...Object.fromEntries(PERIOD_SCOPES.filter(scope=>appliedIntent.request[scope]).map(scope=>[scope,section])),...(body.values?{values:section}:{}),...(body.sessions?{sessions:section}:{}),...(body.facets?{facets:section}:{}),...(body.sourceWork?{sourceWork:section}:{}),...(body.calendar?{calendar:section}:{})},appliedIntent);}}

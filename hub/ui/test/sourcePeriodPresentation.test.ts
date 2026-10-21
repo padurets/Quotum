@@ -13,6 +13,8 @@ import {quotaPeriods} from '../lib/subscription';
 import {hasSubscriptionCaps} from '../lib/providers';
 import type {WorkedSession} from '../../server/domain/periodWork';
 import type {SessionPeriod} from '../lib/period';
+import {budgetView,budgetVisible,subscriptionFundsVisible,historicalCurrencyContext} from '../lib/money';
+import {fixture,flush,NOW,H,M} from './periodRuntimeFixture';
 
 type Node={type:unknown;props:Record<string,unknown>};
 const jsx=(type:unknown,props:Record<string,unknown>):Node=>({type,props});
@@ -137,7 +139,7 @@ test('the actual card tray keeps an accessible loading/error disclosure and retr
 test('card measurements distinguish a failed first read from a successful absence',()=>{
   let reading:{value:null|{windows:[];meters:[];keys:[]};basis:typeof basis|null;loading:boolean;error:string|null}={value:null,basis:null,loading:false,error:'unavailable'};
   const draw=component('../components/SourceCard.tsx','CardMeasurements','function CardMeasurements(','/** Historical funds',{
-    usePeriodValues:()=>reading,useTimeRange:()=>basis.range,useCurrencyContext:()=>({sources:{}}),quotaPeriods,hasSubscriptionCaps,
+    usePeriodValues:()=>reading,useTimeRange:()=>basis.range,useCurrencyContext:()=>({sources:{}}),historicalCurrencyContext,quotaPeriods,hasSubscriptionCaps,
     isWindowHidden:()=>false,planOf:()=>null,MeasurementClock:{Provider:'clock'},providerOf,
     MoneyValues:'money',MoneyCard:'money',QuotaCard:'quota',Limit:'limit',AllHidden:'hidden',PeriodStatus:'period-status',
   });
@@ -148,6 +150,30 @@ test('card measurements distinguish a failed first read from a successful absenc
   assert.ok(render().some(node=>node.props.children===t('period.noEvidence')));
   reading={...reading,error:'history_limit'};
   assert.equal(render().some(node=>node.props.children===t('period.noEvidence')),false);
+});
+
+test('historical card consumers accept the recorded Codex conversion through the shared renderer',async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const h=await fixture({personal:true});t.after(h.close);
+  h.store.record(h.source,{observedAt:NOW-10*M,staleAfterMs:H,plan:'pro',resets:null,windows:[{id:'w',kind:'weekly',minutes:10080,label:null,used:10,remaining:90,resetAt:NOW+H}],balances:[{id:'balance:credits',unit:'credits:codex',status:'finite',amount:'50000',hasCredits:true}]});
+  h.selectRange({from:NOW-H,to:NOW-5*M});await flush();
+  const value=h.period.getValue(h.source).value;
+  assert.ok(value);assert.equal(value.meters.find((m:any)=>m.unit==='USD')?.amount,'2000000000');
+  const bindings={usePeriodValues:()=>h.period.getValue(h.source),useTimeRange:h.selectedRange,useCurrencyContext:()=>h.page.get().board!.currencies,
+    budgetVisible,subscriptionFundsVisible,historicalCurrencyContext,MeasurementClock:{Provider:'clock'},CardTray:'tray',MoneyValues:'money',
+    quotaPeriods,hasSubscriptionCaps,isWindowHidden:()=>false,planOf:()=>null,providerOf,Limit:'limit',PeriodStatus:'status'};
+  const footer=component('../components/SourceCard.tsx','CardFooter','function CardFooter(',undefined,bindings);
+  const measurements=component('../components/SourceCard.tsx','CardMeasurements','function CardMeasurements(','/** Historical funds',bindings);
+  const props={source:h.page.get().board!.cards[h.source],arrange:{view:EMPTY_VIEW},boardId:h.board};
+  const funds=(footer(props)!.props.funds as Node).props.children as Node;
+  const measured=nodes(measurements({...props,source:{...props.source,provider:'deepseek'}})).find(node=>node.type==='money')!;
+  for(const consumer of [funds,measured]){
+    const source=consumer.props.source as any,context=consumer.props.context as any;
+    const shown=budgetView(source,[],source.meters,context).remaining.values;
+    assert.equal(shown[0]?.total.amount,'2000000000');assert.equal(shown[0]?.total.unit,'USD');
+    assert.equal(shown[0]?.total.conversion?.original.amount,'50000');
+    assert.equal(shown[0]?.total.conversion?.original.at,NOW-10*M);
+  }
 });
 
 test('tray pages follow the globally ordered machine groups and retain complete machine totals',()=>{
