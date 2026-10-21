@@ -2134,13 +2134,16 @@ once; differing observations and each ledger's spans retain their own charges.
 Activity has one numerical cohort, defined by shared work filters. Its baseline and
 bar metrics preserve interval union and distinct-session semantics; a legend preview
 reads one exact group, while click emphasis never creates a combined selected summary.
-There is no legend-specific reader, additional request or read allowance. Fixed-range
+Legend emphasis has no dedicated reader, data request or read allowance. Fixed-range
 late updates reuse clean native cells with the existing compact exact summary; news
 before dispatch coalesces and news during a response requires a current replacement.
-Cancelled and late responses remain counted. Work starting at or after the fixed upper
-endpoint asks nothing. The 24h/30d benchmark covers this shared-filter path and checks
-all five charts' emphasis causes zero reads, preparation or preference writes under the
-existing transport, preparation, two-slot and 15 MiB memory ceilings.
+Work-filter replacement can refill Activity drawing cells through the existing reader
+and its bounded tile window. Cancelled and late responses remain counted. Work starting
+at or after the fixed upper endpoint does not reread the session ledger; the shared
+calendar and its drawing cells can still refresh. The 24h/30d benchmark covers this
+shared-filter path and checks that all five charts' emphasis causes zero reads,
+preparation or preference writes under the existing transport, preparation, two-slot
+and 15 MiB memory ceilings.
 A complete Activity frame waits for coherent native and selected-work evidence.
 Same-context replacement retains permitted complete metrics; a native-only placeholder
 cannot erase them. Hard work cutoffs retire evidence and retained previews synchronously,
