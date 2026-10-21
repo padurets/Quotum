@@ -29,7 +29,7 @@ test('the actual empty activity result keeps its time axis and legend container 
   const history: History = {since: range.from, to: range.to, range: `${range.from}-${range.to}`, live: false, cellMs: 5 * M, historyStart: 0, series: [], events: [], activity: {known: {from: range.from, to: range.to}, since: 0, barMs: H, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}}};
   const x = (at: number) => 48 + (at - range.from) / DAY * 340;
   const authorities:number[]=[];
-  const context = {AnalyticsPanel,quotaHistory:{retry:()=>{}},error:undefined as 'history_failed'|undefined,authority:3,
+  const context = {paint:new Map(),AnalyticsPanel,quotaHistory:{retry:()=>{}},error:undefined as 'history_failed'|undefined,authority:3,
     subset:{},scoped:false,allOff:false,focus:{},navigationKey, navigation: {context: 'test', range: 'range'}, React, ...React, CSS: {escape: (id: string) => id}, StackPaths, stacksHeight, activityScale, niceTicks, cellStart, activityEmpty, MINUTE: M, clipPlot, PlotLayer, PlotOverlay, usePreparationBasis: (basis: unknown,_inputs:unknown,_active:unknown,_ready:unknown,authority:number) => {authorities.push(authority);return basis;}, usePrepared: (work: () => Generator<void, unknown, void>) => ({value: drain(work()), ready: true}), EMPTY_ACTIVITY: history.activity,
     pan: new Pan({now: () => NOW, commit: () => {}, requestFrame: () => null, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}}),
     useLocale: () => 'en', useTimeAxis: () => ({box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {...range, end: range.to}, x, drawX: x, screenX: x, commitDrawing: () => {}}),

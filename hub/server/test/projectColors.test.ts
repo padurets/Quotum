@@ -1,3 +1,10 @@
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
+import {Store} from '../store/store.js';
+import {Directory} from '../store/directory.js';
+import {STEPS,migrate} from '../store/schema.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {centralFixture,at} from './centralFixture.js';
@@ -229,4 +236,30 @@ test('queued poll configuration is reprojected when a live-only pinned name expi
   now+=KEEP_MS+1;
   const next=await events.poll(reader,first.lease);assert.ok(next&&next!=='limit');assert.equal(f.store.workKey(f.board),work);
   assert.ok(next.frames.some(frame=>frame.type==='projectColors'));assert.ok(!JSON.stringify(next.frames).includes('live-private-canary'));
+});
+
+for(const encoding of ['identity','gzip'])test(`overview retires private pins before ${encoding} delivery after admission changes`,async t=>{
+  const f=await fixture();f.credit(['private-overview-canary']);await f.pin('private-overview-canary',CATEGORY_COLORS[0]);await f.app.close();
+  let retire=true;
+  const app=await buildApp(f.hub,app=>{
+    app.addHook('onSend',async(request,_reply,payload)=>{
+      if(retire&&request.url.startsWith('/api/overview')){retire=false;const policy=f.store.sessionDevices(f.board,f.owner.id)[0];f.store.setDeviceSessions(f.board,f.device.id,f.owner.id,false,policy.revision,Date.now());}
+      return payload;
+    });
+  });
+  t.after(async()=>{await app.close();f.store.close();});
+  const response=await app.inject({method:'GET',url:'/api/overview?board='+f.board,headers:{cookie:`quotum_session=${f.sessionSecret}`,'accept-encoding':encoding}});
+  assert.equal(response.statusCode,200);assert.equal(response.headers['content-encoding'],undefined);
+  assert.deepEqual(response.json().projectColors.pins,[]);assert.ok(!response.body.includes('private-overview-canary'));
+});
+
+
+test('layout 33 upgrades lazily and persisted board colours survive reopening and board deletion',t=>{
+  const legacy=new DatabaseSync(':memory:');
+  try{for(const step of STEPS.slice(0,33))legacy.exec(step);legacy.exec('PRAGMA user_version=33');migrate(legacy,at);assert.deepEqual(readProjectColors(legacy,'absent'),{version:1,pins:[],revision:0});assert.equal(legacy.prepare('SELECT count(*) n FROM board_project_colors').get()!.n,0);}finally{legacy.close();}
+  const dir=mkdtempSync(path.join(tmpdir(),'quotum-project-colors-')),file=path.join(dir,'db.sqlite');t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  let store=new Store(file,at),directory=new Directory(store.db);const owner=directory.createUser('colors@example.test','Owner','x',at),board=directory.createBoard('Colours',owner.id,at).id;
+  directory.transaction(()=>saveProjectColors(store.db,board,[['persisted',CATEGORY_COLORS[0]]],owner.id,at));store.close();
+  store=new Store(file,at);directory=new Directory(store.db);
+  try{assert.deepEqual(readProjectColors(store.db,board),{version:1,pins:[['persisted',CATEGORY_COLORS[0]]],revision:1});directory.deleteBoard(board);assert.equal(store.db.prepare('SELECT count(*) n FROM board_project_colors').get()!.n,0);}finally{store.close();}
 });

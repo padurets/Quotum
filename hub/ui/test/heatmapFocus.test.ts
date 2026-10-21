@@ -17,7 +17,7 @@ test('heatmap rows follow physical order and an explicit drill focuses the new g
   const hooks=preparationFixture(),jsx=(type:unknown,props:Record<string,unknown>)=>({type,props});
   let selection:{from:number;to:number}|null=null,reading:CalendarReading={window:calendarWindow(Date.UTC(2026,9,20,15,41),'UTC',{mode:'live',periodMs:30*86_400_000}),value:null,basis:null,loading:false,error:null};
   const focused:string[]=[],plot={clientWidth:1200,querySelector:(selector:string)=>({focus:()=>focused.push(selector)})},root={};
-  const context={exports:{} as any,require:()=>({jsx,jsxs:jsx}),memo:(f:unknown)=>f,useMemo:(read:()=>unknown)=>read(),...hooks,
+  const context={exports:{} as any,require:()=>({jsx,jsxs:jsx}),...hooks,memo:(f:unknown)=>f,useMemo:(read:()=>unknown)=>read(),
     useSyncExternalStore:(_subscribe:unknown,read:()=>unknown)=>read(),usePref:()=> 'matrix',useLocale:()=> 'en',formatLocale:()=> 'en',useTimeRange:()=>selection,useSizing:()=>null,
     heatmapLayout,boardPeriod:{calendar:{subscribe:()=>()=>{},get:()=>reading}},t:(key:string)=>key,num:String,CATEGORY_COLORS:['blue'],CALENDAR_OPACITY:[0,.2,.4,.6,.8,1],
     setTimeRange:(range:{from:number;to:number})=>{selection=range;},ResizeObserver:class{observe(){}disconnect(){}},Popover:'popover',Segmented:'segmented',SlidersIcon:'icon',HistoryFailure:'failure',

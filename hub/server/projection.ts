@@ -240,9 +240,9 @@ export class Projection {
   roster(board:string,now:number) {const access=this.hub.store.workAccess(board,now);return {...this.hub.ingest.live.board(access,now),access};}
 
   /** The board as the reader sees it now; null once it is gone. */
-  snapshot(user: string, board: string, now: number): Snapshot | null {
+  snapshot(user: string, board: string, now: number,capturedRoster?:ReturnType<Projection['roster']>): Snapshot | null {
     const lineup = this.lineup(board);
-    const roster=this.roster(board,now);
+    const roster=capturedRoster??this.roster(board,now);
     const part = this.boardPart(board, lineup,roster);
     if (!part) return null;
     const members = this.members(board);

@@ -131,10 +131,10 @@ test('a new private project keeps closed tiles warm and board rechecks increment
   h.store.nameProjects(h.owner.id, ['New private project'], 'Renamed project');
   events.flush();
   assert.notEqual(h.store.workKey(h.board, shown), before);
-  assert.deepEqual(frames.map(f=>f.type),['snapshot','filters']);assert.equal(JSON.parse(frames[0].data).workAuthority,h.store.workKey(h.board));
+  assert.deepEqual(frames.map(f=>f.type),['snapshot','filters','projectColors']);assert.equal(JSON.parse(frames[0].data).workAuthority,h.store.workKey(h.board));
   frames.splice(0);
   h.directory.renameDevice(h.owner.id, device, 'Renamed laptop'); events.flush();
-  assert.deepEqual(frames.map(f=>f.type),['snapshot','filters']);assert.equal(JSON.parse(frames[0].data).workAuthority,h.store.workKey(h.board));
+  assert.deepEqual(frames.map(f=>f.type),['snapshot','filters','projectColors']);assert.equal(JSON.parse(frames[0].data).workAuthority,h.store.workKey(h.board));
   assert.equal(JSON.parse(read()[0]).activity.devices[device], 'Renamed laptop');
 });
 
@@ -170,10 +170,10 @@ test('admitted unheld work keeps funding private and refreshes names under its s
   events.touchBoards([h.shared]);events.flush();assert.ok(frames.some(frame=>frame.type==='history'));frames.length=0;
   h.store.nameProjects(h.owner.id,['Private project'],'Private rename');events.touchBoards([h.shared]);events.flush();
   assert.notEqual(h.store.workKey(h.shared,shown),key);assert.deepEqual(read(),before);assert.equal(reads,2);
-  assert.deepEqual(frames.map(f=>f.type),['snapshot','filters']);assert.equal(readHistory(h.store,h.shared,at,60_000,{to:now}).activity.agentMs,15_000);frames.length=0;
+  assert.deepEqual(frames.map(f=>f.type),['snapshot','filters','projectColors']);assert.equal(readHistory(h.store,h.shared,at,60_000,{to:now}).activity.agentMs,15_000);frames.length=0;
   h.store.hold(foreign,h.owner.id,now);events.touchBoards([h.shared]);events.flush();
   assert.notEqual(h.store.workKey(h.shared,h.store.authorizedSources(h.shared)),key,'a real holding makes the names visible');
-  assert.deepEqual(frames.map(f=>f.type),['snapshot','filters']);
+  assert.deepEqual(frames.map(f=>f.type),['snapshot','filters','projectColors']);
   assert.equal(readHistory(h.store,h.shared,at,60_000,{to:now}).activity.agentMs,15_000);
 });
 

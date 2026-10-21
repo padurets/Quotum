@@ -1,3 +1,4 @@
+import {projectColorBindings} from './projectColorBindings';
 import {chartSeriesMuted} from '../lib/prefs';
 import {ACTIVITY} from '../../server/domain/widgets';
 import {test} from 'node:test';
@@ -37,7 +38,7 @@ function consumer(name:string,clock:PageClock,period:any,initial:any,panning:()=
   const slots:any[]=[],effects:(()=>void)[]=[],stops:(()=>void)[]=[];
   const slot=(create:()=>any)=>{const at=cursor++;return slots[at]??(slots[at]=create());};
   const useRef=(current:any)=>slot(()=>({current}));
-  const context:any={chartSeriesMuted,ACTIVITY,exports:{},require,memo:(value:any)=>value,useLocale:()=>{},usePanning:panning,boardPeriod:period,
+  const context:any={...projectColorBindings(),chartSeriesMuted,ACTIVITY,exports:{},require,memo:(value:any)=>value,useLocale:()=>{},usePanning:panning,boardPeriod:period,
     useId:()=> 'legend-description',seriesFocusStyle:()=>({}),useRef,useState:(initial:any)=>{const box=slot(()=>({value:typeof initial==='function'?initial():initial}));return [box.value,(value:any)=>{box.value=value;dirty=true;}];},
     useSyncExternalStore:(subscribe:any,read:any)=>{const box=slot(()=>{const value={current:read()};stops.push(subscribe(()=>{const next=read();if(!Object.is(next,value.current)){value.current=next;dirty=true;}}));return value;});return box.current=read();},
     LABELS:{source:'activity.bySource',project:'activity.byProject',device:'activity.byDevice'},groupName,useLayoutEffect:(effect:any)=>effects.push(effect),clock,hubNow:clock.hubNow,num,workHours,stamp,atOnce,mutedKey,t,cellLabel,
@@ -159,7 +160,7 @@ test('the Activity clock advances the plot without invalidating unchanged numeri
   test.mock.method(Date,'now',()=>NOW);const h=await fixture(),d=await drawings(h),hooks=preparationFixture();
   let now=NOW,shown={...d.render(),presentation:0};
   const prefs={range:'1h',activityBy:'project',muted:{}},titles={},view=h.page.get().board!.view;
-  const context:any={chartSeriesMuted,ACTIVITY,exports:{},require,memo:(value:any)=>value,...hooks,
+  const context:any={...projectColorBindings(h.page),chartSeriesMuted,ACTIVITY,exports:{},require,memo:(value:any)=>value,...hooks,
     useMemo:(read:any,deps:any[])=>{const box=hooks.useRef(null) as any;if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;},
     useActivitySubset:()=>({}),useHistory:()=>shown,useHistoryPlot:()=>null,usePlot:()=>({}),useLineup:()=>[],usePersonalBoard:()=>false,useTitles:()=>titles,
     useChartMuted:()=>prefs.muted,usePref:(key:keyof typeof prefs)=>prefs[key],useSeriesFocus:()=>{},useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=>h.board,useClock:()=>now,usePanning:()=>null,useHistoryBegins:()=>0,

@@ -179,6 +179,8 @@ function boundedContacts(contacts:Record<string,number|null>) {
 }
 function snapshot(state: PageState, data: Snapshot): PageState {
   const old = state.board?.id === data.board.id ? state.board : null;
+  const sameWork=typeof data.workAuthority==='string'&&old?.workAuthority===data.workAuthority;
+  const newerColors=sameWork&&Number.isSafeInteger(data.projectColorsRevision)&&(old?.projectColorsRevision??0)>Number(data.projectColorsRevision);
   const board: BoardState = {
     presenceConfirmed: true,
     id: data.board.id,
@@ -188,8 +190,8 @@ function snapshot(state: PageState, data: Snapshot): PageState {
     connectionsRevision: Math.max(old?.connectionsRevision ?? 0, data.connectionsRevision ?? 0),
     historyStart: data.historyStart,
     filtersRevision:data.filtersRevision,filtersAuthority:data.filtersAuthority,filters:old?.filters&&old.filters.revision===data.filtersRevision&&old.filters.authority===data.filtersAuthority?old.filters:undefined,
-    projectColorsRevision:data.projectColorsRevision,projectColorsAuthority:data.projectColorsAuthority,
-    projectColors:old?.workAuthority===data.workAuthority?old?.projectColors:undefined,
+    projectColorsRevision:newerColors?old?.projectColorsRevision:data.projectColorsRevision,projectColorsAuthority:newerColors?old?.projectColorsAuthority:data.projectColorsAuthority,
+    projectColors:sameWork?old?.projectColors:undefined,
     workAuthority: typeof data.workAuthority === 'string' && data.workAuthority ? data.workAuthority : undefined,
     lineup: keep(
       old?.lineup,
@@ -205,7 +207,7 @@ function snapshot(state: PageState, data: Snapshot): PageState {
     sourceAccess:keepEach(old?.sourceAccess,data.sourceAccess??{}),
     currencies:keepCurrencyContext(old?.currencies,data.currencies??defaultCurrencyContext),
   };
-  if(data.projectColors&&data.projectColors.revision===data.projectColorsRevision&&data.projectColors.authority===data.projectColorsAuthority)board.projectColors=parseProjectColorEnvelope(data.projectColors)??undefined;
+  if(!newerColors&&data.projectColors&&data.projectColors.revision===data.projectColorsRevision&&data.projectColors.authority===data.projectColorsAuthority)board.projectColors=parseProjectColorEnvelope(data.projectColors)??undefined;
   if(data.projectColorsRevision===undefined&&data.projectColorsAuthority===undefined)board.projectColors=undefined;
   return {
     ...state,

@@ -76,6 +76,8 @@ test('HTTP colour responses adopt atomically and cannot roll back events or cros
   const e=envelope(),first=accept(INITIAL,'snapshot',baseline({projectColorsRevision:1,projectColorsAuthority:e.authority,projectColors:e}));
   const response={type:'project-colors-response' as const,board:'board',generation:0,workAuthority:'work',expected:e,colors:{...e,revision:2,pins:[['A',C[1]]] as ProjectColorPins}};
   const saved=reduce(first,response);assert.equal(saved.board!.projectColors?.revision,2);assert.equal(saved.board!.cards,first.board!.cards);
+  const olderSnapshot=accept(saved,'snapshot',baseline({projectColorsRevision:1,projectColorsAuthority:e.authority,projectColors:e}));
+  assert.equal(olderSnapshot.board!.projectColors,saved.board!.projectColors);assert.equal(olderSnapshot.board!.projectColorsRevision,2);
   const latest=accept(accept(saved,'board',{projectColorsRevision:3,projectColorsAuthority:'b'.repeat(43)}),'projectColors',envelope(3,'b'.repeat(43)));
   assert.equal(reduce(latest,response),latest);
   const revoked=accept(saved,'history',{sources:[],since:0,workAuthority:'revoked'});assert.equal(reduce(revoked,response),revoked);assert.equal(accept(revoked,'projectColors',e),revoked);

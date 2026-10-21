@@ -179,7 +179,7 @@ for (const flush of [false, true]) for (const change of ['holding', 'rule', 'bou
     if (change === 'boundary') time = now + minute;
     if (flush) events.flush();
     const answer = await events.poll(reading, opened.lease); assert.ok(answer && answer !== 'limit');
-    assert.equal(answer.frames.length, 2); assert.equal(answer.frames[0].type, 'snapshot');
+    assert.deepEqual(answer.frames.map(frame=>frame.type),['snapshot','filters','projectColors']);
     const encoded = polled(answer.frames);
     for (const value of ['private-canary.example', 'custom-gateway-canary', link.id, f.owner.id, 'a'.repeat(32)]) assert.ok(!encoded.includes(value), value);
     const snapshot=JSON.parse(answer.frames[0].data);

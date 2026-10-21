@@ -62,7 +62,7 @@ function fixture(t: TestContext, enabled = true) {
 
 const changes = (frames: Frame[]) => frames.flatMap(f => f.type === 'history' ? (JSON.parse(f.data) as {changes: HistoryChange[]}).changes : []);
 function replacement(frames: Frame[]): Snapshot {
-  assert.deepEqual(frames.map(f => f.type), ['snapshot','filters']);
+  assert.deepEqual(frames.map(f => f.type), ['snapshot','filters','projectColors']);
   return JSON.parse(frames[0].data) as Snapshot;
 }
 

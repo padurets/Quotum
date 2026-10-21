@@ -37,7 +37,7 @@ function database() {
       setup: new Setup(!local && directory.userCount() === 0, 'BCDF-GHJK'),
       local: local ? {key} : null,
     });
-    const call = async (method: 'GET' | 'POST' | 'DELETE', url: string, options: {body?: object; headers?: Record<string, string>} = {}) => {
+    const call = async (method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, options: {body?: object; headers?: Record<string, string>} = {}) => {
       const response = await app.inject({method, url, payload: options.body, headers: options.headers});
       const json = String(response.headers['content-type'] ?? '').includes('json');
       return {status: response.statusCode, body: json ? JSON.parse(response.body) : response.body, headers: response.headers};
@@ -356,4 +356,18 @@ test('the app window can request fresh limits through the same board action', as
   assert.equal((await call('POST', url, {headers})).status, 202);
   const after = (await call('GET', '/api/overview', {headers})).body;
   assert.equal(after.refresh[overview.sources[0].id].request.status, 'queued');
+});
+
+
+test('the local board owner saves project colours through the ordinary HTTP resource',async t=>{
+  const db=database(),hub=await db.start(),entered=await hub.enter();
+  t.after(async()=>{await hub.app.close();db.store.close();});
+  const owner=db.directory.soleUser()!,board=db.directory.boards(owner.id)[0].id,now=Date.now();
+  const device=db.directory.saveDevice({userId:owner.id,machine:{id:'local-colours-machine',name:'Local',os:'linux',arch:'x86_64'},agent:'fixture',tokenId:null},now);
+  db.store.creditWork(device.id,now-60_000,now,[{client:'opencode',source:null,origin:'terminal',project:'Local project',folder:'',startedAt:now-60_000,identity:{kind:'legacy',ordinal:0}}]);
+  const headers={cookie:entered.cookie!},url='/api/boards/'+board+'/project-colors';
+  const initial=await hub.call('GET',url,{headers});assert.equal(initial.status,200);
+  const saved=await hub.call('PUT',url,{headers:{...headers,'If-Match':'"'+initial.body.revision+'"'},body:{version:1,authority:initial.body.authority,project:'Local project',color:'#5e81ac'}});
+  assert.equal(saved.status,200);assert.deepEqual(saved.body.pins,[['Local project','#5e81ac']]);
+  assert.deepEqual((await hub.call('GET','/api/overview',{headers})).body.projectColors.pins,saved.body.pins);
 });

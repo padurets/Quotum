@@ -3,6 +3,7 @@ import {PeriodReader,periodRoutes} from './periodRead.js';
 import {Attention} from './attention.js';
 import {STATUS_CODES} from 'node:http';
 import type {Socket} from 'node:net';
+import {Readable} from 'node:stream';
 import Fastify, {type FastifyInstance, type FastifyReply, type FastifyRequest} from 'fastify';
 import staticFiles from '@fastify/static';
 import {config, serviceName, version} from './config.js';
@@ -175,12 +176,29 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
 
   // The board as a stream's `snapshot` gives it (spec/dashboard-v1.md), once: for whatever
   // reads a board at a moment rather than following it.
-  app.get<{Querystring: {board?: string}}>('/api/overview', (request, reply) => {
+  const pendingOverviews=new WeakMap<FastifyRequest,{user:string;board:string;work:string;revision:number;authority:string}>();
+  const readOverview=(user:string,board:string)=>{
+    const now=Date.now(),roster=projection.roster(board,now),snapshot=projection.snapshot(user,board,now,roster);
+    return snapshot?{...snapshot,projectColors:hub.projectColors!.context(board,roster,now).envelope}:null;
+  };
+  app.get<{Querystring: {board?: string}}>('/api/overview',{onSend(request,reply,payload,done){
+    const captured=pendingOverviews.get(request);if(!captured)return done(null,payload);
+    const user=currentUser(request,directory),member=user?.id===captured.user&&directory.membership(captured.board,user.id);
+    const current=member?hub.projectColors!.context(captured.board).envelope:null;
+    if(member&&current!.revision===captured.revision&&current!.authority===captured.authority&&store.workKey(captured.board)===captured.work)return done(null,payload);
+    // Compression may have prepared a stream, but no response bytes have left yet.
+    if(payload instanceof Readable)payload.destroy();
+    reply.removeHeader('content-encoding').removeHeader('content-length');
+    if(!user){reply.code(401);return done(null,JSON.stringify({error:'unauthorized'}));}
+    if(!member){reply.code(404);return done(null,JSON.stringify({error:'board_not_found'}));}
+    return done(null,JSON.stringify(readOverview(user.id,captured.board)));
+  }}, (request, reply) => {
     const access = guards.board(request, reply, request.query.board);
     if (!access) return reply;
-    const snapshot = projection.snapshot(access.user.id, access.board.id, Date.now());
+    const snapshot = readOverview(access.user.id,access.board.id);
+    if(snapshot)pendingOverviews.set(request,{user:access.user.id,board:access.board.id,work:snapshot.workAuthority,revision:snapshot.projectColors.revision,authority:snapshot.projectColors.authority});
     hub.ingest.forecasts.save();
-    return snapshot?{...snapshot,projectColors:hub.projectColors!.context(access.board.id).envelope}:null;
+    return snapshot;
   });
 
   app.get<{Querystring: HistoryQuery & {board?:string}}>('/api/history', (request, reply) => {

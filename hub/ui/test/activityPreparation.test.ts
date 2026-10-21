@@ -1,3 +1,6 @@
+import {CATEGORY_COLORS} from '../../server/domain/categoryColors';
+import type {ProjectColorPins} from '../../server/domain/projectColors';
+import {resolveProjectColors} from '../lib/projectColors';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -50,7 +53,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
   const buffer = (start: number): PlotBuffer => {
     const activityCells: PlotBuffer['activityCells'] = new Map();
     for (let i = 0; i < 480; i++) {
-      const at = start + i * barMs, parts = new Map(Array.from({length: 30}, (_, j) => [`s${j}`, {ms: (j + 1) * 60_000, name: null}]));
+      const at = start + i * barMs, parts = new Map(Array.from({length: 30}, (_, j) => [JSON.stringify(`s${j}`), {ms: (j + 1) * 60_000, name: `s${j}` }]));
       activityCells.set(at, {at, agentMs: 465 * 60_000, activeMs: 0, refs: new Set(), parts: {source: parts, project: parts, device: parts}});
     }
     return {token: 1, epoch: 1, version: start, from: start, to: start + 480 * barMs, cell: barMs, length, barMs, coverage: [[start, start + 480 * barMs]], activityCells, series: [], events: [], knownFrom: start};
@@ -63,7 +66,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
   type Model = {identities: {key: string; name: string | null}[]; shown: {group: PlotGroup; color: string; name: string}[]; strip: PlotBuffer};
   const navigation = {context: 'test', range: 'range'};
   const axis = {box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {from: 0, to: length, end: length}, active: false, screenX: (at: number) => 48 + (at - axis.basis.from) / length * 340, commitDrawing: () => {}};
-  const context = {navigationKey, React, ...parent, memo: (fn: unknown) => fn, useState: child.useState, useEffect: () => {}, seriesFocusStyle:()=>({}), useId: () => 'c',
+  const context = {resolveProjectColors,pins:[] as ProjectColorPins,paint:new Map<string,string>(),colorsReady:true,drawing:{range:undefined},navigationKey, React, ...parent, memo: (fn: unknown) => fn, useState: child.useState, useEffect: () => {}, seriesFocusStyle:()=>({}), useId: () => 'c',
     EMPTY_CELLS: [], registry: {current: null}, groups: [], colors: [], shown: [], strip: buffer(0), by: 'project', prefs: {muted: {}}, locale: 'en', history: {board: 'b'}, authority: 0, arrange: {view: {}}, titles: {},
     groupMuted:()=>false,groupRegistry, groupName: (group: {key: string}) => group.key, mutedKey: (_by: string, key: string) => key,
     plotGroupsPrepared: function* (...args: Parameters<typeof plotGroupsPrepared>) {aggregates++; return yield* plotGroupsPrepared(...args);},
@@ -74,7 +77,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
     clock: () => '', shortDay: () => '', workHours: () => '', stamp: () => '', t: (key: string) => key,
     prepareParent: null as unknown as () => {value: Model | null; ready: boolean}, Stacks: null as unknown as (props: object) => React.ReactNode,
   };
-  runInNewContext(ts.transpileModule(`function prepareParent(){${region}\nreturn prepared;}\n${source.slice(source.indexOf('const Stacks = memo(function Stacks('))}\nglobalThis.prepareParent=prepareParent;globalThis.Stacks=Stacks;`, {compilerOptions: {target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React}}).outputText, context);
+  runInNewContext(ts.transpileModule(`function prepareParent(){${region}\nglobalThis.paint=paint;return prepared;}\n${source.slice(source.indexOf('const Stacks = memo(function Stacks('))}\nglobalThis.prepareParent=prepareParent;globalThis.Stacks=Stacks;`, {compilerOptions: {target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React}}).outputText, context);
   const renderParent = () => {Object.assign(context, parent); parent.begin(); return context.prepareParent();};
   assert.equal(renderParent().value, null); assert.equal(aggregates, 0); parent.commit(); parent.finish();
   const first = renderParent().value!; assert.equal(first.identities.length, 30); assert.equal(aggregates, 1);
@@ -91,12 +94,23 @@ test('actual Activity generators hold one coherent model and produce exact stack
     if (!React.isValidElement<{className?: string; d?: string; children?: React.ReactNode}>(node)) return [];
     return node.props.className === 'activity-stack' && node.props.d !== undefined ? [node.props.d] : pathsOf(node.props.children);
   };
-  const props = {activity: {barMs}, origin: 0, groups: current.shown, from: 0, to: length, unknownTo: null, plot: undefined, onBase: () => {}, onSelect: () => {}, strip: current.strip as PlotBuffer | null, prepared: true, navigation, by: 'project', allMuted: false, empty: null};
+  const props = {activity: {barMs}, origin: 0, groups: current.shown,paint:context.paint, from: 0, to: length, unknownTo: null, plot: undefined, onBase: () => {}, onSelect: () => {}, strip: current.strip as PlotBuffer | null, prepared: true, navigation, by: 'project', allMuted: false, empty: null};
   const renderChild = () => {Object.assign(context, child); child.begin(); return pathsOf(context.Stacks(props));};
   assert.deepEqual(renderChild(), []); assert.equal(draws, 0); child.commit(); child.finish();
   const actual = renderChild();
   const expected = new StackPaths().draw(current.shown, 0, 340 / length, barMs, 160, activityScale(465 * 60_000).max);
   assert.deepEqual([...actual], expected); assert.equal(draws, 1);
+  const beforePalette=aggregates;
+  context.pins=[['s0',CATEGORY_COLORS[8]]];
+  assert.equal(renderParent().value,current);parent.commit();
+  assert.equal(aggregates,beforePalette,'a colour-only update does not restart group preparation');
+  props.paint=context.paint;
+  assert.equal(props.paint.get(JSON.stringify('s0')),CATEGORY_COLORS[8]);
+  assert.equal(props.paint.get(JSON.stringify('s8')),CATEGORY_COLORS[0],'only the conflicting automatic slot moves');
+  assert.equal(props.paint.get(JSON.stringify('s9')),'var(--other)','neutral survivors are not promoted');
+  assert.deepEqual([...renderChild()],expected);child.commit();child.finish();assert.equal(draws,1,'paint changes never rebuild numeric stack paths');
+  context.pins=[];renderParent();parent.commit();props.paint=context.paint;renderChild();child.commit();child.finish();
+  assert.equal(draws,1);assert.equal(props.paint.get(JSON.stringify('s9')),'var(--other)');
   props.from += 60_000; props.to += 60_000;
   axis.basis = {from: props.from, to: props.to, end: props.to};
   assert.deepEqual([...renderChild()], expected); child.commit(); child.finish();
