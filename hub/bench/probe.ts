@@ -120,17 +120,15 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
   let recording = true;
   let instrumentMs = 0;
   let commits = 0;
-  let renders = new Map<Element | null, number>();
-  let mutations = new Map<Element | null, number>();
+  type Counts=Map<Element|null,Map<string,Counted>>;
+  let renders:Counts = new Map();
+  let mutations:Counts = new Map();
   let cardChanged: Record<string, number> = {};
   let moneyChanged: Record<string, number> = {};
   let seriesChanged: Record<string, number> = {};
   const names = new WeakMap<Element, number>();
   let named = 0;
 
-  const bump = (counts: Map<Element | null, number>, nodes: Set<Element | null>) => {
-    for (const node of nodes) counts.set(node, (counts.get(node) ?? 0) + 1);
-  };
   const regionOf = (node: Element | null) => {
     if (!node) return 'page';
     const card = node.closest('[data-card]');
@@ -147,15 +145,24 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
     const time = node.getAttribute('data-time');
     return `${node.tagName.toLowerCase()}${classes}${time ? `[data-time=${time}]` : ''}#${names.get(node)}`;
   };
-  const listed = (counts: Map<Element | null, number>): Counted[] =>
-    [...counts].map(([node, count]) => ({
+  const place = (node:Element|null):Counted => ({
       node: describe(node),
       time: !!node?.hasAttribute('data-time'),
       kind: node?.getAttribute('data-time') ?? null,
       region: regionOf(node),
       ...(node?.closest('section.agent-hours-heatmap')?{widget:'calendar' as const}:node?.closest('section.activity')?{widget:'activity' as const}:node?.closest('[data-widget="quota-session-history"],[data-widget="quota-session-table"]')?{widget:'session' as const}:node?.closest('section.history, section.forecast')?{widget:'quota' as const}:node?.closest('section.budget-history, section.budget-table')?{widget:'budget' as const}:node?.closest('section.subscription-funds')?{widget:'funds' as const}:{}),
-      count,
-    }));
+      count:1,
+    });
+  const bump = (counts:Counts,nodes:Set<Element|null>) => {
+    for(const node of nodes){
+      // A later removal must not erase where this work happened. Keep separate
+      // receipts if the same element subsequently renders in another region.
+      const row=place(node),key=JSON.stringify([row.time,row.kind,row.region,row.widget]);
+      let places=counts.get(node);if(!places){places=new Map();counts.set(node,places);}
+      const previous=places.get(key);if(previous)previous.count++;else places.set(key,row);
+    }
+  };
+  const listed = (counts:Counts):Counted[] => [...counts.values()].flatMap(places=>[...places.values()]);
 
   page.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
     supportsFiber: true,

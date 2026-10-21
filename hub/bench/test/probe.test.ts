@@ -12,7 +12,7 @@ class Element {
     readonly tagName: string,
     readonly className: string,
     private readonly attributes: Record<string, string>,
-    readonly parentElement: Element | null,
+    public parentElement: Element | null,
   ) {parentElement?.children.push(this);}
   hasAttribute(name: string) {
     return Object.hasOwn(this.attributes, name);
@@ -112,6 +112,22 @@ test('a legend focus description renders its entry while a real chart render sti
   assert.ok(!p.bench.read().renders.some(part=>part.kind==='chart'));
   p.hook.onCommitFiberRoot(1,{current:fiber(FUNCTION,{children:[fiber(HOST,{stateNode:panel,children:[focused]})]})});
   assert.ok(p.bench.read().renders.some(part=>part.kind==='chart'));
+});
+
+test('a removed legend keeps the region where it rendered without exempting later header work',()=>{
+  const p=page(),panel=el('section',null,{'data-time':'chart'},'history');
+  const entry=el('button',panel,{'data-series-legend':''},'legend-item');
+  const root=fiber(FUNCTION,{children:[fiber(HOST,{stateNode:entry})]});
+  p.hook.onCommitFiberRoot(1,{current:root});p.mutate(entry);
+  entry.parentElement=null;
+  const removed=p.bench.read();
+  assert.equal(removed.renders[0].region,'analytics','reading after removal cannot turn past chart work into page work');
+  assert.equal(removed.renders[0].widget,'quota');assert.equal(removed.mutations[0].region,'analytics');
+  entry.parentElement=el('header',null,{},'topbar');
+  p.hook.onCommitFiberRoot(1,{current:root});
+  assert.deepEqual(p.bench.read().renders.map(row=>[row.region,row.count]),[['analytics',1],['header',1]],'the same element rendering in a forbidden region must still fail');
+  p.bench.reset();entry.parentElement=null;p.hook.onCommitFiberRoot(1,{current:root});
+  assert.equal(p.bench.read().renders[0].region,'page','a legend marker grants no blanket analytics exemption');
 });
 
 /** Runs the probe as the browser gets it, in a context of its own with a stand-in DOM. */
