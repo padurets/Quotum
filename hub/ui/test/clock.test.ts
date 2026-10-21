@@ -153,6 +153,38 @@ test('a moment that is not after now is a mistake of its part: taken as a minute
   assert.deepEqual(c.woken, ['wrong']);
 });
 
+test('an arriving update cannot postpone the pending wake of an already owed deadline', () => {
+  const c = pageClock(), due = T0 + 1;
+  const watch = c.part('pending', () => due), timer = {...c.timers[0]};
+  c.jump(10);
+  c.clock.due(watch, due, c.now());
+  assert.equal(watch.due, due, 'an owed deadline remains owed until its listener wakes');
+  assert.equal(c.timers[0].id, timer.id);
+  assert.equal(c.timers[0].at, timer.at);
+  c.advance(timer.at - c.now());
+  assert.deepEqual(c.woken, ['pending']);
+  c.advance(MIN - 1);
+  assert.deepEqual(c.woken, ['pending'], 'a new invalid deadline still cannot spin');
+  c.advance(1);
+  assert.deepEqual(c.woken, ['pending', 'pending']);
+});
+
+test('a retained render clock cannot restart the minimum delay before its pending wake', () => {
+  const c = pageClock(), due = T0 + 1;
+  const watch = c.part('pending', () => null), timerAt = T0 + 250;
+  c.clock.due(watch, due, T0);
+  const timer = c.timers[0].id;
+  for (let commit = 0; commit < 3; commit++) {
+    c.jump(10);
+    c.clock.due(watch, due, T0);
+    assert.equal(c.timers[0].id, timer, 'each retained commit must keep the earlier timer');
+    assert.equal(c.timers[0].at, timerAt);
+  }
+  c.advance(timerAt - c.now());
+  assert.deepEqual(c.woken, ['pending']);
+  assert.equal(c.timers.length, 0);
+});
+
 test('a hidden tab has no timer; shown again, whatever came due meanwhile is woken at once', () => {
   const c = pageClock();
   c.part('minute', now => now - (now % MIN) + MIN);
