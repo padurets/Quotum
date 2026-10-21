@@ -7,6 +7,10 @@ import {PeriodAccounting} from '../lib/periodAccounting';
 import {PeriodIndex} from '../lib/periodIndex';
 import {packSamples,retainSamplesPrepared,sampleCount} from '../../server/domain/periodTape';
 import {drain} from '../lib/prepare';
+import {evaluatedRange} from '../../server/domain/period';
+import {retainTapeWithTails} from '../../server/domain/periodRetention';
+import type {PeriodTape} from '../../server/domain/periodTape';
+import {periodTextChangesAt} from '../lib/periodClock';
 import {spentOf} from '../lib/forecast';
 import {num} from '../lib/format';
 import {setLocale,t} from '../i18n';
@@ -60,6 +64,65 @@ const cellContext={exports:{} as {make:(boardPeriod:any,line:Line,history:{range
 runInNewContext(ts.transpileModule(`${source.slice(textStart,textEnd)}
 export function make(boardPeriod:any,line:Line,history:any,range=false){${source.slice(first,last)}return (${source.slice(cellStart+'      spent: '.length,cellEnd).replace(/,$/,'')});}`,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,cellContext);
 const make=cellContext.exports.make;
+
+const coordinator=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
+const clockMethod=coordinator.slice(coordinator.indexOf('  cellChangesAt('),coordinator.indexOf('  projectionState('));
+const clockContext={exports:{} as {method:(...args:any[])=>number|null},evaluatedRange,periodTextChangesAt};
+runInNewContext(ts.transpileModule('class Model {'+clockMethod+'}\nexports.method=Model.prototype.cellChangesAt;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,clockContext);
+
+function spendingPair(tape:PeriodTape,accounting:PeriodAccounting,period:number){
+  const create=(legacy:boolean)=>{
+    let reads=0;
+    const board:any={tapes:new Map([['quota',{tape,accounting,selection:{mode:'live',periodMs:period},rangeKey:'test'}]]),workBoundary:()=>null,
+      quotaSpendingAt:(line:Line,at:number)=>{reads++;return accounting.quotaSpendingSummary(line.sourceId,line.windowId,{from:at-period,to:at})??line;}};
+    // Omitting the new dependency kind exercises the unchanged general clock.
+    board.cellChangesAt=(...args:any[])=>clockContext.exports.method.apply(board,legacy?args.slice(0,8):args);
+    return {cell:make(board,{sourceId:'s',windowId:'w',consumed:777,coveredMs:0} as Line,{range:'test'}),get reads(){return reads;}};
+  };
+  return {selected:create(false),legacy:create(true)};
+}
+
+test('actual spending clock skips flat prefixes without delaying a positive edge expiry, including retirement',()=>{
+  const period=3*H,observations=Array.from({length:121},(_,i)=>({at:i*M,used:i<40?10:10.25,resetAt:10*H,staleAfterMs:2*M}));
+  const tape:PeriodTape={from:0,cut:period,replaceFrom:0,cursor:'c',money:[],quota:[{source:'s',window:'w',samples:drain(retainSamplesPrepared(packSamples(observations)))}]};
+  const accounting=new PeriodAccounting(tape,null),tails=new Map();
+  const retained=drain(retainTapeWithTails(tape,M+1,()=>{},(before,after)=>tails.set(after,{before,after,removed:1})));
+  assert.equal(tails.size,1);
+  const retired=drain(PeriodAccounting.prepareRetirement(retained,null,undefined,accounting,new Set(),undefined,tails));
+  try{for(const locale of ['en','ru'] as const){setLocale(locale,false);
+    for(const [value,index,now] of [[tape,accounting,period+1],[retained,retired,period+M+2]] as const){
+      const {selected,legacy}=spendingPair(value,index,period),due=period+39*M+1;
+      assert.equal(selected.cell.at(now).content,legacy.cell.at(now).content);
+      const before=selected.reads,reference=legacy.reads;
+      assert.equal(selected.cell.changesAt(now),due);assert.equal(legacy.cell.changesAt(now),due);
+      assert.ok(selected.reads-before<(legacy.reads-reference)/4,'flat spending must not format every intermediate observation again');
+      for(const at of [due-1,due,due+1])assert.equal(selected.cell.at(at).content,legacy.cell.at(at).content);
+      assert.equal(selected.cell.at(due).content,t('table.unused'));
+    }
+  }}finally{setLocale('en',false);}
+});
+
+test('actual spending clock retains the last measured edge through gaps, corrections and reset changes',()=>{
+  const period=3*H,observations=[0,1,4,5,6,7,8,9].map((minute,i)=>({at:minute*M,used:i<4?10:5,resetAt:i<6?10*H:5*H,staleAfterMs:2*M,...(minute===4?{validUntil:5*M}:{})}));
+  const tape:PeriodTape={from:0,cut:period,replaceFrom:0,cursor:'c',money:[],quota:[{source:'s',window:'w',samples:drain(retainSamplesPrepared(packSamples(observations)))}]};
+  const accounting=new PeriodAccounting(tape,null),now=period+1,due=period+8*M+1;
+  try{for(const locale of ['en','ru'] as const){setLocale(locale,false);
+    const {selected,legacy}=spendingPair(tape,accounting,period);
+    assert.equal(selected.cell.changesAt(now),due);assert.equal(legacy.cell.changesAt(now),due);
+    assert.equal(selected.cell.at(due-1).content,t('table.unused'));assert.equal(selected.cell.at(due).content,'—');
+    for(const at of [now,due-1,due,due+1])assert.equal(selected.cell.at(at).content,legacy.cell.at(at).content);
+    assert.equal(selected.cell.changesAt(due),null);
+  }}finally{setLocale('en',false);}
+});
+
+test('actual spending clock includes future observations at the exclusive right edge',()=>{
+  const period=3*H,observations=[{at:0,used:10},{at:M,used:10},{at:period+2*M,used:10},{at:period+3*M,used:11}].map(row=>({...row,resetAt:10*H,staleAfterMs:2*M}));
+  const tape:PeriodTape={from:0,cut:period+4*M,replaceFrom:0,cursor:'c',money:[],quota:[{source:'s',window:'w',samples:drain(retainSamplesPrepared(packSamples(observations)))}]};
+  const {selected}=spendingPair(tape,new PeriodAccounting(tape,null),period),now=period+1,due=period+3*M+1;
+  assert.equal(selected.cell.changesAt(now),due);
+  assert.equal(selected.cell.at(due-1).content,'—');
+  assert.equal(selected.cell.at(due).content,t('table.points',{value:num(1,1)}));
+});
 
 test('actual spending cells keep text, deadlines and captured fallbacks through live retirement',async context=>{
   context.mock.method(Date,'now',()=>NOW);

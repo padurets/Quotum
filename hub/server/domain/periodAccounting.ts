@@ -169,8 +169,7 @@ class QuotaIndex {
   static *retire(series:PeriodTape['quota'][number],activity:WorkTimeline|undefined,known:number,prior:QuotaIndex,tail:QuotaTail,reserve?:(bytes:number)=>void):Preparation<QuotaIndex|undefined>{
     if(tail.removed!==1||tail.before!==prior.series||tail.after!==series||!('columns' in prior.series.samples)||!('columns' in series.samples)
       ||sampleCount(prior.series.samples)!==sampleCount(series.samples)+1||prior.activity!==activity||!Object.is(prior.known,known)
-      ||!('base' in prior.spent)||!('base' in prior.during)||!('base' in prior.worked)
-      ||!Object.is(numberAt(prior.during,1),0)||!Object.is(numberAt(prior.worked,1),0))return undefined;
+      ||!('base' in prior.spent)||!('base' in prior.during)||!('base' in prior.worked))return undefined;
     const dropped=sampleDeadlineAt(prior.series.samples,0),origin=numberAt(prior.covered,1)!;
     if(!(Number.isFinite(dropped)||dropped===Infinity)||!Object.is(dropped,numberAt(prior.deadlines,0))
       ||!(yield*integerTimes(prior.series.samples.columns[0]))||!(yield*numericDeadlines(prior.deadlines))||!(yield*integerTailReady(prior.covered,origin)))return undefined;
@@ -178,35 +177,56 @@ class QuotaIndex {
     const copying=(bytes:number)=>{scratch+=bytes;reserve?.(scratch);};
     yield;
     value.deadlines=yield*numberTail(prior.deadlines as NumberColumn,1,copying);
-    yield;
-    if(Object.is(numberAt(prior.spent,1),0))value.spent=yield*numberTail(prior.spent as NumberColumn,1,copying);
-    else {
-      // Removing nonzero spending changes floating addition order. Rebuild it
-      // forward while the independent integer coverage and deadlines keep their tails.
-      const count=sampleCount(series.samples);copying(count*16+64);
-      const spent=new Float64Array(count);let previous:ReturnType<typeof sampleAt>,integers=true;
-      for(let i=0;i<count;i++){
-        if((i&15)===0)yield 16;
-        const sample=sampleAt(series.samples,i)!;
-        if(i){spent[i]=spent[i-1];const step=edge(previous!,sample);if(step.valid)spent[i]+=step.delta;}
-        integers&&=Number.isSafeInteger(spent[i]);previous=sample;
+    const rebuildSpent=!Object.is(numberAt(prior.spent,1),0),rebuildWorked=!Object.is(numberAt(prior.worked,1),0),rebuildDuring=!Object.is(numberAt(prior.during,1),0);
+    const count=sampleCount(series.samples),columns=Number(rebuildSpent)+Number(rebuildWorked)+Number(rebuildDuring);
+    // Removing a nonzero prefix changes floating addition order. Rebuild only
+    // those sums forward; independent deadlines and integer coverage keep their tails.
+    if(columns)copying(columns*(count*16+64));
+    const spent=rebuildSpent?new Float64Array(count):null,worked=rebuildWorked?new Float64Array(count):null,during=rebuildDuring?new Float64Array(count):null;
+    let previous:ReturnType<typeof sampleAt>,integers=true;
+    for(let i=0;i<count&&columns;i++){
+      if((i&15)===0)yield 16;
+      const sample=sampleAt(series.samples,i)!;
+      if(i){
+        if(spent)spent[i]=spent[i-1];if(worked)worked[i]=worked[i-1];if(during)during[i]=during[i-1];
+        const a=previous!,step=edge(a,sample);
+        if(step.valid){
+          if(spent)spent[i]+=step.delta;
+          if(worked||during){const work=a.at>=known&&known!==Infinity?activity?.read({from:a.at,to:sample.at},true)??0:0;if(worked)worked[i]+=work;if(during)during[i]+=work>0?step.delta:0;}
+        }
       }
-      if(count)yield 16;
-      // A finite prefix that cannot use integer packing starts at zero and is
-      // nondecreasing, so the ordinary packer would only copy this Float64 column.
-      value.spent=!integers&&Number.isFinite(spent[count-1])?{length:count,base:0,values:spent}:yield*numberColumn(count,i=>spent[i]);
+      if(spent)integers&&=Number.isSafeInteger(spent[i]);previous=sample;
     }
+    if(count&&columns)yield 16;
+    yield;
+    // A finite prefix that cannot use integer packing starts at zero and is
+    // nondecreasing, so the ordinary packer would only copy this Float64 column.
+    value.spent=spent?!integers&&Number.isFinite(spent[count-1])?{length:count,base:0,values:spent}:yield*numberColumn(count,i=>spent[i]):yield*numberTail(prior.spent as NumberColumn,1,copying);
     yield;
     value.covered=yield*integerTail(prior.covered,origin,copying);
     yield;
-    value.worked=yield*numberTail(prior.worked as NumberColumn,1,copying);
+    value.worked=worked?yield*numberColumn(count,i=>worked[i]):yield*numberTail(prior.worked as NumberColumn,1,copying);
     yield;
-    value.during=yield*numberTail(prior.during as NumberColumn,1,copying);
+    value.during=during?yield*numberColumn(count,i=>during[i]):yield*numberTail(prior.during as NumberColumn,1,copying);
     return value;
   }
 
   sharesWork(activity:WorkTimeline|undefined,known:number){return this.activity===activity&&Object.is(this.known,known);}
   get bytes(){return [this.deadlines,this.spent,this.covered,this.worked,this.during].reduce((n,c)=>n+numberBytes(c),0)+(this.times instanceof Float64Array?numberBytes(this.times):0);}
+  /** Zero spending is distinguished by whether measured time remains. */
+  spendingStateChangesAt(now:number,period:number){
+    const count=this.times.length;if(!count)return Infinity;
+    if(!Number.isFinite(numberAt(this.spent,count-1))||!Number.isFinite(numberAt(this.covered,count-1)))return this.changesAt(now,period);
+    const lo=lower(this.times,now-period),end=lower(this.times,now),hi=Math.max(0,end-1),right=(numberAt(this.times,end)??Infinity)+1;
+    if(hi<=lo)return right;
+    const start=numberAt(this.spent,lo)!,finish=numberAt(this.spent,hi)!;let next=count;
+    if(finish>start){
+      let a=lo+1,b=hi+1;
+      while(a<b){const middle=(a+b)>>>1;if(numberAt(this.spent,middle)===start)a=middle+1;else b=middle;}
+      next=a;
+    }else if(numberAt(this.covered,hi)!>numberAt(this.covered,lo)!)next=lower(this.covered,numberAt(this.covered,hi)!);
+    return Math.min(right,next<count?(numberAt(this.times,next-1)??Infinity)+1+period:Infinity);
+  }
   changesAt(now:number,period:number){
     const from=now-period,deadline=sampleDeadlineAt(this.series.samples,sampleCount(this.series.samples)-1)??Infinity;
     // Work and its clock use the same captured source curve, including after a
@@ -611,6 +631,10 @@ export class PeriodAccounting {
     // Unknown work can name the current time; retain its existing display clock.
     if(!Number.isFinite(Math.max(this.selectedKnown,cutoff)))return undefined;
     const next=this.directWorkChangesAt(source,now,period,cutoff);return Number.isFinite(next)?next:null;
+  }
+  quotaSpendingStateChangesAt(source:string,window:string,now:number,period:number):number|null|undefined {
+    const index=this.quota.get(source+'\n'+window);if(!index)return undefined;
+    const next=index.spendingStateChangesAt(now,period);return Number.isFinite(next)?next:null;
   }
   quotaChangesAt(source:string,window:string,now:number,period:number):number|null|undefined {
     const index=this.quota.get(source+'\n'+window);if(!index)return undefined;

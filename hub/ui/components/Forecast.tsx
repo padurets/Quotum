@@ -172,7 +172,7 @@ const WindowForecast = memo(function WindowForecast({arrange,kind='weekly'}: {ar
           const basis=captured?.basis.deref();
           const initial=captured&&basis!==undefined&&captured.now===now&&captured.cell===shown&&captured.locale===formatLocale()&&basis===boardPeriod.cellBasis('quota')?JSON.stringify(shown):undefined;
           // Direct work totals do not change when a quota observation leaves the period.
-          return boardPeriod.cellChangesAt('quota',now,at=>JSON.stringify(workCell(column,at)),column==='workleft'?at=>workLeftChangesAt(lineAt(at),resetAt,at):undefined,line.sourceId,history!.range,line.windowId,initial,column==='work'||column==='agenthours');
+          return boardPeriod.cellChangesAt('quota',now,at=>JSON.stringify(workCell(column,at)),column==='workleft'?at=>workLeftChangesAt(lineAt(at),resetAt,at):undefined,line.sourceId,history!.range,line.windowId,initial,column==='work'||column==='agenthours'?'selectedWork':'all');
         },
         at:(now:number)=>{const cell=workCell(column,now),basis=boardPeriod.cellBasis('quota');stamp=basis&&typeof WeakRef==='function'?{now,cell,locale:formatLocale(),basis:new WeakRef(basis)}:undefined;return cell;}
       };
@@ -226,7 +226,7 @@ const WindowForecast = memo(function WindowForecast({arrange,kind='weekly'}: {ar
           };
         },
       },
-      spent: {time:'spent',changesAt:now=>boardPeriod.cellChangesAt('quota',now,at=>spentText(spentOf(spentAt(at))),undefined,line.sourceId,history!.range,line.windowId),at:now=>({content:spentText(spentOf(spentAt(now)))})},
+      spent: {time:'spent',changesAt:now=>boardPeriod.cellChangesAt('quota',now,at=>spentText(spentOf(spentAt(at))),undefined,line.sourceId,history!.range,line.windowId,undefined,'spending'),at:now=>({content:spentText(spentOf(spentAt(now)))})},
       forecast: {
         time: 'forecast',
         changesAt: now => cellChangesAt(live, measuredAt, now, ahead, context, chosen),

@@ -73,7 +73,7 @@ const columnValues=(column:any)=>Array.from({length:column.length},(_,i)=>number
 const columnBuffers=(column:any):ArrayBufferLike[]=>ArrayBuffer.isView(column)?[column.buffer]:column.runs?[column.runs.ends.buffer,column.runs.bases.buffer,column.runs.steps.buffer]:column.values?[column.values.buffer]:[];
 const quotaSnapshot=(index:any)=>({samples:Array.from({length:sampleCount(index.series.samples)},(_,i)=>sampleAt(index.series.samples,i)),descriptors:structuredClone(index.series.descriptors),columns:quotaColumns.map(field=>columnValues(index[field]))});
 
-async function retirementControl(t:any,nonzeroSpending=false){
+async function retirementControl(t:any,nonzeroSpending=false,nonzeroWork=false){
   const clock={now:NOW};t.mock.method(Date,'now',()=>clock.now);
   const h=await fixture({personal:true,periodName:'24h',clocked:true});
   try{
@@ -81,13 +81,14 @@ async function retirementControl(t:any,nonzeroSpending=false){
     for(const source of sources){
       h.store.hold(source,h.alice.id,start-H);
       for(let i=0;i<256;i++){const used=nonzeroSpending?.005*i:i<2?0:.005*(i-1);h.store.record(source,{observedAt:start+M+i*5*M,plan:'',resets:null,staleAfterMs:48*H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used,remaining:100-used,resetAt:NOW+24*H}]});}
+      if(nonzeroWork)h.store.creditWork(h.device,start+M,start+20*M,[{source,client:'codex',origin:'terminal',startedAt:start-H,project:'Work project',folder:'Private folder',identity:{kind:'stable',sessionId:['b','d','e'][sources.indexOf(source)].repeat(32)}}]);
     }
     h.events.flush();await flush();
     const before=h.period.tapes.get('quota'),old=sources.map(source=>before.accounting.quota.get(source+'\nw'));
     for(const index of old){
       assert.equal(sampleCount(index.series.samples),256);assert.ok(index.series.descriptors?.length);
       assert.ok(index.times.runs);assert.ok(index.spent.values instanceof Float64Array);assert.ok(index.covered.runs);
-      assert.equal(h.period.index.curves.groups.source.has(index.series.source),false);
+      assert.equal(h.period.index.curves.groups.source.has(index.series.source),nonzeroWork);
     }
     const snapshots=old.map(quotaSnapshot),work=h.period.get().value,workSnapshot=structuredClone(work);
     const bytes=h.pool.estimatedBytes,requests=h.requests.length,revision=h.period.getProjectionRevision('quota');
@@ -182,6 +183,23 @@ test('nonzero spending retires integer coverage while rebuilding the exact float
       for(const from of [c.clock.now-24*H,c.clock.now-12*H])assert.deepEqual(after.accounting.quotaSummary(c.sources[i],'w',{from,to:c.clock.now}),fresh.quotaSummary(c.sources[i],'w',{from,to:c.clock.now}));
     }
     assert.ok(inverseMismatches>0,'the fixture must distinguish forward floating addition from inverse subtraction');
+    c.unchanged();assert.equal(h.requests.length,c.requests);assert.equal(h.period.getProjectionRevision('quota'),c.revision);
+    assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes);assert.equal(c.preparer.size,0);assert.equal(c.tails?.size,0);
+  }finally{c.stopReads();await h.close();c.preparer.dispose();}
+});
+
+test('nonzero work and spending keep independent coverage while rebuilding all floating prefixes exactly',async t=>{
+  const c=await retirementControl(t,true,true),{h}=c;
+  try{
+    for(const index of c.old){assert.ok(numberAt(index.worked,1)!>0);assert.ok(numberAt(index.during,1)!>0);}
+    await c.startRetirement();await c.drain();c.stopReads();
+    assert.equal(c.coveredCopies.size,3,'work must not force rebuilding independent integer coverage');
+    const after=h.period.tapes.get('quota'),fresh=new PeriodAccounting(after.tape,c.work,h.period.index.curves);
+    for(const source of c.sources){
+      const actual=after.accounting.quota.get(source+'\nw'),expected=(fresh as any).quota.get(source+'\nw');
+      for(const field of quotaColumns)assert.deepEqual(columnValues(actual[field]),columnValues(expected[field]),`${field} must equal a fresh forward preparation`);
+      for(const from of [c.clock.now-24*H,c.clock.now-12*H])assert.deepEqual(after.accounting.quotaSummary(source,'w',{from,to:c.clock.now}),fresh.quotaSummary(source,'w',{from,to:c.clock.now}));
+    }
     c.unchanged();assert.equal(h.requests.length,c.requests);assert.equal(h.period.getProjectionRevision('quota'),c.revision);
     assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes);assert.equal(c.preparer.size,0);assert.equal(c.tails?.size,0);
   }finally{c.stopReads();await h.close();c.preparer.dispose();}
