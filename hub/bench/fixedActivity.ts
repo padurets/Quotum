@@ -101,7 +101,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       const baseline=await sample();assert.ok(baseline.activity.known);assert.ok(baseline.tiles.length<=8);
       const selectedFilter=[...bodies.bodies].reverse().find(row=>row.body.workFilter)!.body.workFilter;assert.ok(selectedFilter);
       assert.equal(await cdp.evaluate('window.__quotumFixedActivity.status().members'),4,'emphasis adds no history reader');
-      const geometry=()=>cdp.evaluate<string>(`JSON.stringify([...document.querySelectorAll('.widgets>.widget,.panel[data-time="chart"] .chart,.activity-stack,[data-series] path,.plan-line,.forecast-line')].map(e=>{const b=e.getBoundingClientRect();return[b.x,b.y,b.width,b.height,e.getAttribute('d')];}))`);
+      const geometry=()=>cdp.evaluate<string>(`JSON.stringify([...document.querySelectorAll('.widgets>.widget,.panel[data-time="chart"] .chart,.activity-stack,[data-series] path,.plan-line,.forecast-line')].map(e=>{const b=e.getBoundingClientRect();return[b.x+scrollX,b.y+scrollY,b.width,b.height,e.getAttribute('d')];}))`);
       const beforeHover=await geometry(),hoverStart=bodies.bodies.length;
       await cdp.evaluate('window.__quotumFixedActivity.reset();__quotumBench.reset()');
       const emphasis=await cdp.evaluate<{name:string;matrix:number[][]}[]>(`(async()=>{
@@ -115,14 +115,25 @@ export async function fixedActivity(browser:Browser,stand:Stand){
           const assert=(expected)=>{const got=read();if(got.some((value,i)=>Math.abs(value-expected[i])>.001))throw Error('emphasis matrix '+JSON.stringify({got,expected}));matrix.push(got);};
           const hover=button=>button.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));
           const leave=button=>button.dispatchEvent(new PointerEvent('pointerout',{bubbles:true,pointerType:'mouse'}));
-          buttons[0].click();buttons[1].click();await pause();assert([1,1,.25]);
+          buttons[0].click();buttons[1].click();await pause();assert([1,1,.4]);
           hover(buttons[2]);await pause();assert([.65,.65,1]);if(buttons[2].getAttribute('aria-pressed')!=='false')throw Error('preview changed membership');
-          leave(buttons[2]);await pause();assert([1,1,.25]);hover(buttons[0]);await pause();assert([1,.65,.25]);
-          buttons[0].click();await pause();assert([1,.65,.25]);leave(buttons[0]);await pause();assert([.25,1,.25]);
+          leave(buttons[2]);await pause();assert([1,1,.4]);hover(buttons[0]);await pause();assert([1,.65,.4]);
+          buttons[0].click();await pause();assert([1,.65,.4]);leave(buttons[0]);await pause();assert([.4,1,.4]);
           buttons[1].click();await pause();assert([1,1,1]);reports.push({name:panel.querySelector('h2').textContent,matrix});
         }return reports;
       })()`);
       assert.equal(emphasis.length,5);
+      const key=async(key:string,code:string,windowsVirtualKeyCode:number)=>{
+        for(const type of ['keyDown','keyUp'])await cdp.send('Input.dispatchKeyEvent',{type,key,code,windowsVirtualKeyCode});
+      };
+      for(let index=0;index<5;index++){
+        await cdp.evaluate(`document.querySelectorAll('.panel[data-time="chart"]')[${index}].querySelector('.legend-item').focus()`);
+        await key('Enter','Enter',13);await key('Tab','Tab',9);await key(' ','Space',32);
+        const pressed=await cdp.evaluate<string[]>(`[...document.querySelectorAll('.panel[data-time="chart"]')[${index}].querySelectorAll('.legend-item')].slice(0,3).map(button=>button.getAttribute('aria-pressed'))`);
+        assert.deepEqual(pressed,['true','true','false'],'native Enter and Space independently choose two series');
+        await key('Escape','Escape',27);
+        await cdp.evaluate(`(()=>{document.activeElement.blur();const panel=document.querySelectorAll('.panel[data-time="chart"]')[${index}];for(const button of panel.querySelectorAll('.legend-item[aria-pressed="true"]'))button.click();})()`);
+      }
       const hovered=await sample(),paint=await cdp.evaluate<Reading>('__quotumBench.read()');
       assert.equal(bodies.bodies.length,hoverStart,'emphasis cannot request history');assert.equal(hovered.advances,0,'emphasis cannot prepare paths or accounting');assert.equal(hovered.preferenceWrites,0);assert.equal(await geometry(),beforeHover);assert.deepEqual(hovered.numbers,baseline.numbers);
       assert.ok(!paint.renders.some(part=>part.kind==='chart'),'emphasis cannot render chart consumers');

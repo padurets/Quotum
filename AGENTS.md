@@ -180,7 +180,7 @@ and platform smoke checks still apply.
 - Chart legends share `hub/ui/components/seriesFocus.ts`: click, Enter/Space and
   touch toggle independent in-memory choices; pointer or focus-visible previews one
   series with pointer priority. Preview/chosen/other opacity multipliers are
-  1/0.65/0.25; without a preview, chosen series are 1, and an empty choice restores
+  1/0.65/0.4; without a preview, chosen series are 1, and an empty choice restores
   every series. Apply the multiplier once to every associated plot/legend layer,
   preserving intrinsic opacity and colours. Emphasis changes paint only: no filtering,
   preparation, history reads, preference writes or data-consumer renders.

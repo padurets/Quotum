@@ -102,7 +102,7 @@ function LegendMetrics({history,by,groupKey,group,active}:{history:History|null;
 /** Keyboard descriptions belong to their own entry even when the pointer wins visually. */
 const LegendItem = memo(function LegendItem({history,group,groupKey,by,name,color}:{history:History|null;group:ActivityGroup|null;groupKey:string;by:ActivityDimension;name:string;color:string}) {
   useLocale();const id=useId(),[focused,setFocused]=useState(false);
-  return <div className="activity-legend-item">
+  return <div className="activity-legend-item" data-series-legend>
     <button type="button" className="legend-item" data-series-key={activitySeriesKey(by,groupKey)} data-agent-ms={group?.agentMs} style={seriesFocusStyle(activitySeriesKey(by,groupKey))}
       aria-describedby={id} aria-pressed={false} onFocus={()=>setFocused(true)} onBlur={()=>setFocused(false)}>
       <i className="activity-swatch" style={{background:color}}/><span>{name}</span><LegendAmount history={history} by={by} groupKey={groupKey} group={group}/>

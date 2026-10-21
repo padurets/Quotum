@@ -34,7 +34,7 @@ export function SeriesLegendItem({seriesKey, name, description, color, dash, chi
   seriesKey: string; name: string; description?: string; color: string; dash?: string; children: ReactNode;
 }) {
   const id=useId();
-  return <><button type="button" className="legend-item" data-series-key={seriesKey} style={seriesFocusStyle(seriesKey)} aria-describedby={description?id:undefined} aria-pressed={false}>
+  return <><button type="button" className="legend-item" data-series-legend data-series-key={seriesKey} style={seriesFocusStyle(seriesKey)} aria-describedby={description?id:undefined} aria-pressed={false}>
     <svg width="18" height="6" aria-hidden="true"><line x1="1" x2="17" y1="3" y2="3" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeDasharray={dash || undefined}/></svg>
     <span>{name}</span>{children}
   </button>{description&&<span id={id} className="sr-only">{description}</span>}</>;

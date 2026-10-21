@@ -1974,7 +1974,7 @@ Quota history, wallet budgets, subscription funds and agent activity read and mo
 (`ui/components/timeAxis.ts`), each with its legend under it. Clicks independently
 emphasize several series; pointer or keyboard focus-visible previews one with pointer
 priority. Previewed series retain their normal paint, other chosen series use 65% and
-unchosen series 25%. Without a preview, chosen series are normal; with no represented
+unchosen series 40%. Without a preview, chosen series are normal; with no represented
 choices, every series is normal. Each multiplier preserves the layer's intrinsic
 opacity. Shared plans take their strongest associated series multiplier.
 Activity preview replaces the four useful summary metrics without changing their

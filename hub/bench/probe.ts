@@ -25,7 +25,7 @@ export type Place = {closest(selector: string): Place | null};
  * The parts of the page work is counted by, the nearest first: a label that shows time, a
  * card, the header, the list of agents, the analytics. Anything else is the page.
  */
-export const NODES = '[data-series-details], [data-time], [data-card], header.topbar, section.agents-panel, .history, .forecast, .activity, .budget-history, .budget-table, .subscription-funds, .agent-hours-heatmap, .analytics-head';
+export const NODES = '[data-series-details], [data-series-legend], [data-time], [data-card], header.topbar, section.agents-panel, .history, .forecast, .activity, .budget-history, .budget-table, .subscription-funds, .agent-hours-heatmap, .analytics-head';
 
 /**
  * The components that rendered in a commit, found as React DevTools finds them: walking

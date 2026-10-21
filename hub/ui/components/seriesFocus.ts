@@ -50,7 +50,7 @@ export class SeriesFocus {
       const button=[hovered,focused,pinned].find(button=>button&&root.contains(button));
       const next=!dismissed&&!phase.shifting()&&phase.active()===null&&!root.querySelector('.chart > svg.is-panning')?button?.dataset.seriesKey??null:null;
       const active=[...this.chosen].filter(key=>represented.has(key)),values=new Map<string,string>();
-      if(next!==null||active.length)values.set('--chart-focus','.25');
+      if(next!==null||active.length)values.set('--chart-focus','.4');
       for(const key of active)values.set(variable(key),next===null?'1':'.65');
       if(next!==null)values.set(variable(next),'1');
       for(const key of painted.keys())if(!values.has(key))write(key,undefined);

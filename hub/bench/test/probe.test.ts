@@ -103,6 +103,17 @@ test('opening and closing legend details stay separate while real chart renders 
   assert.ok(p.bench.read().renders.some(part=>part.kind==='chart'),'the detail exemption cannot hide work in a chart data consumer');
 });
 
+test('a legend focus description renders its entry while a real chart render still counts',()=>{
+  const p=page(),panel=el('section',null,{'data-time':'chart'},'activity');
+  const entry=el('div',panel,{'data-series-legend':''},'activity-legend-item');
+  const focused=fiber(FUNCTION,{children:[fiber(HOST,{stateNode:el('button',entry)})]});
+  p.hook.onCommitFiberRoot(1,{current:focused});
+  assert.equal(nodeOf(focused,NODES),entry);
+  assert.ok(!p.bench.read().renders.some(part=>part.kind==='chart'));
+  p.hook.onCommitFiberRoot(1,{current:fiber(FUNCTION,{children:[fiber(HOST,{stateNode:panel,children:[focused]})]})});
+  assert.ok(p.bench.read().renders.some(part=>part.kind==='chart'));
+});
+
 /** Runs the probe as the browser gets it, in a context of its own with a stand-in DOM. */
 function page() {
   type Mutation = {type?: string; attributeName?: string; target: unknown; addedNodes?: unknown[]};

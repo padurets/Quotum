@@ -33,12 +33,12 @@ test('click choices and pointer previews compose the complete three-level matrix
   const h=arbiter(),{a,b,c,controller}=h,changes:(string|null)[]=[];
   controller.subscribe(()=>changes.push(controller.get()));
   assert.deepEqual(h.matrix(),[1,1,1]);
-  h.click(a);h.click(b);assert.deepEqual(h.matrix(),[1,1,.25]);assert.equal(a.pressed,'true');assert.equal(b.pressed,'true');assert.equal(c.pressed,'false');
+  h.click(a);h.click(b);assert.deepEqual(h.matrix(),[1,1,.4]);assert.equal(a.pressed,'true');assert.equal(b.pressed,'true');assert.equal(c.pressed,'false');
   h.hover(c);assert.deepEqual(h.matrix(),[.65,.65,1]);assert.equal(c.pressed,'false');
   const writes=h.writes;h.hover(c);controller.refresh();assert.equal(h.writes,writes,'unchanged interactions cause no repeated style writes');
-  h.leave();assert.deepEqual(h.matrix(),[1,1,.25]);h.hover(a);assert.deepEqual(h.matrix(),[1,.65,.25]);
-  h.click(a);assert.equal(a.pressed,'false');assert.deepEqual(h.matrix(),[1,.65,.25],'toggling previewed A off preserves the independent H');
-  h.leave();assert.deepEqual(h.matrix(),[.25,1,.25]);h.click(b);assert.deepEqual(h.matrix(),[1,1,1]);
+  h.leave();assert.deepEqual(h.matrix(),[1,1,.4]);h.hover(a);assert.deepEqual(h.matrix(),[1,.65,.4]);
+  h.click(a);assert.equal(a.pressed,'false');assert.deepEqual(h.matrix(),[1,.65,.4],'toggling previewed A off preserves the independent H');
+  h.leave();assert.deepEqual(h.matrix(),[.4,1,.4]);h.click(b);assert.deepEqual(h.matrix(),[1,1,1]);
   for(const button of h.buttons)h.click(button);h.hover(b);assert.deepEqual(h.matrix(),[.65,1,.65],'all-chosen still distinguishes preview');
   assert.ok(changes.length>4);h.cleanup();assert.equal(h.properties.size,0);assert.equal(h.events.size,0);assert.equal(h.globalEvents.size,0);assert.equal(h.observing,false);
 });
@@ -47,19 +47,19 @@ test('pointer wins over keyboard; Escape, pan/fold and touch dismiss previews wh
   const h=arbiter(),{a,b,c,controller}=h;
   h.click(a);h.click(b);h.send('focusin',b);h.hover(c);assert.equal(controller.get(),c.dataset.seriesKey);
   h.leave();assert.equal(controller.get(),b.dataset.seriesKey);h.globalEvents.get('keydown')!({key:'Escape'});
-  assert.equal(controller.get(),null);assert.deepEqual(h.matrix(),[1,1,.25]);controller.refresh();assert.equal(controller.get(),null);
-  h.send('focusout',b);h.send('focusin',a);h.shift(true);assert.equal(controller.get(),null);assert.deepEqual(h.matrix(),[1,1,.25]);
+  assert.equal(controller.get(),null);assert.deepEqual(h.matrix(),[1,1,.4]);controller.refresh();assert.equal(controller.get(),null);
+  h.send('focusout',b);h.send('focusin',a);h.shift(true);assert.equal(controller.get(),null);assert.deepEqual(h.matrix(),[1,1,.4]);
   h.shift(false);h.pan(1);assert.equal(controller.get(),null);h.fold(true);h.pan(null);assert.equal(controller.get(),null);h.fold(false);assert.equal(controller.get(),a.dataset.seriesKey);
   controller.dismiss();h.send('pointerup',c,null,'touch');h.click(c);assert.equal(c.pressed,'true');assert.equal(controller.get(),c.dataset.seriesKey);
   h.globalEvents.get('pointerdown')!({target:a});assert.equal(controller.get(),null);assert.deepEqual(h.matrix(),[1,1,1]);
   h.send('pointerup',b,null,'touch');h.click(b);assert.equal(b.pressed,'false');assert.deepEqual(h.matrix(),[.65,1,.65]);
-  h.timers.get(1)!();assert.equal(controller.get(),null);assert.deepEqual(h.matrix(),[1,.25,1]);h.cleanup();assert.equal(h.timers.size,0);
+  h.timers.get(1)!();assert.equal(controller.get(),null);assert.deepEqual(h.matrix(),[1,.4,1]);h.cleanup();assert.equal(h.timers.size,0);
 });
 
 test('dormant explicit identities survive range responses; only an explicit reset prevents their return',()=>{
   const h=arbiter(),{a,b,c,controller}=h;
   h.click(a);a.attached=false;controller.refresh();assert.deepEqual(h.matrix(),[1,1],'dormant A does not dim B/C');
-  a.attached=true;controller.refresh();assert.deepEqual(h.matrix(),[1,.25,.25]);assert.equal(a.pressed,'true');
+  a.attached=true;controller.refresh();assert.deepEqual(h.matrix(),[1,.4,.4]);assert.equal(a.pressed,'true');
   a.attached=false;controller.reset();a.attached=true;controller.refresh();assert.equal(a.pressed,'false');assert.deepEqual(h.matrix(),[1,1,1],'late responses cannot restore reset choices');
   b.attached=c.attached=false;controller.refresh();h.click(a);h.hover(a);assert.deepEqual(h.matrix(),[1]);h.click(a);assert.equal(a.pressed,'false');assert.deepEqual(h.matrix(),[1]);h.leave();assert.deepEqual(h.matrix(),[1]);h.cleanup();
 });
@@ -68,6 +68,6 @@ test('shared plans use the strongest associated series without changing their in
   const h=arbiter(),{a,b,c}=h;
   const plans=planRenderer.exports.paint([{key:'source@resetHour',lines:[a.dataset.seriesKey,b.dataset.seriesKey]},{key:'other@resetHour',lines:['other@weekly']}],['M0,0L10,10','M0,10L10,0']).children[0];
   const focus=(plan:typeof plans[number])=>Math.max(...[...plan.props.style['--series-focus'].matchAll(/var\((--series-[\w-]+)/g)].map(([,key])=>Number(h.properties.get(key)??h.properties.get('--chart-focus')??1)));
-  h.click(a);h.hover(c);assert.equal(focus(plans[0]),.65);assert.equal(focus(plans[1]),.25);
+  h.click(a);h.hover(c);assert.equal(focus(plans[0]),.65);assert.equal(focus(plans[1]),.4);
   h.hover(b);assert.equal(focus(plans[0]),1);assert.equal(plans[0].props.d,'M0,0L10,10');h.cleanup();
 });
