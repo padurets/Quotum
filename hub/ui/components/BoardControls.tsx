@@ -28,6 +28,7 @@ export function BoardControls({
   locked,
   onLock,
   onSettings,
+  local=false,
   personal,
 }: {
   board: string;
@@ -37,6 +38,7 @@ export function BoardControls({
   locked: boolean;
   onLock: () => void;
   onSettings: ((section: 'general' | 'members') => void) | null;
+  local?:boolean;
   personal: boolean;
 }) {
   useLocale();
@@ -160,7 +162,7 @@ export function BoardControls({
               )}
               {onSettings && (
                 <>
-                  {!personal && (
+                  {!personal&&!local && (
                     <button
                       type="button"
                       className="popover-row manage-action"

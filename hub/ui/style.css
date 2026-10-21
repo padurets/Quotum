@@ -1305,3 +1305,16 @@ summary.filter-group-heading::-webkit-details-marker { display: none; }
 
 .popover-anchor { position:absolute; margin-left:0; pointer-events:none; z-index:8; }
 .popover-anchor > .popover { pointer-events:auto; }
+
+/* Project colour settings use the common list and floating surfaces. */
+.project-colors-list { grid-template-columns: minmax(0, 1fr) auto; }
+.project-colors-list .settings-list-row { align-items: center; }
+.project-colors-list .settings-item-main { overflow-wrap: anywhere; }
+.project-color-trigger { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.project-color-trigger .activity-swatch { flex-shrink: 0; border: 1px solid var(--text-3); }
+.project-color-options { border: 0; padding: 8px; margin: 0; min-width: 0; }
+.project-color-options legend { max-width: 100%; overflow-wrap: anywhere; }
+.project-color-options input { accent-color: var(--text); }
+.project-colors-search { display: flex; align-items: end; gap: 12px; margin-bottom: 16px; }
+.project-colors-search .field { flex: 1; min-width: 0; }
+.project-colors-pages { margin-bottom: 20px; }

@@ -10,7 +10,7 @@ import type {WorkFilter} from './domain/dataFilters.js';
 import type {WorkChoices} from './domain/periodRead.js';
 
 /** Explicit project choices use the same admitted history as saved projections. */
-function projectAuthority(store:Store,access:WorkAccess,liveProjects:ReadonlySet<string|null>,reserve:(bytes:number)=>void=()=>{}) {
+export function projectAuthority(store:Store,access:WorkAccess,liveProjects:ReadonlySet<string|null>,reserve:(bytes:number)=>void=()=>{}) {
   let bytes=512;for(const id of access.devices.keys())bytes+=256+id.length*4;reserve(bytes);
   const deviceFrom=JSON.stringify(Object.fromEntries([...access.devices].map(([id,scope])=>[id,scope.from]))),projects=new Map<string,boolean>();
   const project=store.db.prepare("SELECT 1 FROM agent_sessions s JOIN devices d ON d.id=s.device_id LEFT JOIN project_names n ON n.user_id=d.user_id AND n.reported=s.project JOIN json_each(?) j ON j.key=s.device_id WHERE COALESCE(n.name,NULLIF(s.project,''))=? AND EXISTS(SELECT 1 FROM agent_work w WHERE w.session_id=s.id AND w.to_at>CAST(j.value AS INTEGER)) LIMIT 1");
@@ -42,10 +42,10 @@ export function retainedWorkChoices(store:Store,access:WorkAccess,ingest:Ingest,
 }
 
 /** Capture access once; saved intent never supplies permissions. */
-export function filterContext(store:Store,board:string,ingest?:Ingest,capturedAccess?:ReturnType<Store['workAccess']>,capturedRoster?:ReturnType<Ingest['live']['board']>) {
+export function filterContext(store:Store,board:string,ingest?:Ingest,capturedAccess?:ReturnType<Store['workAccess']>,capturedRoster?:ReturnType<Ingest['live']['board']>,now=Date.now()) {
   const sources=store.sources(board),bySource=new Map(sources.map(source=>[source.id,source]));
-  const access=capturedAccess??store.workAccess(board),devices=JSON.stringify([...access.devices.keys()]);
-  const liveProjects=capturedRoster?new Set([...[...capturedRoster.sessions.values()].flat(),...capturedRoster.unattributedSessions].map(row=>row.project)):ingest?.live.projects(access,Date.now())??new Set();
+  const access=capturedAccess??store.workAccess(board,now),devices=JSON.stringify([...access.devices.keys()]);
+  const liveProjects=capturedRoster?new Set([...[...capturedRoster.sessions.values()].flat(),...capturedRoster.unattributedSessions].map(row=>row.project)):ingest?.live.projects(access,now)??new Set();
   const projectAllowed=projectAuthority(store,access,liveProjects);
   const allowed:FilterAuthority=(family,ref)=>{
     if(family==='sources')return ref!==null&&typeof ref==='object'&&!Array.isArray(ref)&&('status' in ref||'source' in ref&&bySource.has(ref.source));

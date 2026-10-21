@@ -31,12 +31,14 @@ import {BoardAdditions} from './additions.js';
 import {additionRoutes} from './routes/additions.js';
 import {DeviceOnboarding} from './deviceOnboarding.js';
 import {responseCompression} from './compression.js';
+import {projectColorsOf,type ProjectColors} from './projectColors.js';
+import {projectColorRoutes} from './routes/projectColors.js';
 
 /**
  * `local`: the desktop app's hub, with the key its window enters with (see local.ts); null
  * on a server. `events`: what open dashboards hear, made here when not given.
  */
-export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup; local: {key: string} | null; events?: Events; credentials?: Credentials; additions?:BoardAdditions; deviceOnboarding?:DeviceOnboarding; hubSources?:HubSources; secretSnapshot?: Pick<SecretInputs, 'storageAtStart' | 'wasFileAtStart'>};
+export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup; local: {key: string} | null; events?: Events; projectColors?:ProjectColors; credentials?: Credentials; additions?:BoardAdditions; deviceOnboarding?:DeviceOnboarding; hubSources?:HubSources; secretSnapshot?: Pick<SecretInputs, 'storageAtStart' | 'wasFileAtStart'>};
 
 /** Route helpers shared by the route modules. */
 export type Guards = {
@@ -49,7 +51,7 @@ export type ExtendHub = (app: FastifyInstance, hub: Hub, guards: Guards) => void
 
 /** Errors of the framework itself (malformed JSON, a body too large…) in the hub's `{error}` shape. */
 function errorCode(status: number, path: string): string {
-  if (status === 413) return /\/filters(?:\?|$)/.test(path) ? 'filters_limit' : /\/period\/sessions(?:\?|$)/.test(path) ? 'history_limit' : 'too_large';
+  if (status === 413) return /\/project-colors(?:\/reset)?(?:\?|$)/.test(path) ? 'project_colors_limit' : /\/filters(?:\?|$)/.test(path) ? 'filters_limit' : /\/period\/sessions(?:\?|$)/.test(path) ? 'history_limit' : 'too_large';
   if (status >= 500) return 'internal_error';
   return path.startsWith('/v1/ingest') ? 'invalid_batch' : path.startsWith('/v1/activity') ? 'invalid_activity' : 'invalid_request';
 }
@@ -85,6 +87,7 @@ function clientError(error: NodeJS.ErrnoException, socket: Socket & {_httpMessag
  * at `/local`, and what is about accounts, sharing and connecting is not there.
  */
 export async function buildApp(hub: Hub, extend?: ExtendHub) {
+  hub.projectColors??=hub.events?.projectColors??projectColorsOf(hub);
   hub = {...hub, credentials: hub.credentials ?? new Credentials(hub.store, null, startSecrets(hub.store.db, {current: null, previous: null, reset: null, storageAtStart: null, wasFileAtStart: false}))};
   const {store, directory} = hub;
   const projection = new Projection(hub);
@@ -177,7 +180,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
     if (!access) return reply;
     const snapshot = projection.snapshot(access.user.id, access.board.id, Date.now());
     hub.ingest.forecasts.save();
-    return snapshot;
+    return snapshot?{...snapshot,projectColors:hub.projectColors!.context(access.board.id).envelope}:null;
   });
 
   app.get<{Querystring: HistoryQuery & {board?:string}}>('/api/history', (request, reply) => {
@@ -199,6 +202,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
   periodRoutes(app,guards,periods);
   accountRoutes(app, hub, guards);
   dataFilterRoutes(app,hub,guards);
+  projectColorRoutes(app,hub,guards);
   sourceKeyRoutes(app,hub,guards);
   currencyRoutes(app,hub,guards);
   linkRoutes(app,hub,guards);

@@ -90,6 +90,7 @@ export class Sessions {
   private readonly presenceSecret = randomBytes(32);
 
   constructor(private readonly store: Store) {
+    store.setLiveProjectPairs((access,now)=>this.projectPairs(access,now));
     store.setCurrentFunding((device,owner,source,now)=>{const machine=this.machines.get(device);return !!machine&&machine.user===owner&&now<=machine.at+KEEP_MS&&machine.sessions.some(session=>session.source===source||this.store.links.context(owner,device).links.some(link=>link.sourceId===source&&matches(link,{...session,deviceId:device},safeRoute(session.route,true).route,link.from)));});
   }
 
@@ -231,6 +232,31 @@ export class Sessions {
       for(const session of machine.sessions)projects.add(session.project===null?null:names.get(session.project)??session.project);
     }
     return projects;
+  }
+
+  /** Raw evidence is private to atomic alias/colour reconciliation. */
+  *projectPairs(access:WorkAccess,now:number):Iterable<readonly [string,string]> {
+    for(const [id,machine] of this.machines){
+      if(!admitted(access,id,machine.user)||now-machine.at>KEEP_MS)continue;
+      for(const session of machine.sessions)if(session.project!==null)yield [machine.user,session.project];
+    }
+  }
+
+  /** Bounded sorted choices need neither interval reads nor funding resolution. */
+  projectChoices(access:WorkAccess,now:number,query:string,after:string|null,limit:number):string[] {
+    const found:string[]=[];
+    const corrected=this.store.db.prepare('SELECT name FROM project_names WHERE user_id=? AND reported=?');
+    for(const [id,machine] of this.machines){
+      if(!admitted(access,id,machine.user)||now-machine.at>KEEP_MS)continue;
+      for(const session of machine.sessions){
+        if(session.project===null)continue;
+        const name=String(corrected.get(machine.user,session.project)?.name??session.project);
+        if(!name.includes(query)||after!==null&&Buffer.compare(Buffer.from(name),Buffer.from(after))<=0||found.includes(name))continue;
+        const index=found.findIndex(old=>Buffer.compare(Buffer.from(name),Buffer.from(old))<0);
+        if(index<0){if(found.length<limit)found.push(name);}else {found.splice(index,0,name);if(found.length>limit)found.pop();}
+      }
+    }
+    return found;
   }
 
   /** One admitted collection is split once into disjoint subscription and fallback slices. */

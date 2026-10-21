@@ -32,6 +32,7 @@ import {resolveLink, splitLinks, type AttributionInput, type Attribution} from '
 
 import {MeasurementPolicies} from './measurementPolicies.js';
 import {admitted,fundingOf,sessionsKnownFrom,sourceWorkFrom,workFundingKey,type WorkAccess} from '../domain/workAccess.js';
+import {readProjectColors,saveProjectColors} from './projectColors.js';
 
 /** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
 export type WorkContext = SessionEvidence & {client?: string; source: string | null; origin: Origin; startedAt: number; project: string; folder: string};
@@ -85,6 +86,7 @@ export class Store {
   private readonly created: number;
   private observer: Touches | null = null;
   private currentFunding:(device:string,owner:string,source:string,now:number)=>boolean=()=>false;
+  private liveProjectPairs:(access:WorkAccess,now:number)=>Iterable<readonly [string,string]>=()=>[];
   private pruned = 0;
   private readonly attentionCyclesReady: boolean;
 
@@ -305,6 +307,10 @@ export class Store {
   }
 
   clientSessionsChanged(user:string,device?:string) {tell(this.observer,o=>o.touchClientSessions?.(user,device));}
+
+  projectColorsChanged(board:string) {tell(this.observer,o=>o.touchBoards([board]));}
+
+  setLiveProjectPairs(read:Store['liveProjectPairs']) {this.liveProjectPairs=read;}
 
   resolveSessions(owner: string, device: string, keys: WorkKey[], now: number, captured?:ReturnType<LinkStore['batch']>): Attribution[] {
     const context = captured??this.links.batch([owner]);
@@ -1083,28 +1089,75 @@ export class Store {
 
   /**
    * Gives every reported name gathered under the person's projects `groups` the name
-   * `name`, or back its own when that is empty. Call it in a transaction: the groups are
-   * worked out from what is kept as it writes.
+   * `name`, or back its own when that is empty. Membership, aliases and colours share
+   * one transaction, including callers already inside a larger operation.
    */
   nameProjects(user: string, groups: string[], name: string) {
-    const names = this.projectNames(user);
-    const sent = new Set(
-      (this.db.prepare('SELECT DISTINCT s.project FROM devices d JOIN agent_sessions s ON s.device_id = d.id WHERE d.user_id = ?').all(user) as {project: string}[]).map(
-        r => r.project,
-      ),
-    );
-    const reported = new Set(groups.flatMap(group => members(group, names, sent)));
-    this.restoreProjects(user, [...reported].filter(r => !name || r === name));
-    const give = this.db.prepare('INSERT INTO project_names VALUES (?, ?, ?) ON CONFLICT (user_id, reported) DO UPDATE SET name = excluded.name');
-    if (name) for (const r of reported) if (r !== name) give.run(user, r, name);
-    this.renamed(user);
+    return transaction(this.db,()=>{
+      const names = this.projectNames(user);
+      const sent = new Set(
+        (this.db.prepare('SELECT DISTINCT s.project FROM devices d JOIN agent_sessions s ON s.device_id = d.id WHERE d.user_id = ?').all(user) as {project: string}[]).map(
+          r => r.project,
+        ),
+      );
+      const reported = new Set(groups.flatMap(group => members(group, names, sent)));
+      this.changeProjectNames(user,[...reported],name?[name]:[...reported],()=>{
+        this.removeProjectNames(user,[...reported].filter(r=>!name||r===name));
+        const give = this.db.prepare('INSERT INTO project_names VALUES (?, ?, ?) ON CONFLICT (user_id, reported) DO UPDATE SET name = excluded.name');
+        if (name) for (const r of reported) if (r !== name) give.run(user, r, name);
+      });
+    });
   }
 
   /** Reported names shown under their own name again. */
   restoreProjects(user: string, reported: string[]) {
+    this.changeProjectNames(user,reported,reported,()=>this.removeProjectNames(user,reported));
+  }
+
+  private removeProjectNames(user:string,reported:string[]) {
     const remove = this.db.prepare('DELETE FROM project_names WHERE user_id = ? AND reported = ?');
     for (const r of reported) remove.run(user, r);
-    this.renamed(user);
+  }
+
+  /** Aliases and colours commit together, using full admitted raw membership rather than the chart's period. */
+  private changeProjectNames(user:string,reported:string[],targets:string[],change:()=>void) {
+    return transaction(this.db,()=>{
+      const now=Date.now(),aliases=this.projectNames(user),names=new Set([...reported.map(raw=>aliases.get(raw)??raw),...targets]);
+      const boards=this.db.prepare('SELECT board_id FROM members WHERE user_id=?').all(user).map(row=>String(row.board_id));
+      const captures=[];
+      const corrected=this.db.prepare('SELECT name FROM project_names WHERE user_id=? AND reported=?');
+      const membership=(pairs:Iterable<readonly [string,string]>)=>{
+        const groups=new Map<string,Set<string>>();
+        for(const [owner,raw] of pairs){const name=String(corrected.get(owner,raw)?.name??raw);let group=groups.get(name);if(!group)groups.set(name,group=new Set());group.add(JSON.stringify([owner,raw]));}
+        return groups;
+      };
+      for(const board of boards){
+        const state=readProjectColors(this.db,board);if(!state.pins.length)continue;
+        const access=this.workAccess(board,now);if(![...access.devices.values()].some(scope=>scope.owner===user))continue;
+        const devices=JSON.stringify(Object.fromEntries([...access.devices].map(([id,scope])=>[id,scope.from]))),pairs=new Map<string,readonly [string,string]>();
+        const rows=this.db.prepare(`SELECT DISTINCT d.user_id,s.project FROM agent_sessions s JOIN devices d ON d.id=s.device_id
+          JOIN json_each(?) j ON j.key=s.device_id LEFT JOIN project_names n ON n.user_id=d.user_id AND n.reported=s.project
+          WHERE COALESCE(n.name,NULLIF(s.project,'')) IN (SELECT value FROM json_each(?))
+          AND EXISTS(SELECT 1 FROM agent_work w WHERE w.session_id=s.id AND w.to_at>CAST(j.value AS INTEGER))`).iterate(devices,JSON.stringify([...names]));
+        for(const row of rows){const pair=[String(row.user_id),String(row.project)] as const;pairs.set(JSON.stringify(pair),pair);}
+        for(const pair of this.liveProjectPairs(access,now))if(names.has(String(corrected.get(...pair)?.name??pair[1])))pairs.set(JSON.stringify(pair),pair);
+        captures.push({board,state,pairs:[...pairs.values()],before:membership(pairs.values())});
+      }
+      change();
+      for(const capture of captures){
+        const after=membership(capture.pairs),pins=new Map(capture.state.pins),next=new Map(pins);
+        for(const [name,color] of pins){
+          const before=capture.before.get(name);if(!before?.size||after.has(name))continue;
+          const destinations=[...after].filter(([,group])=>[...before].some(pair=>group.has(pair)));
+          if(destinations.length!==1)continue;
+          const [target,group]=destinations[0];
+          if(capture.before.has(target)||group.size!==before.size||[...before].some(pair=>!group.has(pair)))continue;
+          next.delete(name);if(!pins.has(target))next.set(target,color);
+        }
+        if(saveProjectColors(this.db,capture.board,[...next],user,now))this.projectColorsChanged(capture.board);
+      }
+      this.renamed(user);
+    });
   }
 
   /** A person's projects are shown under new names: their agents, and the history of the boards that show them. */
@@ -1114,7 +1167,8 @@ export class Store {
       o.touchClientSessions?.(user);
       o.clientHistory?.(user, 0);
       o.touchSources(held);
-      o.touchBoards([...new Set(held.flatMap(id => this.boardsOf(id)))]);
+      const boards=this.db.prepare('SELECT board_id FROM members WHERE user_id=?').all(user).map(row=>String(row.board_id));
+      o.touchBoards([...new Set([...boards,...held.flatMap(id => this.boardsOf(id))])]);
     });
   }
 

@@ -13,6 +13,7 @@ import {earliest, Projection, type HubPart, type Snapshot} from './projection.js
 import type {Directory} from './store/directory.js';
 import type {BoardSource, Store} from './store/store.js';
 import {trouble, type Touches} from './touches.js';
+import type {ProjectColors} from './projectColors.js';
 
 /**
  * What open dashboards hear (spec/dashboard-v1.md): every reader of a board gets its
@@ -134,6 +135,7 @@ export class Events implements Touches {
   readonly epoch: string;
   readonly client: string | null;
   private readonly projection: Projection;
+  readonly projectColors:ProjectColors;
   private readonly watched = new Map<string, Watched>();
   /** Every reader, oldest first. */
   private readonly subscribers = new Map<number, Subscriber>();
@@ -166,12 +168,13 @@ export class Events implements Touches {
   private stopHubRecheck: (() => void) | null = null;
 
   constructor(
-    private readonly parts: {store: Store; directory: Directory; ingest: Ingest; resets: ResetFeed;credentials?:Credentials;hubSources?:HubSources},
+    private readonly parts: {store: Store; directory: Directory; ingest: Ingest; resets: ResetFeed;credentials?:Credentials;hubSources?:HubSources;projectColors?:ProjectColors},
     private readonly options: EventsOptions = config.events,
     private readonly clock: Clock = realClock,
     client = clientScript(),
   ) {
     this.projection = new Projection(parts);
+    this.projectColors=this.projection.projectColors;
     this.epoch = clock.now().toString(36);
     this.client = client;
   }
@@ -513,9 +516,10 @@ export class Events implements Touches {
         if(!frames.length&&!sub.desktop)continue;
         try {
           const replacement=this.financialSnapshot(sub,financialKey,sub.workKey);
-          if(replacement)frames=this.snapshotFrames(replacement.snapshot,sub.board);
+          if(replacement)frames=this.snapshotFrames(replacement.snapshot,sub.board,sub.desktop);
           sub.workKey=this.projection.workKey(sub.board,undefined,this.clock.now());
         }catch(error){trouble(error);this.end(sub,'restart');continue;}
+        frames=this.colorDelivery(frames,!!sub.desktop,sub.board);
         if (sub.desktop && (sources.has(watched.id) || whole.has(watched.id) || frames.length || sub.pending.length || sub.invalidations.size || sub.rebaseline)) {
           const attention = this.attentionFrames(sub, sub.rebaseline, now);
           frames.unshift(...attention.before);
@@ -568,7 +572,7 @@ export class Events implements Touches {
     let computed = touched.has('__sessions')?lineup:lineup.filter(s=>touched.has(s.id));
     let ids: string[] | null = null;
     if (whole) {
-      const part = projection.boardPart(watched.id, lineup);
+      const part = projection.boardPart(watched.id, lineup,roster);
       if (!part) {
         for (const sub of [...watched.subscribers]) this.end(sub, 'gone');
         return null;
@@ -622,8 +626,14 @@ export class Events implements Touches {
       const sources = this.changed(base, 'lineup', ids);
       if (sources !== null) frames.push({type: 'lineup', data: `{"sources":${sources}}`});
     }
-    const filters=this.changed(base,'filters',projection.filtersPart(watched.id));
+    const filters=this.changed(base,'filters',projection.filtersPart(watched.id,roster));
     if(filters!==null)frames.push({type:'filters',data:filters});
+    const colors=this.projectColors.context(watched.id,roster,now).envelope;
+    const colorChange=this.changed(base,'projectColors',colors);
+    if(colorChange!==null){
+      frames.push(frame('board',{projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority}));
+      frames.push({type:'projectColors',data:colorChange});
+    }
     this.arm(watched, now);
     return frames;
   }
@@ -854,7 +864,7 @@ export class Events implements Touches {
     sub.fresh = false;
     if (sub.kind === 'stream') sub.stopPing = this.every(this.options.heartbeatMs, () => this.ping(sub));
     const hello = {epoch: this.epoch, now, client: this.client, heartbeatMs: this.options.heartbeatMs};
-    const frames = [frame('hello', hello), ...this.snapshotFrames(snapshot as Snapshot,reader.board)];
+    const frames = [frame('hello', hello), ...this.snapshotFrames(snapshot as Snapshot,reader.board,reader.desktop)];
     if (sub.desktop) {
       const attention = this.attentionFrames(sub, true, now);
       frames.push(...attention.before, ...attention.after);
@@ -1007,7 +1017,7 @@ export class Events implements Touches {
       if(replacement){lease.financialKey=replacement.key;lease.workKey=replacement.workKey;return this.snapshotFrames(replacement.snapshot,lease.board);}
     }catch(error){trouble(error);this.expire(lease);return [bye('restart')];}
     lease.workKey=this.projection.workKey(lease.board,undefined,this.clock.now());
-    return frames.flatMap(packet=>{
+    return this.colorDelivery(frames,false,lease.board).flatMap(packet=>{
       if(packet.type==='snapshot') {
         const snapshot=JSON.parse(packet.data) as Snapshot;
         if(!snapshot.deviceContacts)return [packet];
@@ -1021,9 +1031,31 @@ export class Events implements Touches {
     });
   }
 
-  private snapshotFrames(snapshot:Snapshot,board:string):Frame[]{
-    const filters=this.projection.filtersPart(board);
-    return [frame('snapshot',{...snapshot,filtersRevision:filters.revision,filtersAuthority:filters.authority}),frame('filters',filters)];
+  private snapshotFrames(snapshot:Snapshot,board:string,desktop=false):Frame[]{
+    const now=this.clock.now(),roster=this.projection.roster(board,now);
+    const filters=this.projection.filtersPart(board,roster);
+    const colors=this.projectColors.context(board,roster,now).envelope;
+    return this.colorDelivery([frame('snapshot',{...snapshot,filtersRevision:filters.revision,filtersAuthority:filters.authority,projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority}),frame('filters',filters),frame('projectColors',colors)],desktop);
+  }
+
+  /** The native background reader's byte-bounded baseline contains no UI colour metadata. */
+  private colorDelivery(frames:Frame[],desktop:boolean,board?:string):Frame[] {
+    if(!desktop){
+      if(!board||!frames.some(packet=>packet.type==='projectColors'))return frames;
+      const colors=this.projectColors.context(board,undefined,this.clock.now()).envelope;
+      return frames.map(packet=>{
+        if(packet.type==='projectColors')return frame(packet.type,colors);
+        if(packet.type!=='snapshot'&&packet.type!=='board')return packet;
+        const data=JSON.parse(packet.data);
+        return packet.type==='snapshot'||'projectColorsRevision' in data?frame(packet.type,{...data,projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority}):packet;
+      });
+    }
+    return frames.flatMap(packet=>{
+      if(packet.type==='projectColors')return [];
+      if(packet.type!=='snapshot'&&packet.type!=='board')return [packet];
+      const {projectColorsRevision:_revision,projectColorsAuthority:_authority,...data}=JSON.parse(packet.data);
+      return Object.keys(data).length?[frame(packet.type,data)]:[];
+    });
   }
 
   /** Prepared frames are not yet disclosed: replace their dataset and private bindings together. */
