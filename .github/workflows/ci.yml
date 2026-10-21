@@ -36,6 +36,11 @@ on:
         required: false
         type: boolean
         default: false
+      windows_key_control:
+        description: Observe independent managed-key compilation and assembly loading
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -129,7 +134,7 @@ jobs:
           if-no-files-found: warn
 
   bench-dashboard:
-    if: ${{ !startsWith(github.ref, 'refs/tags/') && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile))) }}
+    if: ${{ !inputs.windows_key_control && !startsWith(github.ref, 'refs/tags/') && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile))) }}
     runs-on: ubuntu-latest
     # Independent traffic checks run on another runner; every dashboard phase stays here.
     timeout-minutes: 20
@@ -180,7 +185,7 @@ jobs:
           if-no-files-found: warn
 
   idle-cpu-control:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile }}
+    if: ${{ !inputs.windows_key_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -228,6 +233,43 @@ jobs:
             ${{ runner.temp }}/quotum-idle-control/
             hub/dist/client/assets/index-*.js
           if-no-files-found: warn
+
+  windows-key-build:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_key_control && inputs.diagnostic_ref && !inputs.native_trace && !inputs.native_profile && !inputs.original_timing && !inputs.trace_only }}
+    runs-on: windows-latest
+    timeout-minutes: 5
+    outputs: {manifest: '${{ steps.build.outputs.manifest }}'}
+    env: {CONTROL_SOURCE_SHA: '${{ inputs.diagnostic_ref }}'}
+    steps:
+      - uses: actions/checkout@v7
+        with: {ref: '${{ inputs.diagnostic_ref }}'}
+      - uses: actions/setup-node@v7
+        with: {node-version: 24}
+      - id: build
+        run: node .github/windows-key-control.mjs build "${{ runner.temp }}/key-control"
+      - uses: actions/upload-artifact@v7
+        with: {name: windows-key-assembly, path: '${{ runner.temp }}/key-control', if-no-files-found: error, retention-days: 1}
+
+  windows-key-arm:
+    needs: windows-key-build
+    runs-on: windows-latest
+    timeout-minutes: 5
+    strategy: {fail-fast: false, matrix: {arm: [compile, load]}}
+    env: {CONTROL_SOURCE_SHA: '${{ inputs.diagnostic_ref }}', CONTROL_MANIFEST_SHA: '${{ needs.windows-key-build.outputs.manifest }}'}
+    steps:
+      - uses: actions/checkout@v7
+        with: {ref: '${{ inputs.diagnostic_ref }}'}
+      - uses: actions/setup-node@v7
+        with: {node-version: 24}
+      - uses: actions/download-artifact@v7
+        with: {name: windows-key-assembly, path: '${{ runner.temp }}/key-control'}
+      - shell: pwsh
+        run: |
+          node .github/windows-key-control.mjs ${{ matrix.arm }} "${{ runner.temp }}/key-control" | Tee-Object -FilePath "${{ runner.temp }}/key-control-result.json"
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with: {name: 'windows-key-${{ matrix.arm }}', path: '${{ runner.temp }}/key-control-result.json', if-no-files-found: warn, retention-days: 1}
 
   managed-keys:
     if: ${{ !inputs.diagnostic_ref }}

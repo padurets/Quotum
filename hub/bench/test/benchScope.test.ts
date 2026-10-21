@@ -312,6 +312,17 @@ test('manual native tracing uses only the existing dashboard job and rejects mis
   }
   assert.equal(selected('bench-dashboard',{},'pull_request'),true);
   assert.equal(selected('bench-dashboard',{},'workflow_call','refs/tags/v1.0.0'),false);
+  const windows={diagnostic_ref:'1'.repeat(40),windows_key_control:true};
+  assert.equal(selected('idle-cpu-control',windows),false);
+  assert.equal(selected('bench-dashboard',windows),false);
+  assert.equal(selected('windows-key-build',windows),true);
+  assert.equal(selected('windows-key-build',{},'pull_request'),false);
+  for(const flag of ['native_trace','native_profile','original_timing','trace_only']){
+    const inputs={...windows,[flag]:true};
+    assert.equal(selected('windows-key-build',inputs),false);
+    assert.equal(selected('bench-dashboard',inputs),false);
+    assert.equal(selected('idle-cpu-control',inputs),false);
+  }
   const script=job('bench-dashboard').split("          node --import tsx --input-type=module <<'JS'\n")[1].split('\n          JS')[0]
     .replace(/^\s*import .+;\n/gm,'');
   const source='1'.repeat(40),hash='2'.repeat(64);
