@@ -1,7 +1,7 @@
 import type {FastifyInstance, FastifyReply, FastifyRequest} from 'fastify';
 import {Readable} from 'node:stream';
 import type {Guards} from '../api.js';
-import {polled, sse, type ByeReason, type Events, type Frame,type PollAnswer} from '../events.js';
+import {pollBody, sse, type ByeReason, type Events, type Frame,type PollAnswer} from '../events.js';
 import type {Directory} from '../store/directory.js';
 import {CSP, sameSite, sessionSecret} from '../session.js';
 
@@ -19,14 +19,13 @@ export function eventRoutes(app: FastifyInstance, directory: Directory, events: 
   };
 
   const pending=new WeakMap<FastifyRequest,PollAnswer>();
-  const body=(answer:PollAnswer)=>`{"lease":${JSON.stringify(answer.lease)},"now":${answer.now},"events":${polled(answer.frames)}}`;
   app.get<{Querystring: {board?: string; mode?: string; lease?: string; desktop?: string}}>('/api/events', {exposeHeadRoute: false,onSend(request,reply,payload,done){
     const captured=pending.get(request);if(!captured)return done(null,payload);
     const answer=events.deliverPoll(captured);if(answer===captured)return done(null,payload);
     if(payload instanceof Readable)payload.destroy();
     reply.removeHeader('content-encoding').removeHeader('content-length');
     if(answer.frames.some(packet=>packet.type==='bye'&&packet.data.includes('"restart"')))reply.header('Connection','close');
-    return done(null,body(answer));
+    return done(null,pollBody(answer));
   }}, async (request, reply) => {
     const user = guards.user(request, reply);
     if (!user) return reply;
@@ -44,7 +43,7 @@ export function eventRoutes(app: FastifyInstance, directory: Directory, events: 
       if (answer === null) return reply.code(404).send({error: 'board_not_found'});
       pending.set(request,answer);
       if (answer.frames.some(f => f.type === 'bye' && f.data.includes('"restart"'))) reply.header('Connection', 'close');
-      return reply.type('application/json').send(body(answer));
+      return reply.type('application/json').send(pollBody(answer));
     }
     return stream(reply, events, reader);
   });

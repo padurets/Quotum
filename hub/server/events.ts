@@ -43,6 +43,7 @@ export const sse = (frames: Frame[]) => frames.map(f => `event: ${f.type}\ndata:
 
 /** Events as a long poll answers them: `{type, data}` each. */
 export const polled = (frames: Frame[]) => `[${frames.map(f => `{"type":${JSON.stringify(f.type)},"data":${f.data}}`).join(',')}]`;
+export const pollBody=(answer:PollAnswer)=>`{"lease":${JSON.stringify(answer.lease)},"now":${answer.now},"events":${polled(answer.frames)}}`;
 
 const frame = (type: string, data: unknown): Frame => ({type, data: JSON.stringify(data)});
 const bye = (reason: ByeReason) => frame('bye', {reason});
@@ -122,7 +123,8 @@ type Lease = {
   tomb: ByeReason | null;
 };
 type DeliveryContext = {financialKey:string;workKey:string;colors:ProjectColorEnvelope;changesAt:number|null};
-type PollContext = DeliveryContext&{reader:Pick<Reader,'user'|'secret'|'board'>};
+type PollContext = DeliveryContext&{reader:Pick<Reader,'user'|'secret'|'board'>;initial:boolean};
+type HistoryNotice = {sources:string[];since:number;changes?:HistoryChange[];workSince?:number;workAuthority?:string};
 
 /** The path of the page's entry script in the built client, as `index.html` loads it; null without a build. */
 export function clientScript(root = config.clientRoot): string | null {
@@ -525,7 +527,7 @@ export class Events implements Touches {
         let context=watched.context??undefined;
         try {
           const replacement=this.financialSnapshot(sub,financialKey,sub.workKey);
-          if(replacement){frames=this.snapshotFrames(replacement.snapshot,sub.board,sub.desktop);context=replacement.context;}
+          if(replacement){frames=this.replacementFrames(replacement,frames,sub.board,sub.workKey,sub.desktop);context=replacement.context;}
           sub.workKey=this.projection.workKey(sub.board,undefined,this.clock.now());
         }catch(error){trouble(error);this.end(sub,'restart');continue;}
         frames=this.colorDelivery(frames,!!sub.desktop,sub.board);
@@ -1020,41 +1022,53 @@ export class Events implements Touches {
     lease.subscriber = opened.sub;
     this.leases.set(lease.id, lease);
     lease.stopExpiry = this.later(this.options.leaseMs, () => this.expire(lease));
-    return this.pollAnswer(lease,opened.frames,opened.context);
+    return this.pollAnswer(lease,opened.frames,opened.context,true);
   }
 
-  private pollAnswer(reader:Pick<Lease,'id'|'user'|'secret'|'board'|'answerChangesAt'>,frames:Frame[],producer?:DeliveryContext):PollAnswer {
-    const answer={lease:reader.id,now:this.clock.now(),frames};
+  private pollAnswer(reader:Pick<Lease,'id'|'user'|'secret'|'board'|'answerChangesAt'>,frames:Frame[],producer?:DeliveryContext,initial=false):PollAnswer {
+    const answer=this.finishPoll({lease:reader.id,now:this.clock.now(),frames},frames,initial,reader.board);
+    if(answer.frames.some(packet=>packet.type==='bye'))return answer;
     const context=producer??{financialKey:this.parts.store.financialKey(reader.board),workKey:this.projection.workKey(reader.board,undefined,answer.now),colors:this.projectColors.context(reader.board,undefined,answer.now).envelope,changesAt:reader.answerChangesAt};
-    this.pollContexts.set(answer,{...context,reader:{user:reader.user,secret:reader.secret,board:reader.board}});
+    this.pollContexts.set(answer,{...context,reader:{user:reader.user,secret:reader.secret,board:reader.board},initial});
     return answer;
+  }
+
+  /** The initial browser baseline has its established exception; every later answer uses the wire budget. */
+  private finishPoll(answer:PollAnswer,frames:Frame[],initial=false,board?:string):PollAnswer {
+    frames=this.colorDelivery(frames,false,board);
+    const result=frames===answer.frames?answer:{...answer,now:this.clock.now(),frames};
+    if(!initial&&Math.max(Buffer.byteLength(sse(frames)),Buffer.byteLength(pollBody(result)))>this.options.bufferBytes){
+      const lease=this.leases.get(answer.lease);if(lease)this.expire(lease);return {...answer,now:this.clock.now(),frames:[bye('limit')]};
+    }
+    if(result===answer)return answer;
+    const context=this.pollContexts.get(answer);
+    if(context)this.pollContexts.set(result,context);
+    return result;
   }
 
   /** Recheck after asynchronous HTTP hooks and compression, before any bytes are disclosed. */
   deliverPoll(answer:PollAnswer):PollAnswer {
-    const captured=this.pollContexts.get(answer);if(!captured)return answer;
+    const captured=this.pollContexts.get(answer);if(!captured)return this.finishPoll(answer,answer.frames);
     const lease=this.leases.get(answer.lease),reason=this.gone(captured.reader),now=this.clock.now();
-    if(reason){if(lease)this.expire(lease);return {...answer,now,frames:[bye(reason)]};}
+    if(reason){if(lease)this.expire(lease);return this.finishPoll(answer,[bye(reason)]);}
     const financialKey=this.parts.store.financialKey(captured.reader.board),workKey=this.projection.workKey(captured.reader.board,undefined,now);
     const context=this.projectColors.context(captured.reader.board,undefined,now),colors=context.envelope;
     const privateWork=answer.frames.some(packet=>packet.type==='snapshot'||packet.type==='sessions'||packet.type==='unattributedSessions');
     const expired=privateWork&&captured.changesAt!==null&&now>=captured.changesAt;
-    if(financialKey===captured.financialKey&&workKey===captured.workKey&&colors.revision===captured.colors.revision&&colors.authority===captured.colors.authority&&!expired)return answer;
+    if(financialKey===captured.financialKey&&workKey===captured.workKey&&colors.revision===captured.colors.revision&&colors.authority===captured.colors.authority&&!expired)return this.finishPoll(answer,answer.frames,captured.initial,captured.reader.board);
     let frames:Frame[];
     const retired=captured.colors.pins.some(([name])=>!context.allowed(name));
     if(financialKey!==captured.financialKey||workKey!==captured.workKey||retired&&privateWork||expired){
       const replacement=this.replacementSnapshot(captured.reader,now);
-      frames=[...answer.frames.filter(packet=>packet.type==='hello'),...this.snapshotFrames(replacement.snapshot,captured.reader.board)];
+      const pending=[...answer.frames,...(lease?.queue.flatMap(batch=>batch.frames)??[])];
+      frames=[...answer.frames.filter(packet=>packet.type==='hello'),...this.replacementFrames(replacement,pending,captured.reader.board,captured.workKey)];
       // The replacement includes every queued change up to this synchronous projection.
       if(lease){lease.financialKey=financialKey;lease.workKey=workKey;lease.queue=[];lease.bytes=0;lease.answerChangesAt=replacement.context.changesAt;}
     }else{
       frames=this.colorDelivery(answer.frames,false,captured.reader.board);
       if(!frames.some(packet=>packet.type==='projectColors'))frames=[...frames,frame('board',{projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority}),frame('projectColors',colors)];
-      if(!frames.some(packet=>packet.type==='snapshot')&&Math.max(Buffer.byteLength(sse(frames)),Buffer.byteLength(polled(frames)))>this.options.bufferBytes){
-        if(lease)this.expire(lease);return {...answer,now,frames:[bye('limit')]};
-      }
     }
-    return {...answer,now,frames};
+    return this.finishPoll(answer,frames,captured.initial,captured.reader.board);
   }
 
   private take(lease: Lease): Frame[] {
@@ -1073,7 +1087,7 @@ export class Events implements Touches {
         if(retired)replacement=this.replacementSnapshot(lease,now);
         else lease.answerChangesAt=earliest(...privateBatches.map(batch=>batch.context?.changesAt??null));
       }
-      if(replacement){lease.financialKey=replacement.key;lease.workKey=replacement.workKey;lease.answerChangesAt=replacement.context.changesAt;return this.snapshotFrames(replacement.snapshot,lease.board);}
+      if(replacement){const priorWork=lease.workKey;lease.financialKey=replacement.key;lease.workKey=replacement.workKey;lease.answerChangesAt=replacement.context.changesAt;return this.replacementFrames(replacement,frames,lease.board,priorWork);}
     }catch(error){trouble(error);this.expire(lease);return [bye('restart')];}
     lease.workKey=this.projection.workKey(lease.board,undefined,this.clock.now());
     return this.colorDelivery(frames,false,lease.board).flatMap(packet=>{
@@ -1100,14 +1114,19 @@ export class Events implements Touches {
   /** The native background reader's byte-bounded baseline contains no UI colour metadata. */
   private colorDelivery(frames:Frame[],desktop:boolean,board?:string):Frame[] {
     if(!desktop){
-      if(!board||!frames.some(packet=>packet.type==='projectColors'))return frames;
-      const colors=this.projectColors.context(board,undefined,this.clock.now()).envelope;
-      return frames.map(packet=>{
-        if(packet.type==='projectColors')return frame(packet.type,colors);
-        if(packet.type!=='snapshot'&&packet.type!=='board')return packet;
-        const data=JSON.parse(packet.data);
-        return packet.type==='snapshot'||'projectColorsRevision' in data?frame(packet.type,{...data,projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority}):packet;
-      });
+      let last=-1;for(let i=frames.length-1;i>=0;i--)if(frames[i].type==='projectColors'){last=i;break;}if(last<0)return frames;
+      const colors=board?this.projectColors.context(board,undefined,this.clock.now()).envelope:JSON.parse(frames[last].data) as ProjectColorEnvelope;
+      const references={projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority},baseline=frames.some(packet=>packet.type==='snapshot'),result:Frame[]=[];
+      for(let i=0;i<frames.length;i++){
+        const packet=frames[i];
+        if(packet.type==='snapshot')result.push(frame(packet.type,{...JSON.parse(packet.data),...references}));
+        else if(packet.type==='board'){
+          const {projectColorsRevision:_revision,projectColorsAuthority:_authority,...data}=JSON.parse(packet.data);
+          if(Object.keys(data).length)result.push(frame(packet.type,data));
+        }else if(packet.type!=='projectColors')result.push(packet);
+        if(i===last){if(!baseline)result.push(frame('board',references));result.push(frame('projectColors',colors));}
+      }
+      return result.length===frames.length&&result.every((packet,index)=>packet.type===frames[index].type&&packet.data===frames[index].data)?frames:result;
     }
     return frames.flatMap(packet=>{
       if(packet.type==='projectColors')return [];
@@ -1115,6 +1134,39 @@ export class Events implements Touches {
       const {projectColorsRevision:_revision,projectColorsAuthority:_authority,...data}=JSON.parse(packet.data);
       return Object.keys(data).length?[frame(packet.type,data)]:[];
     });
+  }
+
+  /** A snapshot replaces projections, but independent history still has to dirty the reader's cached cells. */
+  private replacementFrames(replacement:ReturnType<Events['replacementSnapshot']>,pending:Frame[],board:string,previousWork:string,desktop=false):Frame[] {
+    return [...this.snapshotFrames(replacement.snapshot,board,desktop),...this.historyDelivery(board,pending,replacement.workKey,previousWork)];
+  }
+
+  private historyDelivery(board:string,frames:Frame[],workKey:string,previousWork:string):Frame[] {
+    const resources=new Map(this.projection.lineup(board).map(source=>[source.id,source])),changes=new Map<string,HistoryChange>();
+    let workSince=Infinity;
+    for(const packet of frames){
+      if(packet.type!=='history')continue;
+      const notice=JSON.parse(packet.data) as HistoryNotice,sameWork=notice.workAuthority===workKey&&previousWork===workKey;
+      if(sameWork&&notice.workSince!==undefined)workSince=Math.min(workSince,notice.workSince);
+      const scoped:HistoryChange[]=notice.changes??notice.sources.map(source=>({source,scope:'quota',since:notice.since}));
+      for(const original of scoped){
+        const source=resources.get(original.source);if(!source)continue;
+        const workOnly=original.workSince!==undefined&&original.since>=original.workSince;
+        if(!sameWork&&workOnly)continue;
+        let since=original.since,from=sameWork?original.workSince:undefined;
+        if(original.scope==='budget'){
+          if(source.budget?.enabled===false||source.provider==='codex'&&source.budget?.anchor==null)continue;
+          const anchor=source.provider==='codex'?source.budget?.anchor??0:0;
+          since=Math.max(since,anchor);if(from!==undefined)from=Math.max(from,anchor);
+        }
+        // Keep supplier data distinct from work-only news when several batches collapse.
+        const key=JSON.stringify([original.source,original.scope,workOnly]),old=changes.get(key);
+        changes.set(key,{source:original.source,scope:original.scope,since:Math.min(since,old?.since??Infinity),...(from===undefined&&old?.workSince===undefined?{}:{workSince:Math.min(from??Infinity,old?.workSince??Infinity)})});
+      }
+    }
+    if(!changes.size&&!Number.isFinite(workSince))return [];
+    const values=[...changes.values()],since=values.reduce((earliest,change)=>Math.min(earliest,change.since),workSince);
+    return [frame('history',{sources:[...new Set(values.map(change=>change.source))],since,changes:values,...(Number.isFinite(workSince)?{workSince}:{}),workAuthority:workKey})];
   }
 
   /** Prepared frames are not yet disclosed: replace their dataset and private bindings together. */

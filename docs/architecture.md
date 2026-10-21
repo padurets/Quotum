@@ -1466,7 +1466,10 @@ window gets ordinary browser presentation. The configuration is its own browser
 metadata slice: colour-only updates neither invalidate evidence nor read history.
 Queued poll batches retain their producing authority and live-session deadline.
 Expired or withdrawn work is replaced before configuration is refreshed or a
-prepared response is delivered.
+prepared response is delivered. Replacements preserve pending history invalidations
+under current permissions, so cached cells remain current even when the work
+authority stays the same. Incremental delivery coalesces colour metadata before
+checking the serialized backlog size.
 
 Secrets (sessions, tokens, codes, invites) are random, prefixed by kind (`qt_s_`,
 `qt_m_`, `qt_d_`, `qt_c_`, `qt_i_`) and stored only as SHA-256 hashes; passwords as

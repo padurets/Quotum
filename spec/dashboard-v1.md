@@ -495,7 +495,11 @@ Browser snapshots and board configuration updates carry only
 `projectColorsRevision` and `projectColorsAuthority`. Initial order is
 `snapshot`, `filters`, `projectColors`; the latter carries the full authorized
 envelope separately within 68 KiB including SSE framing. It shares the existing
-640 KiB incremental backlog. `GET /api/overview` additionally includes the full
+640 KiB incremental backlog. A queued answer carries one current colour envelope
+and matching references; its transformed SSE and poll representations must fit the
+incremental bound. Snapshot replacement preserves independently authorized history
+invalidations, including pending work changes under the same work authority.
+`GET /api/overview` additionally includes the full
 `projectColors` envelope. A configuration matches only when both references match
 within the current connection and board. Missing configuration is not Auto; only a
 legacy baseline omitting both references means Auto. Access/work changes retire old
