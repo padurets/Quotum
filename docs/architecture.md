@@ -2226,10 +2226,12 @@ same viewport; grouping, sorting and paging do not change its capacity or neighb
 Rows use a bounded preview, with oversized text and complete values reachable through
 the shared Popover. Whole rows page through the full loaded index without an inner
 vertical scroller or another history read.
-Subscription cards keep two primary percentage slots, preferring general five-hour
-and weekly limits. Every selected native window remains in their existing measurement
-disclosure. Wallet cards show one available balance, or the first selected cap when
-the balance is excluded; other caps and exact amounts remain in the balance disclosure.
+Subscription cards keep two primary percentage slots, with a session and weekly
+limit when both families are available. General five-hour and weekly windows lead;
+equally specific windows retain the provider's order. Every selected native window
+remains in their existing measurement disclosure. Wallet cards show one available
+balance, or the first selected cap when the balance is excluded; other caps and exact
+amounts remain in the balance disclosure.
 Loading extra selected caps never adds a card row or an inventory-wide lookup.
 The budget chart, legend and table name a total balance by its account rather than
 repeating "Available balance". Scoped key limits keep their names; balance components,

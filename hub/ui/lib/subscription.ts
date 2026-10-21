@@ -21,10 +21,12 @@ export function quotaPeriods(source:Pick<Card,'provider'|'windows'>):Pick<Win,'i
   return [...source.windows,...quotaIds(source.provider).map((id,i)=>({id,kind:i===0?'session':'weekly',label:null,minutes:i===0?300:10080} as Pick<Win,'id'|'kind'|'label'|'minutes'>))];
 }
 
-/** General subscription windows lead; extra native windows stay in the disclosure. */
+/** Keep both period families, preferring general windows and then provider order. */
 export function primaryQuotaPeriods<T extends Pick<Win,'id'|'kind'|'label'|'minutes'>>(periods:readonly T[]):T[] {
   const rank=(period:T)=>period.label===null&&period.kind==='session'&&period.minutes===300?0:period.label===null&&period.kind==='weekly'?1:period.kind==='session'?2:period.kind==='weekly'?3:4;
-  return [...periods].sort((a,b)=>rank(a)-rank(b)||(a.minutes??Infinity)-(b.minutes??Infinity)||a.id.localeCompare(b.id)).slice(0,2);
+  const ordered=[...periods].sort((a,b)=>rank(a)-rank(b)||(a.minutes??Infinity)-(b.minutes??Infinity));
+  const pair=['session','weekly'].flatMap(kind=>{const period=ordered.find(period=>period.kind===kind);return period?[period]:[];});
+  return [...pair,...ordered.filter(period=>!pair.includes(period))].slice(0,2);
 }
 
 export function quotaRemaining(source:Card,id:string):number|null {

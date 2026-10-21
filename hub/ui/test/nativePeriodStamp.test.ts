@@ -29,6 +29,39 @@ function nodes(value:unknown):Node[] {
   return [node,...nodes(node.props.children)];
 }
 
+test('multi-model cards keep the reported session and weekly pair visible through fine measurements',()=>{
+  const window=(id:string,kind:Win['kind'],label:string|null):Win=>({id,kind,label,minutes:kind==='weekly'?10080:300,used:25,remaining:75,resetAt:null});
+  const source={id:'native',provider:'antigravity',successAt:1,windows:[window('gemini:session','session','Gemini Pro'),window('gemini:weekly','weekly','Gemini'),window('claude:weekly','weekly','Claude')]};
+  const hidden=new Set<string>();
+  const context={exports:{} as Record<string,(props:unknown)=>Node>,draw:undefined as unknown as (props:unknown)=>Node,require:()=>runtime,
+    t,stamp,num,level,windowName,providerOf,quotaPeriods,primaryQuotaPeriods,hasSubscriptionCaps,budgetVisible,historicalCurrencyContext,
+    useDataFilters:()=>{},usePeriodValues:()=>({value:null}),useTimeRange:()=>null,useCurrencyContext:()=>defaultCurrencyContext,
+    isWindowHidden:(_view:unknown,_source:string,id:string)=>hidden.has(id),planOf:()=>null,MeasurementClock:{Provider:'clock'},PercentLimit:undefined as unknown,
+    ResetLine:'reset',PlanNote:'plan-note',PlanMark:'plan-mark',Limit:undefined as unknown,
+  };
+  const run=(body:string)=>runInNewContext(ts.transpileModule(body,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
+  const meter=code('../components/Meter.tsx');run(meter.slice(meter.indexOf('export function MeterBar(')));context.PercentLimit=context.exports.PercentLimit;
+  const card=code('../components/SourceCard.tsx'),limit=card.indexOf('function Limit('),measurements=card.indexOf('function CardMeasurements(');
+  run(card.slice(limit,card.indexOf('\n/**',limit))+'\nglobalThis.Limit=Limit;');
+  run(card.slice(measurements,card.indexOf('/** Historical funds',measurements))+'\nglobalThis.draw=CardMeasurements;');
+  const render=()=>nodes(context.draw({source,arrange:{view:EMPTY_VIEW},boardId:'b'}));
+  const labels=(tree:Node[])=>tree.filter(node=>node.props.className==='limit-name').map(node=>node.props.children);
+  const pair=[windowName(source.windows[0]),windowName(source.windows[1])];
+  assert.deepEqual(labels(render()),pair,'a second model must not displace the first reported weekly limit');
+  for(let i=1;i<=20;i++){
+    const remaining=75-i/10;source.windows[1]={...source.windows[1],used:100-remaining,remaining};
+    const tree=render(),fills=tree.filter(node=>String(node.props.className).startsWith('fill fill-'));
+    assert.deepEqual(labels(tree),pair);assert.equal(fills.length,2);
+    assert.equal((fills[1].props.style as {width:string}).width,`${remaining}%`,'every fine measurement reaches the visible weekly meter');
+  }
+  source.windows.push(window('claude:session','session','Claude'));
+  assert.deepEqual(labels(render()),pair,'a second session family does not displace the weekly slot');
+  hidden.add('gemini:weekly');
+  assert.deepEqual(labels(render()),[pair[0],windowName(source.windows[2])],'a selected replacement weekly limit keeps the session slot');
+  source.windows.push(window('session','session',null),window('weekly','weekly',null));
+  assert.deepEqual(labels(render()),source.windows.slice(-2).map(windowName),'general subscription windows lead over model windows');
+});
+
 test('native historical values disclose their actual sample time while live values retain their existing presentation',()=>{
   const now=1_800_000_000_000,at=now-3_600_000,store=new Store(':memory:',at-3_600_000);
   try {
