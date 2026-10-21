@@ -25,7 +25,8 @@ const location=(value:any)=>{
 
 type NativeRow={name:string;phase:string;ts:number|null;duration:number|null;threadTs:number|null;threadDuration:number|null;pid:number;tid:number;frame:number|null;
   source:ReturnType<typeof location>;id:number|null;marker:number|null;kind?:string;processId?:number|null;outermost?:boolean;primary?:boolean};
-const NATIVE_NAMES=new Set(['RunTask','FunctionCall','FireAnimationFrame','RequestAnimationFrame','CancelAnimationFrame','MinorGC','MajorGC','Layout','UpdateLayoutTree','RunMicrotasks','EventDispatch','TimerFire','TimeStamp','PrePaint','Paint','Layerize','CompositeLayers']);
+const NATIVE_NAMES=new Set(['RunTask','FunctionCall','FireAnimationFrame','RequestAnimationFrame','CancelAnimationFrame','MinorGC','MajorGC','Layout','UpdateLayoutTree','RunMicrotasks','EventDispatch','TimerFire','TimeStamp','PrePaint','Paint','Layerize','CompositeLayers',
+  'LocalFrameView::WillStartLifecycleUpdate','LocalFrameView::UpdateLifecyclePhases - start of lifecycle tasks','LocalFrameView::RunStyleAndLayoutLifecyclePhases']);
 
 /** Compiled positions are valid only for the bytes the page actually received. */
 export function clientIdentity(directory=path.join(import.meta.dirname,'../dist/client/assets')):Client {
@@ -252,7 +253,7 @@ export class IdleCpuDiagnostic {
     }
     if(!this.native)await this.clock('start');
     this.active=true;this.tracing=true;
-    await this.cdp.send('Tracing.start',{categories:this.native?'toplevel,v8,devtools.timeline,disabled-by-default-devtools.timeline':'devtools.timeline,disabled-by-default-devtools.timeline.stack',transferMode:'ReportEvents'},this.nativeSignal);
+    await this.cdp.send('Tracing.start',{categories:this.native?'toplevel,v8,blink,devtools.timeline,disabled-by-default-devtools.timeline':'devtools.timeline,disabled-by-default-devtools.timeline.stack',transferMode:'ReportEvents'},this.nativeSignal);
     if(this.native)await this.nativeClock('start');
     if(this.profiling)await this.cdp.send('Profiler.start',{},this.nativeSignal);
   }
