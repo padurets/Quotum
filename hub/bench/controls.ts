@@ -39,7 +39,6 @@ export async function selectMoney(cdp: Cdp, ids: [string, string][], family:'bud
   const draft=await cdp.evaluate<string>(`(async () => {
     const prefs = JSON.parse(localStorage.getItem('quotum.prefs') || '{}');
     prefs.${family==='funds'?'funds':'money'} = {...prefs.${family==='funds'?'funds':'money'},version:1,unit:'USD'};
-    prefs.muted = {};
     localStorage.setItem('quotum.prefs', JSON.stringify(prefs));
     const session=await (await fetch('/api/session')).json(),board=new URL(location.href).searchParams.get('board')??session.boards.find(board=>board.personal)?.id;
     if(!board||!session.user)throw new Error('money selection needs its authenticated board');

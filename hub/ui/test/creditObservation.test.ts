@@ -106,7 +106,7 @@ type SeriesProps={'data-series'?:string;'data-last'?:string;'data-observation'?:
 function drawing(h:Awaited<ReturnType<typeof creditHistory>>,initial:Update,page:ReturnType<typeof observedPage>) {
   const outer=preparationFixture(),inner=preparationFixture();let current=initial,presentation=0;
   const history=():History=>({board:'board',range:'24h',live:true,since:current.now-DAY,to:current.now,cellMs:h.cell,historyStart:current.historyStart,series:[],meterSeries:[current.series],events:[],activity:{since:0,known:null,barMs:h.cell,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}});
-  let shown=history();const sources=[h.sourceCard],prefs={money:DEFAULT_MONEY,funds:DEFAULT_MONEY,muted:{},range:'24h',horizon:'auto'};
+  let shown=history();const sources=[h.sourceCard],prefs={money:DEFAULT_MONEY,funds:DEFAULT_MONEY,range:'24h',horizon:'auto'};
   const Chart=()=>null;
   const memo=(read:()=>unknown,deps:unknown[])=>{const box=outer.useRef(null) as {current:{deps:unknown[];value:unknown}|null};if(!box.current||deps.some((value,i)=>!Object.is(value,box.current!.deps[i])))box.current={deps,value:read()};return box.current.value;};
   const modules:Record<string,unknown>={

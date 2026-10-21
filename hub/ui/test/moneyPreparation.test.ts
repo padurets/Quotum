@@ -44,7 +44,7 @@ test('balance and funds drawing facts do not depend on the visible quantity fram
   for(const [family,meterSeries] of [['budget',[balance,cap]],['funds',[funds]]] as const) {
     const chunks=[{from:0,meterSeries:[...meterSeries]}],drawing={meterSeries:composeMeters(chunks,minute,0,4*minute)};
     const draw=(quantities:{from:number;to:number}|undefined)=>{
-      const context={authority:0,family,moneyBalanceSeries,isMuted:()=>false,accounting:()=>true,settings:{},context:defaultCurrencyContext,strip:{meterChunks:chunks,cell:minute,from:0,to:4*minute,meterFrame:quantities},drawing,history:drawing,unit:'USD',prefs:{muted:{}},sources:[{id:'wallet',provider:'openrouter'},{id:'subscription',provider:'codex'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:[]},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof drawing.meterSeries;lines:Record<string,unknown>[];origin:bigint;span:bigint;pad:bigint}};
+      const context={authority:0,family,moneyBalanceSeries,accounting:()=>true,settings:{},context:defaultCurrencyContext,strip:{meterChunks:chunks,cell:minute,from:0,to:4*minute,meterFrame:quantities},drawing,history:drawing,unit:'USD',prefs:{},sources:[{id:'wallet',provider:'openrouter'},{id:'subscription',provider:'codex'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:[]},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof drawing.meterSeries;lines:Record<string,unknown>[];origin:bigint;span:bigint;pad:bigint}};
       runInNewContext(ts.transpileModule(region+'\nglobalThis.model=prepared.value;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
       return context.model;
     };
@@ -93,7 +93,7 @@ for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'reso
     const series = composeMeters(chunks, 60000, 0, 120000);
     let history = {board: 'board', range: '1h', cellMs: 60000, since: 0, to: 120000, meterSeries: series} as History | null;
     let sources = cards, view = EMPTY_VIEW, presentation = 0;
-    const prefs = {money: {unit: 'USD', view: 'balance', selected: {}}, muted: {}, range: '1h', horizon: 'auto'};
+    const prefs = {money: {unit: 'USD', view: 'balance', selected: {}}, range: '1h', horizon: 'auto'};
     const Chart = () => null;
     const memo = (read: () => unknown, deps: unknown[]) => {const box = outer.useRef(null) as {current: {deps: unknown[]; value: unknown} | null}; if (!box.current || deps.some((v, i) => !Object.is(v, box.current!.deps[i]))) box.current = {deps, value: read()}; return box.current.value;};
     const modules: Record<string, unknown> = {

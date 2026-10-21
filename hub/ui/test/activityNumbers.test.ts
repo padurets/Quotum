@@ -52,12 +52,13 @@ function consumer(name:string,clock:PageClock,period:any,initial:any,panning:()=
 test('a mouse-focused legend keeps its own metric description when keyboard modality changes',async test=>{
   test.mock.method(Date,'now',()=>NOW);setLocale('en');const h=await fixture(),d=await drawings(h);
   const history=d.render().history!,group=history.activity.by.project[0],clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}});
-  const props={history,by:'project',groupKey:group.key,group,name:'Work project',color:'red',muted:true},view=consumer('LegendItem',clock,h.period,props);
+  const props={history,by:'project',groupKey:group.key,group,name:'Work project',color:'red'},view=consumer('LegendItem',clock,h.period,props);
   try{
     assert.ok(view.render().includes('aria-pressed="false"'));view.focus(false);
-    const enabled=view.update({...props,muted:false});
-    for(const key of ['activity.agentHours','activity.active','activity.agents','activity.atOnce'] as const)assert.ok(enabled.includes(t(key)),key);
-    assert.ok(enabled.includes('aria-describedby="legend-description"'));
+    const focused=view.render();
+    for(const key of ['activity.agentHours','activity.active','activity.agents','activity.atOnce'] as const)assert.ok(focused.includes(t(key)),key);
+    assert.ok(focused.includes('aria-describedby="legend-description"'));
+    view.focus(true);assert.equal(view.render(),focused);
   }finally{view.close();d.close();await h.close();}
 });
 
@@ -69,7 +70,7 @@ for(const periodName of ['1h','30d'])test(`${periodName}: PageClock updates fina
   let now=NOW;const timers=new Map<object,{at:number;run:()=>void}>();
   const clock=new PageClock({now:()=>now,visible:()=>true,setTimeout:(run,ms)=>{const token={};timers.set(token,{at:now+ms,run});return token;},clearTimeout:token=>{timers.delete(token as object);}});
   const drawn=d.render(),history=drawn.history!;assert.equal(history.activity.agents,1);
-  const group=history.activity.by.project[0],base={history,by:'project',groupKey:group.key,group,muted:{},since:null};
+  const group=history.activity.by.project[0],base={history,by:'project',groupKey:group.key,group,since:null};
   const totals=consumer('Totals',clock,h.period,base),amount=consumer('LegendAmount',clock,h.period,base),metrics=consumer('LegendMetrics',clock,h.period,{...base,active:true});
   const hover=Math.floor(to/history.activity.barMs)*history.activity.barMs;
   const readout=consumer('ActivityReadout',clock,h.period,{...base,hover,barMs:history.activity.barMs,bar:[hover,90_000,90_000,1],parts:[{key:group.key,name:'Work project',color:'red',ms:90_000}],tipProps:{}});
@@ -94,7 +95,7 @@ for(const periodName of ['1h','30d'])test(`${periodName}: PageClock updates fina
 test('numerical labels freeze during a gesture and retire on an authority replacement',async test=>{
   test.mock.method(Date,'now',()=>NOW);const h=await fixture(),d=await drawings(h);let now=NOW,panning:number|null=1;
   const timers=new Set<object>();const clock=new PageClock({now:()=>now,visible:()=>true,setTimeout:()=>{const token={};timers.add(token);return token;},clearTimeout:token=>{timers.delete(token as object);}});
-  const history=d.render().history,props={history,by:'project',muted:{},since:null},totals=consumer('Totals',clock,h.period,props,()=>panning);
+  const history=d.render().history,props={history,by:'project',since:null},totals=consumer('Totals',clock,h.period,props,()=>panning);
   try {
     const before=totals.render();assert.ok(before);assert.equal(timers.size,0);
     now=NOW+H;h.advance(now);assert.equal(totals.render(),before);
@@ -108,7 +109,7 @@ test('fixed-period numerical consumers never subscribe to a time deadline',async
   const clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>{timers++;return {};},clearTimeout:()=>{}});
   const history={range:`${NOW-H}/${NOW}`,activity:{known:{from:NOW-H,to:NOW},activeMs:M,agentMs:M,agents:1,by:{project:[],source:[],device:[]}}} as unknown as History;
   history.range=h.period.workRangeKey;
-  const totals=consumer('Totals',clock,h.period,{history,by:'project',muted:{},since:null});
+  const totals=consumer('Totals',clock,h.period,{history,by:'project',since:null});
   try{assert.ok(totals.render());assert.equal(timers,0);}finally{totals.close();await h.close();}
 });
 
@@ -151,7 +152,7 @@ test('the actual summary always describes the board cohort; transient preview de
 test('the Activity clock advances the plot without invalidating unchanged numerical consumers',async test=>{
   test.mock.method(Date,'now',()=>NOW);const h=await fixture(),d=await drawings(h),hooks=preparationFixture();
   let now=NOW,shown={...d.render(),presentation:0};
-  const prefs={range:'1h',activityBy:'project',muted:{}},titles={},view=h.page.get().board!.view;
+  const prefs={range:'1h',activityBy:'project'},titles={},view=h.page.get().board!.view;
   const context:any={ACTIVITY,exports:{},require,memo:(value:any)=>value,...hooks,
     useMemo:(read:any,deps:any[])=>{const box=hooks.useRef(null) as any;if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;},
     useActivityHistory:()=>shown,useHistoryPlot:()=>null,usePlot:()=>({}),useLineup:()=>[],usePersonalBoard:()=>false,useTitles:()=>titles,

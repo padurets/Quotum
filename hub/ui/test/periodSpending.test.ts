@@ -68,7 +68,7 @@ function consumer(sourceId:string,board:string,range:PeriodRange) {
   const hooks=preparationFixture(),Chart=()=>null;
   const sources=[{id:sourceId,title:'Wallet',provider:'openrouter'}];
   let history:History|null=null,strip:PlotBuffer|null=null;
-  const prefs={money:{unit:'USD'},muted:{},range:'1h',horizon:'auto'};
+  const prefs={money:{unit:'USD'},range:'1h',horizon:'auto'};
   const memo=(read:()=>unknown,deps:unknown[])=>{const ref=hooks.useRef(null) as {current:{deps:unknown[];value:unknown}|null};if(!ref.current||deps.some((v,i)=>!Object.is(v,ref.current!.deps[i])))ref.current={deps,value:read()};return ref.current.value;};
   const modules:Record<string,unknown>={
     'react/jsx-runtime':jsx,react:{memo:reactMemo,useRef:hooks.useRef,useMemo:memo},

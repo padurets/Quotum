@@ -19,7 +19,7 @@ export const FIXED_ACTIVITY_BUDGET={request:76*1024,body:7*1024*1024,pool:15*102
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 type Numbers={agentMs:number;activeMs:number;agents:number};
 type Body={id:string;requestBytes:number;decoded:number;encoded:number;cancelled:boolean;body:PeriodRequest};
-type Sample={numbers:Numbers;activity:History['activity'];tiles:[number,number,number][];bytes:number;flights:number;advances:number;preparationMs:number;failedReservations:number;preferenceWrites:number};
+type Sample={numbers:Numbers;activity:History['activity'];tiles:[number,number,number][];bytes:number;flights:number;advances:number;jobsStarted:number;preparationMs:number;failedReservations:number;preferenceWrites:number};
 
 /** Independent endpoint sweep: no group aggregate, PeriodActivity or new selection helper. */
 export function activityOracle(trace:WorkTrace,from:number,to:number):Numbers {
@@ -35,8 +35,8 @@ export function activityOracle(trace:WorkTrace,from:number,to:number):Numbers {
 
 function observationScript(period:string){return historyPoolReceiptScript()+`;(() => {
   localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d',activityBy:'project',filtersVisible:true}));
-  const original=window.__quotumInspectHistoryPool,ids=new WeakMap();let serial=0,pool,stats;
-  const reset=()=>stats={bytes:0,flights:0,advances:0,preparationMs:0,failedReservations:0,preferenceWrites:0};reset();
+  const original=window.__quotumInspectHistoryPool,ids=new WeakMap();let serial=0,pool,scheduler,stats;
+  const reset=()=>stats={bytes:0,flights:0,advances:0,jobsStarted:0,preparationMs:0,failedReservations:0,preferenceWrites:0};reset();
   const save=Storage.prototype.setItem;Storage.prototype.setItem=function(key,...args){if(key==='quotum.prefs')stats.preferenceWrites++;return save.call(this,key,...args);};
   const reader=()=>[...pool.members].find(m=>m.transport&&typeof m.activityAt==='function');
   const chart=()=>[...pool.members].find(m=>m.scope==='quota'&&m.grids instanceof Map);
@@ -44,13 +44,13 @@ function observationScript(period:string){return historyPoolReceiptScript()+`;((
     const reserve=p.reserve;p.reserve=function(...args){const result=reserve.apply(this,args);stats.bytes=Math.max(stats.bytes,this.estimatedBytes);if(!result)stats.failedReservations++;return result;};
     const request=p.request;p.request=function(owner,flight,start,cancel){return request.call(this,owner,flight,()=>{stats.flights=Math.max(stats.flights,this.active.size);start();},cancel);};
   };
-  window.__quotumInspectPreparations=scheduler=>{const replace=scheduler.replace;scheduler.replace=function(owner,work,...rest){const next=work.next;work.next=function(...args){const start=performance.now();try{stats.advances++;return next.apply(this,args);}finally{stats.preparationMs+=performance.now()-start;}};return replace.call(this,owner,work,...rest);};};
-  const status=()=>{const p=reader(),h=chart()?.get().history,s=p?.activityProjectionState(h);return {registered:!!p,error:s?.error,loading:p?.get().loading,ready:s?.ready,flights:pool.activeFlights,bytes:pool.estimatedBytes,members:pool.members.size};};
+  window.__quotumInspectPreparations=value=>{scheduler=value;const replace=scheduler.replace;scheduler.replace=function(owner,work,...rest){stats.jobsStarted++;const next=work.next;work.next=function(...args){const start=performance.now();try{stats.advances++;return next.apply(this,args);}finally{stats.preparationMs+=performance.now()-start;}};return replace.call(this,owner,work,...rest);};};
+  const status=()=>{const p=reader(),h=chart()?.get().history,s=p?.activityProjectionState(h);return {registered:!!p,error:s?.error,loading:p?.get().loading,ready:s?.ready,preparing:scheduler?.size,flights:pool.activeFlights,bytes:pool.estimatedBytes,members:pool.members.size};};
   window.__quotumFixedActivity={reset,reader,status,holdDispatch:()=>{const t=reader().transport,schedule=t.schedule;t.schedule=()=>{};return window.__quotumFixedActivity.resumeDispatch=()=>{t.schedule=schedule;schedule.call(t);};},sample:()=>{
     const p=reader(),c=chart(),h=c?.get().history;if(!h||!p.activityProjectionState(h).ready)return null;
     const a=p.project(h,'quota',Date.now()).activity;
     return {...stats,numbers:{agentMs:a.agentMs,activeMs:a.activeMs,agents:a.agents},activity:a,tiles:[...c.grids.values()].flatMap(grid=>[...grid.values()].map(tile=>{if(!ids.has(tile))ids.set(tile,++serial);return[tile.from,tile.to,ids.get(tile)];}))};
-  },ready:()=>{const s=status();return s.ready&&s.flights===0&&!document.querySelector('.chart>svg[data-draw-ready="false"],.activity.is-loading,.history.is-loading');}};
+  },ready:()=>{const s=status();return s.ready&&s.flights===0&&s.preparing===0&&!document.querySelector('.chart>svg[data-draw-ready="false"],.activity.is-loading,.history.is-loading,.budget-history.is-loading,.subscription-funds.is-loading');}};
 })();`;}
 
 /** Physical requests are retained through cancellation and their final response-body accounting. */
@@ -83,20 +83,27 @@ export async function fixedActivity(browser:Browser,stand:Stand){
     try{
       await pause(Math.max(0,selection.to+10-Date.now()));
       await cdp.send('Network.enable');await cdp.send('Page.enable');await cdp.send('Performance.enable');
+      await cdp.send('Emulation.setFocusEmulationEnabled',{enabled:true});
       await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:probeScript()});
       await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
       const split=owner.cookie.indexOf('=');await cdp.send('Network.setCookie',{name:owner.cookie.slice(0,split),value:owner.cookie.slice(split+1),url:owner.base,httpOnly:true,sameSite:'Lax'});
       await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:observationScript(days===1?'24h':'30d')});
       await cdp.send('Page.navigate',{url:owner.base+`/?from=${selection.from}&to=${selection.to}`});
-      const waitFor=async(test:string)=>{const deadline=Date.now()+30_000;while(!await cdp.evaluate<boolean>(test)){if(Date.now()>deadline){const state=await cdp.evaluate('window.__quotumFixedActivity?.status()').catch(()=>null);throw Error(`fixed Activity ${days}d did not become coherent: ${JSON.stringify(state)}`);}await pause(30);}};
+      const waitFor=async(test:string,deadline=Date.now()+30_000)=>{while(!await cdp.evaluate<boolean>(test)){if(Date.now()>deadline){const state=await cdp.evaluate('window.__quotumFixedActivity?.status()').catch(()=>null);throw Error(`fixed Activity ${days}d did not become coherent: ${JSON.stringify(state)}`);}await pause(30);}};
       await waitFor(`document.querySelectorAll('.activity .legend-item').length>2&&!document.querySelector('.activity.is-loading')`);
       const filterRoot=`document.querySelector('[data-filter="filters.projects"]')`;
       await cdp.evaluate(`${filterRoot}.querySelector('button').click()`);
       await waitFor(`${filterRoot}.querySelectorAll('[role="switch"]').length>2`);
       const excluded=await cdp.evaluate<string>(`(()=>{const button=[...${filterRoot}.querySelectorAll('[role="switch"]')].find(b=>!b.textContent.includes('Observed benchmark'));const name=button.querySelector('span').textContent;button.click();return name;})()`);
       await cdp.evaluate(`${filterRoot}.querySelector('button').click()`);
-      const settled=()=>waitFor(`window.__quotumFixedActivity?.ready()===true`);
+      const settled=async()=>{
+        const deadline=Date.now()+30_000;
+        await waitFor(`window.__quotumFixedActivity?.ready()===true`,deadline);
+        await cdp.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        await waitFor(`window.__quotumFixedActivity?.ready()===true`,deadline);
+      };
       await settled();
+      console.error('bench: fixed Activity settled '+JSON.stringify(await cdp.evaluate('window.__quotumFixedActivity.status()')));
       const sample=()=>cdp.evaluate<Sample>('window.__quotumFixedActivity.sample()');
       const baseline=await sample();assert.ok(baseline.activity.known);assert.ok(baseline.tiles.length<=8);
       const selectedFilter=[...bodies.bodies].reverse().find(row=>row.body.workFilter)!.body.workFilter;assert.ok(selectedFilter);
@@ -104,13 +111,19 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       const geometry=()=>cdp.evaluate<string>(`JSON.stringify([...document.querySelectorAll('.widgets>.widget,.panel[data-time="chart"] .chart,.activity-stack,[data-series] path,.plan-line,.forecast-line')].map(e=>{const b=e.getBoundingClientRect();return[b.x+scrollX,b.y+scrollY,b.width,b.height,e.getAttribute('d')];}))`);
       const beforeHover=await geometry(),hoverStart=bodies.bodies.length;
       await cdp.evaluate('window.__quotumFixedActivity.reset();__quotumBench.reset()');
+      console.error(`bench: ${days}d emphasis matrix and native keys`);
       const emphasis=await cdp.evaluate<{name:string;matrix:number[][]}[]>(`(async()=>{
-        const reports=[],pause=async()=>{
-          await new Promise(requestAnimationFrame);
-          await Promise.all([...document.querySelectorAll('.legend-item')].flatMap(button=>button.getAnimations()).map(animation=>animation.finished.catch(()=>{})));
-        };
+        const reports=[];
         for(const panel of document.querySelectorAll('.panel[data-time="chart"]')){
           const buttons=[...panel.querySelectorAll('.legend-item')];if(buttons.length<3)throw Error('emphasis fixture needs three series in '+panel.querySelector('h2').textContent+': '+buttons.length);
+          const pause=async()=>{
+            const deadline=performance.now()+1000;
+            do{
+              await new Promise(requestAnimationFrame);
+              if(!buttons.some(button=>button.getAnimations().some(animation=>animation.pending||animation.playState==='running')))return;
+            }while(performance.now()<deadline);
+            throw Error('legend opacity transition did not settle');
+          };
           const matrix=[],read=()=>buttons.slice(0,3).map(button=>Number(getComputedStyle(button).opacity));
           const assert=(expected)=>{const got=read();if(got.some((value,i)=>Math.abs(value-expected[i])>.001))throw Error('emphasis matrix '+JSON.stringify({got,expected}));matrix.push(got);};
           const hover=button=>button.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));
@@ -136,9 +149,10 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         await cdp.evaluate(`(()=>{document.activeElement.blur();const panel=document.querySelectorAll('.panel[data-time="chart"]')[${index}];for(const button of panel.querySelectorAll('.legend-item[aria-pressed="true"]'))button.click();})()`);
       }
       const hovered=await sample(),paint=await cdp.evaluate<Reading>('__quotumBench.read()');
-      assert.equal(bodies.bodies.length,hoverStart,'emphasis cannot request history');assert.equal(hovered.advances,0,'emphasis cannot prepare paths or accounting');assert.equal(hovered.preferenceWrites,0);assert.equal(await geometry(),beforeHover);assert.deepEqual(hovered.numbers,baseline.numbers);
+      assert.equal(bodies.bodies.length,hoverStart,'emphasis cannot request history');assert.equal(hovered.jobsStarted,0,'emphasis cannot schedule paths or accounting');assert.equal(hovered.advances,0,'emphasis cannot prepare paths or accounting');assert.equal(hovered.preferenceWrites,0);assert.equal(await geometry(),beforeHover);assert.deepEqual(hovered.numbers,baseline.numbers);
       assert.ok(!paint.renders.some(part=>part.kind==='chart'),'emphasis cannot render chart consumers');
       reports.push({days,name:'emphasis',charts:emphasis,requests:0,preparationAdvances:hovered.advances,preferenceWrites:hovered.preferenceWrites});
+      console.error('bench: emphasis '+JSON.stringify(reports.at(-1)));
       let referenceReceipt={requests:0,requestBytes:0,decodedBytes:0,encodedBytes:0};
       const reference=async()=>{
         const request:PeriodRequest={version:1,selection:{mode:'live',periodMs:Date.now()-selection.from+60_000},evaluatedAt:Date.now(),workFilter:selectedFilter,sessions:{}};
