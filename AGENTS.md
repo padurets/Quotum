@@ -184,6 +184,12 @@ and platform smoke checks still apply.
   Verify intermediate as well as settled states: widget bounds, plot or table bounds
   and neighbouring positions must remain stable. A test that only
   finds the right message or checks the final screenshot does not establish this rule.
+- **Stable geometry must not waste space.** Do not reserve layout height for details
+  shown only on hover, focus or touch preview. Such details use the shared glass tooltip
+  or Popover beside their trigger; hidden text variants must not set a widget's minimum
+  height or reduce its plot. Permanent information areas need useful visible content in
+  the ordinary view, such as Activity's summary. A blank preview strip is not a solution
+  to layout shifts and must not prevent the owner from making a widget shorter.
 - **Look at a change on the demo board** (`npm run build && npm run demo` in `hub/`), in
   both languages, not only through tests. A state the board did not show before gets an
   entry in `hub/demo/catalogue.ts` with the codes it shows; `npm test` checks them. One
@@ -209,11 +215,13 @@ and platform smoke checks still apply.
 - Chart legends share `hub/ui/components/seriesFocus.ts` to highlight a series under
   the pointer or keyboard focus. Apply it to every plot layer for that series;
   highlighting changes paint, never the data, selection or prepared geometry. One local
-  controller arbitrates pointer, keyboard and touch for the paint and the information
-  area under the heading. Activity summaries and bar numbers describe the intersection
+  controller arbitrates pointer, keyboard and touch for the paint and its contextual
+  details. Activity summaries and bar numbers describe the intersection
   of board filters and enabled legend series, including exact interval union and distinct
-  sessions. Legend previews replace that summary in the same reserved area. Monetary
-  legend details use this area too; quota charts gain no empty strip or aggregate.
+  sessions. Legend previews replace that summary in the same area, which shows useful
+  totals at rest. Monetary legends keep their names and amounts; their details appear
+  beside the active entry in the shared tooltip, without a reserved strip. Quota charts
+  gain no empty strip or aggregate.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the list of agents, agent activity, the chart, the table).
 - Board widgets never add a vertical scroller inside the page. Table widgets share
   `TableWidget` for responsive layout, whole-row height fitting and the compact pager
