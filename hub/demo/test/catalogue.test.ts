@@ -8,6 +8,7 @@ import {seedProjectColors,PROJECT_COLOR_SCENES} from '../projectColors.js';
 import type {ProjectColorEnvelope} from '../../server/domain/projectColors.js';
 import {readProjectColors} from '../../server/store/projectColors.js';
 import {CATEGORY_COLORS} from '../../server/domain/categoryColors.js';
+import {widgetVisible} from '../../server/domain/widgets.js';
 import {resolveProjectColors,OTHER_COLOR} from '../../ui/lib/projectColors.js';
 import type {PeriodReply} from '../../server/domain/periodRead.js';
 import {expandPeriod,type PeriodWireReply} from '../../server/domain/periodWire.js';
@@ -1048,6 +1049,10 @@ test('project colour scenes retain shared pins, automatic allocation and privacy
   const {stand,hub}=await bringUp(t,set,start),owner=stand.people.get('ana')!,reader=stand.people.get('boris')!;
   const board=(name:string)=>stand.boards.get('colors-'+name)!;
   const palette=(name:string,as=owner)=>as.get<ProjectColorEnvelope>('/api/boards/'+board(name)+'/project-colors');
+  for(const scene of PROJECT_COLOR_SCENES){
+    const snapshot=await owner.get<Snapshot>('/api/overview?board='+board(scene.id));
+    assert.ok(widgetVisible(snapshot.view,ACTIVITY,0));
+  }
   const pinned=await palette('pinned'),other=await palette('pinned',reader);
   assert.deepEqual(pinned,other);
   const pins=new Map(pinned.pins),seen=new Set<string>();

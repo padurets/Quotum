@@ -5,6 +5,7 @@ import type {Store} from '../server/store/store.js';
 import type {Directory} from '../server/store/directory.js';
 import {CATEGORY_COLORS as C} from '../server/domain/categoryColors.js';
 import {saveProjectColors} from '../server/store/projectColors.js';
+import {showWidgets} from '../server/domain/widgets.js';
 
 /** Save/reset races and pending preparation are held by the projectColors regression tests. */
 export const PROJECT_COLOR_SCENES=[
@@ -22,6 +23,10 @@ export const PROJECT_COLORS:DemoSet={...SESSION_ANALYTICS,id:'project-colors',ab
 
 export function seedProjectColors(store:Store,directory:Directory,stand:Stand) {
   const owner=stand.people.get('ana')!,device=directory.devices(owner.id)[0],start=stand.start;
+  for(const scene of PROJECT_COLOR_SCENES){
+    const board=stand.boards.get('colors-'+scene.id)!;
+    directory.saveView(board,showWidgets(directory.view(board),['agents','activity']),owner.id,start);
+  }
   store.creditWork(device.id,start-3*DAY,start-3*DAY+HOUR,[{client:'opencode',source:null,origin:'terminal',startedAt:start-3*DAY,project:'older-project',folder:'',identity:{kind:'stable',sessionId:'9'.repeat(32)}}]);
   const save=(board:string,pins:Parameters<typeof saveProjectColors>[2])=>saveProjectColors(store.db,stand.boards.get(board)!,pins,owner.id,start);
   save('colors-pinned',[['quotum',C[7]],['checkout',C[7]],['migration-41',C[0]],['older-project',C[0]]]);
