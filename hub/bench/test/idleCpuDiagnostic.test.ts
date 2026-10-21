@@ -465,6 +465,37 @@ test('only fixed rendering, animation, lifecycle and commit-wait envelopes join 
   for(const name of names)assert.equal((receipt.events as any[]).filter(row=>row.name===name).length,1);
   assert.doesNotMatch(JSON.stringify(receipt),/private-extra-canary/);assert.equal(receipt.status,'unqualified');
 });
+test('native commit observations keep exact exported edge IDs and host numbers without rounded uint64 IDs',async()=>{
+  const names=['ProxyMain::BeginMainFrame','ProxyMain::BeginMainFrame::commit','ProxyImpl::ReadyToCommit','ProxyImpl::Commit'];
+  const slices=names.map((name,i)=>({name,ph:'X',pid:101,tid:i<2?101:105,ts:2_000_000+i*100,dur:90,
+    args:{main_frame_pipeline:{main_frame_id:Number.MAX_SAFE_INTEGER+1},private:'private-commit-canary'}}));
+  const flows=names.slice(0,-1).flatMap((name,i)=>[
+    {name,ph:'s',id:i+7,pid:101,tid:slices[i].tid,ts:slices[i].ts},
+    {name,ph:'f',id:i+7,bp:'e',pid:101,tid:slices[i+1].tid,ts:slices[i+1].ts},
+  ]);
+  const host={name:'BeginMainThreadFrame',ph:'I',pid:101,tid:101,ts:2_000_010,args:{layerTreeId:19,data:{frameId:0,private:'private-commit-canary'}}};
+  const held=['HoldCommit','ReleaseCommitbyActivation'].map(name=>({name,ph:'I',pid:101,tid:105,ts:2_000_350}));
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:[...slices,...flows,host,...held]}));
+  const rows=receipt.events as any[];
+  const retained=record(safeEvidence(receipt)).events as any[];
+  assert.deepEqual(retained.filter(row=>row.flowId!==undefined).map(row=>[row.name,row.phase,row.flowId,row.flowEnd??false,row.ts,row.tid]),
+    flows.map(row=>[row.name,row.ph,row.id,row.ph==='f',row.ts,row.tid]));
+  for(const name of names)assert.equal(rows.filter(row=>row.name===name&&row.phase==='X').length,1);
+  const saved=rows.find(row=>row.name==='BeginMainThreadFrame');assert.equal(saved.hostId,19);assert.equal(saved.sourceFrame,0);
+  for(const {name} of held)assert.ok(rows.some(row=>row.name===name));
+  assert.equal(record(receipt.capture).invalid,0);assert.doesNotMatch(JSON.stringify(safeEvidence(receipt)),/private-commit-canary|main_frame_id|pipelineId/);
+});
+test('unsafe flow and host observations fail closed without borrowing nearby numeric IDs',async()=>{
+  const base={name:'ProxyMain::BeginMainFrame',ph:'s',pid:101,tid:101,ts:2_000_000};
+  const bad=[...['7',-1,1.5,Number.MAX_SAFE_INTEGER+1,undefined].map(id=>({...base,id})),
+    {...base,ph:'f',id:7},
+    ...[0,'19',Number.MAX_SAFE_INTEGER+1].map(layerTreeId=>({...base,name:'BeginMainThreadFrame',ph:'I',args:{layerTreeId,data:{frameId:0}}})),
+    {...base,name:'BeginMainThreadFrame',ph:'I',args:{layerTreeId:19,data:{frameId:'0'}}}];
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:bad}));
+  assert.equal(record(receipt.capture).invalid,bad.length);assert.equal(record(receipt.capture).status,'insufficient-evidence');
+  assert.ok(!(receipt.events as any[]).some(row=>row.flowId!==undefined||row.hostId!==undefined));
+  assert.ok((receipt.rejected as any[]).every(row=>row.reason==='commit-metadata'));
+});
 test('native-profile stop failure retains its first error, signed cleanup profile and all owned releases',async()=>{
   const owner=new RunOwner(),original=Error('original native profile stop'),saved:Saved[]=[];let attempts=0;
   const cdp=new class extends NativeCdpFake {

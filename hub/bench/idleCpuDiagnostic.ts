@@ -9,7 +9,7 @@ import {ScriptBinding} from './scriptBinding.js';
 import type {Reading} from './probe.js';
 
 type Client={status:'available';name:string;bytes:number;sha256:string}|{status:'unavailable'};
-type RawEvent={name:string;ph:string;ts?:number;dur?:number;tts?:number;tdur?:number;pid?:number;tid?:number;args?:{name?:unknown;data?:{frame?:string;id?:number;timerId?:number;timeout?:number;singleShot?:boolean;scriptId?:string|number;lineNumber?:number;columnNumber?:number;stackTrace?:unknown;message?:string;frames?:{frame?:string;processId?:number;isOutermostMainFrame?:boolean;isInPrimaryMainFrame?:boolean}[]}}};
+type RawEvent={name:string;ph:string;id?:unknown;bp?:unknown;ts?:number;dur?:number;tts?:number;tdur?:number;pid?:number;tid?:number;args?:{name?:unknown;layerTreeId?:unknown;data?:{frame?:string;frameId?:unknown;id?:number;timerId?:number;timeout?:number;singleShot?:boolean;scriptId?:string|number;lineNumber?:number;columnNumber?:number;stackTrace?:unknown;message?:string;frames?:{frame?:string;processId?:number;isOutermostMainFrame?:boolean;isInPrimaryMainFrame?:boolean}[]}}};
 type CounterWindow={before:Record<string,number>;after:Record<string,number>;instrumentMs:number;seconds:number};
 type Save=(name:string,value:unknown,large?:boolean)=>void;
 type Profile=Parameters<typeof numericProfile>[0];
@@ -17,6 +17,7 @@ type ClockSource={sha256:string;lineNumber:number;columnNumber:number}|null;
 type ClockTiming=ReturnType<typeof ownedClockFires>[number]&{threadTs:number|null;threadDuration:number|null};
 const MAX_EVENTS=100_000,MAX_BYTES=32*1024*1024;
 const finite=(value:unknown)=>typeof value==='number'&&Number.isFinite(value)&&value>=0;
+const integer=(value:unknown):value is number=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0;
 const location=(value:any)=>{
   const scriptId=typeof value?.scriptId==='string'&&/^[1-9]\d*$/.test(value.scriptId)?Number(value.scriptId):value?.scriptId;
   return Number.isSafeInteger(scriptId)&&scriptId>0&&Number.isSafeInteger(value?.lineNumber)&&value.lineNumber>=0&&Number.isSafeInteger(value?.columnNumber)&&value.columnNumber>=0
@@ -24,9 +25,10 @@ const location=(value:any)=>{
 };
 
 type NativeRow={name:string;phase:string;ts:number|null;duration:number|null;threadTs:number|null;threadDuration:number|null;pid:number;tid:number;frame:number|null;
-  source:ReturnType<typeof location>;id:number|null;marker:number|null;kind?:string;processId?:number|null;outermost?:boolean;primary?:boolean};
+  source:ReturnType<typeof location>;id:number|null;marker:number|null;kind?:string;processId?:number|null;outermost?:boolean;primary?:boolean;flowId?:number;flowEnd?:true;hostId?:number;sourceFrame?:number};
+const PIPELINE_NAMES=new Set(['ProxyMain::BeginMainFrame','ProxyMain::BeginMainFrame::commit','ProxyImpl::ReadyToCommit','ProxyImpl::Commit']);
 const NATIVE_NAMES=new Set(['RunTask','FunctionCall','FireAnimationFrame','RequestAnimationFrame','CancelAnimationFrame','MinorGC','MajorGC','Layout','UpdateLayoutTree','RunMicrotasks','EventDispatch','TimerFire','TimeStamp','PrePaint','Paint','Layerize','CompositeLayers',
-  'PageAnimator::serviceScriptedAnimations','WebFrameWidgetImpl::UpdateLifecycle','LayerTreeHost::WaitForCommitCompletion']);
+  'PageAnimator::serviceScriptedAnimations','WebFrameWidgetImpl::UpdateLifecycle','LayerTreeHost::WaitForCommitCompletion',...PIPELINE_NAMES,'BeginMainThreadFrame','HoldCommit','ReleaseCommitbyActivation']);
 
 /** Compiled positions are valid only for the bytes the page actually received. */
 export function clientIdentity(directory=path.join(import.meta.dirname,'../dist/client/assets')):Client {
@@ -146,7 +148,7 @@ export class IdleCpuDiagnostic {
   private readonly completed=(message?:{dataLossOccurred?:unknown})=>{
     this.ended=true;if(this.native)this.nativeLoss=typeof message?.dataLossOccurred==='boolean'?message.dataLossOccurred:null;this.complete();
   };
-  private rejectNative(event:RawEvent,reason:'identity'|'timestamp'|'phase'|'duration'|'frame-metadata'){
+  private rejectNative(event:RawEvent,reason:'identity'|'timestamp'|'phase'|'duration'|'frame-metadata'|'commit-metadata'){
     this.invalid++;
     if(this.nativeRejected.length>=8)return;
     const metadata=event.name==='thread_name'||event.name==='TracingStartedInBrowser',known=NATIVE_NAMES.has(event.name),frame=event.args?.data?.frame;
@@ -158,16 +160,27 @@ export class IdleCpuDiagnostic {
   private collectNative(events:RawEvent[]){
     for(const event of events){
       const metadata=event.name==='thread_name'||event.name==='TracingStartedInBrowser',known=NATIVE_NAMES.has(event.name);
+      const flow=PIPELINE_NAMES.has(event.name)&&(event.ph==='s'||event.ph==='f');
       if(!metadata&&!known&&event.ph!=='B'&&event.ph!=='E')continue;
       if(!Number.isSafeInteger(event.pid)||event.pid!<=0||!Number.isSafeInteger(event.tid)||event.tid!<=0){this.rejectNative(event,'identity');continue;}
       if(!metadata&&!finite(event.ts)){this.rejectNative(event,'timestamp');continue;}
-      if(!['B','E','X','I','M'].includes(event.ph)){this.rejectNative(event,'phase');continue;}
+      if(!flow&&!['B','E','X','I','M'].includes(event.ph)){this.rejectNative(event,'phase');continue;}
       if(event.ph==='X'&&!finite(event.dur)){this.rejectNative(event,'duration');continue;}
       const data=event.args?.data,marker=data?.message==='quotum-native-start'?1:data?.message==='quotum-native-end'?2:null;
       if(event.name==='TimeStamp'&&marker===null&&event.ph!=='B'&&event.ph!=='E')continue;
       const row:NativeRow={name:known||metadata?event.name:'other',phase:event.ph,ts:finite(event.ts)?event.ts!:null,duration:finite(event.dur)?event.dur!:null,
         threadTs:finite(event.tts)?event.tts!:null,threadDuration:finite(event.tdur)?event.tdur!:null,pid:event.pid!,tid:event.tid!,frame:data?.frame?data.frame===this.frame?1:2:null,
         source:event.name==='FunctionCall'?location(data):null,id:Number.isSafeInteger(data?.id)?data!.id!:null,marker};
+      if(flow){
+        // Exported edge indices stay exact; original uint64 commit IDs may not.
+        if(!integer(event.id)||event.ph==='f'&&event.bp!=='e'){this.rejectNative(event,'commit-metadata');continue;}
+        row.flowId=event.id;if(event.ph==='f')row.flowEnd=true;
+      }
+      if(event.name==='BeginMainThreadFrame'){
+        const host=event.args?.layerTreeId,frame=data?.frameId;
+        if(!integer(host)||host===0||!integer(frame)){this.rejectNative(event,'commit-metadata');continue;}
+        row.hostId=host;row.sourceFrame=frame;
+      }
       if(event.name==='thread_name')row.kind=event.args?.name==='CrRendererMain'?'renderer-main':'other';
       if(event.name==='TracingStartedInBrowser'){
         if(!Array.isArray(data?.frames)){this.rejectNative(event,'frame-metadata');continue;}
