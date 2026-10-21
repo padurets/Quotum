@@ -19,7 +19,7 @@ export const FIXED_ACTIVITY_BUDGET={request:76*1024,body:7*1024*1024,pool:15*102
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 type Numbers={agentMs:number;activeMs:number;agents:number};
 type Body={id:string;requestBytes:number;decoded:number;encoded:number;cancelled:boolean;body:PeriodRequest};
-type Sample={numbers:Numbers;activity:History['activity'];tiles:[number,number,number][];bytes:number;flights:number;advances:number;jobsStarted:number;preparationMs:number;failedReservations:number;preferenceWrites:number};
+type Sample={numbers:Numbers;activity:History['activity'];tiles:[number,number,number][];bytes:number;flights:number;advances:number;jobsStarted:number;fetches:number;preparationMs:number;failedReservations:number;preferenceWrites:number};
 
 /** Independent endpoint sweep: no group aggregate, PeriodActivity or new selection helper. */
 export function activityOracle(trace:WorkTrace,from:number,to:number):Numbers {
@@ -36,7 +36,8 @@ export function activityOracle(trace:WorkTrace,from:number,to:number):Numbers {
 function observationScript(period:string){return historyPoolReceiptScript()+`;(() => {
   localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d',activityBy:'project',filtersVisible:true}));
   const original=window.__quotumInspectHistoryPool,ids=new WeakMap();let serial=0,pool,scheduler,stats;
-  const reset=()=>stats={bytes:0,flights:0,advances:0,jobsStarted:0,preparationMs:0,failedReservations:0,preferenceWrites:0};reset();
+  const reset=()=>stats={bytes:0,flights:0,advances:0,jobsStarted:0,fetches:0,preparationMs:0,failedReservations:0,preferenceWrites:0};reset();
+  const fetch=window.fetch;window.fetch=function(...args){stats.fetches++;return fetch.apply(this,args);};
   const save=Storage.prototype.setItem;Storage.prototype.setItem=function(key,...args){if(key==='quotum.prefs')stats.preferenceWrites++;return save.call(this,key,...args);};
   const reader=()=>[...pool.members].find(m=>m.transport&&typeof m.activityAt==='function');
   const chart=()=>[...pool.members].find(m=>m.scope==='quota'&&m.grids instanceof Map);
@@ -154,9 +155,9 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         await cdp.evaluate(`(()=>{document.activeElement.blur();const panel=document.querySelectorAll('.panel[data-time="chart"]')[${index}];for(const button of panel.querySelectorAll('.legend-item[aria-pressed="true"]'))button.click();})()`);
       }
       const hovered=await sample(),paint=await cdp.evaluate<Reading>('__quotumBench.read()');
-      assert.equal(bodies.bodies.length,hoverStart,'emphasis cannot request history');assert.equal(hovered.jobsStarted,0,'emphasis cannot schedule paths or accounting');assert.equal(hovered.advances,0,'emphasis cannot prepare paths or accounting');assert.equal(hovered.preferenceWrites,0);assert.equal(await geometry(),beforeHover);assert.deepEqual(hovered.numbers,baseline.numbers);
+      assert.equal(hovered.fetches,0,'emphasis cannot send HTTP requests');assert.equal(bodies.bodies.length,hoverStart,'emphasis cannot request history');assert.equal(hovered.jobsStarted,0,'emphasis cannot schedule paths or accounting');assert.equal(hovered.advances,0,'emphasis cannot prepare paths or accounting');assert.equal(hovered.preferenceWrites,0);assert.equal(await geometry(),beforeHover);assert.deepEqual(hovered.numbers,baseline.numbers);
       assert.ok(!paint.renders.some(part=>part.kind==='chart'),'emphasis cannot render chart consumers');
-      reports.push({days,name:'emphasis',charts:emphasis,requests:0,preparationAdvances:hovered.advances,preferenceWrites:hovered.preferenceWrites});
+      reports.push({days,name:'emphasis',charts:emphasis,requests:0,httpRequests:hovered.fetches,scheduledPreparations:hovered.jobsStarted,preparationAdvances:hovered.advances,preferenceWrites:hovered.preferenceWrites});
       console.error('bench: emphasis '+JSON.stringify(reports.at(-1)));
       let referenceReceipt={requests:0,requestBytes:0,decodedBytes:0,encodedBytes:0};
       const reference=async()=>{
@@ -215,28 +216,37 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         await actor.through(actor.floorAt+200);await actor.through(actor.floorAt+300);await actor.through(actor.floorAt+400);await pause(350);
         await cdp.evaluate('window.__quotumFixedActivity.resumeDispatch()');
       },1);
-      const intercepted=async(trigger:()=>Promise<void>,whileHeld:()=>Promise<void>)=>{
+      const intercepted=async(trigger:()=>Promise<void>,whileHeld:()=>Promise<void>,holdFollowing=false)=>{
+        type Paused={requestId:string;networkId?:string};
         let release!:(event:{requestId:string;networkId?:string})=>void;
         const paused=new Promise<{requestId:string;networkId?:string}>(yes=>{release=yes;}),deadline=setTimeout(()=>release({requestId:''}),10_000);
-        let held=false;
+        let held=false,holding=true;
+        const following:Paused[]=[],captures:Promise<void>[]=[],errors:unknown[]=[];
+        const account=async(event:Paused)=>{
+          const payload=await cdp.send<{body:string;base64Encoded:boolean}>('Fetch.getResponseBody',{requestId:event.requestId});
+          const row=bodies.bodies.find(row=>row.id===event.networkId);assert.ok(row);row.decoded=payload.base64Encoded?Buffer.from(payload.body,'base64').length:Buffer.byteLength(payload.body);
+        };
         const intercept=(event:{requestId:string;networkId?:string;request:{postData?:string}})=>{
           const body=JSON.parse(event.request.postData??'{}') as PeriodRequest;
           if(!held&&body.sessions){held=true;release(event);}
+          else if(holding&&holdFollowing&&body.sessions){following.push(event);captures.push(account(event).catch(error=>{errors.push(error);}));}
           else void cdp.send('Fetch.continueResponse',{requestId:event.requestId}).catch(()=>{});
         };
         cdp.on('Fetch.requestPaused',intercept);
         await cdp.send('Fetch.enable',{patterns:[{urlPattern:'*/api/boards/*/period',requestStage:'Response'}]});
         try{
           await trigger();const event=await paused;assert.ok(event.requestId,'a real shared-work response must be held');
-          const payload=await cdp.send<{body:string;base64Encoded:boolean}>('Fetch.getResponseBody',{requestId:event.requestId});
-          const row=bodies.bodies.find(row=>row.id===event.networkId);assert.ok(row);row.decoded=payload.base64Encoded?Buffer.from(payload.body,'base64').length:Buffer.byteLength(payload.body);
-          await whileHeld();await cdp.send('Fetch.continueResponse',{requestId:event.requestId}).catch(()=>{});
-        }finally{clearTimeout(deadline);await cdp.send('Fetch.disable');cdp.off('Fetch.requestPaused',intercept);}
+          await account(event);await whileHeld();holding=false;
+          await Promise.all(captures);
+          for(const response of [event,...following])await cdp.send('Fetch.continueResponse',{requestId:response.requestId}).catch(()=>{});
+        }finally{holding=false;clearTimeout(deadline);await Promise.all(captures);await cdp.send('Fetch.disable');cdp.off('Fetch.requestPaused',intercept);}
+        assert.deepEqual(errors,[],'all held response bodies must remain accounted');
       };
+      const retainedSummary=await cdp.evaluate('document.querySelector(".activity-totals").outerHTML');
       const during=await phase('news during response',()=>intercepted(async()=>{await actor.through(actor.floorAt+500);},async()=>{
         await actor.through(actor.floorAt+600);await pause(350);
-        assert.equal(await cdp.evaluate('window.__quotumFixedActivity.status().ready'),false,'pending news cannot publish the held summary as the new answer');
-      }),2);
+        assert.equal(await cdp.evaluate('document.querySelector(".activity-totals").outerHTML'),retainedSummary,'held work answers preserve the complete previous cohort, including all four metrics');
+      },true),2);
       assert.ok(during.current.flights<=2);
       const generations=await phase('cancelled A to B to A',()=>intercepted(async()=>{await actor.through(actor.floorAt+700);},async()=>{
         await cdp.evaluate(`${filterRoot}.querySelector('button').click()`);
