@@ -122,3 +122,10 @@ test('a missing body acknowledgement is cancelled at the diagnostic deadline',as
   f.receive();const result=f.binding.afterFamily([1,2]);await pending;t.mock.timers.tick(5000);await result;
   assert.equal(aborted,true);assert.equal(f.report().status,'unavailable');assert.equal(f.report().debuggerDisabled,true);assert.deepEqual(f.sent,['Network.getResponseBody']);f.binding.close();assert.equal(f.listeners.size,0);
 });
+
+
+test('cancelled post-window binding starts no source or debugger command',async()=>{
+  const f=fixture(),abort=new AbortController();f.receive();abort.abort();
+  await f.binding.afterFamily([1],'after-family',abort.signal);
+  assert.equal(f.report().status,'unavailable');assert.equal(f.report().debuggerDisabled,true);assert.deepEqual(f.sent,[]);f.binding.close();
+});

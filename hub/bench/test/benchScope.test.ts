@@ -71,13 +71,17 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   class Requests {count=0;bytes=0;byPath={};counting=false;}
   class Stop extends Error {}
   class ChromeLaunchError extends Error {}
-  const panning=async()=>{mark('panning');if(fault==='panning-throw')throw Error('panning-original');
+  class IdleCpuDiagnostic {
+    constructor(_cdp:unknown,_save:unknown,_client:unknown,owned:boolean,mode:string,readonly signal:AbortSignal){assert.equal(owned,true);assert.equal(mode,'native-trace');signal.throwIfAborted();mark('native-trace-created');}
+    async close(){assert.equal(this.signal.aborted,true);mark('native-trace-close');}
+  }
+  const panning=async(_cdp?:unknown,_pace?:unknown,_output?:unknown,_reload?:unknown,trace?:()=>IdleCpuDiagnostic)=>{mark('panning');trace?.();if(fault==='panning-throw')throw Error('panning-original');
     if(fault==='cancel'){listeners.get('SIGTERM')!();await exited;throw Error('cancelled-panning');}
     return{problems:problems('panning'),reports:['quota','session','activity','budget','funds'].flatMap(initiator=>['24h','30d'].map(period=>({initiator,period,frames:[16],latency:[16]})))};
   };
   const context={exports:{},process:{argv:['node','index.ts',...(ci?['--ci']:[]),...args],env:{CI:'1',...env},pid:1,platform:'linux',
       on:(name:string,fn:()=>void)=>{listeners.set(name,fn);},exit:(code:number)=>{exits.push(code);terminal();}},
-    Date:class extends Date {static now(){return now;}},console:{log:()=>{},error:(value:unknown)=>{logs.push(String(value));}},path,Buffer,RunOwner,Demo,Evidence,Requests,Stop,ChromeLaunchError,
+    Date:class extends Date {static now(){return now;}},console:{log:()=>{},error:(value:unknown)=>{logs.push(String(value));}},path,Buffer,RunOwner,Demo,Evidence,Requests,Stop,ChromeLaunchError,IdleCpuDiagnostic,
     mkdirSync:()=>{},writeFileSync:(file:string,body:string)=>diagnosticFiles.set(path.basename(file,'.json'),JSON.parse(body)),sourceIdentity:()=>({checkoutSha:'fixture'}),
     USAGE:'fixture usage',IDLE:{ci:120,full:300},SHOWN_MS:30_000,MEASURED:'fixture',HISTORY_BYTES_PER_MEASUREMENT,
     SETS:[set],fixtureTiming,panningSet:(value:unknown)=>value,people:()=>[{id:'ana'}],freePort:async()=>{mark('freePort');return 1234;},
@@ -235,4 +239,66 @@ test('the existing bench check requires success from both independent scopes',{s
     assert.ok(!job.includes('continue-on-error:'));
     assert.ok(!job.includes('\n    needs:'),'benchmark producers run independently');
   }
+});
+
+
+for(const scope of ['all','dashboard'])test('native-trace '+scope+' keeps every original dashboard phase and owned cleanup',async()=>{
+  const result=await run(['--scope',scope],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'native-trace'});
+  assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);assert.deepEqual(result.statuses,['diagnostic']);
+  for(const name of tail)assert.equal(result.calls.filter(call=>call===name).length,1);
+  assert.ok(result.calls.indexOf('native-trace-created')>result.calls.indexOf('frequency'));
+  assert.equal(result.calls.filter(call=>call==='native-trace-close').length,1);
+});
+for(const fault of ['panning','panning-throw','cancel'] as const)test('native-trace preserves original '+fault,async()=>{
+  const result=await run(['--scope','dashboard'],fault,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'native-trace'});
+  assert.equal(result.error,undefined);assert.deepEqual(result.exits,[1]);assert.deepEqual(result.statuses,[fault==='cancel'?'cancelled':'failed']);
+  assert.equal(result.calls.filter(call=>call==='native-trace-close').length,1);
+  if(fault==='panning')assert.ok((result.saved.get('result') as {problems:string[]}).problems.includes('panning-red'));
+  if(fault==='panning-throw')assert.ok(result.logs.some(line=>line.includes('panning-original')));
+});
+test('history still rejects native-trace before preparation',async()=>{
+  const result=await run(['--scope','history'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'native-trace'});assert.match(String(result.error),/scope/i);assert.deepEqual(result.calls,[]);
+});
+test('native-trace refuses attached, non-CI and conflicting diagnostic runs before preparation',async()=>{
+  const cases:[string[],Record<string,string>,boolean][]=[
+    [['--scope','dashboard','--cdp','http://example.test'],{},true],
+    [['--scope','dashboard'],{},false],
+    [[],{QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'1'},true],
+    [[],{QUOTUM_BENCH_DIAGNOSE_NATIVE:'1'},true],
+    [[],{QUOTUM_BENCH_REVERSAL_PROBE:'1'},true],
+  ];
+  for(const [args,env,ci] of cases){
+    const result=await run(args,undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'native-trace',...env},ci);
+    assert.match(String(result.error),/conflicting/i);assert.ok(!result.calls.includes('prepare'));
+  }
+});
+
+test('manual native tracing uses only the existing dashboard job and rejects mismatched evidence',()=>{
+  const workflow=readFileSync(new URL('../../../.github/workflows/ci.yml',import.meta.url),'utf8');
+  const job=(name:string)=>workflow.split('  '+name+':\n')[1].split(/\n  [\w-]+:/)[0];
+  const selected=(name:string,inputs:object,event='workflow_dispatch',ref='refs/heads/task')=>{
+    const expression=job(name).match(/if: \$\{\{ (.+) \}\}/)![1];
+    return Boolean(runInNewContext(expression,{inputs,github:{event_name:event,ref},always:()=>true,startsWith:(value:string,prefix:string)=>value.startsWith(prefix)}));
+  };
+  for(const native_trace of [false,true]){
+    const inputs={diagnostic_ref:'1'.repeat(40),native_trace};
+    assert.equal(selected('bench-dashboard',inputs),native_trace);
+    assert.equal(selected('idle-cpu-control',inputs),!native_trace);
+    assert.equal(selected('bench-history',inputs),false);
+    assert.equal(selected('bench',inputs),false);
+  }
+  assert.equal(selected('bench-dashboard',{},'pull_request'),true);
+  assert.equal(selected('bench-dashboard',{},'workflow_call','refs/tags/v1.0.0'),false);
+  const script=job('bench-dashboard').split("          node --import tsx --input-type=module <<'JS'\n")[1].split('\n          JS')[0]
+    .replace(/^\s*import .+;\n/gm,'');
+  const source='1'.repeat(40),hash='2'.repeat(64);
+  const verify=(env:Record<string,string|undefined>={},head=source,client:object={status:'available',sha256:hash})=>runInNewContext(script,{
+    process:{env:{QUOTUM_BENCH_SOURCE_SHA:source,EXPECTED_CLIENT_SHA256:hash,...env}},
+    execFileSync:()=>head,clientIdentity:()=>client,console:{log(){}},
+  });
+  assert.doesNotThrow(()=>verify());
+  for(const env of [{TRACE_ONLY:'true'},{ORIGINAL_TIMING:'true'},{QUOTUM_BENCH_SOURCE_SHA:'bad'},{EXPECTED_CLIENT_SHA256:'bad'}])assert.throws(()=>verify(env),/diagnostic mode|mismatch/);
+  assert.throws(()=>verify({},'3'.repeat(40)),/mismatch/);
+  assert.throws(()=>verify({},source,{status:'unavailable'}),/mismatch/);
+  assert.throws(()=>verify({},source,{status:'available',sha256:'3'.repeat(64)}),/mismatch/);
 });

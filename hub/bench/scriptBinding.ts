@@ -41,7 +41,7 @@ export class ScriptBinding {
     this.injected=[];this.injectedOmitted=this.injectedConflicts=0;
   }
 
-  async afterFamily(intervals:readonly number[],stage:'after-family'|'after-failed-family'='after-family'){
+  async afterFamily(intervals:readonly number[],stage:'after-family'|'after-failed-family'='after-family',parent?:AbortSignal){
     const family=++this.family,received=this.received;this.received=[];
     const expected=this.injected;this.injected=[];
     const omittedExpected=this.injectedOmitted,expectedConflicts=this.injectedConflicts;this.injectedOmitted=this.injectedConflicts=0;
@@ -92,7 +92,7 @@ export class ScriptBinding {
         const matched=new Set([...injectedOwners.values()].filter(consistent).flatMap(owner=>owner.intervals));
         const unmatched=expected.filter(value=>!matched.has(value.interval)).map(value=>value.interval);injected.unmatchedIntervals=unmatched;
         if(expected.length||omittedExpected||expectedConflicts)injected.status=expected.length&&!unmatched.length&&!omittedExpected&&!expectedConflicts&&!injected.conflicts&&!omittedInjectedOwners&&!omittedAnonymous?'complete':'insufficient-evidence';
-      });
+      },parent);
     }catch{report.status='unavailable';report.reason='script binding command failed';}
     finally{
       this.cdp.off('Debugger.scriptParsed',parsed);

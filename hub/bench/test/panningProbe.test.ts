@@ -12,7 +12,7 @@ const edgeSeries=():PanReading['edgeSeries']=>['wheel','drag'].map(stage=>({stag
 
 // Run the production browser probe with the browser's ordered RAF queue.
 const source = readFileSync(new URL('../panning.ts', import.meta.url), 'utf8');
-const probe = source.match(/await cdp\.evaluate\(`(\(\(\) => \{\n\s*const initiator=[\s\S]+?\}\)\(\))`\);/)![1];
+const probe = source.match(/const samplerSource=`(\(\(\) => \{\n\s*const initiator=[\s\S]+?\}\)\(\))`;/)![1];
 
 function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quota', typed = false) {
   let time = 0;
@@ -134,7 +134,7 @@ test('actual postconditions preserve failure and cleanup after motion sampling s
   // Execute exact integration statements and their original catch/finally. Native
   // geometry assertions are controlled at CDP; this is not a browser performance run.
   const script=`globalThis.run=async()=>{${[...helpers,wheel].map(node=>node.getText(ast)).join('\n')}try{${tail.map(node=>node.getText(ast)).join('\n')}}${outer.catchClause!.getText(ast)}finally${outer.finallyBlock!.getText(ast)}};`;
-  for(const fail of [false,true]){
+  for(const fail of [false,true])for(const native of [false,true]){
     const f=fixture(),files=new Map<string,any>(),original=new Error('controlled held-Shift failure');
     let cleanupCalls=0;const cleanup=f.reading.cleanup;
     f.reading.cleanup=()=>{cleanupCalls++;cleanup();};
@@ -161,7 +161,9 @@ test('actual postconditions preserve failure and cleanup after motion sampling s
       },
     };
     const evidence=fail?{save:(name:string,value:unknown)=>files.set(name,value)}:undefined;
-    const sandbox={...globals,cdp,evidence,deadline,panPartialScript,panningSettlement,selector:'[data-widget="quota-history"]',initiator:'quota',period:'24h',geometry:{x:0,y:0,series:12,sessionSeries:12,budgetSeries:12,fundsSeries:12,charts:5},edgeSeries:[],costStart:undefined,costEnd:undefined,reports:[],scenario:{initiator:'quota',period:'24h'},failed:false,stage:'controlled',interception:false,originalHorizon:'auto',click:async()=>{},at:(value:string)=>{context=value;},progress:(value:string)=>{
+    const reports:PanReading[]=[],traceCalls:string[]=[];
+    const traced=native?{stop:async()=>{assert.equal(reports.length,1);assert.equal(f.reading.running,false);traceCalls.push('stop');},bindAndClose:async()=>{assert.deepEqual(traceCalls,['stop']);traceCalls.push('bind');}}:undefined;
+    const sandbox={...globals,cdp,evidence,traced,deadline,panPartialScript,panningSettlement,selector:'[data-widget="quota-history"]',initiator:'quota',period:'24h',geometry:{x:0,y:0,series:12,sessionSeries:12,budgetSeries:12,fundsSeries:12,charts:5},edgeSeries:[],costStart:undefined,costEnd:undefined,reports,scenario:{initiator:'quota',period:'24h'},failed:false,stage:'controlled',interception:false,originalHorizon:'auto',click:async()=>{},at:(value:string)=>{context=value;},progress:(value:string)=>{
       if(value.endsWith('/complete'))complete=true;
     }};
     runInNewContext(ts.transpileModule(script,{compilerOptions:{target:ts.ScriptTarget.ES2023}}).outputText,sandbox);
@@ -172,6 +174,7 @@ test('actual postconditions preserve failure and cleanup after motion sampling s
       assert.equal(partial.status,'unavailable');assert.equal(partial.frames,undefined);assert.equal(complete,false);
     }else{await run();assert.equal(complete,true);}
     assert.equal(held,true);assert.equal(f.reading.running,false);assert.equal(sandbox.reports.length,1);
+    assert.deepEqual(traceCalls,native?['stop','bind']:[]);
     assert.equal(cleanupCalls,2,'both the report and outer finally must run the actual cleanup');
   }
 });

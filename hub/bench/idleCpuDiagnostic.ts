@@ -9,7 +9,7 @@ import {ScriptBinding} from './scriptBinding.js';
 import type {Reading} from './probe.js';
 
 type Client={status:'available';name:string;bytes:number;sha256:string}|{status:'unavailable'};
-type RawEvent={name:string;ph:string;ts?:number;dur?:number;tts?:number;tdur?:number;pid?:number;tid?:number;args?:{data?:{frame?:string;timerId?:number;timeout?:number;singleShot?:boolean;scriptId?:string|number;lineNumber?:number;columnNumber?:number;stackTrace?:unknown;message?:string}}};
+type RawEvent={name:string;ph:string;ts?:number;dur?:number;tts?:number;tdur?:number;pid?:number;tid?:number;args?:{name?:unknown;data?:{frame?:string;id?:number;timerId?:number;timeout?:number;singleShot?:boolean;scriptId?:string|number;lineNumber?:number;columnNumber?:number;stackTrace?:unknown;message?:string;frames?:{frame?:string;processId?:number;isOutermostMainFrame?:boolean;isInPrimaryMainFrame?:boolean}[]}}};
 type CounterWindow={before:Record<string,number>;after:Record<string,number>;instrumentMs:number;seconds:number};
 type Save=(name:string,value:unknown,large?:boolean)=>void;
 type Profile=Parameters<typeof numericProfile>[0];
@@ -22,6 +22,10 @@ const location=(value:any)=>{
   return Number.isSafeInteger(scriptId)&&scriptId>0&&Number.isSafeInteger(value?.lineNumber)&&value.lineNumber>=0&&Number.isSafeInteger(value?.columnNumber)&&value.columnNumber>=0
     ?{scriptId,lineNumber:value.lineNumber,columnNumber:value.columnNumber}:null;
 };
+
+type NativeRow={name:string;phase:string;ts:number|null;duration:number|null;threadTs:number|null;threadDuration:number|null;pid:number;tid:number;frame:number|null;
+  source:ReturnType<typeof location>;id:number|null;marker:number|null;kind?:string;processId?:number|null;outermost?:boolean;primary?:boolean};
+const NATIVE_NAMES=new Set(['RunTask','FunctionCall','FireAnimationFrame','RequestAnimationFrame','CancelAnimationFrame','MinorGC','MajorGC','Layout','UpdateLayoutTree','RunMicrotasks','EventDispatch','TimerFire','TimeStamp']);
 
 /** Compiled positions are valid only for the bytes the page actually received. */
 export function clientIdentity(directory=path.join(import.meta.dirname,'../dist/client/assets')):Client {
@@ -76,7 +80,7 @@ export function originalTraceProblems(from:number,to:number,cellMs:number,window
   return problems;
 }
 
-/** One original idle interval, observed only in the benchmark's own synthetic browser. */
+/** Bounded CPU or timeline observations in the benchmark's own synthetic browser. */
 export class IdleCpuDiagnostic {
   readonly binding:ScriptBinding;
   private frame:string|null=null;
@@ -99,9 +103,19 @@ export class IdleCpuDiagnostic {
   private profileStatus='unavailable';
   private traceCleanup='unavailable';
   private readonly clockSource:ClockSource;
+  private nativeLoader:string|null=null;
+  private nativeStable=false;
+  private nativeLoss:boolean|null=null;
+  private nativeLifecycle=0;
+  private nativeRuntime=false;
+  private nativeCleaning:Promise<void>|undefined;
+  private readonly nativeClocks:{stage:'start'|'end';lo:number;hi:number;timeOrigin:number}[]=[];
+  private readonly nativeInvalidated=()=>{this.nativeLifecycle++;};
+  private get native(){return this.collection==='native-trace';}
   private readonly clocks:{stage:string;before:number|null;page:number;after:number|null;valid:boolean}[]=[];
   private readonly collected=(message:{value:RawEvent[]})=>{
     if(!this.active)return;
+    if(this.native){this.collectNative(message.value);return;}
     for(const event of message.value){
       if(!['TimerInstall','TimerRemove','TimerFire','FunctionCall','TimeStamp'].includes(event.name))continue;
       const data=event.args?.data;
@@ -125,13 +139,75 @@ export class IdleCpuDiagnostic {
       this.bytes+=bytes;this.events.push(safe);
     }
   };
-  private readonly completed=()=>{this.ended=true;this.complete();};
+  private readonly completed=(message?:{dataLossOccurred?:unknown})=>{
+    this.ended=true;if(this.native)this.nativeLoss=typeof message?.dataLossOccurred==='boolean'?message.dataLossOccurred:null;this.complete();
+  };
+  private collectNative(events:RawEvent[]){
+    for(const event of events){
+      const metadata=event.name==='thread_name'||event.name==='TracingStartedInBrowser',known=NATIVE_NAMES.has(event.name);
+      if(!metadata&&!known&&event.ph!=='B'&&event.ph!=='E')continue;
+      if(!Number.isSafeInteger(event.pid)||event.pid!<=0||!Number.isSafeInteger(event.tid)||event.tid!<=0||!metadata&&!finite(event.ts)) {this.invalid++;continue;}
+      if(!['B','E','X','I','M'].includes(event.ph)||event.ph==='X'&&!finite(event.dur)) {this.invalid++;continue;}
+      const data=event.args?.data,marker=data?.message==='quotum-native-start'?1:data?.message==='quotum-native-end'?2:null;
+      if(event.name==='TimeStamp'&&marker===null&&event.ph!=='B'&&event.ph!=='E')continue;
+      const row:NativeRow={name:known||metadata?event.name:'other',phase:event.ph,ts:finite(event.ts)?event.ts!:null,duration:finite(event.dur)?event.dur!:null,
+        threadTs:finite(event.tts)?event.tts!:null,threadDuration:finite(event.tdur)?event.tdur!:null,pid:event.pid!,tid:event.tid!,frame:data?.frame?data.frame===this.frame?1:2:null,
+        source:event.name==='FunctionCall'?location(data):null,id:Number.isSafeInteger(data?.id)?data!.id!:null,marker};
+      if(event.name==='thread_name')row.kind=event.args?.name==='CrRendererMain'?'renderer-main':'other';
+      if(event.name==='TracingStartedInBrowser'){
+        if(!Array.isArray(data?.frames)){this.invalid++;continue;}
+        if(data.frames.length>32)this.omitted+=data.frames.length-32;
+        for(const frame of data.frames.slice(0,32))if(frame.frame===this.frame)this.appendNative({...row,frame:1,processId:Number.isSafeInteger(frame.processId)&&frame.processId!>0?frame.processId!:null,
+          outermost:frame.isOutermostMainFrame===true,primary:frame.isInPrimaryMainFrame===true});
+      }else this.appendNative(row);
+    }
+  }
+  private appendNative(row:NativeRow){
+    const bytes=Buffer.byteLength(JSON.stringify(row));
+    if(this.events.length>=MAX_EVENTS||this.bytes+bytes>MAX_BYTES){this.omitted++;return;}
+    this.bytes+=bytes;this.events.push(row);
+  }
+  private async nativeClock(stage:'start'|'end'){
+    const reading=await this.cdp.evaluate<{lo:number;hi:number;timeOrigin:number}>(`(()=>{const lo=performance.now();console.timeStamp('quotum-native-${stage}');return {lo,hi:performance.now(),timeOrigin:performance.timeOrigin};})()`,this.nativeSignal);
+    this.nativeClocks.push({stage,lo:reading.lo,hi:reading.hi,timeOrigin:reading.timeOrigin});
+  }
+  private saveNative(cleanup:string){
+    const rows=this.events as NativeRow[],maps=rows.filter(row=>row.name==='TracingStartedInBrowser');
+    const pids=[...new Set(maps.map(row=>row.processId))],pid=pids.length===1?pids[0]:null;
+    const mains=rows.filter(row=>row.name==='thread_name'&&row.pid===pid&&row.kind==='renderer-main'),tid=mains.length===1?mains[0].tid:null;
+    const scope=!!pid&&tid===pid&&maps.length>0&&maps.every(row=>row.outermost&&row.primary)&&!rows.some(row=>row.name==='thread_name'&&row.pid===pid&&row.tid===tid&&row.kind!=='renderer-main')&&this.nativeStable&&!this.nativeLifecycle;
+    const markers=rows.filter(row=>row.name==='TimeStamp'&&row.frame===1&&row.pid===pid&&row.tid===tid);
+    const clock=this.nativeClocks.length===2&&this.nativeClocks.every((row,i)=>row.stage===(i?'end':'start')&&[row.lo,row.hi,row.timeOrigin].every(finite)&&row.hi>=row.lo)&&this.nativeClocks[0].timeOrigin===this.nativeClocks[1].timeOrigin&&this.nativeClocks[1].lo>=this.nativeClocks[0].hi;
+    const start=markers.filter(row=>row.marker===1),end=markers.filter(row=>row.marker===2);
+    const stamps=start.length===1&&end.length===1&&start[0].phase==='I'&&end[0].phase==='I'&&Number.isSafeInteger(start[0].ts)&&Number.isSafeInteger(end[0].ts)&&end[0].ts!>start[0].ts!;
+    this.save('native-frame-trace',{mode:'diagnostic',status:'unqualified',kind:'Recorded scopes only; wall minus thread time does not identify descheduling, blocking or throttling.',
+      capture:{status:cleanup==='complete'&&this.ended&&this.nativeLoss===false&&!this.omitted&&!this.invalid?'complete':'insufficient-evidence',cleanup,ended:this.ended,dataLossOccurred:this.nativeLoss,omitted:this.omitted,invalid:this.invalid,bytes:this.bytes},
+      scope:{status:scope?'complete':'unknown',frame:1,pid:pid??null,tid,lifecycleEvents:this.nativeLifecycle,stableFrame:this.nativeStable},
+      clocks:{status:scope&&clock&&stamps?'recorded-unqualified':'unknown',readings:this.nativeClocks,markers},
+      source:this.sourceBinding??{status:'unknown'},events:rows,
+      unqualifiedCandidates:scope?0:rows.length},true);
+  }
+  private cleanupNative(){
+    // Owner cancellation stops observations; release both domains with one separate deadline.
+    return this.nativeCleaning??=bounded('native trace cleanup',async signal=>{
+      const results=await Promise.allSettled([
+        (async()=>{if(this.tracing){await this.cdp.send('Tracing.end',{},signal);this.tracing=false;}})(),
+        (async()=>{if(this.nativeRuntime){await this.cdp.send('Runtime.disable',{},signal);this.nativeRuntime=false;}})(),
+      ]);
+      const failure=results.find(result=>result.status==='rejected');if(failure?.status==='rejected')throw failure.reason;
+    },5000);
+  }
+  private nativeListeners(attach:boolean){
+    for(const method of ['Page.frameNavigated','Page.frameDetached','Runtime.executionContextsCleared']){
+      if(attach)this.cdp.on(method,this.nativeInvalidated);else this.cdp.off(method,this.nativeInvalidated);
+    }
+  }
 
-  constructor(private readonly cdp:Cdp,private readonly save:Save,client:Client,ownedSynthetic:boolean,private readonly collection:'profile'|'trace'='profile'){
+  constructor(private readonly cdp:Cdp,private readonly save:Save,client:Client,ownedSynthetic:boolean,private readonly collection:'profile'|'trace'|'native-trace'='profile',private readonly nativeSignal?:AbortSignal){
     if(!ownedSynthetic)throw Error('Idle CPU diagnostics require an owned synthetic browser');
-    this.clockSource=clockTimerSource(client);
-    this.binding=new ScriptBinding(cdp,client,(name,value)=>{if(name.startsWith('source-family-'))this.sourceBinding=value;save('idle-cpu-'+name,value);});
-    save('idle-cpu-client',{mode:'diagnostic',client,clockSource:this.clockSource});
+    this.clockSource=this.native?null:clockTimerSource(client);
+    this.binding=new ScriptBinding(cdp,client,(name,value)=>{if(name.startsWith('source-family-'))this.sourceBinding=value;save((this.native?'native-frame-':'idle-cpu-')+name,value);});
+    save(this.native?'native-frame-client':'idle-cpu-client',{mode:'diagnostic',client,clockSource:this.clockSource});
   }
 
   private async clock(stage:string){
@@ -143,40 +219,57 @@ export class IdleCpuDiagnostic {
 
   /** Called before the unchanged from/to/reset/metrics sequence. */
   async start(){
-    this.frame=(await this.cdp.send<{frameTree:{frame:{id:string}}}>('Page.getFrameTree')).frameTree.frame.id;
+    if(this.native){
+      if(this.tracing||this.ended||this.nativeClocks.length)throw Error('Native trace is single-use');
+      this.nativeSignal?.throwIfAborted();this.nativeListeners(true);this.nativeRuntime=true;
+      await this.cdp.send('Runtime.enable',{},this.nativeSignal);
+    }
+    const frame=(await this.cdp.send<{frameTree:{frame:{id:string;loaderId?:string}}}>('Page.getFrameTree',{},this.nativeSignal)).frameTree.frame;
+    this.frame=frame.id;if(this.native)this.nativeLoader=typeof frame.loaderId==='string'&&frame.loaderId?frame.loaderId:null;
     if(typeof this.frame!=='string'||!this.frame)throw Error('Owned target frame unavailable');
     this.cdp.on('Tracing.dataCollected',this.collected);this.cdp.on('Tracing.tracingComplete',this.completed);
     if(this.collection==='profile'){
       this.profiler=true;await this.cdp.send('Profiler.enable');
       await this.cdp.send('Profiler.setSamplingInterval',{interval:2000});
     }
-    await this.clock('start');
+    if(!this.native)await this.clock('start');
     this.active=true;this.tracing=true;
-    await this.cdp.send('Tracing.start',{categories:'devtools.timeline,disabled-by-default-devtools.timeline.stack',transferMode:'ReportEvents'});
+    await this.cdp.send('Tracing.start',{categories:this.native?'toplevel,v8,devtools.timeline,disabled-by-default-devtools.timeline':'devtools.timeline,disabled-by-default-devtools.timeline.stack',transferMode:'ReportEvents'},this.nativeSignal);
+    if(this.native)await this.nativeClock('start');
     if(this.collection==='profile')await this.cdp.send('Profiler.start');
   }
 
-  /** Called only after the original after-metrics and readout have been frozen. */
-  async stop(window:CounterWindow){
+  /** Stop only after the original counter readout or native report is frozen. */
+  async stop(window?:CounterWindow){
+    if(!this.native&&!window)throw Error('Original idle counter window unavailable');
     let profile:ReturnType<typeof numericProfile>|null=null,cleanup='complete',error:unknown;
     try{
-      await this.clock('end');
+      if(this.native){
+        await this.nativeClock('end');
+        const frame=(await this.cdp.send<{frameTree:{frame:{id:string;loaderId?:string}}}>('Page.getFrameTree',{},this.nativeSignal)).frameTree.frame;
+        this.nativeStable=!!this.nativeLoader&&frame.id===this.frame&&frame.loaderId===this.nativeLoader;
+      }else await this.clock('end');
       if(this.collection==='profile'){
         const reply=await this.cdp.send<{profile:Profile}>('Profiler.stop');
         await this.cdp.send('Profiler.disable');this.profiler=false;
         profile=numericProfile(reply.profile);
       }
       const completed=new Promise<void>(resolve=>{this.complete=resolve;});
-      await this.cdp.send('Tracing.end');
-      await bounded('idle CPU trace drain',()=>completed);
+      await this.cdp.send('Tracing.end',{},this.nativeSignal);
+      await bounded('idle CPU trace drain',()=>completed,5000,this.nativeSignal);
       this.tracing=false;
     }catch(value){error=value;cleanup='incomplete';}
     finally{
       this.active=false;
       this.cdp.off('Tracing.dataCollected',this.collected);this.cdp.off('Tracing.tracingComplete',this.completed);
       if(this.profiler)try{await this.cdp.send('Profiler.stop');await this.cdp.send('Profiler.disable');this.profiler=false;}catch{cleanup='incomplete';}
-      if(this.tracing)try{await this.cdp.send('Tracing.end');this.tracing=false;}catch{cleanup='incomplete';}
+      if(this.native){
+        this.nativeListeners(false);
+        try{await this.cleanupNative();}catch(value){cleanup='incomplete';error??=value;}
+      }else if(this.tracing)try{await this.cdp.send('Tracing.end');this.tracing=false;}catch{cleanup='incomplete';}
       this.traceCleanup=cleanup;
+      if(this.native){try{this.saveNative(cleanup);}catch(value){error??=value;}}
+      else {
       this.profileStatus=this.collection==='trace'?'not-collected-by-design':cleanup==='complete'&&profile?.status==='complete'?'complete':'insufficient-evidence';
       this.save('idle-cpu-profile',{mode:'diagnostic',kind:this.collection==='trace'?'CPU sampling was not requested; tracing overhead is unqualified.':'Sampled elapsed widths, not thread CPU time; observer overhead unqualified.',
         status:this.profileStatus,samplingInterval:this.collection==='trace'?null:2000,clocks:this.clocks,cleanup,profile},true);
@@ -185,11 +278,12 @@ export class IdleCpuDiagnostic {
         scope:'explicit owned target frame only',frame:1,coordinates:'as emitted; source binding required',cleanup,ended:this.ended,omitted:this.omitted,
         invalid:this.invalid,invalidOwners:this.invalidOwners,omittedOwners:this.omittedOwners,timerFires:this.timerFires,sourceCallbacks:this.sourceCallbacks,
         rejectedForeign:this.rejectedForeign,unscoped:this.unscoped,bytes:this.bytes,events:this.events},true);
+      }
     }
     if(error)throw error;
   }
 
-  async bindAndClose(){try{await this.binding.afterFamily([1]);}finally{this.binding.close();}}
+  async bindAndClose(){try{if(this.native)await this.binding.afterFamily([1],'after-family',this.nativeSignal);else await this.binding.afterFamily([1]);}finally{this.binding.close();if(this.native)this.saveNative(this.traceCleanup);}}
   traceReceipt(from:number,to:number,cellMs:number,window:CounterWindow,reading:Reading){
     const fires=ownedClockFires(this.events,this.sourceBinding,this.clockSource,window.before.Timestamp,window.after.Timestamp).map(fire=>{
       const event=this.events.find(value=>{const row=value as {name:string;ts:number;pid:number;tid:number};return row.name==='TimerFire'&&row.ts===fire.ts&&row.pid===fire.pid&&row.tid===fire.tid;}) as {threadTs:number|null;threadDuration:number|null};
@@ -202,9 +296,16 @@ export class IdleCpuDiagnostic {
     this.save('idle-cpu-original-trace',receipt);return receipt;
   }
   async close(){
+    const interrupted=this.native&&(this.active||this.tracing||this.nativeRuntime);
     this.active=false;this.binding.close();
+    if(this.native)this.nativeListeners(false);
     this.cdp.off('Tracing.dataCollected',this.collected);this.cdp.off('Tracing.tracingComplete',this.completed);
     if(this.profiler){try{await this.cdp.send('Profiler.stop');}finally{await this.cdp.send('Profiler.disable');this.profiler=false;}}
-    if(this.tracing){await this.cdp.send('Tracing.end');this.tracing=false;}
+    if(this.native){
+      let error:unknown;
+      try{await this.cleanupNative();}catch(value){error=value;}
+      if(interrupted)try{this.saveNative('incomplete');}catch(value){error??=value;}
+      if(error)throw error;
+    }else if(this.tracing){await this.cdp.send('Tracing.end');this.tracing=false;}
   }
 }

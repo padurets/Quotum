@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       diagnostic_ref:
-        description: Full public commit SHA for the independent idle CPU control
+        description: Full public commit SHA for the independent benchmark control
         required: true
         type: string
       expected_client_sha256:
@@ -23,6 +23,11 @@ on:
         default: false
       original_timing:
         description: Sample CPU using the original idle window without alignment
+        required: false
+        type: boolean
+        default: false
+      native_trace:
+        description: Trace funds at 24h within the complete original dashboard checks
         required: false
         type: boolean
         default: false
@@ -119,7 +124,7 @@ jobs:
           if-no-files-found: warn
 
   bench-dashboard:
-    if: ${{ !inputs.diagnostic_ref && !startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ !startsWith(github.ref, 'refs/tags/') && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && inputs.native_trace)) }}
     runs-on: ubuntu-latest
     # Independent traffic checks run on another runner; every dashboard phase stays here.
     timeout-minutes: 20
@@ -128,6 +133,8 @@ jobs:
         working-directory: hub
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.diagnostic_ref || github.sha }}
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -135,8 +142,27 @@ jobs:
           cache-dependency-path: hub/package-lock.json
       - run: npm ci
       - run: npm run build
+      - name: Verify the native trace source and received-client identity
+        if: ${{ inputs.native_trace }}
+        run: |
+          node --import tsx --input-type=module <<'JS'
+          import {execFileSync} from 'node:child_process';
+          import {clientIdentity} from './bench/idleCpuDiagnostic.ts';
+          if(process.env.TRACE_ONLY==='true'||process.env.ORIGINAL_TIMING==='true')throw Error('Choose one diagnostic mode');
+          const requested=process.env.QUOTUM_BENCH_SOURCE_SHA,expected=process.env.EXPECTED_CLIENT_SHA256;
+          const actual=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),client=clientIdentity();
+          if(!/^[a-f0-9]{40}$/.test(requested??'')||actual!==requested||!/^[a-f0-9]{64}$/.test(expected??'')||client.status!=='available'||client.sha256!==expected)throw Error('Diagnostic control source or client mismatch');
+          console.log('Diagnostic control source and compiled client verified');
+          JS
+        env:
+          QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
+          EXPECTED_CLIENT_SHA256: ${{ inputs.expected_client_sha256 }}
+          TRACE_ONLY: ${{ inputs.trace_only }}
+          ORIGINAL_TIMING: ${{ inputs.original_timing }}
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope dashboard
         env:
+          QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.native_trace && 'native-trace' || '' }}
+          QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.native_trace && inputs.diagnostic_ref || '' }}
           QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-bench-dashboard
       - name: Benchmark evidence
         if: always()
@@ -147,7 +173,7 @@ jobs:
           if-no-files-found: warn
 
   idle-cpu-control:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:

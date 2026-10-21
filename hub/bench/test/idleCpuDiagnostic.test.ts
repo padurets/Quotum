@@ -1,7 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {readFileSync} from 'node:fs';
+import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {EventCounts,type Heard} from '../stream.js';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
@@ -9,6 +11,8 @@ import type {Cdp} from '../cdp.js';
 import type {Reading} from '../probe.js';
 import {IdleCpuDiagnostic,sourceIdentity,originalTraceProblems,ownedClockFires} from '../idleCpuDiagnostic.js';
 import {numericProfile,profileWindow} from '../cpuProfile.js';
+import {Evidence,safeEvidence} from '../evidence.js';
+import {RunOwner} from '../runOwner.js';
 import {idleWindow,idlePhaseScript,idlePhaseProblems} from '../still.js';
 
 type Saved={name:string;value:unknown;large?:boolean};
@@ -294,4 +298,145 @@ test('a generic, injected, foreign or asynchronous callback cannot prove a Clock
 test('missing or mismatched source binding cannot credit Clock ownership',()=>{
   assert.equal(ownedClockFires(clockEvents,clockBinding,null,1,3).length,0);
   for(const patch of [{status:'mismatch'},{receivedHash:'0'.repeat(64)},{debuggerDisabled:false},{owners:[]}])assert.equal(ownedClockFires(clockEvents,{...clockBinding,...patch},clockSource,1,3).length,0);
+});
+
+
+// Proposed trace-only controls; these execute no browser and infer no CPU category.
+const nativeMetadata=(pid=101)=>({name:'TracingStartedInBrowser',ph:'I',ts:1,pid:100,tid:100,args:{data:{frames:[{frame:'own-frame',processId:pid,isOutermostMainFrame:true,isInPrimaryMainFrame:true}]}}});
+class NativeCdpFake extends CurrentCdpFake {
+  skipMetadata=false;loss:boolean|undefined=false;loader='loader-1';origin=1000;page=10;
+  override async evaluate<T>(expression:string,signal?:AbortSignal):Promise<T>{
+    signal?.throwIfAborted();this.commands.push('evaluate');
+    const start=expression.includes('quotum-native-start');assert.ok(start||expression.includes('quotum-native-end'));
+    const lo=this.page;this.page+=100;
+    this.emit('Tracing.dataCollected',{value:[{name:'TimeStamp',ph:'I',ts:1_000_000+lo*1000,pid:101,tid:101,args:{data:{frame:'own-frame',message:start?'quotum-native-start':'quotum-native-end'}}}]});
+    return {lo,hi:lo+.05,timeOrigin:this.origin} as T;
+  }
+  override async send<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>{
+    signal?.throwIfAborted();
+    if(method==='Page.getFrameTree'){this.commands.push(method);return {frameTree:{frame:{id:'own-frame',loaderId:this.loader}}} as T;}
+    if(method==='Tracing.start'){
+      this.commands.push(method);assert.equal((params as {categories:string}).categories,'toplevel,v8,devtools.timeline,disabled-by-default-devtools.timeline');
+      if(!this.skipMetadata)this.emit('Tracing.dataCollected',{value:[nativeMetadata(),{name:'thread_name',ph:'M',pid:101,tid:101,args:{name:'CrRendererMain'}}]});
+      return {} as T;
+    }
+    if(method==='Tracing.end'){this.commands.push(method);this.emit('Tracing.tracingComplete',this.loss===undefined?{}:{dataLossOccurred:this.loss});return {} as T;}
+    return super.send<T>(method,params,signal);
+  }
+}
+const nativeEvents=[
+  {name:'RunTask',ph:'B',ts:1_020_000,tts:100,pid:101,tid:101},
+  {name:'FunctionCall',ph:'X',ts:1_021_000,dur:1000,tts:101,tdur:500,pid:101,tid:101,args:{data:{frame:'own-frame',scriptId:'11',lineNumber:1,columnNumber:2,url:'private-canary',functionName:'private-canary'}}},
+  {name:'MinorGC',ph:'X',ts:1_022_000,dur:800,tts:601,tdur:700,pid:101,tid:101,args:{private:'private-canary'}},
+  {name:'Layout',ph:'X',ts:1_023_000,dur:100,pid:101,tid:101,args:{data:{frame:'own-frame',nodes:'private-canary'}}},
+  {name:'FireAnimationFrame',ph:'X',ts:1_024_000,dur:200,pid:101,tid:101,args:{data:{frame:'own-frame',id:19}}},
+  {name:'private-canary',ph:'B',ts:1_025_000,pid:101,tid:101},
+  {ph:'E',ts:1_025_010,pid:101,tid:101},
+  {name:'RunTask',ph:'E',ts:1_026_000,tts:1400,pid:101,tid:101},
+  {name:'MajorGC',ph:'X',ts:1_027_000,dur:300,pid:102,tid:102},
+];
+async function captureNative(configure?:(cdp:NativeCdpFake)=>void,during?:(cdp:NativeCdpFake)=>void){
+  const cdp=new NativeCdpFake({forbidProfiler:true}),saved:Saved[]=[];configure?.(cdp);
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value,large)=>saved.push({name,value,large}),client,true,'native-trace');
+  cdp.emit('Network.responseReceived',{type:'Script',requestId:'asset-1',response:{url:asset}});
+  await diagnostic.start();cdp.emit('Tracing.dataCollected',{value:nativeEvents});during?.(cdp);
+  cdp.commands.push('ORIGINAL.report-frozen');await diagnostic.stop();await diagnostic.bindAndClose();await diagnostic.close();
+  const receipt=record(saved.findLast(row=>row.name==='native-frame-trace')!.value);
+  return {cdp,saved,receipt};
+}
+test('native trace retains frameless work, B/E boundaries and distinct wall/thread clocks without an idle qualification',async()=>{
+  const {cdp,saved,receipt}=await captureNative();
+  assert.equal(receipt.status,'unqualified');assert.equal(record(receipt.capture).status,'complete');assert.equal(record(receipt.scope).status,'complete');
+  assert.equal(record(receipt.clocks).status,'recorded-unqualified');
+  const rows=receipt.events as any[],gc=rows.find(row=>row.name==='MinorGC');
+  assert.equal(gc.frame,null);assert.equal(gc.duration,800);assert.equal(gc.threadDuration,700);
+  assert.equal(rows.find(row=>row.name==='FireAnimationFrame').id,19);
+  assert.ok(rows.some(row=>row.name==='other'&&row.phase==='B'));assert.ok(rows.some(row=>row.name==='other'&&row.phase==='E'));
+  assert.ok(rows.some(row=>row.pid===102));assert.equal(record(receipt.scope).pid,101);
+  assert.ok(!cdp.commands.some(name=>name.startsWith('Profiler.')));assert.ok(!saved.some(row=>row.name==='idle-cpu-original-trace'));
+  assert.ok(cdp.commands.indexOf('Tracing.end')>cdp.commands.indexOf('ORIGINAL.report-frozen'));
+  assert.ok(cdp.commands.indexOf('Debugger.enable')>cdp.commands.indexOf('Tracing.end'));
+  assert.doesNotMatch(JSON.stringify(safeEvidence(receipt)),/private-canary/);
+  for(const rows of cdp.listeners.values())assert.equal(rows.length,0);
+});
+for(const loss of [true,undefined])test('native trace keeps '+String(loss)+' data-loss state insufficient',async()=>{
+  const {receipt}=await captureNative(cdp=>{cdp.loss=loss;});assert.equal(record(receipt.capture).status,'insufficient-evidence');assert.equal(receipt.status,'unqualified');
+});
+for(const event of ['Page.frameNavigated','Page.frameDetached','Runtime.executionContextsCleared'])test('native trace invalidates '+event+' through the drain',async()=>{
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit(event,{}));assert.equal(record(receipt.scope).status,'unknown');assert.ok((receipt.events as unknown[]).length>0);
+});
+test('missing metadata and changed loader keep sanitized candidates unknown',async()=>{
+  for(const result of [await captureNative(cdp=>{cdp.skipMetadata=true;}),await captureNative(undefined,cdp=>{cdp.loader='loader-2';})]){
+    assert.equal(record(result.receipt.scope).status,'unknown');assert.equal(record(result.receipt.clocks).status,'unknown');assert.ok((result.receipt.events as unknown[]).length>0);
+  }
+});
+test('conflicting process binding does not borrow the first renderer',async()=>{
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:[nativeMetadata(102)]}));assert.equal(record(receipt.scope).status,'unknown');
+});
+test('changed timeOrigin cannot qualify native page/trace alignment',async()=>{
+  const {receipt}=await captureNative(undefined,cdp=>{cdp.origin=2000;});assert.equal(record(receipt.clocks).status,'unknown');assert.equal(receipt.status,'unqualified');
+});
+test('already cancelled native trace starts no CDP operation',async()=>{
+  const cdp=new NativeCdpFake(),abort=new AbortController();abort.abort();
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,()=>{},client,true,'native-trace',abort.signal);
+  await assert.rejects(diagnostic.start());await diagnostic.close();assert.deepEqual(cdp.commands,[]);
+});
+
+
+test('actual native collector releases tracing and Runtime after RunOwner abort with one independent signal',async()=>{
+  const owner=new RunOwner(),saved:Saved[]=[],signals:AbortSignal[]=[];
+  const cdp=new class extends NativeCdpFake {
+    override async send<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>{
+      if(method==='Tracing.end'||method==='Runtime.disable'){
+        assert.equal(owner.signal.aborted,true);assert.ok(signal);assert.notEqual(signal,owner.signal);assert.equal(signal.aborted,false);signals.push(signal);
+      }
+      return super.send<T>(method,params,signal);
+    }
+  }({forbidProfiler:true});
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value)=>saved.push({name,value}),client,true,'native-trace',owner.signal);
+  owner.resource(()=>diagnostic.close());await diagnostic.start();await owner.close();
+  assert.equal(cdp.commands.filter(name=>name==='Tracing.end').length,1);assert.equal(cdp.commands.filter(name=>name==='Runtime.disable').length,1);
+  assert.equal(signals.length,2);assert.equal(signals[0],signals[1]);
+  const receipt=record(saved.findLast(row=>row.name==='native-frame-trace')!.value);assert.equal(record(receipt.capture).cleanup,'incomplete');assert.equal(receipt.status,'unqualified');
+  for(const listeners of cdp.listeners.values())assert.equal(listeners.length,0);
+});
+test('actual native collector still disables Runtime when Tracing.end rejects during owner cleanup',async()=>{
+  const owner=new RunOwner(),traceError=Error('trace cleanup rejected');let closeError:unknown;
+  const cdp=new class extends NativeCdpFake {
+    override async send<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>{
+      if(method==='Tracing.end'){assert.equal(owner.signal.aborted,true);assert.equal(signal?.aborted,false);this.commands.push(method);throw traceError;}
+      return super.send<T>(method,params,signal);
+    }
+  }({forbidProfiler:true});
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,()=>{},client,true,'native-trace',owner.signal);
+  owner.resource(async()=>{try{await diagnostic.close();}catch(error){closeError=error;throw error;}});
+  await diagnostic.start();await assert.rejects(owner.close(),/resource cleanup failed/);
+  assert.equal(closeError,traceError);assert.equal(cdp.commands.filter(name=>name==='Runtime.disable').length,1);
+  for(const listeners of cdp.listeners.values())assert.equal(listeners.length,0);
+});
+test('native stop keeps its original error when both independent cleanup operations reject',async()=>{
+  const original=Error('original clock failure'),traceError=Error('trace cleanup failure'),runtimeError=Error('Runtime cleanup failure');
+  const cdp=new class extends NativeCdpFake {
+    override async evaluate<T>(expression:string,signal?:AbortSignal):Promise<T>{if(expression.includes('quotum-native-end'))throw original;return super.evaluate<T>(expression,signal);}
+    override async send<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>{
+      if(method==='Tracing.end'||method==='Runtime.disable'){assert.equal(signal?.aborted,false);this.commands.push(method);throw method==='Tracing.end'?traceError:runtimeError;}
+      return super.send<T>(method,params,signal);
+    }
+  }({forbidProfiler:true});
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,()=>{},client,true,'native-trace');await diagnostic.start();
+  await assert.rejects(diagnostic.stop(),error=>error===original);await assert.rejects(diagnostic.close(),error=>error===traceError);
+  assert.equal(cdp.commands.filter(name=>name==='Tracing.end').length,1);assert.equal(cdp.commands.filter(name=>name==='Runtime.disable').length,1);
+});
+
+test('native trace cap remains explicit through the actual artifact writer',async t=>{
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:Array.from({length:100_001},(_,i)=>({name:'RunTask',ph:'X',ts:2_000_000+i,dur:1,pid:101,tid:101}))}));
+  assert.equal((receipt.events as unknown[]).length,100_000);assert.ok(Number(record(receipt.capture).omitted)>0);
+  assert.equal(record(receipt.capture).status,'insufficient-evidence');
+  const directory=mkdtempSync(path.join(os.tmpdir(),'quotum-native-evidence-'));t.after(()=>rmSync(directory,{recursive:true,force:true}));
+  const evidence=new Evidence(directory);evidence.saveTrace('native-frame-trace',receipt);
+  const root=path.join(directory,evidence.id),saved=JSON.parse(readFileSync(path.join(root,'native-frame-trace.json'),'utf8'));
+  assert.equal(saved.events.length,100_000);assert.equal(saved.capture.omitted,record(receipt.capture).omitted);
+  assert.equal(saved.capture.status,'insufficient-evidence');assert.equal(saved.status,'unqualified');
+  const manifest=JSON.parse(readFileSync(path.join(root,'manifest.json'),'utf8'));
+  assert.deepEqual(manifest.errors,[]);assert.equal(manifest.files[0].truncated,false);
 });
