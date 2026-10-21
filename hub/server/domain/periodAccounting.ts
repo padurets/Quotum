@@ -183,19 +183,22 @@ class QuotaIndex {
     // those sums forward; independent deadlines and integer coverage keep their tails.
     if(columns)copying(columns*(count*16+64));
     const spent=rebuildSpent?new Float64Array(count):null,worked=rebuildWorked?new Float64Array(count):null,during=rebuildDuring?new Float64Array(count):null;
-    let previous:ReturnType<typeof sampleAt>,integers=true;
+    // Exact integer coverage already records which observation edges were valid.
+    // Keep endpoint values once per observation and add each floating delta forward.
+    const fields=series.samples.columns;
+    let coverage=0,used=0,reset=-1,at=0,integers=true;
     for(let i=0;i<count&&columns;i++){
       if((i&15)===0)yield 16;
-      const sample=sampleAt(series.samples,i)!;
+      const nextCoverage=numberAt(prior.covered,i+1)!,nextUsed=spent||during?numberAt(fields[1],i)!:0,nextReset=spent||during?numberAt(fields[2],i)!:-1,nextAt=worked||during?numberAt(value.times,i)!:0;
       if(i){
         if(spent)spent[i]=spent[i-1];if(worked)worked[i]=worked[i-1];if(during)during[i]=during[i-1];
-        const a=previous!,step=edge(a,sample);
-        if(step.valid){
-          if(spent)spent[i]+=step.delta;
-          if(worked||during){const work=a.at>=known&&known!==Infinity?activity?.read({from:a.at,to:sample.at},true)??0:0;if(worked)worked[i]+=work;if(during)during[i]+=work>0?step.delta:0;}
+        if(nextCoverage>coverage){
+          const delta=reset===-1||nextReset===-1?0:Math.max(0,nextUsed-used);
+          if(spent)spent[i]+=delta;
+          if(worked||during){const work=at>=known&&known!==Infinity?activity?.read({from:at,to:nextAt},true)??0:0;if(worked)worked[i]+=work;if(during)during[i]+=work>0?delta:0;}
         }
       }
-      if(spent)integers&&=Number.isSafeInteger(spent[i]);previous=sample;
+      if(spent)integers&&=Number.isSafeInteger(spent[i]);coverage=nextCoverage;used=nextUsed;reset=nextReset;at=nextAt;
     }
     if(count&&columns)yield 16;
     yield;

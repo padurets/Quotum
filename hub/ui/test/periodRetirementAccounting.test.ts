@@ -96,12 +96,14 @@ async function retirementControl(t:any,nonzeroSpending=false,nonzeroWork=false){
     const preparer=new Preparations({now:()=>++time,post:run=>queue.push(run)});
     const active=new Set<any>(),copied=new Set<any>(),coveredCopies=new Set<any>(),reads=new Map<string,number>();
     const watched:{column:any;descriptor:PropertyDescriptor}[]=[];
-    let tails:Map<any,any>|undefined,proofs:any[]=[],preparations=0;
+    let tails:Map<any,any>|undefined,proofs:any[]=[],preparations=0,availabilityReads=0;
     const watch=(tape:any)=>{
       for(const series of tape.quota)if(sources.includes(series.source)&&sampleCount(series.samples)===255){
         const column=series.samples.columns[1],descriptor=Object.getOwnPropertyDescriptor(column,'values')!;
         if(watched.some(item=>item.column===column))continue;
         assert.ok(descriptor.value instanceof Float64Array);watched.push({column,descriptor});reads.set(series.source,0);
+        const stale=series.samples.columns[3],saved=Object.getOwnPropertyDescriptor(stale,'values')!;watched.push({column:stale,descriptor:saved});
+        Object.defineProperty(stale,'values',{configurable:true,enumerable:true,get:()=>{if(active.size)availabilityReads++;return saved.value;}});
         Object.defineProperty(column,'values',{configurable:true,enumerable:true,get:()=>{reads.set(series.source,reads.get(series.source)!+1);return descriptor.value;}});
       }
     };
@@ -129,7 +131,7 @@ async function retirementControl(t:any,nonzeroSpending=false,nonzeroWork=false){
       assert.equal(tails?.size,3);assert.equal(h.period.tapes.get('quota'),before);
       assert.equal(h.period.get().value,work);assert.ok(h.pool.estimatedBytes>bytes);
     };
-    return {h,clock,sources,before,old,work,requests,revision,queue,preparer,active,copied,coveredCopies,reads,stopReads,unchanged,drain,startRetirement,insideCopy,get tails(){return tails;},get proofs(){return proofs;},get preparations(){return preparations;}};
+    return {h,clock,sources,before,old,work,requests,revision,queue,preparer,active,copied,coveredCopies,reads,stopReads,unchanged,drain,startRetirement,insideCopy,get tails(){return tails;},get proofs(){return proofs;},get preparations(){return preparations;},get availabilityReads(){return availabilityReads;}};
   }catch(error){await h.close();throw error;}
 }
 
@@ -194,6 +196,7 @@ test('nonzero work and spending keep independent coverage while rebuilding all f
     for(const index of c.old){assert.ok(numberAt(index.worked,1)!>0);assert.ok(numberAt(index.during,1)!>0);}
     await c.startRetirement();await c.drain();c.stopReads();
     assert.equal(c.coveredCopies.size,3,'work must not force rebuilding independent integer coverage');
+    assert.equal(c.availabilityReads,0,'retirement uses exact coverage instead of decoding every observation availability again');
     const after=h.period.tapes.get('quota'),fresh=new PeriodAccounting(after.tape,c.work,h.period.index.curves);
     for(const source of c.sources){
       const actual=after.accounting.quota.get(source+'\nw'),expected=(fresh as any).quota.get(source+'\nw');
