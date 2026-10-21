@@ -99,6 +99,16 @@ test('resource-only transport omits an unused predicate while work and facet rea
   }finally{transport.reset();}
 });
 const flush=async()=>{for(let i=0;i<180;i++)await Promise.resolve();};
+for(const [status,code,closed] of [[404,'currency_not_found',false],[409,'currency_changed',false],[401,'unauthorized',true],[403,'forbidden',true],[404,'board_not_found',true],[404,'not_found',true]] as const)test(`current ${status} ${code} ${closed?'revokes':'preserves'} board access`,async()=>{
+  const pool=new HistoryPool(),replies:PeriodReply[]=[];let lost=0;
+  const intent:PeriodIntent={board:'b',generation:1,revision:1,request:{version:1,selection:{mode:'range',from:0,to:NOW},evaluatedAt:NOW,values:['s']}};
+  const transport=new PeriodTransport(pool,()=>intent,reply=>{replies.push(reply);},async()=>{throw new ApiError(status,code);},()=>{lost++;});
+  try{
+    transport.change();await flush();assert.equal(lost,closed?1:0);
+    assert.deepEqual(replies[0]?.values,{state:'error',error:'unavailable'});
+    assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);
+  }finally{transport.reset();}
+});
 type Coordinator={activate(active:boolean):void;changed():void;retry():void;retryHistory(scope:PeriodScope):void;transport:PeriodTransport;get():{value:WorkTrace|null;loading:boolean;error:string|null};getValue(id:string):{loading:boolean;error:string|null};projectionState(history:Pick<History,'range'>,scope:PeriodScope):{ready:boolean;error?:string}};
 type Attempt={body:PeriodRequest;signal:AbortSignal};
 const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');

@@ -102,7 +102,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     work:async()=>{mark('work');return{reports:[],problems:problems('work')};},
     workObserved:async()=>{mark('observed-work');return{reports:[],setup:{},problems:problems('observed-work')};},
     workPrivate:async()=>{mark('private-work');return{reports:[],problems:problems('private-work')};},
-    frequencyKeys:async()=>{mark('frequency');},panning,
+    frequencyKeys:async()=>{mark('frequency');},panning,panningProblems:()=>[],
     creditPhase:async()=>{mark('credits');if(fault==='credits-throw')throw new Stop('credits-original');return{updates:[],problems:problems('credits')};},
     moneyPhase:async()=>{mark('money');return{problems:problems('money')};},
     fixedActivity:async()=>{mark('fixed-activity');return{reports:[],problems:problems('fixed-activity')};},
