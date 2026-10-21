@@ -341,7 +341,7 @@ async function captureNative(configure?:(cdp:NativeCdpFake)=>void,during?:(cdp:N
   cdp.emit('Network.responseReceived',{type:'Script',requestId:'asset-1',response:{url:asset}});
   await diagnostic.start();cdp.emit('Tracing.dataCollected',{value:nativeEvents});during?.(cdp);
   cdp.commands.push('ORIGINAL.report-frozen');await diagnostic.stop();await diagnostic.bindAndClose();await diagnostic.close();
-  const receipt=record(saved.findLast(row=>row.name==='native-frame-trace')!.value);
+  const receipt=record([...saved].reverse().find(row=>row.name==='native-frame-trace')!.value);
   return {cdp,saved,receipt};
 }
 test('native trace retains frameless work, B/E boundaries and distinct wall/thread clocks without an idle qualification',async()=>{
@@ -397,7 +397,7 @@ test('actual native collector releases tracing and Runtime after RunOwner abort 
   owner.resource(()=>diagnostic.close());await diagnostic.start();await owner.close();
   assert.equal(cdp.commands.filter(name=>name==='Tracing.end').length,1);assert.equal(cdp.commands.filter(name=>name==='Runtime.disable').length,1);
   assert.equal(signals.length,2);assert.equal(signals[0],signals[1]);
-  const receipt=record(saved.findLast(row=>row.name==='native-frame-trace')!.value);assert.equal(record(receipt.capture).cleanup,'incomplete');assert.equal(receipt.status,'unqualified');
+  const receipt=record([...saved].reverse().find(row=>row.name==='native-frame-trace')!.value);assert.equal(record(receipt.capture).cleanup,'incomplete');assert.equal(receipt.status,'unqualified');
   for(const listeners of cdp.listeners.values())assert.equal(listeners.length,0);
 });
 test('actual native collector still disables Runtime when Tracing.end rejects during owner cleanup',async()=>{
