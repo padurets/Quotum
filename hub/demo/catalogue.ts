@@ -157,7 +157,9 @@ export const SESSION_ACTIVITY_SCENES=[
  * cancellation, coverage and whole-cell accounting; bench/panning.ts exercises native
  * wheel and Shift-drag with delayed history on all five charts. Cooperative preparation
  * and the held final pose are checked by ui/test/prepare.test.ts, history.test.ts and
- * timeAxisMotion.test.ts; they add no lasting demo state.
+ * timeAxisMotion.test.ts; they add no lasting demo state. Heatmap preparation,
+ * compatible replacement, authority retirement and hidden-width recovery are held
+ * by ui/test/heatmapFocus.test.ts.
  *
  * Two states of a weekly window's forecast never last on a working hub, and have no entry:
  * `renewing`, the moment between a measurement and the hub's forecast of it (the hub works

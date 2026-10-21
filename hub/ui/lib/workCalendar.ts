@@ -21,11 +21,13 @@ export function calendarWindow(at:number,zone=calendarZone(),selection:PeriodSel
 }
 export const calendarLevel=(ms:number,span=3_600_000)=>ms===0?0:ms<span*.5?1:ms<span?2:ms<span*2?3:ms<span*4?4:5;
 export const CALENDAR_OPACITY=[0,.2,.4,.6,.8,1];
+const hourFormats=new Map<string,{format:Intl.NumberFormat;separator:string}>();
 export function exactAgentHours(ms:number,locale:string){
   const scale=1_000_000_000n,rounded=(BigInt(ms)*scale+1_800_000n)/3_600_000n;
   const whole=rounded/scale,fraction=(rounded%scale).toString().padStart(9,'0').replace(/0+$/,'');
-  const format=new Intl.NumberFormat(locale,{useGrouping:false});
-  const separator=format.formatToParts(1.1).find(p=>p.type==='decimal')!.value;
+  let stored=hourFormats.get(locale);
+  if(!stored){const format=new Intl.NumberFormat(locale,{useGrouping:false});stored={format,separator:format.formatToParts(1.1).find(p=>p.type==='decimal')!.value};if(hourFormats.size>=4)hourFormats.delete(hourFormats.keys().next().value!);hourFormats.set(locale,stored);}
+  const {format,separator}=stored;
   return format.format(whole)+(fraction?separator+fraction:'');
 }
 export type CalendarReading={window:ReturnType<typeof calendarWindow>;value:CalendarValue|null;basis:CalendarBasis|null;loading:boolean;error:string|null};
@@ -50,6 +52,7 @@ export class WorkCalendar {
   needed=false;
   generation=0;
   state:CalendarReading={window:calendarWindow(Date.now()),value:null,basis:null,loading:false,error:null};
+  presentationKey=()=>this.context;
   private listeners=new Set<()=>void>();
   private accountedState:CalendarReading|null=null;
   private accountedBytes=0;

@@ -1,5 +1,6 @@
 import type {CalendarCell} from '../../server/domain/workCalendar';
 import type {CalendarReading} from './workCalendar';
+import {drain,type Preparation} from '../../server/domain/prepare';
 const MIN=60_000,HOUR=60*MIN,DAY=24*HOUR;
 export const HEATMAP_NATURAL=300,HEATMAP_MIN=160;
 export type HeatmapView='matrix'|'calendar';
@@ -8,13 +9,37 @@ export type HeatLabel={text:string;x:number;y:number;align?:'end'|'middle'};
 export type HeatmapLayout={cells:HeatCell[];labels:HeatLabel[];height:number;naturalHeight:number;span:number;kind:'strip'|'rows'|'columns'|'calendar'};
 type Civil={date:string;hour:number;minute:number;offset:string};
 const cache=new WeakMap<number[],{zone:string;parts:Civil[]}>();
-function civilParts(reading:CalendarReading){
+const civilZones=new Map<string,{formatter:Intl.DateTimeFormat;instants:Map<number,Civil>}>();
+function* civilPartsPrepared(reading:CalendarReading):Preparation<Civil[]>{
   const {edges,zone}=reading.window,old=cache.get(edges);if(old?.zone===zone)return old.parts;
-  const formatter=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZoneName:'longOffset'});
-  const parts=edges.slice(0,-1).map(at=>{const p=formatter.formatToParts(at),part=(key:string)=>p.find(p=>p.type===key)!.value;return {date:[part('year'),part('month'),part('day')].join('-'),hour:Number(part('hour')),minute:Number(part('minute')),offset:part('timeZoneName')};});
+  let stored=civilZones.get(zone);
+  if(!stored){stored={formatter:new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZoneName:'longOffset'}),instants:new Map()};if(civilZones.size>=2)civilZones.delete(civilZones.keys().next().value!);}
+  civilZones.delete(zone);civilZones.set(zone,stored);
+  const {formatter,instants}=stored;
+  // Replaced readings reuse their fine partition. Cache civil coordinates only;
+  // work, availability and exact partial endpoints still come from each reading.
+  const parts:Civil[]=[];
+  for(const at of edges.slice(0,-1)){
+    let value=instants.get(at);
+    if(!value){const p=formatter.formatToParts(at),part=(key:string)=>p.find(p=>p.type===key)!.value;value={date:[part('year'),part('month'),part('day')].join('-'),hour:Number(part('hour')),minute:Number(part('minute')),offset:part('timeZoneName')};}
+    instants.delete(at);instants.set(at,value);if(instants.size>4096)instants.delete(instants.keys().next().value!);
+    parts.push(value);yield;
+  }
   cache.set(edges,{zone,parts});return parts;
 }
 const time=(hour:number)=>String(hour).padStart(2,'0')+':00';
+const labelFormats=new Map<string,Intl.DateTimeFormat>();
+function labelFormat(key:string,locale:string,options:Intl.DateTimeFormatOptions){
+  let format=labelFormats.get(key);
+  if(!format){format=new Intl.DateTimeFormat(locale,options);if(labelFormats.size>=12)labelFormats.delete(labelFormats.keys().next().value!);labelFormats.set(key,format);}
+  return format;
+}
+export const heatDateLabel=(date:string,locale:string)=>labelFormat('date:'+locale,locale,{day:'numeric',month:'long',year:'numeric',timeZone:'UTC'}).format(new Date(date+'T12:00Z'));
+export function heatIntervalLabel(item:Pick<HeatCell,'from'|'to'|'dayRange'|'repeated'>,span:number,zone:string,locale:string){
+  if(span>=23*HOUR&&item.from===item.dayRange.from&&item.to===item.dayRange.to&&!item.repeated)return '';
+  const format=labelFormat(JSON.stringify([locale,zone,item.repeated]),locale,{timeZone:zone,hour:'2-digit',minute:'2-digit',hourCycle:'h23',...(item.repeated?{timeZoneName:'shortOffset'}:{})});
+  return format.format(item.from)+' — '+format.format(item.to);
+}
 
 /** Expiry changes only the cell's readout and paint, never prepared geometry. */
 export function heatCellAt(item:HeatCell,now:number):HeatCell {
@@ -28,7 +53,8 @@ export function heatCellAt(item:HeatCell,now:number):HeatCell {
 export const heatCellChangesAt=(item:HeatCell,now:number)=>item.parts.reduce<number|null>((next,c)=>c.agentMs!==null&&c.validUntil!==null&&c.validUntil>now?Math.min(next??Infinity,c.validUntil):next,null);
 
 /** Geometry groups exact fine intervals; resizing never divides coarse Activity bars. */
-export function heatmapLayout(reading:CalendarReading,width:number,view:HeatmapView,locale:string,allocated=0):HeatmapLayout {
+export const heatmapLayout=(...args:Parameters<typeof heatmapLayoutPrepared>)=>drain(heatmapLayoutPrepared(...args));
+export function* heatmapLayoutPrepared(reading:CalendarReading,width:number,view:HeatmapView,locale:string,allocated=0):Preparation<HeatmapLayout> {
   const {window,value}=reading,{range,dates,dayEdges,edges}=window,w=Math.max(100,width),short=range.to-range.from<=DAY;
   const naturalHeight=HEATMAP_NATURAL,height=Math.max(HEATMAP_MIN,allocated||naturalHeight);
   let rows=false;
@@ -50,8 +76,9 @@ export function heatmapLayout(reading:CalendarReading,width:number,view:HeatmapV
     rows=best.rows;left=rows?(w<420?51:63):42;span=best.hours*HOUR;
   }
   type Group={date:string;from:number;to:number;hour:number;offset:string;minute:number;shifted:boolean;agentMs:number;known:number;availableFrom:number;availableTo:number;validUntil:number|null;fold:number;parts:CalendarCell[]};
-  const parts=civilParts(reading),groups=new Map<string,Group>();
+  const parts=yield* civilPartsPrepared(reading),groups=new Map<string,Group>();
   for(let i=0;i<edges.length-1;i++){
+    yield;
     const from=Math.max(edges[i],range.from),to=Math.min(edges[i+1],range.to);if(from>=to)continue;
     const part=parts[i],hour=short?part.hour+Math.floor(part.minute/(span/MIN))*(span/MIN)/60:Math.floor(part.hour/(span/HOUR))*(span/HOUR);
     const key=short?String(Math.floor(from/span)):part.date+':'+hour+(view==='calendar'?'':':'+part.offset);
@@ -59,7 +86,7 @@ export function heatmapLayout(reading:CalendarReading,width:number,view:HeatmapV
     const c=value?.cells[i];if(c)g.parts.push(c);if(c?.agentMs!==null&&c?.agentMs!==undefined){g.agentMs+=c.agentMs;g.known+=Math.max(0,c.to-c.from);g.availableFrom=Math.min(g.availableFrom,c.from);g.availableTo=Math.max(g.availableTo,c.to);if(c.validUntil!==null)g.validUntil=Math.min(g.validUntil??Infinity,c.validUntil);}
   }
   const list=[...groups.values()],counts=new Map<string,number>(),folds=new Map<number,number>();
-  for(const g of list){const key=g.date+':'+g.hour;g.fold=counts.get(key)??0;counts.set(key,g.fold+1);folds.set(g.hour,Math.max(folds.get(g.hour)??1,g.fold+1));}
+  for(const g of list){yield;const key=g.date+':'+g.hour;g.fold=counts.get(key)??0;counts.set(key,g.fold+1);folds.set(g.hour,Math.max(folds.get(g.hour)??1,g.fold+1));}
   const slots:{hour:number;fold:number}[]=[];if(!short)for(let h=0;h<24;h+=span/HOUR)for(let f=0;f<(folds.get(h)??1);f++)slots.push({hour:h,fold:f});
   const labels:HeatLabel[]=[],cells:HeatCell[]=[],weekday=new Intl.DateTimeFormat(locale,{weekday:'short',timeZone:'UTC'});
   const kind=short?'strip':view==='calendar'?'calendar':rows?'rows':'columns';let pitch=0;
@@ -84,6 +111,7 @@ export function heatmapLayout(reading:CalendarReading,width:number,view:HeatmapV
     dates.forEach((d,i)=>labels.push({text:String(Number(d.slice(-2))),x:((pad+i)%cols)*(cw+gap)+1,y:24+Math.floor((pad+i)/cols)*pitch+(pitch-8)/2+4}));
   }
   for(const g of list){
+    yield;
     const day=dates.indexOf(g.date);if(day<0)continue;
     const slot=slots.findIndex(s=>s.hour===g.hour&&s.fold===g.fold);let x=0,y=24,cw=0,ch=0,row=0,column=0;
     if(kind==='strip'){x=(g.from-range.from)/(range.to-range.from)*w;cw=(g.to-g.from)/(range.to-range.from)*w-3;ch=height-30;column=cells.length;}

@@ -15,6 +15,23 @@ function reading(from:number,to:number,zone='UTC'){
   const window=calendarWindow(to,zone,{mode:'range',from,to}),cells=drain(calendarCells([row(from,to)],window.edges,window.edges.slice(1).map((_,i)=>i),to,from,from,90*DAY,{from,to})).map(([,c])=>c);
   return {window,value:{zone,edges:window.edges,cells,availableFrom:from,retainedFrom:from,cursor:'cursor'},basis:null,loading:false,error:null};
 }
+test('replacement calendar arrays reuse civil instants without caching work or mixing time zones',t=>{
+  const from=Date.UTC(2032,8,20,5),r=reading(from,from+DAY),other=reading(from,from+DAY,'Pacific/Honolulu'),distant=reading(from+3*DAY,from+4*DAY);
+  let calls=0;const original=Intl.DateTimeFormat.prototype.formatToParts;
+  t.mock.method(Intl.DateTimeFormat.prototype,'formatToParts',function(this:Intl.DateTimeFormat,...args:Parameters<typeof original>){calls++;return original.apply(this,args);});
+  const draw=(value:typeof r)=>heatmapLayout(value,1138,'matrix','en');
+  const clone=(value:typeof r)=>({...value,window:{...value.window,edges:[...value.window.edges]}});
+  const first=draw(r);assert.ok(calls>1000);calls=0;
+  const index=r.value.cells.findIndex(cell=>cell.agentMs!==null),updated={...clone(r),value:{...r.value,cells:r.value.cells.map((cell,i)=>i===index?{...cell,agentMs:cell.agentMs!+M}:cell)}};
+  const next=draw(updated);
+  assert.equal(calls,0,'a replacement with the same partition formats no old instant again');
+  assert.equal(next.cells.reduce((sum,c)=>sum+(c.cell.agentMs??0),0),DAY+M,'only civil coordinates are cached; new work remains exact');
+  const geometry=(layout:ReturnType<typeof draw>)=>layout.cells.map(({key,from,to,x,y,width,height})=>({key,from,to,x,y,width,height}));
+  assert.deepEqual(geometry(next),geometry(first));
+  const local=draw(other);assert.ok(calls>1000,'a different zone has its own civil coordinates');
+  assert.notEqual(local.cells[0].date,first.cells[0].date);calls=0;draw(clone(r));assert.equal(calls,0);
+  draw(distant);calls=0;draw(clone(r));assert.ok(calls>0,'navigation cannot retain an unbounded set of formatted instants');
+});
 test('civil dates and registered sums survive 23/25-hour and half-hour DST days',()=>{
   for(const [from,to,zone,hours] of [
     ['2026-03-08T05:00Z','2026-03-09T04:00Z','America/New_York',23],

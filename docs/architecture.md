@@ -1553,6 +1553,11 @@ and share one sparse extraction with other work consumers; they read neither
 financial history nor a full session ledger just for the heatmap. Browser geometry
 aggregates those fine cells into a chronological strip, day/hour matrix or compact
 calendar as the duration and width require, without new reads or inner scrolling.
+Civil coordinates and geometry are prepared after commit through the shared
+cancellable scheduler. A compatible refresh keeps the complete grid until its
+replacement is ready; a changed selection or authority retires it immediately.
+Bounded civil-time and label caches contain no work values. A hidden surface keeps
+its last positive measurement until it can measure its visible width again.
 The plot has a natural height of 300 CSS pixels and a minimum of 160, independent
 of the selected duration. A chosen height changes orientation, cell grouping and
 label density; it never removes a civil date or divides a coarse amount to invent

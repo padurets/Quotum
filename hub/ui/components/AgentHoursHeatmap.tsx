@@ -2,7 +2,8 @@ import {memo,useMemo,useLayoutEffect,useRef,useState,useSyncExternalStore,type C
 import {createPortal} from 'react-dom';
 import {boardPeriod} from '../lib/period';
 import {CALENDAR_OPACITY,calendarLevel,exactAgentHours} from '../lib/workCalendar';
-import {heatmapLayout,heatCellAt,heatCellChangesAt,HEATMAP_MIN,HEATMAP_NATURAL,type HeatCell} from '../lib/heatmap';
+import {heatmapLayoutPrepared,heatCellAt,heatCellChangesAt,heatDateLabel,heatIntervalLabel,HEATMAP_MIN,HEATMAP_NATURAL,type HeatCell,type HeatmapLayout} from '../lib/heatmap';
+import {usePrepared} from './prepared';
 import {useClock} from '../lib/clock';
 import {AGENT_HOURS_HEATMAP,withHidden,type Arrange} from '../lib/view';
 import {CATEGORY_COLORS} from '../lib/providers';
@@ -27,12 +28,8 @@ function TimedBucket(props:BucketProps){
 const Bucket=memo(function Bucket({item,span,zone,tab,selected,focus,openRange,panel,onKey,timed}:BucketProps){
   const locale=useLocale(),[open,setOpen]=useState(false),[hover,setHover]=useState(false),[focused,setFocused]=useState(false);
   const anchor=useRef<HTMLDivElement>(null),active=!open&&(hover||focused),tip=useBubble(active,anchor,panel.current);
-  const label=useMemo(()=>new Intl.DateTimeFormat(formatLocale(),{day:'numeric',month:'long',year:'numeric',timeZone:'UTC'}).format(new Date(item.date+'T12:00Z')),[item.date,locale]);
-  const interval=useMemo(()=>{
-    if(span>=23*3_600_000&&item.from===item.dayRange.from&&item.to===item.dayRange.to&&!item.repeated)return '';
-    const formatter=new Intl.DateTimeFormat(formatLocale(),{timeZone:zone,hour:'2-digit',minute:'2-digit',hourCycle:'h23',...(item.repeated?{timeZoneName:'shortOffset'}:{})});
-    return formatter.format(item.from)+' — '+formatter.format(item.to);
-  },[item.from,item.to,item.repeated,item.dayRange.from,item.dayRange.to,span,zone,locale]);
+  const label=useMemo(()=>heatDateLabel(item.date,formatLocale()),[item.date,locale]);
+  const interval=useMemo(()=>heatIntervalLabel(item,span,zone,formatLocale()),[item.from,item.to,item.repeated,item.dayRange.from,item.dayRange.to,span,zone,locale]);
   const available=item.cell.agentMs!==null,level=available?calendarLevel(item.cell.agentMs!,span):0;
   const aria=[label,interval,available?t('calendar.exact',{hours:exactAgentHours(item.cell.agentMs!,formatLocale())}):t('calendar.unavailable'),...(item.partial?[t('calendar.partial')]:[])].join('\n');
   const day=span>=23*3_600_000,range=day?item.dayRange:{from:item.from,to:item.to};
@@ -56,10 +53,14 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
   const {value,loading,error,window}=reading,root=useRef<HTMLElement>(null),matrix=useRef<HTMLDivElement>(null),sizing=useSizing();
   const [focused,setFocused]=useState(''),[settings,setSettings]=useState(false),[width,setWidth]=useState(0),[height,setHeight]=useState(0);
   const focusRange=useRef<{from:number;to:number}|null>(null);
-  const layout=useMemo(()=>heatmapLayout(reading,width,view,formatLocale(),height),[reading,width,view,locale,height]);
+  const context=JSON.stringify([boardPeriod.calendar.presentationKey(),!!value,window.zone,view,width,height,locale,selection]);
+  const aligned=!selection||window.range.from===selection.from&&window.range.to===selection.to;
+  const prepared=usePrepared(()=>heatmapLayoutPrepared(reading,width,view,formatLocale(),height),[window,value,width,view,locale,height],context,aligned);
+  const empty:HeatmapLayout={cells:[],labels:[],height:Math.max(HEATMAP_MIN,height||HEATMAP_NATURAL),naturalHeight:HEATMAP_NATURAL,span:3_600_000,kind:'strip'};
+  const layout=prepared.value??empty;
   const measure=useRef(()=>{});
   measure.current=()=>{
-    const node=root.current,plot=matrix.current;if(!node||!plot)return;setWidth(plot.clientWidth);
+    const node=root.current,plot=matrix.current;if(!node||!plot||!plot.clientWidth)return;setWidth(plot.clientWidth);
     if(sizing){const shown=pixels(node.getBoundingClientRect().height-fillOf(node)),chrome=shown-plot.getBoundingClientRect().height,min=pixels(chrome+HEATMAP_MIN);
       sizing.report({min,natural:pixels(chrome+HEATMAP_NATURAL),shown,layout:JSON.stringify([width,locale,view])});const next=sizing.manual?pixels(Math.max(HEATMAP_MIN,sizing.allocated-chrome)):0;setHeight(was=>same(was,next)?was:next);
     }
@@ -87,7 +88,7 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
     setFocused(next.key);matrix.current?.querySelector<HTMLButtonElement>(`[data-heatmap-cell="${next.key}"]`)?.focus();
   };
   const unit=layout.span<3_600_000?60_000:3_600_000,thresholds=[0,0,layout.span*.5,layout.span,layout.span*2,layout.span*4];
-  return <section ref={root} className={`panel agent-hours-heatmap${loading?' is-loading':''}`} aria-label={t('calendar.title')} aria-busy={loading} data-calendar-ready={!!value}>
+  return <section ref={root} className={`panel agent-hours-heatmap${loading?' is-loading':''}`} aria-label={t('calendar.title')} aria-busy={loading||!prepared.ready} data-calendar-ready={!!value&&prepared.ready}>
     <div className="panel-head"><h2 className="panel-heading">{t('calendar.title')}</h2><div className="panel-controls"><ReadState error={error} loading={loading&&!!selection&&!!value} range={reading.basis?.range} retry={boardPeriod.retry}/><Popover label={t('calendar.settings')} icon={<SlidersIcon/>} open={settings} onOpenChange={setSettings}>
       <div className="popover-section"><div className="popover-title">{t('calendar.view')}</div><div className="popover-pad"><Segmented value={view} onChange={heatmapView=>setPrefs({heatmapView})} options={['matrix','calendar'].map(key=>[key as 'matrix'|'calendar',t(key==='matrix'?'calendar.matrix':'calendar.calendar')])} label={t('calendar.view')}/></div></div>
       {arrange.owner&&<HideRow onHide={()=>arrange.update(view=>withHidden(view,AGENT_HOURS_HEATMAP,true))}>{t('widget.hide')}</HideRow>}
