@@ -61,7 +61,7 @@ export class WorkCalendar {
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
   private publish(){this.accountedState=null;for(const listener of this.listeners)listener();}
   get bytes(){
-    if(!this.visible||!this.context)return 0;
+    if(!this.visible||!this.context)return this.cache.bytes;
     if(this.accountedState!==this.state){this.accountedState=this.state;this.accountedBytes=readingBytes(this.state);}
     return this.accountedBytes+this.cache.bytes;
   }
@@ -75,8 +75,15 @@ export class WorkCalendar {
     if(changed){
       this.generation++;this.context=context;const window=calendarWindow(now,calendarZone(),selection);
       if(window.zone!==this.state.window.zone)this.cache.clear();
-      this.state=visible&&!limited?this.cache.read(window,selection,now,reserve)??{window,value:null,basis:null,loading:true,error:null}:{window,value:null,basis:null,loading:false,error:null};
+      const current=this.generation,previous=this.state;
+      const reading=visible&&!limited?this.cache.read(window,selection,now,reserve)??{window,value:null,basis:null,loading:true,error:null}:{window,value:null,basis:null,loading:false,error:null};
+      if(current!==this.generation||previous!==this.state)return true;
+      this.state=reading;this.accountedState=null;
       this.needed=visible&&!this.state.value;
+      // This reservation belongs only to configure's projection. The accepted
+      // reading is now resident; publication must not charge the same cells twice.
+      reserve(0);
+      if(current!==this.generation||reading!==this.state)return true;
     }
     else this.tick(now,true);
     if(visible&&limited){this.needed=false;this.state={...this.state,value:null,basis:null,loading:false,error:'filters_limit'};}
@@ -120,10 +127,12 @@ export class WorkCalendar {
     if(range.from!==part.basis.range.from||range.to!==part.basis.range.to)return;
     const previous=this.state.basis,old=this.state.value;
     if(previous&&part.basis.run===previous.run&&(Number(part.basis.revision)<Number(previous.revision)||part.basis.evidenceCut<previous.evidenceCut))return;
+    const state=this.state,current=()=>this.visible&&generation===this.generation&&this.state===state;
+    const admit=(bytes:number)=>{const accepted=reserve(bytes);return current()&&accepted;};
     let value:CalendarValue,window=this.state.window;
     if(part.state==='delta'){
       if(!old||!previous||(['calendarKey','filterKey','workAuthority','run'] as const).some(key=>previous[key]!==part.basis[key]))return;
-      if(!reserve(JSON.stringify(part).length*3+old.cells.length*16)){this.receive({state:'error',error:'history_limit'},generation,()=>true);return;}
+      if(!admit(JSON.stringify(part).length*3+old.cells.length*16)){if(current())this.receive({state:'error',error:'history_limit'},generation,()=>true);return;}
       const cells=old.cells.slice();let prior=-1;
       for(const [i,cell] of part.value.updates){if(!Number.isInteger(i)||i<=prior||i>=cells.length)return;prior=i;cells[i]=cell;}
       value={...old,availableFrom:part.value.availableFrom,retainedFrom:part.value.retainedFrom,cursor:part.value.cursor,cells};
@@ -132,8 +141,9 @@ export class WorkCalendar {
       if(!sameDays||part.value.edges[0]!==window.edges[0]||part.value.edges.at(-1)!==window.edges.at(-1))window=calendarWindow(part.basis.evaluatedAt,window.zone,this.selection);
       if(part.value.zone!==window.zone||JSON.stringify(part.value.edges)!==JSON.stringify(window.edges)||part.value.cells.length!==window.edges.length-1)return;
       const staging=valueBytes(part.value)+JSON.stringify(part.basis).length*3;
-      if(!reserve(staging)){this.receive({state:'error',error:'history_limit'},generation,()=>true);return;}
-      this.cache.add(part.basis,part.value,reserve,staging);
+      if(!admit(staging)){if(current())this.receive({state:'error',error:'history_limit'},generation,()=>true);return;}
+      this.cache.add(part.basis,part.value,admit,staging);
+      if(!current())return;
       const {proof:_proof,...accepted}=part.value;value={...accepted,edges:window.edges};
     }
     this.needed=false;this.state={...this.state,window:{...window,range:part.basis.range},value,basis:part.basis,loading:false,error:null};this.publish();

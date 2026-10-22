@@ -9,9 +9,17 @@ type Entry={basis:CalendarBasis;zone:string;from:number;to:number;cut:number;val
 /** Only anonymous integrals are retained; the board's shared pool can evict any frame. */
 export class CalendarCache {
   private entries=new Set<Entry>();
-  get bytes(){return [...this.entries].reduce((n,e)=>n+e.bytes,0);}
-  clear(){this.entries.clear();}
+  private borrowed=new Map<Entry,number>();
+  private revision=0;
+  get bytes(){
+    let bytes=0;for(const entry of this.entries)bytes+=entry.bytes;
+    for(const entry of this.borrowed.keys())if(!this.entries.has(entry))bytes+=entry.bytes;
+    return bytes;
+  }
+  clear(){this.revision++;this.entries.clear();}
   invalidate(since:number){
+    if(since===Infinity)return;
+    this.revision++;
     for(const entry of this.entries){
       if(since<=entry.from){this.entries.delete(entry);continue;}
       // A later credit changes the tail, not the integrals before its first instant.
@@ -24,15 +32,20 @@ export class CalendarCache {
     // A newer revision can change only a tail. dirty() already bounded every
     // affected proof; unrelated news must not discard its reusable prefix.
     if([...this.entries].some(e=>e.basis.run!==basis.run||e.basis.filterKey!==basis.filterKey||e.basis.workAuthority!==basis.workAuthority||e.zone!==value.zone))this.clear();
-    let bytes=staging;
+    const revision=this.revision;let bytes=staging,failed=false;
     try{
-      const result=calendarCurve(proof,basis.range,basis.evidenceCut,value.availableFrom,size=>{bytes+=size;if(!reserve(bytes))throw new Error('calendar_cache_limit');});
+      const result=calendarCurve(proof,basis.range,basis.evidenceCut,value.availableFrom,size=>{
+        const next=bytes+size;if(!reserve(next))throw new Error('calendar_cache_limit');bytes=next;
+      },size=>{
+        // Failed release keeps its admitted charge and cannot hide a builder error.
+        const next=Math.max(staging,bytes-size);try{if(reserve(next))bytes=next;}catch{/* Keep the conservative charge. */}
+      });
       const entry:Entry={basis,zone:value.zone,from:basis.range.from,to:basis.range.to,cut:Math.min(basis.range.to,basis.evidenceCut),validBefore:Infinity,known:value.availableFrom,retained:value.retainedFrom,retention:proof.retentionMs,period:proof.periodMs,cursor:value.cursor,curve:result.curve,bytes:1024+result.bytes,at:basis.evaluatedAt};
-      if(!reserve(bytes+1024))return;
+      if(!reserve(bytes+1024)||revision!==this.revision)return;
       for(const prior of this.entries)if(prior.from===entry.from&&prior.to===entry.to)this.entries.delete(prior);
       this.entries.add(entry);
-    }catch(error){if(!(error instanceof Error)||error.message!=='calendar_cache_limit')throw error;}
-    finally{reserve(staging);}
+    }catch(error){failed=true;if(!(error instanceof Error)||error.message!=='calendar_cache_limit')throw error;}
+    finally{try{reserve(staging);}catch(error){if(!failed)throw error;}}
   }
   read(window:ReturnType<typeof calendarWindow>,selection:PeriodSelection,now:number,reserve:(bytes:number)=>boolean):CalendarReading|null {
     const entries=[...this.entries].filter(e=>e.zone===window.zone&&e.basis.evidenceCut<=now);if(!entries.length)return null;
@@ -49,12 +62,19 @@ export class CalendarCache {
       const to=Math.min(cut,next.cut);segments.push({from,to,curve:next.curve});from=to;
     }
     if(!segments.length&&!entries.some(e=>e.from<=range.from&&e.to>=range.to))return null;
-    // A trim may evict these entries while this projection still reads their curves.
-    if(!reserve(this.bytes+1024+window.edges.length*256+window.dates.length*256))return null;
-    const available=entries.flatMap(e=>e.known===null?[]:[e.known]),known=available.length?Math.min(...available):null;
-    const cells=calendarProjection(window.edges,range,cut,known,retained,latest.retention,selection.mode==='live'?selection.periodMs:undefined,segments);
-    const day=86_400_000,cursor=entries.find(e=>selection.mode==='range'?e.period===undefined&&range.to<=e.validBefore&&e.basis.range.from===range.from&&e.basis.range.to===range.to:e.period===selection.periodMs&&e.validBefore===Infinity&&Math.floor(e.from/day)*day===window.edges[0]&&Math.ceil(e.to/day)*day===window.edges.at(-1));
-    for(const e of entries)if(segments.some(s=>s.curve===e.curve))e.at=now;
-    return {window,value:{zone:window.zone,edges:window.edges,availableFrom:known,retainedFrom:retained,cursor:cursor?.cursor??'',cells},basis:{...(cursor??latest).basis,evaluatedAt:now,evidenceCut:cut,range},loading:false,error:null};
+    // LRU removal retires the cache owner, but a synchronous projection still owns
+    // its captured curves. Count that shared storage once until the last read ends.
+    const revision=this.revision;
+    for(const entry of entries)this.borrowed.set(entry,(this.borrowed.get(entry)??0)+1);
+    try{
+      if(!reserve(1024+window.edges.length*256+window.dates.length*256)||revision!==this.revision)return null;
+      const available=entries.flatMap(e=>e.known===null?[]:[e.known]),known=available.length?Math.min(...available):null;
+      const cells=calendarProjection(window.edges,range,cut,known,retained,latest.retention,selection.mode==='live'?selection.periodMs:undefined,segments);
+      const day=86_400_000,cursor=entries.find(e=>selection.mode==='range'?e.period===undefined&&range.to<=e.validBefore&&e.basis.range.from===range.from&&e.basis.range.to===range.to:e.period===selection.periodMs&&e.validBefore===Infinity&&Math.floor(e.from/day)*day===window.edges[0]&&Math.ceil(e.to/day)*day===window.edges.at(-1));
+      for(const e of entries)if(segments.some(s=>s.curve===e.curve))e.at=now;
+      return {window,value:{zone:window.zone,edges:window.edges,availableFrom:known,retainedFrom:retained,cursor:cursor?.cursor??'',cells},basis:{...(cursor??latest).basis,evaluatedAt:now,evidenceCut:cut,range},loading:false,error:null};
+    }finally{
+      for(const entry of entries){const remaining=this.borrowed.get(entry)!-1;if(remaining)this.borrowed.set(entry,remaining);else this.borrowed.delete(entry);}
+    }
   }
 }
