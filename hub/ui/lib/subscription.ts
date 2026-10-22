@@ -16,9 +16,11 @@ import {drain,type Preparation} from './prepare';
 import {ordered} from '../../server/domain/prepare';
 
 /** Subscription periods are independent of the provider's stored measurement unit. */
-export function quotaPeriods(source:Pick<Card,'provider'|'windows'>):Pick<Win,'id'|'kind'|'label'|'minutes'>[] {
-  if(!hasSubscriptionCaps(source.provider))return source.windows;
-  return [...source.windows,...quotaIds(source.provider).map((id,i)=>({id,kind:i===0?'session':'weekly',label:null,minutes:i===0?300:10080} as Pick<Win,'id'|'kind'|'label'|'minutes'>))];
+export function quotaPeriods(source:Pick<Card,'provider'|'windows'>,historical?:readonly Win[]):Pick<Win,'id'|'kind'|'label'|'minutes'>[] {
+  // Logical choices outlive a missing observation; historical-only windows remain selectable.
+  const windows=historical?[...new Map([...source.windows,...historical].map(({id,kind,label,minutes})=>[id,{id,kind,label,minutes}])).values()]:source.windows;
+  if(!hasSubscriptionCaps(source.provider))return windows;
+  return [...windows,...quotaIds(source.provider).map((id,i)=>({id,kind:i===0?'session':'weekly',label:null,minutes:i===0?300:10080} as Pick<Win,'id'|'kind'|'label'|'minutes'>))];
 }
 
 /** Keep both period families; stable IDs break equal-specificity ties across replies. */

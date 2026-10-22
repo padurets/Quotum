@@ -1,3 +1,4 @@
+import {windowName} from '../lib/quota';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -70,7 +71,7 @@ test('subscription balances live only in the dashboard and compact footers, with
     memo:(fn:unknown)=>fn,useLocale:()=>{},useCard:()=>source,useTitle:()=>'Fixture',useMine:()=>true,
     usePeriodValues:()=>({value:null}),useTimeRange:()=>null,useCurrencyContext:()=>({}),MeasurementClock:{Provider:'clock'},useSourcePeriodSessions:()=>({rows:[],basis:null,loading:false,error:null}),
     useSessions:()=>[],useResetsFor:()=>undefined,useSourceAccess:()=>null,useBoardId:()=>'board',useServerView:()=>EMPTY_VIEW,
-    providerOf,budgetVisible,subscriptionFundsVisible,quotaPeriods,primaryQuotaPeriods,hasSubscriptionCaps,isWindowHidden:()=>false,planOf:()=>null,colorOf:()=>'',
+    providerOf,budgetVisible,subscriptionFundsVisible,quotaPeriods,primaryQuotaPeriods,windowName,hasSubscriptionCaps,isWindowHidden:()=>false,planOf:()=>null,colorOf:()=>'',
     SourceSettings:'settings',CardMark:'mark',BalanceMark:'balance-status',AccessMark:'access',QuotaMark:'quota-status',
     MoneyCard:'money',QuotaCard:'quota',Limit:'limit',PercentLimit:'limit',ResetLine:'reset',FreeResets:'free-resets',AllHidden:'hidden',
     UsageWorkMark:'work-evidence',Tray:({current,news}:{current:unknown;news:unknown})=>jsx('footer',{children:[news,current]}),

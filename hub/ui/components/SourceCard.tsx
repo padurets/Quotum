@@ -288,7 +288,7 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
   useDataFilters();
   const reading=usePeriodValues(source.id),selected=useTimeRange();
   const value=selected?reading.value:source;
-  const count=value?quotaPeriods(value).filter(w=>!isWindowHidden(arrange.view,source.id,w.id)).length:null;
+  const count=quotaPeriods(source,selected?value?.windows??[]:undefined).filter(w=>!isWindowHidden(arrange.view,source.id,w.id)).length;
   const pending=!!selected&&(reading.loading||!!reading.error);
   const status=pending?[t(reading.error?'period.failed':'period.loading'),reading.basis?t('analytics.retainedRange',{range:timeRangeLabel(reading.basis.range)}):null].filter(Boolean).join('\n'):'';
   const mine = useMine(source.id);
@@ -513,15 +513,15 @@ function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;
   const reading=usePeriodValues(source.id),selected=useTimeRange();
   const historical=!!selected,value=historical?reading.value:null;
   const windows=historical?value?.windows??[]:source.windows;
-  const periods=quotaPeriods({provider:source.provider,windows}),shownPeriods=periods.filter(w=>!isWindowHidden(arrange.view,source.id,w.id));
+  const periods=quotaPeriods(source,historical?windows:undefined),shownPeriods=periods.filter(w=>!isWindowHidden(arrange.view,source.id,w.id));
   const visible=windows.filter(w=>!isWindowHidden(arrange.view,source.id,w.id)),weekly=planOf(arrange.view,source.id),caps=hasSubscriptionCaps(source.provider);
-  const primary=primaryQuotaPeriods(shownPeriods),allHidden=!!periods.length&&!shownPeriods.length;
+  const primary=primaryQuotaPeriods(shownPeriods),allHidden=!shownPeriods.length&&(!!periods.length||filters?.windows.mode==='include'&&!filters.windows.values.some(([id])=>id===source.id));
   const wallet=providerOf(source.provider)?.funding==='wallet';
   const noEvidence=historical&&!!value&&!reading.loading&&!reading.error&&!windows.length&&!value.meters.length&&value.creditBalance?.status!=='unlimited'&&!allowances.length;
   return <MeasurementClock.Provider value={historical?reading.basis?.range.to??selected.to:null}>
     <div className={`limits card-primary${wallet?' is-wallet':''}`}>
       {!caps&&wallet&&budgetVisible(source)&&<MoneyCard source={source} board={boardId} view={arrange.view} measurement={historical?value:undefined}/>}
-      {allHidden?<AllHidden/>:noEvidence?<div className="card-empty">{t('period.noEvidence')}</div>:primary.map(period=>{const w=visible.find(w=>w.id===period.id),measurement=historical?value:source;return w?<Limit key={w.id} w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={weekly}/>:caps&&measurement?<QuotaCard key={period.id} source={measurement} ids={[period.id]}/>:null;})}
+      {!wallet&&(allHidden?<AllHidden/>:noEvidence?<div className="card-empty">{t('period.noEvidence')}</div>:primary.map(period=>{const w=visible.find(w=>w.id===period.id),measurement=historical?value:source;return w?<Limit key={w.id} w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={weekly}/>:caps&&measurement?<QuotaCard key={period.id} source={measurement} ids={[period.id]}/>:<PercentLimit key={period.id} name={windowName(period)} remaining={null} status={<small className="key-status" role="img" title={t('quota.unavailable')} aria-label={t('quota.unavailable')}/>} reset={<span>—</span>} valueTitle={t('quota.unavailable')}/>;}))}
       {!historical&&!caps&&!source.windows.length&&!budgetVisible(source)&&!source.meters&&<div className="card-empty">{errorText(source.error??'waiting')}</div>}
     </div>
   </MeasurementClock.Provider>;
@@ -532,15 +532,15 @@ function MeasurementDetails({source,arrange}:{source:Card;arrange:Arrange}) {
   useDataFilters();
   const reading=usePeriodValues(source.id),selected=useTimeRange(),value=selected?reading.value:source;
   const windows=value?.windows.filter(w=>!isWindowHidden(arrange.view,source.id,w.id))??[];
-  const periods=quotaPeriods({provider:source.provider,windows}).filter(w=>!isWindowHidden(arrange.view,source.id,w.id));
-  const empty=!!selected&&!!value&&!value.windows.length&&!value.meters?.length&&value.creditBalance?.status!=='unlimited';
+  const periods=quotaPeriods(source,selected?value?.windows??[]:undefined).filter(w=>!isWindowHidden(arrange.view,source.id,w.id));
+  const empty=!!selected&&!!value&&!value.windows.length&&!value.meters?.length&&value.creditBalance?.status!=='unlimited'&&!periods.length;
   if(!periods.length&&!empty&&(!selected||!reading.loading&&!reading.error))return null;
   return <div className="popover-section">
     <div className="popover-title">{t('source.measurements')}</div>
     <div className="popover-pad measurement-details">
       {selected&&<PeriodStatus {...reading}/>}
       <MeasurementClock.Provider value={selected?reading.basis?.range.to??selected.to:null}>
-        {periods.map(period=>{const w=windows.find(w=>w.id===period.id);return w?<div key={w.id}><Limit w={w} measuredAt={source.successAt} weekly={planOf(arrange.view,source.id)} details/></div>:hasSubscriptionCaps(source.provider)&&value?<QuotaCard key={period.id} source={value} ids={[period.id]} details/>:null;})}
+        {periods.map(period=>{const w=windows.find(w=>w.id===period.id);return w?<div key={w.id}><Limit w={w} measuredAt={source.successAt} weekly={planOf(arrange.view,source.id)} details/></div>:hasSubscriptionCaps(source.provider)&&value?<QuotaCard key={period.id} source={value} ids={[period.id]} details/>:<div key={period.id}><PercentLimit name={windowName(period).replaceAll(' · ','\n')} remaining={null} status={<small className="key-status" role="img" title={t('quota.unavailable')} aria-label={t('quota.unavailable')}/>} reset={<span>—</span>} precise valueTitle={t('quota.unavailable')}/><small className="measurement-proof">{t('quota.unavailable')}</small></div>;})}
       </MeasurementClock.Provider>
       {empty&&!reading.loading&&!reading.error&&<p>{t('period.noEvidence')}</p>}
     </div>

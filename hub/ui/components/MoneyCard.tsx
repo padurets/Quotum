@@ -141,11 +141,11 @@ export function CapMetrics({
   const label = (
     <span className="cap-label">
       <span>{name}</span>
-      {status}
+      {status??(!cap&&<CapStatus/>)}
     </span>
   );
   const bar = <MeterBar remaining={cap ? remaining : null} label={name} />;
-  const reset = cap ? <CapReset meter={cap} short={compact} /> : <span>{t('money.stale')}</span>;
+  const reset = cap ? <CapReset meter={cap} short={compact} /> : <span>{t('quota.unavailable')}</span>;
   if (compact)
     return (
       <div className="compact-limit is-money">
@@ -341,17 +341,19 @@ export function MoneyCard({
   const context = useCurrencyContext(source.id);
   const {keys, meters, allowances, error,loading,retry} = useShownKeys(source, view, board);
   // Time navigation keeps the selected-key metadata owner, but never borrows its amounts.
-  if(measurement===null||measurement&&!measurement.meters.length&&!allowances.length)return null;
-  return <MoneyValues source={measurement??source} keys={measurement?.keys??keys} names={keys} meters={measurement?.meters??meters} allowances={allowances} error={error} loading={loading} retry={retry} compact={compact} tray={tray} context={measurement?historicalCurrencyContext(context,source.id,measurement.meters):context}/>;
+  const value=measurement===undefined?source:measurement??{id:source.id,provider:source.provider,meters:[]};
+  return <MoneyValues source={value} keys={measurement===undefined?keys:measurement?.keys??[]} names={keys} meters={measurement===undefined?meters:measurement?.meters??[]} allowances={allowances} noEvidence={!!measurement&&!measurement.meters.length} error={error} loading={loading} retry={retry} compact={compact} tray={tray} context={measurement?historicalCurrencyContext(context,source.id,measurement.meters):context}/>;
 }
 
 type MoneySource=Pick<Card,'id'|'provider'|'meters'|'currencyUnavailable'|'creditBalance'>;
-export function MoneyValues({source,keys,names=keys,meters,allowances=keys.filter(key=>meters.some(m=>m.id===`key:${key.id}:cap`&&m.kind==='cap')).map(key=>key.id),error=null,loading=false,retry,compact=false,tray=false,context}:{source:MoneySource;keys:KeyPart[];names?:readonly Pick<KeyPart,'id'|'name'>[];meters:Meter[];allowances?:readonly string[];error?:unknown;loading?:boolean;retry?:()=>void;compact?:boolean;tray?:boolean;context:CurrencyContext}) {
+export function MoneyValues({source,keys,names=keys,meters,allowances=keys.filter(key=>meters.some(m=>m.id===`key:${key.id}:cap`&&m.kind==='cap')).map(key=>key.id),noEvidence=false,error=null,loading=false,retry,compact=false,tray=false,context}:{source:MoneySource;keys:KeyPart[];names?:readonly Pick<KeyPart,'id'|'name'>[];meters:Meter[];allowances?:readonly string[];noEvidence?:boolean;error?:unknown;loading?:boolean;retry?:()=>void;compact?:boolean;tray?:boolean;context:CurrencyContext}) {
   const filters=useDataFilters().current,moneyPrefs=usePref('money'),fundsPrefs=usePref('funds');
   const showBalance=!filters||matchesWallet(walletRule(filters,moneyPrefs.unit??undefined),{source:source.id,kind:'balance'},true);
   const {remaining, limits} = budgetView(source, keys.filter(key=>allowances.includes(key.id)), meters, context),
     groups = remaining.values;
   const selectedCount=allowances.length,selected=selectedCount>0;
+  const logical=names.filter(key=>allowances.includes(key.id)).sort((a,b)=>(a.name??'').localeCompare(b.name??'')||a.id.localeCompare(b.id));
+  const first=logical.length===selectedCount?logical[0]:undefined,primary=first&&limits.find(limit=>limit.scope.id===first.id);
   const unavailable=allowances.filter(id=>!limits.some(limit=>limit.scope.id===id));
   const disclosureLabel=[t('money.breakdown'),selectedCount?t('money.selectedAllowances',{count:selectedCount}):null].filter(Boolean).join('\n');
   const credit=source.provider==='codex';
@@ -433,6 +435,7 @@ export function MoneyValues({source,keys,names=keys,meters,allowances=keys.filte
     </div>
   );
   if(tray)return filters&&!matchesSelection(fundsRule(filters,fundsPrefs.unit??undefined),source.id)?null:<FundsMark source={source} groups={groups} context={context} native={native} rateSources={rateSources} quoteDate={quoteDate} displayUnavailable={!!displayUnavailable}/>;
+  if(noEvidence&&showBalance&&!selected)return <div className="card-empty">{t('period.noEvidence')}</div>;
   return (
     <div className="money-body">
       {showBalance&&<div className="money-balance">
@@ -493,8 +496,7 @@ ${approximate ? '≈ ' : ''}${formatted}`}
           </CreditBalanceValue>
         </div>
       </div>}
-      {!showBalance&&limits[0]&&<Popover label={disclosureLabel} trigger={<BudgetKeyMetrics limit={limits[0]} context={context} compact={compact}/>} triggerClass="money-primary-trigger">{breakdown}</Popover>}
-      {!showBalance&&!limits.length&&(selected||error?<Popover label={disclosureLabel} trigger={<span className="limit-value">—</span>} triggerClass="money-primary-trigger">{breakdown}</Popover>:<div className="card-empty"><span>{t('filters.emptyMetrics')}</span><button type="button" className="text-button" onClick={openDataFilters}>{t('header.filters')}</button></div>)}
+      {!showBalance&&(selected||error?<Popover label={disclosureLabel} trigger={primary?<BudgetKeyMetrics limit={{...primary,part:{...primary.part,name:first!.name}}} context={context} compact={compact}/>:<CapMetrics cap={undefined} name={first?keyName(first):disclosureLabel} compact={compact}/>} triggerClass="money-primary-trigger">{breakdown}</Popover>:<div className="card-empty"><span>{t('filters.emptyMetrics')}</span><button type="button" className="text-button" onClick={openDataFilters}>{t('header.filters')}</button></div>)}
     </div>
   );
 }

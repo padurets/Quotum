@@ -23,7 +23,7 @@ function fixture(compact=false){
   const modules:Record<string,unknown>={react:hooks,'./moneySelection':{selectedAllowanceIds},'./dataFilters':{useDataFilters:()=>({current:filters})},'./prefs':{usePref:()=>({unit:'USD'})},'../../server/domain/dataFilters':{walletRule},'./view':{keyShown:()=>true},'./http':{ApiError},'../../server/domain/meterHistory':{MAX_METERS},'./keyReads':{readKeyIds:()=>new Promise((resolve,reject)=>flights.push({resolve,reject}))}};
   const keys={exports:{} as typeof import('../lib/moneyKeys'),require:(name:string)=>modules[name],AbortController};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../lib/moneyKeys.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,keys);
-  const jsx=(type:unknown,props:Node['props'])=>({type,props}),context={exports:{} as {MoneyValues:(props:unknown)=>Node},require:()=>({jsx,jsxs:jsx}),...money,currencySymbol,t,useDataFilters:()=>({current:filters}),usePref:()=>({unit:'USD'}),walletRule,matchesWallet,fundsRule,matchesSelection,Popover:'popover',CreditBalanceValue:({children}:{children:unknown})=>children,ErrorLine:'error',BudgetKeyMetrics:'key',stamp:String,day:String,ApiError};
+  const jsx=(type:unknown,props:Node['props'])=>({type,props}),context={exports:{} as {MoneyValues:(props:unknown)=>Node},require:()=>({jsx,jsxs:jsx}),...money,currencySymbol,t,useDataFilters:()=>({current:filters}),usePref:()=>({unit:'USD'}),walletRule,matchesWallet,fundsRule,matchesSelection,Popover:'popover',CreditBalanceValue:({children}:{children:unknown})=>children,ErrorLine:'error',CapMetrics:'unavailable-cap',BudgetKeyMetrics:'key',stamp:String,day:String,ApiError};
   const src=readFileSync(new URL('../components/MoneyCard.tsx',import.meta.url),'utf8');
   runInNewContext(ts.transpileModule(src.slice(src.indexOf('export function MoneyValues('),src.indexOf('/** Subscription funds')),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   let latest:ReturnType<typeof keys.exports.useShownKeys>;
@@ -73,4 +73,17 @@ test('an explicit uncapped preview choice owns a named unavailable disclosure',(
   const f=fixture();f.source.keys.push(f.key);const tree=f.render();
   assert.ok(tree.some(n=>n.props.children===f.key.name));assert.ok(tree.some(n=>n.props.children===t('quota.unavailable')));
   assert.equal(f.flights.length,0,'a known preview key needs no extra lookup');
+});
+
+test('a pending extra allowance cannot promote the next arrived cap before its logical order is known',async()=>{
+  const f=fixture(),known={...f.key,id:'known',name:'Beta known'};
+  f.key.name='Alpha selected extra';f.source.keys.push(known);f.source.meters.push({...f.cap,id:'key:known:cap'});
+  f.filters.wallet={mode:'only',values:[{source:'s',kind:'keyCap',key:'known'},{source:'s',kind:'keyCap',key:'extra'}]};
+  const primary=()=>f.render().find(n=>n.type==='popover'&&n.props.triggerClass==='money-primary-trigger')!;
+  assert.equal(primary().props.trigger.type,'unavailable-cap','an unknown selected name may sort before the known key');
+  f.flights[0].reject(new ApiError(503,'unavailable'));await flush();assert.equal(primary().props.trigger.type,'unavailable-cap');
+  f.retry();primary();f.flights[1].resolve({keys:[f.key],meters:[]});await flush();
+  assert.equal(primary().props.trigger.props.name,f.key.name,'missing first amount keeps the now known first identity');
+  f.retry();primary();f.flights[2].resolve({keys:[f.key],meters:[f.cap]});await flush();
+  assert.equal(primary().props.trigger.props.limit.scope.id,'extra');
 });

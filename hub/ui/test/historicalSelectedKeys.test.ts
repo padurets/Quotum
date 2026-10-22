@@ -1,3 +1,4 @@
+import {windowName} from '../lib/quota';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -49,7 +50,7 @@ test('a selected key beyond the preview keeps its known name across live, pendin
   const modules:Record<string,unknown>={react:hooks,'./moneySelection':{selectedAllowanceIds},'./dataFilters':{useDataFilters:()=>({current:selection})},'./prefs':{usePref:()=>({unit:'USD'})},'./http':{ApiError},'./keyReads':{readKeyIds},'../../server/domain/meterHistory':{MAX_METERS}};
   const hook={exports:{} as typeof import('../lib/moneyKeys'),require:(name:string)=>modules[name],AbortController};
   runInNewContext(ts.transpileModule(code('../lib/moneyKeys.ts'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,hook);
-  const jsx=(type:any,props:any)=>({type,props}),context:any={...money,...filters,selectedAllowanceIds,usePref:()=>({unit:'USD'}),useDataFilters:()=>({current:selection}),exports:{},require:()=>({jsx,jsxs:jsx,Fragment:'fragment'}),t,currencySymbol,usePeriodValues:()=>reading,useTimeRange:()=>selected,useCurrencyContext:()=>defaultCurrencyContext,quotaPeriods,primaryQuotaPeriods,hasSubscriptionCaps,providerOf,isWindowHidden:()=>false,planOf:()=>null,MeasurementClock:{Provider:'clock'},QuotaCard:'quota',Limit:'limit',AllHidden:'hidden',Popover:'popover',CreditBalanceValue:({children}:any)=>children,ErrorLine:'error',BudgetKeyMetrics:'key',stamp:String,day:String,ApiError,
+  const jsx=(type:any,props:any)=>({type,props}),context:any={...money,...filters,selectedAllowanceIds,usePref:()=>({unit:'USD'}),useDataFilters:()=>({current:selection}),exports:{},require:()=>({jsx,jsxs:jsx,Fragment:'fragment'}),t,currencySymbol,usePeriodValues:()=>reading,useTimeRange:()=>selected,useCurrencyContext:()=>defaultCurrencyContext,quotaPeriods,primaryQuotaPeriods,windowName,PercentLimit:'unavailable',hasSubscriptionCaps,providerOf,isWindowHidden:()=>false,planOf:()=>null,MeasurementClock:{Provider:'clock'},QuotaCard:'quota',Limit:'limit',AllHidden:'hidden',Popover:'popover',CreditBalanceValue:({children}:any)=>children,ErrorLine:'error',openDataFilters:()=>{},CapMetrics:'unavailable-cap',BudgetKeyMetrics:'key',stamp:String,day:String,ApiError,
     useShownKeys:()=>{hookRenders++;cursor=0;const result=hook.exports.useShownKeys(source,EMPTY_VIEW,h.board);effects.splice(0).forEach(run=>run());return result;}};
   const run=(body:string)=>runInNewContext('(function(){'+ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText+'})()',context);
   const mc=code('../components/MoneyCard.tsx');run(mc.slice(mc.indexOf('export function MoneyValues('),mc.indexOf('/** Subscription funds')));context.MoneyValues=context.exports.MoneyValues;
@@ -72,4 +73,14 @@ test('a selected key beyond the preview keeps its known name across live, pendin
     selected=null;assert.equal(render().find(n=>n.type==='key')?.props.limit.part.name,name(5));
   }
   assert.equal(requests.length,1,'time navigation and language changes reuse the bounded selected-key metadata');
+  selection.wallet={mode:'only',values:[]};
+  for(const locale of ['en','ru'] as const){setLocale(locale);for(const state of ['live','pre-first','pending','failed']){
+    selected=state==='live'?null:range;
+    reading={value:state==='pending'||state==='failed'?null:{...value,meters:[],keys:[]},basis:{range},loading:state==='pending',error:null};
+    const tree=render();
+    assert.equal(tree.filter(n=>n.props.children===t('header.filters')).length,1,'an explicit empty wallet selection always keeps its existing filter action');
+    assert.equal(tree.some(n=>n.props.children===t('period.noEvidence')),false,'wallet content has one semantic owner');
+    assert.equal(tree.some(n=>n.props['data-money']),false,'pending history cannot borrow a live amount');
+  }}
+  assert.equal(requests.length,1,'an empty scope does not request key metadata');
 });
