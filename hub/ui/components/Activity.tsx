@@ -6,9 +6,9 @@ import {activityEmpty, activityScale, activityGroupName as groupName, atOnce, gr
 import {ACTIVITY_BY, setPrefs, usePref} from '../lib/prefs';
 import {setTimeRange, timeRange, timeRangeKey, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks} from '../lib/periods';
-import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
-import {usePersonalBoard, useBoardId, useLineup, useTitles,useProjectColorPins,useProjectColorsReady} from '../lib/board';
-import {useClock} from '../lib/clock';
+import {ACTIVITY, withHidden, type Arrange} from '../lib/view';
+import {useBoardId, useTitles,useProjectColorPins,useProjectColorsReady} from '../lib/board';
+import {hubNow,useClock} from '../lib/clock';
 import {quotaHistory, useActivityHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {boardPeriod,type ActivityProjection} from '../lib/period';
 import type {ActivityFrame as History} from '../lib/period';
@@ -31,7 +31,7 @@ import {usePlot} from './sizing';
 import {clipPlot, PlotLayer, PlotOverlay} from './PlotLayer';
 import {seriesFocusStyle, useSeriesFocus, type SeriesFocus} from './seriesFocus';
 
-type ActivityHistory=Pick<History,'range'|'activity'>&{projection?:ActivityProjection|null};
+type ActivityHistory=Pick<History,'range'|'since'|'activity'>&{projection?:ActivityProjection|null};
 type DetailFrame={history:ActivityHistory|null;since:number|null;identities:GroupIdentity[]};
 
 const MINUTE = 60_000;
@@ -83,11 +83,11 @@ function Metrics({agentMs, activeMs, agents}: {agentMs: number; activeMs: number
 const metricsText = (value: {agentMs:number;activeMs:number;agents:number}) => [workHours(value.agentMs),workHours(value.activeMs),num(value.agents),atOnce(value.agentMs,value.activeMs)];
 
 /** Small numerical consumers follow formatted changes, independently of the drawing grid. */
-function useActivityNumbers(history:ActivityHistory|null,by:ActivityDimension,read:(activity:ActivityData)=>string,enabled=true,bar?:number,key?:string,retained=false) {
+function useActivityNumbers(history:ActivityHistory|null,by:ActivityDimension,read:(activity:ActivityData,now:number)=>string,enabled=true,bar?:number,key?:string,retained=false) {
   const panning=usePanning();
   const projection=history?.projection,valid=!projection||boardPeriod.activityValid(projection);
   const at=(now:number)=>history?projection?boardPeriod.activityFrameAt(projection,history.activity,by,now,bar,key):boardPeriod.activityAt(history,by,now,bar,key,retained||!boardPeriod.activityProjectionState(history).ready):null;
-  const now=useClock(now=>history&&enabled&&panning===null?(projection?boardPeriod.activityFrameChangesAt(projection,by,now,time=>read(at(time)!),key):!retained&&boardPeriod.activityProjectionState(history).ready?boardPeriod.activityChangesAt(history,by,now,time=>read(at(time)!),key):null):null);
+  const now=useClock(now=>history&&enabled&&panning===null?(projection?boardPeriod.activityFrameChangesAt(projection,by,now,time=>read(at(time)!,time),key):!retained&&boardPeriod.activityProjectionState(history).ready?boardPeriod.activityChangesAt(history,by,now,time=>read(at(time)!,time),key):null):null);
   if(!valid)return null;
   if(panning!==null&&projection&&enabled)return bar===undefined?at(pan.get()?.now??now):null;
   return panning===null&&enabled?at(now):bar===undefined?history?.activity??null:null;
@@ -158,8 +158,6 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const panel = useRef<HTMLElement>(null);
   // Made taller by its owner, the widget gives the room to the stacks, as the chart does.
   const {plot, onBase} = usePlot(panel);
-  const lineup = useLineup();
-  const personal = usePersonalBoard();
   const titles = useTitles(arrange.view.names);
   const range=usePref('range'),horizon=usePref('horizon'),activityBy=usePref('activityBy');
   const prefs=useMemo(()=>({range,horizon,activityBy}),[range,horizon,activityBy]);
@@ -179,7 +177,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const from = frame.from;
   const to = measuredTo(frame, history, selected, prefs.range);
   const activity = history?.activity ?? null,drawnActivity=drawing?.activity??null;
-  const numeric=useMemo(()=>({history:drawing?{range:drawing.range,activity:drawing.activity,projection:boardPeriod.captureActivity(drawing)}:null,since:history&&activity?.known&&activity.known.from>history.since?activity.known.from:null}),[drawing]);
+  const numeric=useMemo(()=>({history:drawing?{range:drawing.range,since:drawing.since,activity:drawing.activity,projection:boardPeriod.captureActivity(drawing)}:null,since:history&&activity?.known&&activity.known.from>history.since?activity.known.from:null}),[drawing]);
   // A queued preparation owns its captured evidence until replacement commits.
   useLayoutEffect(()=>numeric.history?.projection?boardPeriod.retainActivity(numeric.history.projection):undefined,[numeric.history?.projection]);
   // Emphasis changes paint; the same groups supply preparation and numerical evidence.
@@ -238,25 +236,16 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     paintRegistry.current=paintBasis?{...paintBasis,groups:painted}:null;
   }, [geometry,identities,paintBasis,painted]);
   // Numerical consumers keep the evidence basis and own their exact clock wakes.
-  const shownSources = lineup.filter(id => titles[id] && !isHidden(arrange.view, cardId(id)));
   // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).
   const since = history && activity?.known && activity.known.from > history.since ? activity.known.from : null;
 
-  const said = activityEmpty(history, shownSources.length, personal);
-  const empty = error || !said
-    ? null
-    : said.key === 'loading'
-      ? null
-      : said.key === 'knownFrom' || said.key === 'noneSince'
-        ? t(`activity.${said.key}`, {time: stamp(said.at)})
-        : t(`activity.${said.key}`);
   const answered = history?.range === (selected ? timeRangeKey(selected) : prefs.range);
-  const emptyFrame = answered && panning === null && !strip ? empty : null;
 
   const detailFrame=useMemo(()=>geometry?{...geometry.numeric,identities:geometry.identities}:null,[geometry]);
   const renderDetails=(frame:DetailFrame|null,retained:boolean)=>({
     summary:<Totals history={frame?.history??null} retained={retained} by={by} since={frame?.since??null} focus={focus}/>,
-    legend:<div className="legend">{(emptyFrame?[]:frame?.identities??controls).map(identity=><LegendItem key={identity.key} retained={retained} history={frame?.history??null} groupKey={identity.key} by={by} group={frame?.history?.activity.by[by].find(group=>group.key===identity.key)??null} name={groupName(identity,by,titles)} color={resolved.get(identity.key)?.color??identity.color}/>)}</div>,
+    legend:<div className="legend">{(frame?.identities??[]).map(identity=><LegendItem key={identity.key} retained={retained} history={frame?.history??null} groupKey={identity.key} by={by} group={frame?.history?.activity.by[by].find(group=>group.key===identity.key)??null} name={groupName(identity,by,titles)} color={resolved.get(identity.key)?.color??identity.color}/>)}</div>,
+    empty:<EmptyState history={frame?.history??null} retained={retained} by={by}/>,
   });
   return (
     <AnalyticsPanel ref={panel} className="activity" title={t('activity.title')} chart history={history} loading={loading} error={error} retry={()=>{boardPeriod.retry();quotaHistory.retry();}}
@@ -270,7 +259,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             activity={drawnActivity ?? EMPTY_ACTIVITY}
             currentActivity={activity ?? EMPTY_ACTIVITY}
             origin={drawing?.since ?? from}
-            groups={emptyFrame ? [] : presentation.shown}
+            groups={presentation.shown}
             paint={paint}
             registry={presentation.registry}
             onDrawing={presentation.onDrawing}
@@ -286,7 +275,6 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             navigation={navigation}
             by={by}
             valueContext={board??''}
-            empty={!history ? empty : emptyFrame}
           />
 
       </>
@@ -323,6 +311,20 @@ function ActivityReadout({history,by,hover,barMs,bar,parts,tipProps,retained=fal
   </Tooltip>;
 }
 
+/** The empty overlay follows the same committed evidence and clock as its totals. */
+const EmptyState = memo(function EmptyState({history,by,retained=false}:{history:ActivityHistory|null;by:ActivityDimension;retained?:boolean}) {
+  useLocale();
+  const reason=(activity:ActivityData,now:number)=>{
+    const frame=history?.projection,from=frame?now-frame.selection.periodMs:history?.since??0;
+    const since=frame&&from<(frame.projector?.trace.anchor??Infinity)?frame.basis.from:from;
+    return activityEmpty({since,activity},0);
+  };
+  const activity=useActivityNumbers(history,by,(value,now)=>JSON.stringify(reason(value,now)),true,undefined,undefined,retained);
+  const said=activity?reason(activity,hubNow()):null;
+  const text=!said||said.key==='loading'?null:said.key==='knownFrom'||said.key==='noneSince'?t(`activity.${said.key}`,{time:stamp(said.at)}):t(`activity.${said.key}`);
+  return <div data-time="activity-empty">{text&&<div className="chart-empty">{text}</div>}</div>;
+});
+
 /** The prepared stack paths remain unchanged while their parent moves or clips them. */
 const StackArtwork = memo(function StackArtwork({model,paint,by}: {by:ActivityDimension;paint:ReadonlyMap<string,string>;model: {
   groups: {group: PlotGroup; color: string}[];
@@ -356,11 +358,10 @@ const Stacks = memo(function Stacks({
   navigation,
   by,
   valueContext='',
-  empty,
 }: {
   history?: History|null;
   detailFrame:DetailFrame|null;
-  renderDetails:(frame:DetailFrame|null,retained:boolean)=>{summary:ReactNode;legend:ReactNode};
+  renderDetails:(frame:DetailFrame|null,retained:boolean)=>{summary:ReactNode;legend:ReactNode;empty?:ReactNode};
   activity: ActivityData;
   /** Exact boundary bars and readout advance without rebuilding interior stacks. */
   currentActivity?: ActivityData;
@@ -384,7 +385,6 @@ const Stacks = memo(function Stacks({
   navigation: AxisNavigation;
   by: ActivityDimension;
   valueContext?:string;
-  empty: string | null;
 }) {
   const locale = useLocale();
   const left = 48, right = 12;
@@ -637,7 +637,7 @@ const Stacks = memo(function Stacks({
           <rect x={axis.screenX(hover)} width={Math.max(1, axis.screenX(hover + barMs) - axis.screenX(hover))} y={top} height={height - top - bottom} className="hover-band" />
         )}
       </PlotOverlay>
-      {empty && <div className="chart-empty">{empty}</div>}
+      {!axis.panning&&!active&&!strip&&details.empty}
       {hover !== null && bar && parts.length > 0 && !drag && (
         <ActivityReadout retained={!coherent} history={model?.detailFrame?.history??null} by={by} hover={hover} barMs={barMs} bar={bar} parts={parts} tipProps={{tip,className:narrow?'is-below':'',style:tipStyle}}/>
       )}

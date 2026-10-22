@@ -9,7 +9,10 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import * as React from 'react';
-import {activityScale,groupColors} from '../lib/activity';
+import {activityEmpty,activityScale,groupColors} from '../lib/activity';
+import {boardPeriod} from '../lib/period';
+import {hubNow,useClock} from '../lib/clock';
+import {usePanning} from '../lib/pan';
 import type {ActivityGroup} from '../lib/types';
 import {plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
 import {StackPaths} from '../lib/stackPaths';
@@ -105,10 +108,13 @@ test('actual Activity composition resolves retained stacks and the new legend to
   const start=source.indexOf('  const controls=useMemo('),region=source.slice(start,source.indexOf('  // Numerical consumers keep',start));
   const elementStart=source.indexOf('<Stacks\n'),element=source.slice(elementStart,source.indexOf('/>',elementStart)+2);
   const detailStart=source.indexOf('  const detailFrame='),details=source.slice(detailStart,source.indexOf('  return (\n    <AnalyticsPanel ref={panel} className="activity"',detailStart));
+  const numbers=source.slice(source.indexOf('function useActivityNumbers('),source.indexOf('function LegendAmount('));
+  const empty=source.slice(source.indexOf('const EmptyState = memo('),source.indexOf('const StackArtwork = memo('));
+  assert.ok(numbers.startsWith('function useActivityNumbers(')&&empty.startsWith('const EmptyState = memo('));
   const axis={box:{current:null},svg:{current:null},width:400,scale:1,hover:null,drag:null,clip:'c',handlers:{},basis:{from:0,to:length,end:length},active:false,screenX:(at:number)=>at,commitDrawing:()=>{}};
   type Row={group:ActivityGroup;color:string;name:string};
   type Frame={element:React.ReactElement<Record<string,unknown>>;legend:React.ReactNode;prepared:{value:unknown}};
-  const context={...parent,React,numeric:null as any,loading:false,focus:{},Totals:()=>null,memo:(fn:unknown)=>fn,useEffect:()=>{},useId:()=> 'c',seriesFocusStyle:()=>({}),activitySeriesKey:(_by:string,key:string)=>key,
+  const context={...parent,React,numeric:null as any,loading:false,focus:{},Totals:()=>null,memo:(fn:unknown)=>fn,useEffect:()=>{},useId:()=> 'c',seriesFocusStyle:()=>({}),activitySeriesKey:(_by:string,key:string)=>key,boardPeriod,hubNow,useClock,usePanning,activityEmpty,
     StackPaths:CountedPaths,stacksHeight:()=>160,activityScale,niceTicks,cellStart,navigationKey,MINUTE:60_000,CSS:{escape:(id:string)=>id},pan:{active:()=>null,subscribe:()=>()=>{},onStop:()=>()=>{}},
     useLocale:()=> 'en',useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),PlotLayer:()=>null,PlotOverlay:()=>null,
     clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',t:(key:string)=>key,LegendItem:()=>null,groupName:(group:{name:string|null})=>group.name??'',
@@ -118,7 +124,7 @@ test('actual Activity composition resolves retained stacks and the new legend to
     board:'b',EMPTY_ACTIVITY:{},emptyFrame:null,panning:null,answered:true,error:undefined,from:0,to:length,since:null,onBase:()=>{},setTimeRange:()=>{},plot:undefined,navigation:{context:'b',range:'24h'},
     render:null as unknown as ()=>Frame,Stacks:null as unknown as (props:object)=>React.ReactNode,StackArtwork:null as unknown as (props:object)=>React.ReactNode,
   };
-  runInNewContext(ts.transpileModule(`function render(){${region}\n${details}\nreturn {element:(${element}),prepared};}\nglobalThis.render=render;\n${source.slice(source.indexOf('const StackArtwork = memo(function StackArtwork('))}\nglobalThis.Stacks=Stacks;globalThis.StackArtwork=StackArtwork;`,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React}}).outputText,context);
+  runInNewContext(ts.transpileModule(`${numbers}\n${empty}\nfunction render(){${region}\n${details}\nreturn {element:(${element}),prepared};}\nglobalThis.render=render;\n${source.slice(source.indexOf('const StackArtwork = memo(function StackArtwork('))}\nglobalThis.Stacks=Stacks;globalThis.StackArtwork=StackArtwork;`,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React}}).outputText,context);
   const frame=(names:string[])=>{
     context.groups=names.map(name=>({key:JSON.stringify(name),name,cells:Array.from({length:480},(_,i):[number,number]=>[i*60_000,60_000]),agentMs:60_000,activeMs:60_000,agents:1}));
     context.colors=groupColors(context.groups,'project',{} as Parameters<typeof groupColors>[2],()=> '');

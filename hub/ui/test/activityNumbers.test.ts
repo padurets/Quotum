@@ -240,13 +240,16 @@ test('the Activity clock advances the plot without invalidating unchanged numeri
   const context:any={...projectColorBindings(h.page),boardPeriod:h.period,ACTIVITY,exports:{},require,memo:(value:any)=>value,...hooks,
     useMemo:(read:any,deps:any[])=>{const box=hooks.useRef(null) as any;if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;},
     useSyncExternalStore:(_subscribe:any,get:any)=>get(),useActivityHistory:()=>shown,useHistoryPlot:()=>null,usePlot:()=>({}),useLineup:()=>[],usePersonalBoard:()=>false,useTitles:()=>titles,
-    usePref:(key:keyof typeof prefs)=>prefs[key],useSeriesFocus:()=>{},useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=>h.board,useClock:()=>now,usePanning:()=>null,useHistoryBegins:()=>0,
+    usePref:(key:keyof typeof prefs)=>prefs[key],useSeriesFocus:()=>{},useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=>h.board,useClock:()=>now,hubNow:()=>now,usePanning:()=>null,useHistoryBegins:()=>0,
     axisNavigation:()=>({context:h.board,range:'1h'}),frameOf:()=>({from:now-H,to:now}),measuredTo:()=>now,
     activityEmpty,groupColors,groupName:(group:any)=>group.name,activitySeriesKey,stamp,t,useLayoutEffect:hooks.useLayoutEffect,
     isHidden:()=>false,cardId:(id:string)=>id,quotaHistory:{},setTimeRange:()=>{},pan:{get:()=>null},
     AnalyticsPanel:()=>null,ActivitySettings:()=>null,Totals:()=>null,Stacks:()=>null,LegendItem:()=>null,EMPTY_ACTIVITY:shown.history!.activity,
   };
-  runInNewContext(compile(source.slice(source.indexOf('export const Activity ='),source.indexOf('/** How tall'))),context);
+  const numbers=source.slice(source.indexOf('function useActivityNumbers('),source.indexOf('function LegendAmount('));
+  const empty=source.slice(source.indexOf('const EmptyState = memo('),source.indexOf('const StackArtwork = memo('));
+  assert.ok(numbers.startsWith('function useActivityNumbers(')&&empty.startsWith('const EmptyState = memo('));
+  runInNewContext(compile(numbers+empty+source.slice(source.indexOf('export const Activity ='),source.indexOf('/** How tall'))),context);
   const find=(node:any,type:any):any=>Array.isArray(node)?node.flatMap(part=>find(part,type)):React.isValidElement(node)?[...(node.type===type?[node]:[]),...find((node.props as any).children,type)]:[];
   const render=()=>{hooks.begin();const node=context.exports.Activity({arrange:{view}});hooks.commit();const plot=find(node,context.Stacks)[0].props,details=plot.renderDetails(plot.detailFrame,false);return {totals:details.summary.props,legend:find(details.legend,context.LegendItem).map((entry:any)=>entry.props),plot};};
   try{

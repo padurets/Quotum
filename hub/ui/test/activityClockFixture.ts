@@ -8,7 +8,7 @@ import type {PageClock} from '../lib/clock';
 import {projectColorBindings} from './projectColorBindings';
 import {ACTIVITY} from '../../server/domain/widgets';
 import {num,workHours,stamp} from '../lib/format';
-import {atOnce,activitySeriesKey,activityGroupName as groupName} from '../lib/activity';
+import {atOnce,activityEmpty,activitySeriesKey,activityGroupName as groupName} from '../lib/activity';
 import {t} from '../i18n';
 import {cellLabel} from '../lib/periods';
 const require=createRequire(import.meta.url);
@@ -27,7 +27,7 @@ export function activityClockConsumer(name:string,clock:PageClock,period:any,ini
   const context:any={...projectColorBindings(),ACTIVITY,exports:{},require,memo:(value:any)=>value,useLocale:()=>{},usePanning:panning,boardPeriod:period,pan:{get:()=>panning()===null?null:{now:panAt()}},
     useId:()=> 'legend-description',seriesFocusStyle:()=>({}),useRef,useState:(initial:any)=>{const box=slot(()=>({value:typeof initial==='function'?initial():initial}));return [box.value,(value:any)=>{box.value=value;dirty=true;}];},
     useSyncExternalStore:(subscribe:any,read:any)=>{const box=slot(()=>{const value={current:read()};stops.push(subscribe(()=>{const next=read();if(!Object.is(next,value.current)){value.current=next;dirty=true;}}));return value;});return box.current=read();},
-    LABELS:{source:'activity.bySource',project:'activity.byProject',device:'activity.byDevice'},groupName,useLayoutEffect:(effect:any)=>effects.push(effect),clock,hubNow:clock.hubNow,num,workHours,stamp,atOnce,activitySeriesKey,t,cellLabel,
+    LABELS:{source:'activity.bySource',project:'activity.byProject',device:'activity.byDevice'},groupName,useLayoutEffect:(effect:any)=>effects.push(effect),clock,hubNow:clock.hubNow,num,workHours,stamp,atOnce,activityEmpty,activitySeriesKey,t,cellLabel,
     Tooltip:({children}:any)=>React.createElement('div',{className:'tooltip'},children),
   };
   runInNewContext(compile(clockSource.slice(clockSource.indexOf('export function useClock'))),context);context.useClock=context.exports.useClock;
