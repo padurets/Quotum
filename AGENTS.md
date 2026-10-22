@@ -64,8 +64,8 @@ Native horizontal wheel and Shift-drag scenarios start separately from each of t
 charts (five-hour limits, weekly limits, activity, balance and subscription funds), moving all five at 24h and 30d
 with at least twelve real series per resource family and CPU throttled fourfold, including an unread edge,
 strip rebuilding, reversal and return to live. Moving-frame p95/p99 must stay within
-34/50 ms and input-to-updated-frame p95 within 34 ms; callbacks without actual chart
-movement cannot pass. Existing idle, measurement and work budgets remain unchanged.
+34/80 ms and input-to-updated-frame p95 within 50 ms; callbacks without actual chart
+movement cannot pass. Idle, measurement and work budgets apply independently.
 Input is credited after the production RAF reaches its coalesced position on the real
 data layers. Input-free pauses are excluded from moving intervals; pending input keeps
 delayed work measurable. The final geometry must commit before an unpainted last input

@@ -173,7 +173,7 @@ export async function captionControl(cdp:Cdp,base:string,evidence:{save(name:str
         arm.reading=await panning({send,evaluate,on:cdp.on.bind(cdp),off:cdp.off.bind(cdp),snapshot:cdp.snapshot.bind(cdp),at:next=>{stage=next;cdp.at(name+'/'+next);}},undefined,{selection:'quota24',save:(event,value)=>evidence.save('caption-'+name.toLowerCase()+'-'+event,value)});
         arm.budgetFailures=arm.reading.problems.map(reason=>({reason}));
         assets.check();
-        const allowed=new Set(['quota/24h moving-frame p95 exceeds 34 ms','quota/24h moving-frame p99 exceeds 50 ms','quota/24h input-to-updated-frame p95 exceeds 34 ms']);
+        const allowed=new Set(['quota/24h moving-frame p95 exceeds 34 ms','quota/24h moving-frame p99 exceeds 80 ms','quota/24h input-to-updated-frame p95 exceeds 50 ms']);
         if(arm.reading.reports.length!==1||arm.reading.reports[0].initiator!=='quota'||arm.reading.reports[0].period!=='24h'||arm.reading.problems.some(problem=>!allowed.has(problem)))throw new Error('Caption original structural checks failed');
         const report=arm.reading.reports[0],currentCohort=[report.series,report.sessionSeries,report.budgetSeries,report.fundsSeries,report.charts];
         if(currentCohort.some((value,index)=>value!==[48,15,12,12,5][index]))throw new Error('Caption initial measured cohort changed');

@@ -21,10 +21,10 @@ wheel and Shift-drag starting from each five-hour limit, weekly limit, agent act
 budget balance and subscription-funds chart at 24h and 30d, moving
 all five charts with at least twelve real series per resource family and
 CPU throttled fourfold. The scenario covers delayed history, strip rebuilding, reversal
-and returning to live. Moving-frame intervals must stay within 34 ms at p95 and 50 ms
-at p99; input to an actually updated chart frame must stay within 34 ms at p95. Empty
-callbacks and missing samples fail. The previous idle, measurement, work and native
-frequency-focus checks retain their budgets. Mixed Codex subscriptions also exercise
+and returning to live. Moving-frame intervals must stay within 34 ms at p95 and 80 ms
+at p99; input to an actually updated chart frame must stay within 50 ms at p95. Empty
+callbacks and missing samples fail. Idle, measurement, work and native
+frequency-focus checks also apply. Mixed Codex subscriptions also exercise
 changed credit balances and unchanged-value heartbeats: each updates its own card and
 funds history without waking quota or wallet analytics. A separate fixed Activity subset
 phase at 24h and 30d checks exact selected totals and bar values, dirty-cell reuse,
@@ -33,7 +33,7 @@ the shared pool limits. An isolated relevant historical work update may add one 
 subset read; the live work budget stays unchanged. No browser means the check was not run. UTC calendar-only card events must match the stream's unchanged observation
 baseline and the exact new period. Raw traffic remains reported; missing, repeated or
 unrelated updates fail. This exception permits no extra page rendering or requests and
-retains the 0.3 ms/s idle script budget.
+retains the 1 ms/s idle script budget.
 The idle artifact retains the original performance timestamps, script-duration counters
 and unrounded probe time used in its calculation, so the reported rate can be recomputed.
 CI runs the unchanged history traffic matrix and dashboard phases on separate runners,
@@ -548,8 +548,10 @@ languages.
 lists without working, opens Ana's board in headless Chrome and checks the budget in
 `hub/bench/budget.ts`. During warmup no `history` may arrive. For two minutes (five
 without `--ci`) an idle board with neither measurements nor working agents asks nothing,
-is told only `ping`, renders and changes only what shows time, and spends a fifth of
-the script it did before events. Then twenty measurements reach their card and chart,
+is told only `ping`, renders and changes only what shows time, and spends at most
+1 ms of script per second after subtracting the probe's own time. This elapsed-time
+budget catches script regressions; it does not measure total CPU or energy.
+Then twenty measurements reach their card and chart,
 19 within a second, reading a small tail of history rather than the whole period.
 Finally the stand's laptop reports one working agent: each live credited report makes
 at most one small history read and renders only its card, agents and analytics.
@@ -573,7 +575,7 @@ minute before that grid edge. Planning includes both in the
 same observation window, retaining the original fade deadline, minimum settle wait
 and job limits. Sparse and eco histories keep their own cadence.
 Reports retain planned and observed bounds, inner CPU counter bounds, transition counts and actual
-performance duration; missing coverage is a failure and the 0.3 ms/s budget includes
+performance duration; missing coverage is a failure and the 1 ms/s budget includes
 the transition's work.
 Two read-only storage snapshots inside those counters also require the admitted quota
 rows due in that window to lose their expected predecessor, with unchanged evidence

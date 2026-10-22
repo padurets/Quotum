@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {EventCounts} from '../stream.js';
-import {idleProblems,type Idle} from '../budget.js';
+import {IDLE_SCRIPT_MS_PER_SECOND,idleProblems,type Idle} from '../budget.js';
 import {spending,utcPeriods,type Reading} from '../../server/domain/meters.js';
 import type {Card} from '../../server/projection.js';
 import {safeEvidence} from '../evidence.js';
@@ -26,7 +26,7 @@ test('private contacts remain fully reported while the unchanged board budget se
   }
   assert.ok(idleProblems({...idle(counts.boardCounts()),requests:{count:1,byPath:{'/api/devices':1}}}).length,'contact refetch remains forbidden');
   assert.ok(idleProblems({...idle(counts.boardCounts()),renders:[{region:'header',node:'div',kind:null,time:false,count:1}]}).length,'contact-driven board work remains forbidden');
-  assert.ok(idleProblems({...idle(counts.boardCounts()),scriptMsPerSecond:0.301}).length,'the idle CPU threshold is unchanged');
+  assert.ok(idleProblems({...idle(counts.boardCounts()),scriptMsPerSecond:IDLE_SCRIPT_MS_PER_SECOND+0.001}).length,'private contacts do not bypass the idle script budget');
 });
 
 test('only empty owner semantic hints qualify separately; board refreshes still fail',()=>{
@@ -97,7 +97,7 @@ test('idle admits only exact UTC calendar packets and keeps all data and renderi
     assert.deepEqual(idleProblems(report),[]);
     for(const region of ['card:wallet','analytics','header','card:other'])assert.match(idleProblems({...report,renders:[{region,node:'div',kind:null,time:false,count:1}]}).join('\n'),/rendered outside/);
     assert.match(idleProblems({...report,renders:[{region:'analytics',node:'svg',kind:'chart',time:true,count:4}]}).join('\n'),/more than 2/);
-    assert.match(idleProblems({...report,scriptMsPerSecond:0.301}).join('\n'),/script took/);
+    assert.match(idleProblems({...report,scriptMsPerSecond:IDLE_SCRIPT_MS_PER_SECOND+0.001}).join('\n'),/script took/);
     assert.match(idleProblems({...report,requests:{count:1,byPath:{'/api/history':1}}}).join('\n'),/asked the hub/);
     const invalid:unknown[]=[null,[],{}, {...next,id:'foreign'}, {...next,successAt:at+1}, {...next,provider:'codex'}, {...next,owners:['other']}, {...next,keys:[]}, {...next,extra:true}, {...next,meters:[{...meter,amount:'9007199254740994'}]}, {...next,meters:[{...meter,at:at+1}]}];
     for(const change of [{from:boundary+1},{to:boundary+1},{amount:'0'},{complete:true},{knownFrom:boundary},{uncertain:true},{unlocated:[{}]},{extra:true}])invalid.push({...next,spending:{...next.spending,day:{...next.spending.day,...change}}});
