@@ -17,7 +17,7 @@ export function AnalyticsPanel({ref, className, title, controls, settings, histo
   const retained = history && history.range !== (selected ? timeRangeKey(selected) : period);
   return <section ref={ref} className={`panel ${className}${loading ? ' is-loading' : ''}`} aria-label={title} aria-busy={loading} data-history-range={history?.range} data-time={chart ? 'chart' : undefined}>
     <div className="panel-head">
-      <h2 className="panel-heading">{title}</h2>
+      <h2 className="panel-heading" tabIndex={-1}>{title}</h2>
       <div className="panel-controls"><ReadState loading={loading&&!!retained} error={error} retained={!!retained} range={history?{from:history.since,to:history.to}:null} retry={retry}>{details}</ReadState>{controls}{settings}</div>
     </div>
     {!history&&loading&&<span className="initial-reader" role="status" aria-label={t('period.loading')}><span className="spinner" aria-hidden="true"/></span>}

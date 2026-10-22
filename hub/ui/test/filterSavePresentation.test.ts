@@ -12,7 +12,7 @@ test('filter save failures use the existing action chrome with accessible detail
   let saves=0,owner=true;
   const state={saved:{revision:1},current:{},dirty:true,saving:false,error:null as unknown};
   const context={exports:{} as {FilterSaveActions:()=>{props:Record<string,any>}},require:()=>({jsx,jsxs:jsx,Fragment:'fragment'}),
-    t,messageOf,useDataFilters:()=>state,useRole:()=>owner?'owner':'reader',executableWorkFilters:()=>true,
+    t,messageOf,useDataFilters:()=>state,useRole:()=>owner?'owner':'reader',executableWorkFilters:()=>true,useRemovalFocus:()=>()=>{},
     dataFilters:{restore:()=>{},save:()=>{saves++;}},Save:'save',RotateCcw:'restore',TriangleAlert:'warning',ErrorLine:'error',Popover:'popover'};
   runInNewContext(ts.transpileModule(source.slice(source.indexOf('export function FilterSaveActions')),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   try{

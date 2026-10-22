@@ -2046,6 +2046,11 @@ the shared glass tooltip, using the existing exact money presentation. Names and
 amounts remain in the legend; hover, keyboard focus and touch preview reserve no
 blank information strip. Activity keeps its useful four-metric summary at rest and
 replaces it with the focused cohort in the same area.
+Recovery controls return keyboard focus before they disappear. A removed Retry
+returns to its surviving disclosure button; a retiring disclosure returns to an
+available control in the same widget, or its heading when no control remains.
+Filter-save recovery returns to the resource filter while Save is disabled. These
+returns preserve a newer focus elsewhere and do not count as new reader navigation.
 The common Resources filter selects accounts, key caps and subscription funds
 across cards, charts and tables. An account selects its total balance; a key selects
 its reported remaining cap within the shared 32-meter bound. Balance components
