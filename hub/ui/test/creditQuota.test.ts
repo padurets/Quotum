@@ -11,6 +11,7 @@ import type {QuotaCard as QuotaComponent,CapReset as ResetComponent,KeyMetrics a
 import * as money from '../lib/money';
 import * as format from '../lib/format';
 import * as quota from '../lib/quota';
+import * as focusReturn from '../components/focusReturn';
 import {MeterBar,PercentLimit,ResetText} from '../components/Meter';
 import {QUOTA_IDS} from '../../server/domain/meters';
 import {t} from '../i18n';
@@ -38,6 +39,7 @@ const context={exports:{} as {QuotaCard:typeof QuotaComponent;CapReset:typeof Re
   if(name.endsWith('/clock'))return {useClock:()=>now};
   if(name.endsWith('/measurementClock'))return {useMeasurementClock:()=>now,useMeasurementTime:()=>null};
   if(name.endsWith('/i18n'))return {t};
+  if(name==='./focusReturn')return focusReturn;
   if(name==='./Meter')return {MeterBar,PercentLimit,ResetText};
   if(name.endsWith('/quota'))return quota;
   return {};
