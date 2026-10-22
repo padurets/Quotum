@@ -27,6 +27,7 @@ export class ActivitySelection implements HistoryMember {
   private lifetime={};
   private generation=0;
   private news=0;
+  private attempted=-1;
   private dirty=Infinity;
   private scheduled=false;
   private flight:Flight|null=null;
@@ -69,19 +70,24 @@ export class ActivitySelection implements HistoryMember {
   evictionCandidates(){return [];}
   get=()=>this.state;
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
-  private publish(state:ActivitySelectionState){this.state=state;for(const listener of this.listeners)listener();}
+  private publish(state:ActivitySelectionState){
+    const before=this.state;
+    if(before.model===state.model&&before.loading===state.loading&&before.error===state.error&&before.errorOwner===state.errorOwner)return;
+    this.state=state;for(const listener of this.listeners)listener();
+  }
   configure(scope:ActivityScope|null,paused=false){
-    if(scope)try{
-      if(!executableWorkFilters(activityScope(scope.filters,scope.by,scope.muted)))throw new Error('history_limit');
-    }catch{this.reset();this.publish({model:null,loading:false,error:'history_limit'});return;}
     const identity=scope?JSON.stringify([scope.board,scope.authority,scope.workAuthority,scope.run,scope.by,[...scope.muted].sort(),scope.filters,scope.selection,scope.rangeKey,scope.barMs]):'';
-    if(identity===this.identity){this.paused=paused;if(!paused){this.refresh();if(this.dirty!==Infinity)this.schedule();}return;}
+    if(identity===this.identity){this.paused=paused;if(!paused){this.refresh();if(this.dirty!==Infinity&&this.attempted!==this.news)this.schedule();}return;}
     this.reset();this.identity=identity;this.scope=scope;this.paused=paused;
-    if(scope){this.env.pool.register(this);this.dirty=-Infinity;this.publish({model:null,loading:!paused,error:null});if(!paused)this.schedule();}
+    if(scope){
+      try{if(!executableWorkFilters(activityScope(scope.filters,scope.by,scope.muted)))throw new Error('history_limit');}
+      catch{this.scope=null;this.publish({model:null,loading:false,error:'history_limit'});return;}
+      this.env.pool.register(this);this.dirty=-Infinity;this.publish({model:null,loading:!paused,error:null});if(!paused)this.schedule();
+    }
   }
   private scheduler(){return this.env.scheduler?this.env.scheduler():preparations();}
   reset(){
-    this.generation++;this.identity='';this.lifetime={};this.scope=null;this.source=this.awaiting=null;this.waitingForBoard=false;this.tiles.clear();this.bytes=0;this.dirty=Infinity;
+    this.generation++;this.identity='';this.lifetime={};this.scope=null;this.source=this.awaiting=null;this.waitingForBoard=false;this.tiles.clear();this.bytes=0;this.dirty=Infinity;this.attempted=-1;
     if(!this.retained.size)this.env.pool.unregister(this);
     this.flight?.controller.abort();this.scheduler()?.cancel(this.owner);
     // A cancelled response/preparation owns its reservation until its finally block.
@@ -118,11 +124,12 @@ export class ActivitySelection implements HistoryMember {
     if(!this.scope)return;
     if(this.state.errorOwner==='upstream-work'){this.env.retryWork?.();this.refresh();return;}
     if(this.scope.selection.mode==='live'||this.dirty===Infinity)this.dirty=-Infinity;
+    this.news++;
     this.publish({model:this.state.model,loading:true,error:null});this.schedule();
   };
   private schedule(){if(this.scheduled)return;this.scheduled=true;queueMicrotask(()=>queueMicrotask(()=>{this.scheduled=false;this.flush();}));}
   private flush(){
-    const scope=this.scope;if(!scope||this.paused||this.flight||this.dirty===Infinity)return;
+    const scope=this.scope;if(!scope||this.paused||this.flight||this.dirty===Infinity||this.attempted===this.news)return;
     if(scope.selection.mode==='live'&&this.awaiting&&this.env.read().trace===this.awaiting)return;
     try{if(!executableWorkFilters(activityScope(scope.filters,scope.by,scope.muted)))throw new Error('history_limit');}
     catch{this.dirty=Infinity;this.publish({model:null,loading:false,error:'history_limit'});return;}
@@ -136,6 +143,8 @@ export class ActivitySelection implements HistoryMember {
     const reserve=(bytes:number)=>{if(!pool.reserve(flight,transport+bytes))throw new Error('history_limit');scratch=bytes;};
     try{
       if(!valid())return;
+      // Rendering a failed dirty range does not authorize another attempt.
+      this.attempted=news;
       let build:Preparation<{model:Model;tiles:Map<number,HistoryTile>;bytes:number}>;
       if(scope.selection.mode==='live'){
         const reading=this.env.read(),trace=reading.trace;
@@ -193,7 +202,7 @@ export class ActivitySelection implements HistoryMember {
     }catch(error){
       if(valid()){
         if(error&&typeof error==='object'&&'status' in error&&[401,403,404].includes(Number(error.status))){this.reset();this.env.accessLost?.();return;}
-        this.publish({model:this.state.model,loading:false,error:error instanceof Error&&error.message==='history_limit'?'history_limit':'history_failed',errorOwner:scope.selection.mode==='live'?'local-preparation':'subset-read'});
+        if(news===this.news)this.publish({model:this.state.model,loading:false,error:error instanceof Error&&error.message==='history_limit'?'history_limit':'history_failed',errorOwner:scope.selection.mode==='live'?'local-preparation':'subset-read'});
         // Failed cells remain dirty. A later event cannot confirm the failed prefix.
       }
     }finally{

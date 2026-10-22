@@ -2249,6 +2249,10 @@ cutoffs and compatible legacy zero cutoffs retire it synchronously even when the
 authority token is unchanged. Financial and unrelated-source news do not. Retry
 belongs to the failed owner: upstream work transport, local preparation, or the
 bounded fixed-subset request. Evidence dates and recovery use existing disclosures.
+Repeating the same context or upstream snapshot does not start another attempt or
+publish an equivalent state. A failed attempt preserves its dirty prefix until an
+explicit retry or relevant new work authorizes its replacement. Pausing and resuming
+alone do not repeat a failed read or local preparation.
 For a warmed fixed subset, a relevant late-work event may add one bounded local request
 beyond the board's ordinary update. It retains clean cells and reads the potentially
 dirty tail on the full range's cell grid, together with a fresh compact exact summary
