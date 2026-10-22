@@ -145,10 +145,30 @@ export function historyScroll(geometry: {x: number; y: number; width: number}, f
   return {x: geometry.x, y: geometry.y, xDistance: distance, yDistance: 0, speed: Math.max(1, Math.round(geometry.width * fraction / .75)), gestureSourceType: 'mouse', preventFling: true};
 }
 
+/** Diagnostic boundaries keep exact selections beside the readers that still own work. */
+export function historyCheckpointScript(length:number,label:string) {
+  return `(() => {
+    const params=new URLSearchParams(location.search),traffic=window.__historyTraffic;
+    const selection=params.has('from')&&params.has('to')?{mode:'range',from:Number(params.get('from')),to:Number(params.get('to'))}:{mode:'live',periodMs:${length}};
+    const drawings=[...document.querySelectorAll('.history,.activity,.budget-history,.subscription-funds')].map((panel,index)=>{
+      const svg=panel.querySelector('.chart>svg'),fields=['panEnd','panOrigin','panToken','panScale','panBase','drawFrom','drawTo','drawReady'];
+      return {index,family:['history','activity','budget-history','subscription-funds'].find(name=>panel.classList.contains(name)),range:panel.dataset.historyRange??null,loading:panel.classList.contains('is-loading'),svg:!!svg,...Object.fromEntries(fields.map(key=>[key,svg?.dataset[key]??null]))};
+    });
+    return {label:${JSON.stringify(label)},at:performance.now(),wallAt:Date.now(),selection,drawings,movement:traffic?{tokens:[...traffic.tokens],poses:traffic.poses.map(pose=>({...pose})),pushes:traffic.pushes}:null,pool:window.__quotumHistoryPoolReceipt?.checkpoint?.(${JSON.stringify(label)})??{status:'unavailable'}};
+  })()`;
+}
+
 type TrafficProxy = {url: string; transfers: Transfer[]; phase(value: string, latency?: number): void; settled(value: string): Promise<void>};
 
 async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number, poolEvidence=false) {
   const tab = await openTab(browser), cdp = tab.cdp, bodies = new HistoryBodies(cdp);
+  const checkpoints:unknown[]=[];
+  const checkpoint=async(label:string)=>{
+    if(!poolEvidence)return;
+    const boundary={label,phase:bodies.phase,stage:bodies.stage,at:Date.now(),http:{active:bodies.activeCount,pending:bodies.pending.size,attempts:bodies.reads.length}};
+    try{checkpoints.push({...boundary,page:await cdp.evaluate(historyCheckpointScript(length,label))});}
+    catch(error){checkpoints.push({...boundary,error:String(error)});}
+  };
   cdp.at(`${name}/seed`);
   const close = async () => {cdp.at(`${name}/cleanup`); await cdp.evaluate('(()=>{const p=window.__historyTraffic;if(p){p.running=false;cancelAnimationFrame(p.raf);history.pushState=p.originalPush;}})()').catch(() => {}); await tab.close();};
   try {
@@ -166,7 +186,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
         if (bodies.errors.length) throw bodies.errors[0];
         if ((!seed||hasSeededHistory(bodies.reads,seedPhase))&&!bodies.activeCount && !bodies.pending.size && await cdp.evaluate<boolean>(poolEvidence?`(()=>{window.__quotumHistoryPoolReceipt?.mark(${seed?0:bodies.phase.endsWith('/warm')?2:1},${bodies.stage==='cold scroll'?1:bodies.stage==='cached return'?2:bodies.stage==='cached repeat'?3:0});return ['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))&&!!document.querySelector('.history .series[d]:not([d=""])')&&!document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-pan-end],.chart>svg[data-draw-ready="false"],.chart>svg.is-panning');})()`:`['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))&&!!document.querySelector('.history .series[d]:not([d=""])')&&!document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-pan-end],.chart>svg[data-draw-ready="false"],.chart>svg.is-panning')`)) {
           await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,250))');
-          if (!bodies.activeCount && !bodies.pending.size) return;
+          if (!bodies.activeCount && !bodies.pending.size) {if(poolEvidence)await checkpoint(`${bodies.stage}/settled${seed?'/seed':''}`);return;}
         }
         if (Date.now() > deadline) throw new Error(`${name}: full drawings or terminal HTTP did not settle: ${JSON.stringify({reads:bodies.reads.map(read=>({id:read.attemptId,phase:read.phase,resources:read.sections?.map(section=>section.scope),complete:read.count?.complete,canceled:read.canceled})),attempts:await cdp.evaluate('window.__quotumHistoryAttempts'),transfers:proxy.transfers.filter(t=>t.phase===seedPhase)})}`);
         await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,20))');
@@ -192,7 +212,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
       history.pushState=function(...args){p.pushes++;return originalPush.apply(this,args);};
       const frame=()=>{if(!p.running)return;if(root.dataset.panEnd){const token=root.dataset.panToken;if(p.tokens.at(-1)!==token)p.tokens.push(token);const end=Number(root.dataset.panEnd),origin=Number(root.dataset.panOrigin);if(p.poses.at(-1)?.end!==end)p.poses.push({end,origin});}p.raf=requestAnimationFrame(frame);};p.raf=requestAnimationFrame(frame);
     })()`);
-    return {cdp, bodies, settled, geometry, cell, seeds, close};
+    return {cdp, bodies, settled, geometry, cell, seeds, close, checkpoint, checkpoints};
   } catch (error) {await close(); throw error;}
 }
 
@@ -204,7 +224,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
       const name = `browser/${length / DAY}d/${future ? 'history' : 'activity'}/${latency}ms/${fraction}/take${take}`;
       // Include month-long returns that can fail before the original Activity diagnostic starts.
       const poolEvidence=process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL==='1'&&(length===30*DAY&&future===DAY||name==='browser/30d/activity/0ms/0.5/take1');
-      const {cdp, bodies, settled, geometry, cell, seeds, close} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence);
+      const {cdp, bodies, settled, geometry, cell, seeds, close, checkpoint, checkpoints} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence);
       let observer:Awaited<ReturnType<typeof observeReversal>>|null=null;
       try {
         observer=await observeReversal(cdp,browser,false);
@@ -212,7 +232,9 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         const scroll = (distance: number,stage:string) => {
           bodies.stage=stage;
           cdp.at(`${bodies.phase}/${stage}`);
-          return observer!.watch(`${bodies.phase}/${stage}`,()=>cdp.send('Input.synthesizeScrollGesture', historyScroll(geometry, fraction, distance)));
+          const input=()=>observer!.watch(`${bodies.phase}/${stage}`,()=>cdp.send('Input.synthesizeScrollGesture', historyScroll(geometry, fraction, distance)));
+          if(!poolEvidence)return input();
+          return (async()=>{await checkpoint(`${stage}/before-input`);const result=await input();await checkpoint(`${stage}/input-returned`);return result;})();
         };
         await scroll(geometry.width * fraction,'cold scroll'); await settled();
         const pose = await cdp.evaluate<{tokens: string[]; poses: {end: number; origin: number}[]; pushes: number; from: number; to: number}>('({tokens:__historyTraffic.tokens,poses:__historyTraffic.poses,pushes:__historyTraffic.pushes,from:Number(new URLSearchParams(location.search).get("from")),to:Number(new URLSearchParams(location.search).get("to"))})');
@@ -274,9 +296,10 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         invalidated.push({...historyCutInvalidation(error,name,take),reads:bodies.reads.map(read=>({phase:read.phase,from:read.from,to:read.to,count:read.count}))});
       } finally {
         if(poolEvidence)try{
+          await checkpoint('cohort/before-cleanup');
           const receipt=await cdp.evaluate('window.__quotumHistoryPoolReceipt?.read()??({status:"unavailable"})');
           const calendar=await cdp.evaluate('window.__quotumCalendarReceipt?.read()??({status:"unavailable"})');
-          writeFileSync(`/tmp/quotum-bench-history-pool-${name.replaceAll('/','-')}.json`,JSON.stringify({name,mode:'diagnostic',seed:bodies.diagnostic(`${name}/seed`),cold:bodies.diagnostic(`${name}/cold`),reads:bodies.diagnostic(`${name}/warm`),receipt,calendar}));
+          writeFileSync(`/tmp/quotum-bench-history-pool-${name.replaceAll('/','-')}.json`,JSON.stringify({name,mode:'diagnostic',scenario:{length,future,latency,fraction,cell,geometry},checkpoints,seed:bodies.diagnostic(`${name}/seed`),cold:bodies.diagnostic(`${name}/cold`),reads:bodies.diagnostic(`${name}/warm`),transfers:proxy.transfers.filter(transfer=>transfer.phase.startsWith(name+'/')),receipt,calendar}));
           console.error('bench: history pool receipt saved');
         }catch(error){console.error('bench: history pool receipt unavailable: '+String(error));}
         await observer?.close();await close();
