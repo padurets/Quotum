@@ -779,7 +779,7 @@ export const Chart = memo(function Chart({
           </Tooltip>
         )
       )}
-      {!lines.length && empty && <div className="chart-empty">{empty}</div>}
+      {prepared.ready && !lines.length && empty && <div className="chart-empty">{empty}</div>}
     </div>
   );
 });
