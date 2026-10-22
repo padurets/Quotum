@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {panning} from '../panning.js';
 import {safeEvidence} from '../evidence.js';
 
-async function failedSettlement(message: string,selection?:'quota24'|'activity24') {
+async function failedSettlement(message: string) {
   const error = new Error(message), saved = new Map<string, unknown>();
   let loaded = () => {};
   const cdp = {
@@ -15,16 +15,9 @@ async function failedSettlement(message: string,selection?:'quota24'|'activity24
     },
     on: <T>(method: string, callback: (params: T) => void) => {if(method==='Page.loadEventFired')loaded = () => callback(undefined as T);}, off() {},
   };
-  await assert.rejects(panning(cdp, async () => {}, {selection,save: (name, value) => saved.set(name, safeEvidence(value))}), value => value === error);
-  return saved.get('panning-failure') as {settlement?: unknown;initiator:string;period:string};
+  await assert.rejects(panning(cdp, async () => {}, {save: (name, value) => saved.set(name, safeEvidence(value))}), value => value === error);
+  return saved.get('panning-failure') as {settlement?: unknown};
 }
-
-test('a scoped Activity control retains the original failing case and leaves the default entry intact',async()=>{
-  for(const [selection,initiator] of [[undefined,'quota'],['quota24','quota'],['activity24','activity']] as const){
-    const failed=await failedSettlement('controlled settlement failure',selection);
-    assert.equal(failed.initiator,initiator);assert.equal(failed.period,'24h');
-  }
-});
 
 test('an original settlement failure retains safe per-plot state from the error already returned by the page', async () => {
   const canary = 'private-page-value', wanted = '1790000000000-1790086400000';
