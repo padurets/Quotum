@@ -797,7 +797,7 @@ class BoardPeriod {
           this.workProofEpoch=proofEpoch;
           this.workSelection=intent.request.selection;this.workRangeKey=this.workSelection.mode==='range'?periodKey(this.workSelection):prefs().range;
           this.work={value,basis:section.basis,loading:false,error:null};this.index=prepared.index;this.activity=prepared.activity;this.activityRetained=null;
-          this.updateWork(hubNow(),false);
+          const now=hubNow();this.advanceValues(now);this.updateWork(now,false);
         }
       }
       this.measureBytes();
@@ -902,11 +902,7 @@ class BoardPeriod {
     if(!this.active)return;
     const now=hubNow();
     this.tickCalendar(now);
-    if(now>=this.nativeDue&&this.selection.mode==='range'){
-      const at=Math.min(this.selection.to,now);
-      for(const [id,reading] of this.values)if(reading.value)this.setValue(id,{...reading,value:periodValueNow(reading.value,at)});
-      this.publishProjection();
-    }
+    this.advanceValues(now);
     if(this.selection.mode==='live'){
       const range=evaluatedRange(this.selection,now),workGap=!!this.index&&range.from<this.index.trace.anchor;
       const gaps=PERIOD_SCOPES.filter(scope=>{const entry=this.tapes.get(scope);return entry?.selection.mode==='live'&&range.from<entry.tape.from;});
@@ -924,6 +920,12 @@ class BoardPeriod {
     if(!this.updateWork(now,fromClock))return;
     this.retireExpired(now);
     this.scheduleClock();
+  }
+  private advanceValues(now:number){
+    if(now<this.nativeDue||this.selection.mode!=='range')return;
+    const at=Math.min(this.selection.to,now);
+    for(const [id,reading] of this.values)if(reading.value)this.setValue(id,{...reading,value:periodValueNow(reading.value,at)});
+    this.publishProjection();
   }
   private updateWork(now:number,fromClock:boolean){
     this.evaluatedAt=now;
