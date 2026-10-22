@@ -111,7 +111,7 @@ export class WorkCalendar {
     const advance=this.selection.mode==='live'?Math.min(window.dayEdges.at(-1)!,window.dayEdges[1]+this.selection.periodMs):Infinity;
     return advance;
   }
-  dirty(){this.cache.clear();if(this.visible&&!this.limited){this.needed=true;return true;}return false;}
+  dirty(since=-Infinity){this.cache.invalidate(since);if(since===Infinity||this.selection.mode==='range'&&since>=this.selection.to)return false;if(this.visible&&!this.limited){this.needed=true;return true;}return false;}
   demand():CalendarDemand|undefined {return this.visible&&this.needed?{zone:this.state.window.zone,...(this.state.value?.cursor?{cursor:this.state.value.cursor}:{})}:undefined;}
   receive(part:CalendarSection,generation:number,reserve:(bytes:number)=>boolean){
     if(!this.visible||generation!==this.generation)return;

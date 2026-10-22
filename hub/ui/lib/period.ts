@@ -60,6 +60,7 @@ class BoardPeriod {
   private proofEpoch=0;
   private workProofEpoch=-1;
   private valuesProofEpoch=-1;
+  private validBefore=Infinity;
   private readonly dirtyScopes=new Set<PeriodScope>();
   private scopeKeys:Partial<Record<PeriodScope,string>>={};
   private evaluatedAt=hubNow();
@@ -95,7 +96,7 @@ class BoardPeriod {
   private authority='';
   private financialIdentity='';
   private workAuthority:string|undefined;
-  private readonly valueCache=new Map<string,{values:Map<string,Reading<PeriodValues>>;bytes:number;at:number}>();
+  private readonly valueCache=new Map<string,{values:Map<string,Reading<PeriodValues>>;to:number;validBefore:number;bytes:number;at:number}>();
   private readonly values=new Map<string,Reading<PeriodValues>>();
   private readonly valueListeners=new Map<string,Set<()=>void>>();
   private work:Reading<WorkTrace>=empty();
@@ -117,7 +118,7 @@ class BoardPeriod {
   private readonly watch=clock.watch();
   private bytes=0;
   private cacheKey='';
-  private readonly retained=new Map<string,{bytes:number;copyBytes:number;at:number;fits:(selection:PeriodSelection)=>boolean;restore:(selection:PeriodSelection)=>void}>();
+  private readonly retained=new Map<string,{bytes:number;copyBytes:number;at:number;invalidate:(data:Extract<import('./board').HubEvent,{type:'history'}>['data'])=>boolean;valid:(selection:PeriodSelection)=>boolean;fits:(selection:PeriodSelection)=>boolean;restore:(selection:PeriodSelection)=>void}>();
   readonly transport=new PeriodTransport(historyPool,()=>this.intent(),(reply,intent,reserve)=>this.receive(reply,intent,reserve),fetchPeriod,()=>{page.dispatch({type:'board-close'});if(typeof window!=='undefined')window.dispatchEvent(new Event(UNAUTHORIZED));});
   constructor(){historyPool.register(this);clock.subscribe(this.watch,()=>this.tick());}
   private configureCalendar(visible:boolean,context:string,now:number,limited:boolean,selection:PeriodSelection){
@@ -130,13 +131,14 @@ class BoardPeriod {
   private retainCurrent(){
     if(!this.cacheKey)return;
     if(!this.valuesNeeded&&this.valuesProofEpoch===this.proofEpoch&&this.selection.mode==='range'&&[...this.values.values()].every(v=>v.value&&!v.loading&&!v.error)){
-      const values=new Map(this.values);this.valueCache.set(periodKey(this.selection),{values,bytes:JSON.stringify([...values]).length*3,at:hubNow()});
+      const values=new Map(this.values);this.valueCache.set(periodKey(this.selection),{values,to:this.selection.to,validBefore:this.validBefore,bytes:JSON.stringify([...values]).length*3,at:hubNow()});
     }
     const range=evaluatedRange(this.selection,hubNow());
     if(!this.active||!page.get().board||this.workNeeded||this.work.loading||this.work.error||this.valuesNeeded||[...this.values.values()].some(value=>value.loading||value.error)||PERIOD_SCOPES.some(scope=>this.projectionErrors[scope]||this.scopeKeys[scope]&&this.needsTape(scope,this.scopeKeys[scope]!,range)))return;
     const tapes=new Map([...this.tapes].map(([scope,tape])=>[scope,{...tape}])),work=this.work,index=this.index,activity=this.activity,workSelection=this.workSelection,workRangeKey=this.workRangeKey,cursor=this.cursor,liveEvidence=this.liveEvidence,values=new Map(this.values),cursors=this.transport.evidence(),bytes=this.bytes-this.facetBytes();
     const sourceTape=this.sourceTape,sourceCurves=this.sourceCurves,sourceCursor=this.sourceCursor;
     const context=JSON.stringify([this.authority,this.scopeKeys,this.filterKey,this.financialIdentity]);
+    const selection=this.selection,sources=[...this.sourceIds];let validBefore=this.validBefore;
     const workProofEpoch=this.workProofEpoch,valuesProofEpoch=this.valuesProofEpoch,reusable=workProofEpoch===this.proofEpoch&&(!values.size||valuesProofEpoch===this.proofEpoch)&&[...tapes.values()].every(t=>t.proofEpoch===this.proofEpoch);
     // Proofs and alternative states are immutable and shared by shifted summaries.
     // Summaries exclude shared shift proofs; a whole value sequence bounds its largest replay.
@@ -144,7 +146,13 @@ class BoardPeriod {
       +[...tapes.values()].reduce((sum,{tape})=>sum+JSON.stringify({...tape,fixed:tape.fixed?{...tape.fixed,shift:undefined}:undefined}).length*6,0)
       +JSON.stringify([...values.values()]).length*3;
     this.valueCache.delete(periodKey(this.selection));
-    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,copyBytes,at:hubNow(),fits:selection=>reusable&&selection.mode==='range'&&work.value?.fixed!==undefined&&canShift(work.value.fixed,selection)&&context===JSON.stringify([this.authority,this.scopeKeys,this.filterKey,this.financialIdentity])&&[...tapes.values()].every(({tape})=>tape.fixed&&canShift(tape.fixed,selection))&&[...values.values()].every(v=>hasPeriodValue(v.value,Math.min(selection.to,hubNow()))),restore:selection=>{
+    const valid=(target:PeriodSelection)=>target.mode==='range'?target.to<=validBefore:validBefore===Infinity;
+    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,copyBytes,at:hubNow(),valid,invalidate:data=>{
+      const since=Math.min(data.sources.some(id=>sources.includes(id))?data.since:Infinity,workChange(data,sources).since);
+      if(since===Infinity)return true;
+      validBefore=Math.min(validBefore,since);return selection.mode==='range'&&selection.to<=validBefore;
+    },fits:selection=>valid(selection)&&reusable&&selection.mode==='range'&&work.value?.fixed!==undefined&&canShift(work.value.fixed,selection)&&context===JSON.stringify([this.authority,this.scopeKeys,this.filterKey,this.financialIdentity])&&[...tapes.values()].every(({tape})=>tape.fixed&&canShift(tape.fixed,selection))&&[...values.values()].every(v=>hasPeriodValue(v.value,Math.min(selection.to,hubNow()))),restore:selection=>{
+      this.validBefore=validBefore;
       this.workEvidence++;
       this.tapes.clear();for(const [scope,tape] of tapes)this.tapes.set(scope,tape);
       this.work=work;this.index=index;this.activity=activity;this.activityRetained=null;this.workSelection=workSelection;this.workRangeKey=workRangeKey;this.cursor=cursor;this.liveEvidence=liveEvidence;this.bytes=bytes;
@@ -159,8 +167,9 @@ class BoardPeriod {
       }
       this.measureBytes();
       this.transport.restoreEvidence(cursors);this.workNeeded=false;this.valuesNeeded=false;
-      this.workProofEpoch=workProofEpoch;
-      this.valuesProofEpoch=valuesProofEpoch;
+      this.workProofEpoch=reusable?this.proofEpoch:workProofEpoch;
+      this.valuesProofEpoch=reusable?this.proofEpoch:valuesProofEpoch;
+      if(reusable)for(const tape of this.tapes.values())tape.proofEpoch=this.proofEpoch;
       // A cached live ledger may have crossed all of its old deadlines while hidden.
       this.retirementAt=selection.mode==='live'?hubNow():Infinity;
     }});
@@ -340,7 +349,7 @@ class BoardPeriod {
     this.tapes.delete('quota');delete this.projectionErrors.quota;this.transport.forgetEvidence('quota');
     this.workRows=[];
     const previous=this.rowsBySource;this.rowsBySource=new Map();for(const id of previous.keys())for(const listener of this.sourceListeners.get(id)??[])listener();
-    this.work={...this.work,loading:this.wantsWork};this.publishWork();this.publishProjection(['quota','budget']);
+    this.workNeeded=this.wantsWork;this.work={...this.work,loading:this.wantsWork};this.publishWork();this.publishProjection(['quota','budget']);
     this.measureBytes();clock.due(this.watch,null,hubNow());
   }
   private retireFinancialValues() {
@@ -362,7 +371,7 @@ class BoardPeriod {
     this.calendar.clear();
     this.sourceTape=null;this.sourceCurves=undefined;this.sourceCursor=undefined;this.resetFacets();
     this.workEvidence++;this.retirementAt=Infinity;
-    this.proofEpoch++;this.workProofEpoch=-1;this.valuesProofEpoch=-1;this.dirtyScopes.clear();
+    this.proofEpoch++;this.workProofEpoch=-1;this.valuesProofEpoch=-1;this.validBefore=Infinity;this.dirtyScopes.clear();
     this.retained.clear();this.cacheKey='';
     preparations()?.cancel(this.preparationOwner);this.transport.reset();this.work=empty();this.cursor=undefined;this.index=null;this.activity=null;this.activityRetained=null;this.tapes.clear();delete this.projectionErrors.quota;delete this.projectionErrors.budget;delete this.projectionErrors.funds;this.valueCache.clear();this.liveEvidence=false;this.bytes=0;this.workRows=[];this.publishProjection();
     for(const id of this.values.keys())this.setValue(id,noValue);this.values.clear();
@@ -399,9 +408,20 @@ class BoardPeriod {
     if(changedFinancial)this.retireFinancialValues();
     const calendarChanged=this.configureCalendar(widgetVisible(board.view,AGENT_HOURS_HEATMAP,board.lineup.length),JSON.stringify([board.id,board.workAuthority,nextFilter,this.workLimit]),hubNow(),this.workLimit,selection);
     if(calendarChanged){this.resetFacets();this.revision++;if(this.identity)this.transport.change();}
-    const calendarEvent=event?.type==='hub'&&(event.event.type==='hello'||event.event.type==='snapshot'||event.event.type==='mine'||event.event.type==='lineup'||event.event.type==='history'&&(event.event.data.workSince!==undefined||event.event.data.changes?.some(c=>c.workSince!==undefined)));
-    if(calendarEvent&&this.calendar.dirty()){this.revision++;this.invalidateFacets();this.transport.change();}
-    if(event?.type==='hub'&&['history','hello','snapshot','mine','lineup'].includes(event.event.type))this.retained.clear();
+    const history=event?.type==='hub'&&event.event.type==='history'?event.event.data:null;
+    const calendarEvent=event?.type==='hub'&&['hello','snapshot','mine','lineup'].includes(event.event.type);
+    const workSince=history?workChange(history,sources).since:Infinity;
+    if((calendarEvent||history&&workSince!==Infinity)&&this.calendar.dirty(calendarEvent?-Infinity:workSince)){this.revision++;this.invalidateFacets();this.transport.change();}
+    if(calendarEvent)this.retained.clear();
+    if(history){
+      for(const [key,entry] of this.retained)if(!entry.invalidate(history))this.retained.delete(key);
+      for(const [key,entry] of this.valueCache){
+        const since=history.sources.some(id=>entry.values.has(id))?history.since:Infinity;
+        if(since<entry.to)this.valueCache.delete(key);else entry.validBefore=Math.min(entry.validBefore,since);
+      }
+      const since=Math.min(history.sources.some(id=>sources.includes(id))?history.since:Infinity,workSince);
+      if(selection.mode==='range')this.validBefore=Math.min(this.validBefore,since);
+    }
     const cacheKey=JSON.stringify([identity,scopeKeys,nextFilter,financialIdentity]);
     if(cacheKey!==this.cacheKey){this.retainCurrent();this.cacheKey=cacheKey;}
     this.filterKey=nextFilter;
@@ -419,15 +439,18 @@ class BoardPeriod {
       this.resetFacets();
       const oldBoard=this.identity?JSON.parse(this.identity)[0]:null;
       this.identity=identity;this.generation++;this.revision++;
+      this.validBefore=Infinity;
       this.workEvidence++;this.retirementAt=Infinity;
       this.dirtyScopes.clear();
       for(const scope of PERIOD_SCOPES)delete this.projectionErrors[scope];
       if(oldBoard!==board.id){this.clear();this.configureCalendar(widgetVisible(board.view,AGENT_HOURS_HEATMAP,board.lineup.length),JSON.stringify([board.id,board.workAuthority,nextFilter,this.workLimit]),hubNow(),this.workLimit,selection);}
       this.cacheKey=cacheKey;
       let cached=this.valueCache.get(periodKey(selection));
-      if(!cached&&selection.mode==='range')cached=[...this.valueCache.values()].find(c=>sources.every(id=>hasPeriodValue(c.values.get(id)?.value,Math.min(selection.to,hubNow()))));
+      if(cached&&selection.mode==='range'&&selection.to>cached.validBefore)cached=undefined;
+      if(!cached&&selection.mode==='range')cached=[...this.valueCache.values()].find(c=>selection.to<=c.validBefore&&sources.every(id=>hasPeriodValue(c.values.get(id)?.value,Math.min(selection.to,hubNow()))));
       const valueStaging={role:'visible' as const};
       if(cached&&!historyPool.reserve(valueStaging,cached.bytes))cached=undefined;
+      if(cached)this.validBefore=cached.validBefore;
       this.valuesNeeded=selection.mode==='range'&&!cached;
       if(selection.mode==='range')for(const id of sources){const saved=cached?.values.get(id),value=periodValueAt(saved?.value,Math.min(selection.to,hubNow()));this.setValue(id,saved?{...saved,...(value?{value}:{}),basis:saved.basis?{...saved.basis,range:{from:selection.from,to:selection.to}}:null}:{...this.getValue(id),loading:true,error:null});}
       else {for(const id of this.values.keys())this.setValue(id,noValue);this.values.clear();}
@@ -448,7 +471,7 @@ class BoardPeriod {
       this.bytes=JSON.stringify([...this.values.values()]).length*3+JSON.stringify(this.workRows).length*3+(this.activityRetained?JSON.stringify(this.activityRetained).length*3:0);
       historyPool.release(valueStaging);
       this.workNeeded=wantsWork&&(!this.work.value||range.from<this.work.value.anchor||range.to>(this.work.value.cut??0)&&!this.liveEvidence);
-      const saved=this.retained.has(cacheKey)?[cacheKey,this.retained.get(cacheKey)!] as const:[...this.retained].find(([,entry])=>entry.fits(selection));
+      const saved=this.retained.get(cacheKey)?.valid(selection)?[cacheKey,this.retained.get(cacheKey)!] as const:[...this.retained].find(([,entry])=>entry.fits(selection));
       if(saved){
         const staging={role:'visible' as const},before=this.bytes;
         this.retained.delete(saved[0]);this.bytes+=saved[1].bytes;
@@ -486,10 +509,10 @@ class BoardPeriod {
         this.tick();
       }else if(hub.type==='history') {
         const included=hub.data.sources.some(id=>sources.includes(id));
-        if(included){this.proofEpoch++;this.valueCache.clear();}
         const own=hub.data.workSince!==undefined&&(selection.mode==='live'||hub.data.workSince<selection.to);
-        const relevant=included&&(selection.mode==='live'||hub.data.since<selection.to)||own;
+        const relevant=changedWork||included&&(selection.mode==='live'||hub.data.since<selection.to)||own;
         if(relevant){
+          if(included){this.proofEpoch++;this.validBefore=Infinity;}
           this.resourceGeneration++;
           if(own)this.invalidateFacets();
           const {retired}=workChange(hub.data,sources,selection.mode==='live'?Infinity:selection.to);
