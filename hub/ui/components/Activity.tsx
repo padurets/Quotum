@@ -260,7 +260,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     for (const identity of identities) {if (!groupMuted(identity.key)) plotted.push({group: data.get(identity.key) ?? {key: identity.key, name: identity.name, cells: EMPTY_CELLS}, color: identity.color, name: groupName(identity, by, titles)}); yield;}
     return {identities, shown: plotted, strip, registry: {authority, token: strip.token,range:drawing?.range, by,basis:groups, seed: previous.seed, groups: identities}};
   }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted, locale], `${authority}:${history?.board}:${by}`,by!=='project'||colorsReady);
-  const geometry = by==='project'&&!colorsReady?null:prepared.value;
+  const geometry = prepared.value;
   const [displayed,setDisplayed]=useState<ActivityRegistry|null>(null);
   const paintRegistry=useRef<ActivityRegistry|null>(null);
   const retained=displayed?.authority===authority&&displayed.by===by?displayed:null;
