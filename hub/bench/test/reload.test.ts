@@ -29,27 +29,27 @@ test('a failed panning scenario saves its original command before partial eviden
   const error = new Error('original scenario failure'), files = new Map<string, unknown>(), events: string[] = [];
   let first = true, loaded = () => {}, context = '', id = 0;
   type Ack = {id: number; method: string};
-  let lastAck: Ack | null = null, failedAck: Ack | null = null, failedContext = '';
+  let lastReply: Ack | null = null, failedAck: Ack | null = null, failedContext = '';
   const cdp = {
     at: (value: string) => {context = value; if (value.endsWith('/cleanup')) events.push('cleanup');},
-    snapshot: () => {events.push('snapshot'); return {context, lastAck};},
+    snapshot: () => {events.push('snapshot'); return {context, lastReply};},
     on: (method: string, callback: () => void) => {if(method==='Page.loadEventFired')loaded = callback;}, off: () => {},
-    send: async (method: string) => {lastAck = {id: ++id, method}; if (method === 'Page.reload') loaded(); if (method === 'Emulation.setCPUThrottlingRate') throw new Error('cleanup failed');},
+    send: async (method: string) => {lastReply = {id: ++id, method}; if (method === 'Page.reload') loaded(); if (method === 'Emulation.setCPUThrottlingRate') throw new Error('cleanup failed');},
     evaluate: async (source: string) => {
-      lastAck = {id: ++id, method: 'Runtime.evaluate'};
+      lastReply = {id: ++id, method: 'Runtime.evaluate'};
       if (first) {first = false; return 'auto';}
       if (source.includes("status:'partial'")) {events.push('partial'); return {inputs: 17};}
-      events.push('original-failure'); failedAck = lastAck; failedContext = context;
+      events.push('original-failure'); failedAck = lastReply; failedContext = context;
       throw error;
     },
   } as unknown as Cdp;
   await assert.rejects(panning(cdp, undefined, {save: (name, value) => {events.push('save:' + name); files.set(name, value);}}), value => value === error);
   assert.ok(files.has('panning-failure') && files.has('panning-partial') && files.has('panning-cleanup'));
   assert.match(JSON.stringify(files.get('panning-partial')), /17/);
-  const failure = files.get('panning-failure') as {command: {context: string; lastAck: typeof lastAck}};
-  assert.deepEqual(failure.command, {context: failedContext, lastAck: failedAck});
+  const failure = files.get('panning-failure') as {command: {context: string; lastReply: typeof lastReply}};
+  assert.deepEqual(failure.command, {context: failedContext, lastReply: failedAck});
   assert.equal(failure.command.context, 'native/quota/charts-open');
-  assert.notDeepEqual(failure.command.lastAck, lastAck, 'partial and cleanup must actually replace the current command');
+  assert.notDeepEqual(failure.command.lastReply, lastReply, 'partial and cleanup must actually replace the current command');
   assert.deepEqual(events.slice(events.indexOf('original-failure') + 1, events.indexOf('partial') + 1), ['snapshot', 'save:panning-failure', 'partial']);
   assert.ok(events.indexOf('partial') < events.indexOf('cleanup'));
 });

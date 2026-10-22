@@ -12,7 +12,7 @@ import type {ProcessIdentity} from './browserProcess.js';
 export class Cdp {
   private next = 1;
   private context = '';
-  private lastAck: {id: number; method: string; at: number} | null = null;
+  private lastReply: {id: number; method: string; at: number} | null = null;
   private lastEvent: {method: string; at: number} | null = null;
   private terminal: {method: 'Inspector.targetCrashed' | 'Inspector.detached'; at: number} | null = null;
   private failure: {id: number; method: string; context: string; started: number; deadline: number; elapsedMs: number; reason?: string} | null = null;
@@ -25,14 +25,14 @@ export class Cdp {
       if (message.id !== undefined) {
         const call = this.waiting.get(message.id);
         this.waiting.delete(message.id);
-        if (call) {call.clean(); this.lastAck = {id: message.id, method: call.method, at: performance.now()};}
+        if (call) {call.clean(); this.lastReply = {id: message.id, method: call.method, at: performance.now()};}
         // Page exceptions are successful protocol replies but failed evaluations.
         // Save their command before the caller starts cleanup, without page text.
         if (call?.method === 'Runtime.evaluate' && (message.result as {exceptionDetails?: unknown} | undefined)?.exceptionDetails) {
           this.failure ??= {id: message.id, method: call.method, context: call.context, started: call.started, deadline: call.started + 30_000,
             elapsedMs: performance.now() - call.started, reason: 'a page evaluation failed'};
         }
-        // Keep the first rejection before cleanup replies replace lastAck.
+        // Keep the first rejection before cleanup replies replace lastReply.
         if (message.error) {
           if (call) this.failure ??= {id: message.id, method: call.method, context: call.context, started: call.started, deadline: call.started + 30_000,
             elapsedMs: performance.now() - call.started, reason: 'the browser rejected the command'};
@@ -73,7 +73,8 @@ export class Cdp {
   at(context: string) {this.context = context;}
 
   snapshot() {
-    return {context: this.context, socketState: this.socket.readyState, lastAck: this.lastAck, lastEvent: this.lastEvent, terminal: this.terminal, failure: this.failure,
+    // "lastAck" contains "stack", which the evidence filter removes.
+    return {context: this.context, socketState: this.socket.readyState, lastReply: this.lastReply, lastEvent: this.lastEvent, terminal: this.terminal, failure: this.failure,
       pending: [...this.waiting].map(([id, call]) => ({id, method: call.method, started: call.started, deadline: call.started + 30_000}))};
   }
 

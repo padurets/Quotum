@@ -101,6 +101,27 @@ class Socket extends EventTarget {
 }
 const connection = (socket: Socket) => new (Cdp as unknown as new (socket: unknown) => Cdp)(socket);
 
+test('saved timeout evidence retains the last reply without retaining its body or later cleanup replies', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  t.mock.method(performance, 'now', () => 123.25);
+  const socket = new Socket(), cdp = connection(socket);
+  t.after(() => cdp.close());
+  const answered = cdp.evaluate('private-expression-canary');
+  socket.answer(1, {result: {value: 'private-page-canary'}}); await answered;
+  cdp.at('history/warm/cached return');
+  const pending = assert.rejects(cdp.send('Input.synthesizeScrollGesture'), /no browser response in 30 s/);
+  t.mock.timers.tick(30_000); await pending;
+  const original = cdp.snapshot().failure;
+  const saved = safeEvidence({command: cdp.snapshot(), stack: 'private-stack-canary'}) as {command: ReturnType<Cdp['snapshot']>};
+  assert.deepEqual(saved.command.lastReply, {id: 1, method: 'Runtime.evaluate', at: 123.25});
+  assert.deepEqual(saved.command.failure, original);
+  const cleanup = cdp.send('Performance.getMetrics'); socket.answer(3, {}); await cleanup;
+  assert.equal(cdp.snapshot().lastReply?.id, 3);
+  assert.equal(saved.command.lastReply?.id, 1);
+  assert.deepEqual(cdp.snapshot().failure, original);
+  assert.doesNotMatch(JSON.stringify(saved), /private-|expression|stack/i);
+});
+
 test('a protocol rejection keeps its original command through cleanup without retaining browser text', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   t.mock.method(performance,'now',()=>10000+2/7);
@@ -118,7 +139,7 @@ test('a protocol rejection keeps its original command through cleanup without re
       assert.ok(Number.isFinite(original.elapsedMs)); assert.ok(Number.isFinite(original.started));
       assert.equal(original.deadline, original.started + 30_000);
       const cleanup = cdp.send('Emulation.setCPUThrottlingRate', {rate: 1}); socket.answer(2, {}); await cleanup;
-      assert.equal(cdp.snapshot().lastAck?.id, 2);
+      assert.equal(cdp.snapshot().lastReply?.id, 2);
       const timed = assert.rejects(cdp.send('Performance.getMetrics'), /no browser response/);
       t.mock.timers.tick(30_000); await timed;
       socket.reject(1, 'private-late-error-canary'); socket.reject(999, 'private-unknown-error-canary');
