@@ -86,7 +86,7 @@ jobs:
         if: ${{ always() && contains(github.event.pull_request.labels.*.name, 'benchmark-history-pool-diagnostics') }}
         with:
           name: history-pool-receipt
-          path: /tmp/quotum-bench-history-pool.json
+          path: /tmp/quotum-bench-history-pool-*.json
           if-no-files-found: warn
 
   idle-cpu-diagnostic:
