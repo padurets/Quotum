@@ -127,6 +127,9 @@ nor the evaluated expression.
 After the original deadline has failed, a postmortem may pause the same failed owned
 target to collect bounded stack locations. Its report marks that intervention;
 mandatory resume and owned-target cleanup follow, and the original failure is retained.
+Before pausing, a fresh connection to that exact owned target runs the same page probe
+within the existing two-second window. A reply records responsiveness through that session;
+it does not identify the cause of the original timeout.
 An explicit diagnostic replay may also intervene. Neither can provide a passing
 canonical result.
 The optional native trace retains fixed raster, tile preparation and activation scopes

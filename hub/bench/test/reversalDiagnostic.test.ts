@@ -236,3 +236,61 @@ test('canonical reload collection retains its original navigation without debugg
   assert.equal(report.mode,'canonical');assert.equal(report.startedAt,1000);assert.equal(report.navigation.requested.loaderId,'loader-1');assert.equal(report.navigation.committed.loaderId,'loader-2');assert.equal(report.navigation.loadAtMs,3);
   assert.deepEqual(commands,[]);assert.doesNotMatch(logs.join(''),/private-canary|Debugger|Profiler/);
 });
+
+for(const outcome of ['reply','connect timeout','evaluate timeout'] as const)test('a failed owned page compares its session with a fresh connection: '+outcome,async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const logs:string[]=[],expressions:string[]=[],signals:AbortSignal[]=[];
+  t.mock.method(console,'error',(line:string)=>logs.push(line));
+  t.mock.method(globalThis,'fetch',async()=>new Response('{}'));
+  const {page}=pageFixture(),endpoint='ws://private-canary.invalid/original-target';
+  Object.defineProperty(page,'endpoint',{value:endpoint});
+  const wait=(signal:AbortSignal)=>new Promise<never>((_,reject)=>{signals.push(signal);signal.addEventListener('abort',()=>reject(signal.reason),{once:true});});
+  page.evaluate=async(expression,signal)=>{expressions.push(expression);return wait(signal!);};
+  let connections=0,closed=0,reject!:(error:Error)=>void;
+  t.mock.method(Cdp,'connect',async(url,signal)=>{
+    assert.equal(url,endpoint);connections++;
+    if(outcome==='connect timeout')return wait(signal!);
+    return {evaluate:async(expression:string,signal:AbortSignal)=>{
+      expressions.push(expression);return outcome==='evaluate timeout'?wait(signal):{private:'private-canary'};
+    },close:()=>{closed++;}} as unknown as Cdp;
+  });
+  const observer=await observeReversal(page,{owned:true,endpoint:'fixture',close:async()=>{}});
+  const original=new Error('original gesture timeout');
+  const failed=assert.rejects(observer.watch('warm return',()=>new Promise<never>((_,fail)=>{reject=fail;})),error=>error===original);
+  t.mock.timers.tick(6000);await flush();assert.equal(connections,0);
+  page.snapshot=()=>({failure:{id:196,method:'Input.synthesizeScrollGesture'}}) as ReturnType<Cdp['snapshot']>;
+  reject(original);await flush();t.mock.timers.tick(2000);await failed;await observer.close();
+  assert.equal(connections,1);assert.ok(signals.every(signal=>signal.aborted));
+  assert.equal(closed,outcome==='connect timeout'?0:1);
+  if(outcome!=='connect timeout')assert.equal(expressions[0],expressions[1]);
+  const report=JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));
+  assert.equal(report.page,'unresponsive');
+  assert.equal(report.freshPage.status,outcome==='reply'?'responded':outcome==='connect timeout'?'unavailable':'unresponsive');
+  assert.equal(report.freshPage.connected,outcome!=='connect timeout');
+  assert.ok(report.freshPage.toMs>=report.freshPage.fromMs);
+  assert.equal(report.command.failure.id,196);assert.doesNotMatch(logs.join(''),/private-canary|document\.visibilityState/);
+});
+
+test('a fresh page connection arriving after cancellation is closed without evaluating',async t=>{
+  t.mock.method(console,'error',()=>{});t.mock.method(globalThis,'fetch',async()=>new Response('{}'));
+  const {page}=pageFixture();Object.defineProperty(page,'endpoint',{value:'ws://private-canary.invalid/owned'});
+  page.snapshot=()=>({failure:{id:196}}) as ReturnType<Cdp['snapshot']>;
+  let release!:(value:Cdp)=>void,connected=()=>{},closed=0,evaluated=0;
+  const started=new Promise<void>(resolve=>{connected=resolve;});
+  t.mock.method(Cdp,'connect',async()=>{connected();return new Promise<Cdp>(resolve=>{release=resolve;});});
+  const controller=new AbortController(),original=new Error('original gesture timeout');
+  const observer=await observeReversal(page,{owned:true,endpoint:'fixture',close:async()=>{}},{signal:controller.signal});
+  const failed=assert.rejects(observer.watch('warm return',async()=>{throw original;}),error=>error===original);
+  await started;controller.abort();await failed;await observer.close();
+  release({evaluate:async()=>{evaluated++;},close:()=>{closed++;}} as unknown as Cdp);await flush();
+  assert.equal(closed,1);assert.equal(evaluated,0);
+});
+
+for(const owned of [false,true])test('a page probe cannot create another session without both ownership and its exact endpoint: '+owned,async t=>{
+  t.mock.method(console,'error',()=>{});t.mock.method(globalThis,'fetch',async()=>new Response('{}'));
+  const {page}=pageFixture();if(!owned)Object.defineProperty(page,'endpoint',{value:'ws://private-canary.invalid/foreign'});
+  page.snapshot=()=>({failure:{id:196}}) as ReturnType<Cdp['snapshot']>;
+  let connections=0;t.mock.method(Cdp,'connect',async()=>{connections++;throw new Error('unexpected connection');});
+  const observer=await observeReversal(page,{owned,endpoint:'fixture',close:async()=>{}}),original=new Error('original');
+  await assert.rejects(observer.watch('failed',async()=>{throw original;}),error=>error===original);await observer.close();assert.equal(connections,0);
+});
