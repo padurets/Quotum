@@ -71,6 +71,10 @@ test('heatmap rows follow physical order and an explicit drill focuses the new g
   assert.ok(bucket);const range={from:bucket.props.item.from,to:bucket.props.item.to};
   bucket.props.openRange(range);render();assert.equal(focused.length,0,'an old frame cannot receive the requested focus');
   reading={...reading,window:calendarWindow(range.to,'UTC',{mode:'range',...range}),loading:true};render();hooks.finish();view=render();
+  assert.equal(focused.length,0,'a pending unknown grid must not consume the drill focus');
+  const window=reading.window;
+  reading={...reading,value:{zone:'UTC',edges:window.edges,cursor:'ready',availableFrom:range.from,retainedFrom:range.from,cells:window.edges.slice(0,-1).map((from,i)=>({agentMs:0,from,to:window.edges[i+1],validUntil:null}))},loading:false};
+  render();hooks.finish();view=render();
   const tab=view.find(n=>n.props.tab)!;assert.ok(tab);assert.equal(focused.length,1);assert.ok(focused[0].includes(tab.props.item.key));
   render();assert.equal(focused.length,1,'ordinary data renders do not steal focus');
   bucket.props.openRange(range);selection={from:range.from-86_400_000,to:range.to-86_400_000};render();assert.equal(focused.length,1,'later navigation cancels a pending drill focus');

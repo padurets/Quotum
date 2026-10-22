@@ -44,6 +44,8 @@ export {LINK_SCENES} from './links.js';
 /** Mixed analytics stays visible; transient reads, errors, hard cutoffs and retries
  * are held by analyticsPanel, activitySelection, activityCoherence, moneyKeys,
  * historicalSelectedKeys and filterSavePresentation UI tests.
+ * Consecutive monetary gestures, shared projector ownership and cold keyboard drill
+ * handoffs are held by moneyPanDomain, activityProjectorMemory and heatmapDrillFocus.
  * Split reconnect legends and resize preparation are held by periodContinuity and
  * chartPreparation; future-relative cache admission by periodEventAdmission.
  * Stable intermediate plot/table geometry is checked on the real demo in the browser.

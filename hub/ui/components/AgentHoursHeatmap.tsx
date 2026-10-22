@@ -99,10 +99,11 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
   useLayoutEffect(()=>{
     const range=focusRange.current;if(!range)return;
     if(selection?.from!==range.from||selection?.to!==range.to){focusRange.current=null;return;}
-    if(window.range.from!==range.from||window.range.to!==range.to||!tab)return;
+    // Placeholder cells retire again when the requested evidence arrives.
+    if(!value||!prepared.ready||window.range.from!==range.from||window.range.to!==range.to||!tab)return;
     const button=matrix.current?.querySelector<HTMLButtonElement>(`[data-heatmap-cell="${tab.key}"]`);
     if(button){focusRange.current=null;button.focus({preventScroll:true});}
-  },[selection,window,tab?.key]);
+  },[selection,window,tab?.key,value,prepared.ready]);
   const key=(event:KeyboardEvent<HTMLButtonElement>,item:HeatCell)=>{
     const {key,ctrlKey}=event;let candidates:HeatCell[]=[];
     if(key==='Home'||key==='End')candidates=layout.cells.filter(c=>ctrlKey||c.row===item.row).sort((a,b)=>ctrlKey?a.from-b.from:a.column-b.column);

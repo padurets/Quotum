@@ -1618,7 +1618,9 @@ Shared filter choices cover the common selected work range; closed controls requ
 nothing. Shared-clock expiry retires stale contributions in individual buckets
 without rebuilding geometry or polling. Null history, registered zero and
 observation completeness remain distinct.
-An explicit interval/day action changes the common selection; only elapsed retained
+An explicit interval/day action changes the common selection and focuses its ready
+grid after the requested evidence and geometry commit. Temporary unknown cells
+cannot consume that focus handoff; a newer navigation cancels it. Only elapsed retained
 evidence is counted. Fixed thresholds scale with the displayed interval, use the
 first Nord Warm colour and remain independent of the filtered sample.
 
