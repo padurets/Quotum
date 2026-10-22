@@ -28,7 +28,7 @@ export {OTHER_COLOR} from './projectColors';
  * The colour of each group of a stack: a subscription has its card's, as on the chart;
  * projects and machines take CATEGORY_COLORS by agent-hours, so a project may change
  * colour when the period does. Past the palette, the rest share a neutral: each is
- * still a group of its own, named in the tooltip and switched off and on in the legend.
+ * still a group of its own, named in the tooltip and emphasized through the legend.
  */
 export function groupColors(groups: ActivityGroup[], by: ActivityDimension, view: View, providerOf: (source: string) => string,pins:ProjectColorPins=[]): string[] {
   if(by==='project')return resolveProjectColors(groups,pins).map(group=>group.color);
@@ -70,12 +70,8 @@ export function activityEmpty(history: Pick<History, 'since' | 'activity'> | nul
   return activity.known.from > history.since ? {key: 'noneSince', at: activity.known.from} : {key: 'none'};
 }
 
-/**
- * Under which key a group switched off in the widget's legend is kept among the lines
- * switched off in the chart's (`Prefs.muted`): its own for each way of splitting, so
- * switching off a project leaves the machines as they are.
- */
-export const mutedKey = (by: ActivityDimension, key: string) => `activity:${by}:${key}`;
+/** A legend and every plot layer share an identity within their grouping dimension. */
+export const activitySeriesKey = (by: ActivityDimension, key: string) => `activity:${by}:${key}`;
 
 /** The mean number of agents working while any worked, rounded only for display. */
 export const atOnce = (agentMs: number, activeMs: number) => num(activeMs > 0 ? agentMs / activeMs : 0, 1);

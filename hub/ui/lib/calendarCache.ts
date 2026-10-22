@@ -26,7 +26,8 @@ export class CalendarCache {
       entry.validBefore=Math.min(entry.validBefore,since);entry.to=Math.min(entry.to,since);entry.cut=Math.min(entry.cut,since);
     }
   }
-  evictionCandidates(){return [...this.entries].map(e=>({bytes:e.bytes,shownAt:e.at,drop:()=>{this.entries.delete(e);}}));}
+  // Evicting a cache owner cannot free storage still borrowed by a projection.
+  evictionCandidates(){return [...this.entries].map(e=>({bytes:this.borrowed.has(e)?0:e.bytes,shownAt:e.at,drop:()=>{this.entries.delete(e);}}));}
   add(basis:CalendarBasis,value:CalendarValue,reserve:(bytes:number)=>boolean,staging:number){
     const proof=value.proof;if(!proof)return;
     // A newer revision can change only a tail. dirty() already bounded every

@@ -1,5 +1,4 @@
 import * as widgets from '../../server/domain/widgets';
-import {chartSeriesMuted} from '../lib/prefs';
 import {pan} from '../lib/pan';
 import {test,type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
@@ -71,14 +70,14 @@ function consumer(sourceId:string,board:string,range:PeriodRange,t:TestContext) 
   t.after(hooks.dispose);
   const sources=[{id:sourceId,title:'Wallet',provider:'openrouter'}];
   let history:History|null=null,strip:PlotBuffer|null=null;
-  const prefs={money:{unit:'USD'},muted:{},range:'1h',horizon:'auto'};
+  const prefs={money:{unit:'USD'},range:'1h',horizon:'auto'};
   const memo=(read:()=>unknown,deps:unknown[])=>{const ref=hooks.useRef(null) as {current:{deps:unknown[];value:unknown}|null};if(!ref.current||deps.some((v,i)=>!Object.is(v,ref.current!.deps[i])))ref.current={deps,value:read()};return ref.current.value;};
   const modules:Record<string,unknown>={
     'react/jsx-runtime':jsx,react:{memo:reactMemo,useRef:hooks.useRef,useMemo:memo,useLayoutEffect:hooks.useLayoutEffect},
     '../../server/domain/providers':providers,'../../server/domain/currency':currency,'../../server/domain/meterHistory':{composeMetersPrepared},
     '../lib/board':{useServerView:()=>undefined,useBoardId:()=>board,useCurrencyContext:()=>currency.defaultCurrencyContext,useNamed:()=>sources},
     '../lib/history':{useBudgetFinancialHistory:()=>({history,drawing:history,loading:false,presentation:0}),useBudgetHistoryPlot:()=>strip,useHistoryBegins:()=>NOW-3*H,budgetHistory:{retry:()=>{}}},
-    '../lib/prefs':{useChartMuted:()=>prefs.muted,chartSeriesMuted,usePref:(key:keyof typeof prefs)=>prefs[key]},'../lib/moneySelection':{moneySelection:()=>({selection:{unit:'USD',ids:[[sourceId,'balance']]},omitted:0,removed:0})},
+    '../lib/prefs':{usePref:(key:keyof typeof prefs)=>prefs[key]},'../lib/moneySelection':{moneySelection:()=>({selection:{unit:'USD',ids:[[sourceId,'balance']]},omitted:0,removed:0})},
     '../lib/moneyView':moneyView,'../lib/money':money,'../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},'../lib/view':{...widgets,colorOf:()=> '#fff'},
     '../lib/periods':{frameOf:()=>({...range,live:false}),measuredTo:()=>range.to},'../lib/timeRange':{useTimeRange:()=>range,timeRangeKey},
     '../lib/clock':{useClock:()=>NOW},'../lib/pan':{pan,usePanning:()=>strip?1:null},'../lib/axisNavigation':{axisNavigation:()=>({context:board})},

@@ -1,5 +1,4 @@
 import * as widgets from '../../server/domain/widgets';
-import {chartSeriesMuted} from '../lib/prefs';
 import {moneyBalanceSeries} from '../lib/moneyTable';
 import {defaultCurrencyContext} from '../../server/domain/currency';
 import {axisNavigation} from '../lib/axisNavigation';
@@ -21,7 +20,7 @@ import * as currency from '../../server/domain/currency';
 import * as moneyView from '../lib/moneyView';
 import * as money from '../lib/money';
 import * as moneyTable from '../lib/moneyTable';
-import {moneySelection,fundsLegacyMuted} from '../lib/moneySelection';
+import {moneySelection} from '../lib/moneySelection';
 import {EMPTY_VIEW} from '../../server/domain/view';
 import type {Card, History} from '../lib/types';
 import type {Chart as ChartComponent} from '../components/Chart';
@@ -47,7 +46,7 @@ test('balance and funds drawing facts do not depend on the visible quantity fram
   for(const [family,meterSeries] of [['budget',[balance,cap]],['funds',[funds]]] as const) {
     const chunks=[{from:0,meterSeries:[...meterSeries]}],drawing={meterSeries:composeMeters(chunks,minute,0,4*minute)};
     const draw=(quantities:{from:number;to:number}|undefined)=>{
-      const context={authority:0,family,axisNavigation,selected:null,panning:null,muted:{},useRef:(value:unknown)=>({current:value}),moneyBalanceSeries,isMuted:()=>false,accounting:()=>true,settings:{},context:defaultCurrencyContext,strip:{meterChunks:chunks,cell:minute,from:0,to:4*minute,meterFrame:quantities},drawing,history:drawing,unit:'USD',prefs:{range:'1h',horizon:'auto',muted:{}},sources:[{id:'wallet',provider:'openrouter'},{id:'subscription',provider:'codex'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:meterSeries.map(s=>[s.source,s.meter])},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof drawing.meterSeries;lines:Record<string,unknown>[];origin:bigint;span:bigint;pad:bigint}};
+      const context={authority:0,family,axisNavigation,selected:null,panning:null,useRef:(value:unknown)=>({current:value}),moneyBalanceSeries,accounting:()=>true,settings:{},context:defaultCurrencyContext,strip:{meterChunks:chunks,cell:minute,from:0,to:4*minute,meterFrame:quantities},drawing,history:drawing,unit:'USD',prefs:{range:'1h',horizon:'auto',muted:{}},sources:[{id:'wallet',provider:'openrouter'},{id:'subscription',provider:'codex'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:meterSeries.map(s=>[s.source,s.meter])},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof drawing.meterSeries;lines:Record<string,unknown>[];origin:bigint;span:bigint;pad:bigint}};
       runInNewContext(ts.transpileModule(region+'\nglobalThis.model=prepared.value;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
       return context.model;
     };
@@ -105,7 +104,7 @@ for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'reso
       '../../server/domain/providers': providers, '../../server/domain/currency': currency, '../../server/domain/meterHistory': {composeMetersPrepared},
       '../lib/board': {useServerView:()=>undefined,useBoardId: () => 'board', useCurrencyContext: () => defaultCurrencyContext, useNamed: () => sources},
       '../lib/history': {useBudgetFinancialHistory: () => ({history,drawing:history,loading:loading??!history,presentation}),useBudgetHistory: () => ({history, drawing: history, loading: !history, presentation}), useBudgetHistoryPlot: () => null, useHistoryBegins: () => 0, budgetHistory: {retry: () => {}}},
-      '../lib/prefs': {useChartMuted:()=>prefs.muted,chartSeriesMuted,usePref: (key:keyof typeof prefs) => prefs[key]}, '../lib/moneySelection': {moneySelection,fundsLegacyMuted}, '../lib/moneyView': moneyView, '../lib/money': money,
+      '../lib/prefs': {usePref: (key:keyof typeof prefs) => prefs[key]}, '../lib/moneySelection': {moneySelection}, '../lib/moneyView': moneyView, '../lib/money': money,
       '../lib/view': {...widgets,colorOf: () => '#fff'}, '../lib/periods': {frameOf: () => ({from: 0, to: 120000, live: true}), measuredTo: () => 60000},
       '../lib/timeRange': {useTimeRange: () => null}, '../lib/clock': {useClock: () => 60000}, '../lib/pan': {pan,usePanning: () => null},
       '../lib/axisNavigation': {axisNavigation: () => ({context: 'board'})}, '../i18n': {t: (key: string) => key, useLocale: () => 'en'},

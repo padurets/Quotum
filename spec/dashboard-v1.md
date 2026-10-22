@@ -478,7 +478,7 @@ Neither the key nor unavailable names enter responses, conflicts or events.
 
 `GET /api/boards/:board/project-colors/choices?query=...&cursor=...` returns
 `{projects, nextCursor?, authority}`. It pages fifty admitted live/retained corrected
-names in the same order, independently of range, filters, legend mutes, funding and
+names in the same order, independently of range, filters, legend emphasis, funding and
 card visibility. Search is a literal substring of at most 120 codepoints. The
 signed cursor binds board, query and authority; changed context returns the same
 sanitized context conflict. There is no snapshot total or background catalogue poll.
@@ -514,7 +514,7 @@ work-authority changes, geometry preparation, time navigation or notification ne
 For each chart registry, present manual groups reserve their distinct colours first.
 Surviving Auto groups keep their slots, including neutral overflow. A new reservation
 moves only conflicting Auto groups to the first free slot or neutral; new groups use
-remaining slots in existing order. Absent pins reserve nothing; muted and offscreen
+remaining slots in existing order. Absent pins reserve nothing; emphasized and offscreen
 registry groups retain their slots. Releasing a slot does not promote survivors.
 Every Activity paint layer, legend and readout uses the same resolution.
 
@@ -1174,7 +1174,7 @@ unselected-source changes do not retire the work index. Positive work cutoffs re
 credited work while retaining the last complete frame under the same authority.
 An unchanged `hello.epoch` preserves compatible work. A changed known epoch retires
 the session index, calendar evidence and every Activity presentation, including
-all-visible and local subsets. Independent native financial observations remain
+its shared-filter totals and prepared stacks. Independent native financial observations remain
 valid under their own authority. Replacement work confirms the current run before
 adoption; delayed replies from an earlier run cannot restore its presentation.
 Consumers coalesce affected sections into one foreground read. All accounting endpoint
@@ -1416,7 +1416,7 @@ without refitting the range or removing the carried future margin. Two fixed tim
 therefore keep their screen positions through pending and complete states. Presets,
 Back, horizon changes and authority changes explicitly establish a new projection.
 Activity also keeps its final value scale through an exact boundary replacement;
-newly read higher work can expand it. A new navigation, legend selection, authority
+newly read higher work can expand it. A new navigation, shared data selection, authority
 or explicit geometry change establishes its next value projection. Native quota
 readiness alone cannot publish an empty pending-work Activity replacement.
 Readiness, errors, empty results and filters never change a widget's shell, plot,

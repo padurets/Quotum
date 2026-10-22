@@ -34,6 +34,8 @@ function fixture(t:TestContext){
   function receive(selection:PeriodSelection,at=now){try{calendar.receive(section(selection,at),calendar.generation,reserve);}finally{pool.release(flight);}}
   configure(live);receive(live);configure(cold);receive(cold);
   assert.equal(calendar.evictionCandidates().length,2);assert.equal(calendar.needed,false);assert.ok(cache.bytes>0);
+  assert.ok(cache.evictionCandidates().every(candidate=>candidate.bytes>0));
+  assert.equal(cache.evictionCandidates().reduce((sum,candidate)=>sum+candidate.bytes,0),cache.bytes);
   t.after(()=>{pool.release(flight);calendar.clear();assert.equal(calendar.bytes,0);assert.equal(pool.activeFlights,0);});
   return {calendar,cache,pool,flight,reserve,configure,receive,evictions};
 }
@@ -54,6 +56,7 @@ for(const change of ['drop','clear','invalidate','hide','replace','nested','thro
   const h=fixture(t),before=h.cache.bytes,window=calendarWindow(now+8801,'UTC',live);let observed=0,calls=0;
   const read=()=>h.cache.read(window,live,now+8801,()=>{
     if(++calls>1)return true;
+    assert.ok(h.cache.evictionCandidates().every(candidate=>candidate.bytes===0),'dropping a cache owner cannot release a borrowed curve');
     if(change==='drop')for(const e of h.cache.evictionCandidates())e.drop();
     if(change==='clear'||change==='throw'||change==='refuse')h.cache.clear();
     if(change==='invalidate')h.cache.invalidate(-Infinity);

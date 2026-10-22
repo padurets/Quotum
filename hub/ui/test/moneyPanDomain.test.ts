@@ -11,8 +11,7 @@ import {EMPTY_VIEW} from '../../server/domain/view';
 import * as moneyView from '../lib/moneyView';
 import * as money from '../lib/money';
 import * as moneyTable from '../lib/moneyTable';
-import {moneySelection,fundsLegacyMuted} from '../lib/moneySelection';
-import {chartSeriesMuted} from '../lib/prefs';
+import {moneySelection} from '../lib/moneySelection';
 import * as periods from '../lib/periods';
 import {Pan} from '../lib/pan';
 import {timeRangeKey} from '../lib/timeRange';
@@ -52,12 +51,12 @@ function renderer(h:Awaited<ReturnType<typeof fixture>>,family:string){
   const outer=preparationFixture(),inner=preparationFixture();let selected:typeof A|null=A,panning:number|null=1,externalGesture:any=null;
   const meter={id:h.meter,amount:'20000000',kind:'balance',unit:'USD',limit:null,at:NOW,stale:false,staleAfterMs:M,resetAt:null,minutes:null,scope:null,label:null};
   const sources=[{id:'s',title:'S',provider:family==='funds'?'codex':'openrouter',plan:'',successAt:NOW,error:null,stale:false,windows:[],resets:null,owners:[],staleAfterMs:M,measureIntervalMs:null,meters:[meter]}];
-  const settings={unit:'USD',selected:{USD:[['s',h.meter]]}},prefs={range:'1h',horizon:'auto' as const,muted:{},money:settings,funds:settings},Chart=()=>null;
+  const settings={unit:'USD',selected:{USD:[['s',h.meter]]}},prefs={range:'1h',horizon:'auto' as const,money:settings,funds:settings},Chart=()=>null;
   const initial={...A,end:A.to},navA=axisNavigation('board',A,prefs),navB=axisNavigation('board',h.target,prefs),axisOwner=axisPresentationFixture(initial,navA,900,1,76,12);axisOwner.context.commit(initial,true);axisOwner.context.pose.current.offset=-(h.target.from-A.from)/(A.to-A.from)*812;axisOwner.active.current=1;
   const modules:any={'react/jsx-runtime':jsx,react:{memo:reactMemo,useRef:outer.useRef,useMemo:outer.useMemo,useLayoutEffect:outer.useLayoutEffect},'../../server/domain/providers':providers,'../../server/domain/currency':currency,'../../server/domain/meterHistory':{composeMetersPrepared},
     '../lib/board':{useServerView:()=>undefined,useBoardId:()=> 'board',useCurrencyContext:()=>currency.defaultCurrencyContext,useNamed:()=>sources},
     '../lib/history':{useBudgetFinancialHistory:()=>({...h.store.get(),drawing:h.store.get().history}),useBudgetHistoryPlot:()=>h.store.getPlot(),useHistoryBegins:()=>0,budgetHistory:{retry(){}},fundsHistory:{retry(){}}},
-    '../lib/prefs':{useChartMuted:()=>prefs.muted,chartSeriesMuted,usePref:(key:string)=>(prefs as any)[key]},'../lib/moneySelection':{moneySelection,fundsLegacyMuted},'../lib/moneyView':moneyView,'../lib/money':money,'../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},
+    '../lib/prefs':{usePref:(key:string)=>(prefs as any)[key]},'../lib/moneySelection':{moneySelection},'../lib/moneyView':moneyView,'../lib/money':money,'../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},
     '../lib/view':{...widgets,colorOf:()=> 'blue'},'../lib/periods':periods,'../lib/timeRange':{useTimeRange:()=>selected,timeRangeKey},'../lib/clock':{useClock:()=>NOW},'../lib/pan':{pan:h.gesture,usePanning:h.gesture.active},
     '../lib/axisNavigation':{axisNavigation},'../i18n':{t:(key:string)=>key,useLocale:()=> 'en'},'./prepared':{usePrepared:outer.usePrepared},'./sizing':{usePlot:()=>({plot:300,onBase(){}})},'./Chart':{Chart}};
   const component:any={exports:{},require:(name:string)=>modules[name]??{}};runInNewContext(compile(readFileSync(new URL('ui/components/MoneyAnalytics.tsx',root),'utf8')),component);

@@ -1,18 +1,16 @@
 import {AnalyticsPanel} from './AnalyticsPanel';
-import {ReadState} from './ReadState';
 import {memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode} from 'react';
 import type {Activity as ActivityData, ActivityDimension, ActivityGroup} from '../lib/types';
 import {clock, num, shortDay, stamp, workHours} from '../lib/format';
-import {activityEmpty, activityScale, activityGroupName as groupName, atOnce, groupColors, mutedKey} from '../lib/activity';
-import {ACTIVITY_BY, setMuted, setPrefs, usePref, useChartMuted, chartMuteKey, chartSeriesMuted} from '../lib/prefs';
+import {activityEmpty, activityScale, activityGroupName as groupName, atOnce, groupColors, activitySeriesKey} from '../lib/activity';
+import {ACTIVITY_BY, setPrefs, usePref} from '../lib/prefs';
 import {setTimeRange, timeRange, timeRangeKey, useTimeRange, type TimeRange} from '../lib/timeRange';
-import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks, periodOf} from '../lib/periods';
+import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks} from '../lib/periods';
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
-import {page, usePersonalBoard, useBoardId, useLineup, useTitles,useProjectColorPins,useProjectColorsReady} from '../lib/board';
-import {useClock,hubNow} from '../lib/clock';
+import {usePersonalBoard, useBoardId, useLineup, useTitles,useProjectColorPins,useProjectColorsReady} from '../lib/board';
+import {useClock} from '../lib/clock';
 import {quotaHistory, useActivityHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {boardPeriod,type ActivityProjection} from '../lib/period';
-import {workChange} from '../lib/workChanges';
 import type {History} from '../../server/domain/history';
 import {plotBar, plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
 import {usePrepared, usePreparationBasis} from './prepared';
@@ -33,16 +31,8 @@ import {usePlot} from './sizing';
 import {clipPlot, PlotLayer, PlotOverlay} from './PlotLayer';
 import {seriesFocusStyle, useSeriesFocus, type SeriesFocus} from './seriesFocus';
 
-import {ActivitySelection,type ActivitySelectionState} from '../lib/activitySelection';
-import {effectiveFilters,onDataFilters} from '../lib/filterSelection';
-import {defaultFilters,workFilter,matchesSource} from '../../server/domain/dataFilters';
-import {fetchPeriod} from '../lib/periodTransport';
-import {historyPool} from '../lib/historyPool';
-import {UNAUTHORIZED} from '../lib/http';
-
 type ActivityHistory=Pick<History,'range'|'activity'>&{projection?:ActivityProjection|null};
-type SubsetModel=ActivitySelectionState['model'];
-type DetailFrame={history:ActivityHistory|null;model:SubsetModel;scoped:boolean;allOff:boolean;since:number|null;identities:GroupIdentity[]};
+type DetailFrame={history:ActivityHistory|null;since:number|null;identities:GroupIdentity[]};
 
 const MINUTE = 60_000;
 const EMPTY_ACTIVITY: ActivityData = {since: 0, known: null, barMs: MINUTE, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}};
@@ -117,93 +107,28 @@ function LegendMetrics({history,by,groupKey,group,active,retained=false}:{retain
   return <span data-time="activity-metrics">{value?<Metrics agentMs={value.agentMs} activeMs={value.activeMs} agents={value.agents}/>:<span>{t('activity.pendingRange')}</span>}</span>;
 }
 
-function SelectedLegendAmount({history,subset,model,groupKey}:{history:ActivityHistory|null;subset:ActivitySelection;model:SubsetModel;groupKey:string}) {
-  const {activity}=useSubsetNumbers(subset,history,true,undefined,model,groupKey);
-  return <b data-time="activity-work">{activity?workHours(activity.agentMs):'—'}</b>;
-}
-
-function SelectedLegendMetrics({history,subset,model,groupKey}:{history:ActivityHistory|null;subset:ActivitySelection;model:SubsetModel;groupKey:string}) {
-  const {activity}=useSubsetNumbers(subset,history,true,undefined,model,groupKey);
-  return <span data-time="activity-metrics">{activity?<Metrics agentMs={activity.agentMs} activeMs={activity.activeMs} agents={activity.agents}/>:<span>{t('activity.pendingRange')}</span>}</span>;
-}
-
 /** Keyboard descriptions belong to their own entry even when the pointer wins visually. */
-const LegendItem = memo(function LegendItem({history,group,groupKey,by,name,color,muted,retained=false,subset,model=null,scoped=false}:{subset:ActivitySelection;model?:SubsetModel;scoped?:boolean;retained?:boolean;history:ActivityHistory|null;group:ActivityGroup|null;groupKey:string;by:ActivityDimension;name:string;color:string;muted:boolean}) {
+const LegendItem = memo(function LegendItem({history,group,groupKey,by,name,color,retained=false}:{history:ActivityHistory|null;group:ActivityGroup|null;groupKey:string;by:ActivityDimension;name:string;color:string;retained?:boolean}) {
   useLocale();const id=useId(),[focused,setFocused]=useState(false);
-  return <div className="activity-legend-item">
-    <button type="button" className="legend-item" data-series-key={mutedKey(by,groupKey)} data-agent-ms={group?.agentMs} style={seriesFocusStyle(mutedKey(by,groupKey))}
-      aria-describedby={id} aria-pressed={!muted} onFocus={()=>setFocused(true)} onBlur={()=>setFocused(false)}
-      onClick={()=>setMuted(chartMuteKey(ACTIVITY,by,groupKey),!muted)}>
-      <i className="activity-swatch" style={{background:color}}/><span>{name}</span><>{scoped&&!muted?<SelectedLegendAmount history={history} subset={subset} model={model} groupKey={groupKey}/>:<LegendAmount retained={retained} history={history} by={by} groupKey={groupKey} group={group}/>}</>
+  return <div className="activity-legend-item" data-series-legend>
+    <button type="button" className="legend-item" data-series-key={activitySeriesKey(by,groupKey)} data-agent-ms={group?.agentMs} style={seriesFocusStyle(activitySeriesKey(by,groupKey))}
+      aria-describedby={id} aria-pressed={false} onFocus={()=>setFocused(true)} onBlur={()=>setFocused(false)}>
+      <i className="activity-swatch" style={{background:color}}/><span>{name}</span><LegendAmount retained={retained} history={history} by={by} groupKey={groupKey} group={group}/>
     </button>
-    <span id={id} className="sr-only">{muted?t('activity.seriesHidden'):focused?scoped?<SelectedLegendMetrics history={history} subset={subset} model={model} groupKey={groupKey}/>:<LegendMetrics retained={retained} history={history} by={by} groupKey={groupKey} group={group} active/>:null}</span>
+    <span id={id} className="sr-only">{focused?<LegendMetrics retained={retained} history={history} by={by} groupKey={groupKey} group={group} active/>:null}</span>
   </div>;
 });
 
-/** Keep dormant exclusions so a newly arriving group follows the saved legend choice. */
-export function activityMutedKeys(muted:Record<string,boolean>,by:ActivityDimension) {
-  const keys=new Set<string>(),prefix=`activity:${by}:`;
-  for(const [key,on] of Object.entries(muted))if(key.startsWith(prefix)&&on)keys.add(key.slice(prefix.length));
-  for(const [key,on] of Object.entries(muted))try{const parts=JSON.parse(key);if(Array.isArray(parts)&&parts.length===3&&parts[0]===ACTIVITY&&parts[1]===by&&typeof parts[2]==='string'){if(on)keys.add(parts[2]);else keys.delete(parts[2]);}}catch{/* Legacy keys were read above. */}
-  return [...keys].sort();
-}
-
-function useActivitySubset(history:History|null,by:ActivityDimension,muted:Record<string,boolean>,authority:number,allOff:boolean) {
-  const [reader]=useState(()=>new ActivitySelection({pool:historyPool,now:hubNow,send:fetchPeriod,
-    read:()=>{const value=boardPeriod.get();return {trace:value.value,ready:!value.loading&&!value.error&&!!value.value,error:value.error,evidence:value.evidence};},
-    accessLost:()=>{page.dispatch({type:'board-close'});window.dispatchEvent(new Event(UNAUTHORIZED));},
-    retryWork:()=>boardPeriod.retry(),
-  }));
-  const selected=useTimeRange(),range=usePref('range');
-  const configure=useRef(()=>{});
-  configure.current=()=>{
-    const off=activityMutedKeys(muted,by),board=page.get().board;
-    reader.configure(off.length&&history&&board&&history.board===board.id?{board:board.id,authority:JSON.stringify([authority,board.workAuthority,page.get().hubEpoch]),workAuthority:board.workAuthority,run:page.get().hubEpoch,by,muted:off,filters:workFilter(effectiveFilters()??defaultFilters()),
-      selection:selected?{mode:'range',...selected}:{mode:'live',periodMs:periodOf(range).ms},rangeKey:selected?timeRangeKey(selected):range,barMs:history.activity.barMs}:null,allOff);
-  };
-  useLayoutEffect(()=>configure.current());
-  useEffect(()=>{
-    const stops=[boardPeriod.subscribe(reader.refresh),onDataFilters(()=>configure.current()),page.listen((event,state)=>{
-      if(!state.board||event.type==='board-close')reader.reset();
-      else if(event.type==='hub'){
-        if(event.event.type==='history'){
-          const board=state.board,filters=effectiveFilters(),range=timeRange();
-          const change=workChange(event.event.data,board.lineup.filter(id=>!filters||matchesSource(filters,id)),range?.to??Infinity);
-          if(change.retired)reader.invalidate();
-          else if(change.since!==Infinity||event.event.data.workAuthority!==undefined)reader.changed(change.since,event.event.data.workAuthority);
-          configure.current();
-        }else if(['hello','snapshot','mine','lineup'].includes(event.event.type)){configure.current();reader.baseline();}
-      }
-    })];
-    return()=>{stops.forEach(stop=>stop());reader.reset();};
-  },[reader]);
-  return reader;
-}
-
-function useSubsetNumbers(reader:ActivitySelection,history:ActivityHistory|null,enabled:boolean,bar?:number,model?:SubsetModel,key?:string) {
-  const state=useSyncExternalStore(reader.subscribe,reader.get),panning=usePanning();
-  const active=model===undefined?state.model:model;
-  const admitted=!!active&&reader.sameScope(active);
-  const at=(now:number)=>active?.rangeKey===history?.range?reader.numbers(now,bar,active,key):null;
-  const frozen=useRef<ReturnType<typeof at>>(null);
-  const now=useClock(now=>enabled&&panning===null?reader.changesAt(now,at=>{const value=reader.numbers(at,bar,active,key);return JSON.stringify([value?.available,!!value?.known,...metricsText(value??EMPTY_ACTIVITY)]);},active,key):null);
-  if(!enabled||!admitted)frozen.current=null;
-  else if(panning===null)frozen.current=at(now);
-  return {activity:enabled?(panning===null?at(now):admitted?frozen.current:null):null,state};
-}
-
 /** Only this small region hears legend preview changes. Its reserved geometry is constant. */
-const Totals=memo(function Totals({history,by,subset,scoped,allOff,since,focus,model,retained=false}:{model?:SubsetModel;retained?:boolean;history:ActivityHistory|null;by:ActivityDimension;subset:ActivitySelection;scoped:boolean;allOff:boolean;since:number|null;focus:SeriesFocus}) {
+const Totals=memo(function Totals({history,by,since,focus,retained=false}:{history:ActivityHistory|null;by:ActivityDimension;since:number|null;focus:SeriesFocus;retained?:boolean}) {
   useLocale();const selected=useSyncExternalStore(focus.subscribe,focus.get);
-  // The legend can retain an identity after its last work leaves this interval.
-  const prefix=mutedKey(by,''),key=selected?.startsWith(prefix)?selected.slice(prefix.length):undefined,previewed=key!==undefined;
-  const localPreview=scoped&&previewed&&!!model&&!model.muted.includes(key);
-  const base=useActivityNumbers(history,by,value=>JSON.stringify([!!value.known,...metricsText(value)]),!scoped||previewed&&!localPreview,undefined,key,retained);
-  const local=useSubsetNumbers(subset,history,scoped&&(!previewed||localPreview),undefined,model,localPreview?key:undefined);
-  const context=localPreview?local.activity:base,preview=previewed?context?.by[by].find(part=>part.key===key):undefined;
-  const activity=previewed&&context?{...context,agentMs:preview?.agentMs??0,activeMs:preview?.activeMs??0,agents:preview?.agents??0}:scoped?local.activity:base;
-  const text=allOff?t('activity.noSeries'):activity?.available===false?t('activity.noSessions'):activity&&!activity.known?t('activity.knownFrom',{time:stamp(activity.since)}):null;
-  return <div className="chart-info activity-info" data-time="activity-info" data-series-context={previewed?selected:undefined}>
+  // The strip can retain a legend identity after its work leaves the interval.
+  const prefix=activitySeriesKey(by,''),key=selected?.startsWith(prefix)?selected.slice(prefix.length):undefined;
+  const base=useActivityNumbers(history,by,value=>JSON.stringify([!!value.known,...metricsText(value)]),true,undefined,key,retained);
+  const preview=base?.by[by].find(part=>part.key===key);
+  const activity=key!==undefined&&base?{...base,agentMs:preview?.agentMs??0,activeMs:preview?.activeMs??0,agents:preview?.agents??0}:base;
+  const text=activity?.available===false?t('activity.noSessions'):activity&&!activity.known?t('activity.knownFrom',{time:stamp(activity.since)}):null;
+  return <div className="chart-info activity-info" data-time="activity-info" data-series-context={key!==undefined?selected:undefined}>
     <div className="activity-totals" data-time="activity-totals" data-agent-ms={!text?activity?.agentMs:undefined}>
       {text?<span>{text}</span>:<>
         <span title={t('activity.agentHoursHint')}><span className="activity-total-name">{t('activity.agentHours')}</span><b>{activity?workHours(activity.agentMs):'—'}</b></span>
@@ -212,8 +137,7 @@ const Totals=memo(function Totals({history,by,subset,scoped,allOff,since,focus,m
         <span title={t('activity.atOnceHint')}><span className="activity-total-name">{t('activity.atOnce')}</span><b>{activity&&activity.activeMs>0?atOnce(activity.agentMs,activity.activeMs):'—'}</b></span>
       </>}
     </div>
-    {since!==null&&<span className="sr-only">{t('activity.since',{time:stamp(since)})}</span>}
-    {scoped&&!previewed&&<ReadState error={local.state.error} retry={subset.retry}/>}
+    <span className="sr-only">{since!==null?t('activity.since',{time:stamp(since)}):null}</span>
   </div>;
 });
 
@@ -237,11 +161,10 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const lineup = useLineup();
   const personal = usePersonalBoard();
   const titles = useTitles(arrange.view.names);
-  const range=usePref('range'),horizon=usePref('horizon'),activityBy=usePref('activityBy'),muted=useChartMuted(ACTIVITY);
-  const prefs=useMemo(()=>({range,horizon,activityBy,muted}),[range,horizon,activityBy,muted]);
-  const groupMuted=(key:string)=>chartSeriesMuted(muted,ACTIVITY,activityBy,key,!!muted[mutedKey(activityBy,key)]);
+  const range=usePref('range'),horizon=usePref('horizon'),activityBy=usePref('activityBy');
+  const prefs=useMemo(()=>({range,horizon,activityBy}),[range,horizon,activityBy]);
   const by = prefs.activityBy;
-  const focus=useSeriesFocus(panel,`${authority}:${drawing?.range}:${by}`);
+  const focus=useSeriesFocus(panel,`${useBoardId()}:${by}`,{kind:by},`${authority}:${drawing?.range}`);
   const locale = useLocale();
   const selected = useTimeRange();
   const board=useBoardId(),baseNavigation=axisNavigation(board,selected,prefs),navigation={...baseNavigation,context:JSON.stringify([baseNavigation.context,authority])};
@@ -256,26 +179,18 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const from = frame.from;
   const to = measuredTo(frame, history, selected, prefs.range);
   const activity = history?.activity ?? null,drawnActivity=drawing?.activity??null;
-  const currentGroups=drawnActivity?.by[by]??[];
-  const allOff=currentGroups.length>0&&currentGroups.every(group=>groupMuted(group.key));
-  // Saved exclusions define the cohort even while their groups have no work.
-  const scoped=activityMutedKeys(muted,by).length>0;
-  const subset=useActivitySubset(drawing,by,muted,authority,allOff);
-  const local=useSyncExternalStore(subset.subscribe,subset.get);
-  const numeric=useMemo(()=>({history:drawing?{range:drawing.range,activity:drawing.activity,projection:boardPeriod.captureActivity(drawing)}:null,model:local.model,scoped,allOff,since:history&&activity?.known&&activity.known.from>history.since?activity.known.from:null}),[drawing,local.model,scoped,allOff]);
-  // A queued preparation owns its input even before its output can be displayed.
-  useLayoutEffect(()=>subset.retain(numeric.model),[subset,numeric.model]);
+  const numeric=useMemo(()=>({history:drawing?{range:drawing.range,activity:drawing.activity,projection:boardPeriod.captureActivity(drawing)}:null,since:history&&activity?.known&&activity.known.from>history.since?activity.known.from:null}),[drawing]);
+  // A queued preparation owns its captured evidence until replacement commits.
   useLayoutEffect(()=>numeric.history?.projection?boardPeriod.retainActivity(numeric.history.projection):undefined,[numeric.history?.projection]);
-  // What the groups look like changes with the answer, the board and the legend, not with time: the same objects as the clock moves the frame.
+  // Emphasis changes paint; the same groups supply preparation and numerical evidence.
   const {groups, colors, shown} = useMemo(() => {
     const groups = drawnActivity?.by[by] ?? [];
     const colors = groupColors(groups, by, arrange.view, source => titles[source]?.provider ?? '');
     const names = groups.map(group => groupName(group, by, titles));
-    const muted = groups.map(group => groupMuted(group.key));
-    const shown = groups.flatMap((group, i) => (muted[i] ? [] : [{group, color: colors[i], name: names[i]}]));
-    return {groups, colors, names, muted, shown};
+    const shown = groups.map((group, i) => ({group, color: colors[i], name: names[i]}));
+    return {groups, colors, names, shown};
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drawnActivity, by, arrange.view, titles, prefs.muted, locale]);
+  }, [drawnActivity, by, arrange.view, titles, locale]);
   const controls=useMemo(()=>groups.map((group,i)=>({key:group.key,name:group.name,color:colors[i]})),[groups,colors]);
   const prepared = usePrepared(function* () {
     const data = new Map<string, PlotGroup>();
@@ -289,11 +204,10 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     const previous = registry.current?.authority === authority && registry.current.token === strip.token && registry.current.by === by ? registry.current : {authority, token: strip.token,range:drawing?.range, by, seed, groups: seed};
     const identities = groupRegistry(previous.seed, previous.groups, [...found.values()], by === 'source' ? key => key==='unknown'||key==='notProvided'?'var(--other)' : colorOf(arrange.view, key, titles[key]?.provider ?? '') : undefined);
     const plotted: {group: PlotGroup; color: string; name: string}[] = [];
-    for (const identity of identities) {if (!groupMuted(identity.key)) plotted.push({group: data.get(identity.key) ?? {key: identity.key, name: identity.name, cells: EMPTY_CELLS}, color: identity.color, name: groupName(identity, by, titles)}); yield;}
+    for (const identity of identities) {plotted.push({group: data.get(identity.key) ?? {key: identity.key, name: identity.name, cells: EMPTY_CELLS}, color: identity.color, name: groupName(identity, by, titles)}); yield;}
     return {numeric,identities, shown: plotted, strip, registry: {authority, token: strip.token,range:drawing?.range, by,basis:groups, seed: previous.seed, groups: identities}};
-  }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted, locale,numeric], `${authority}:${history?.board}:${by}:${JSON.stringify(activityMutedKeys(muted,by))}`,(by!=='project'||colorsReady)&&(panning!==null||!scoped||allOff||!loading&&!error&&!!local.model&&!local.loading&&!local.error&&subset.compatible(local.model)));
+  }, [strip, groups, colors, shown, by, arrange.view, titles, locale,numeric], `${authority}:${history?.board}:${by}`,by!=='project'||colorsReady);
   const geometry = prepared.value;
-  useLayoutEffect(()=>subset.retain(geometry?.numeric.model??null),[subset,geometry?.numeric.model]);
   useLayoutEffect(()=>geometry?.numeric.history?.projection?boardPeriod.retainActivity(geometry.numeric.history.projection):undefined,[geometry?.numeric.history?.projection]);
   const [displayed,setDisplayed]=useState<ActivityRegistry|null>(null);
   const paintRegistry=useRef<ActivityRegistry|null>(null);
@@ -341,8 +255,8 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
 
   const detailFrame=useMemo(()=>geometry?{...geometry.numeric,identities:geometry.identities}:null,[geometry]);
   const renderDetails=(frame:DetailFrame|null,retained:boolean)=>({
-    summary:<Totals history={frame?.history??null} model={frame?.model??null} retained={retained} by={by} subset={subset} scoped={frame?.scoped??scoped} allOff={frame?.allOff??allOff} since={frame?.since??null} focus={focus}/>,
-    legend:<div className="legend">{(emptyFrame?[]:frame?.identities??controls).map(identity=><LegendItem key={identity.key} subset={subset} model={frame?.model??null} scoped={frame?.scoped??scoped} retained={retained} history={frame?.history??null} groupKey={identity.key} by={by} group={frame?.history?.activity.by[by].find(group=>group.key===identity.key)??null} name={groupName(identity,by,titles)} color={resolved.get(identity.key)?.color??identity.color} muted={!!groupMuted(identity.key)}/>)}</div>,
+    summary:<Totals history={frame?.history??null} retained={retained} by={by} since={frame?.since??null} focus={focus}/>,
+    legend:<div className="legend">{(emptyFrame?[]:frame?.identities??controls).map(identity=><LegendItem key={identity.key} retained={retained} history={frame?.history??null} groupKey={identity.key} by={by} group={frame?.history?.activity.by[by].find(group=>group.key===identity.key)??null} name={groupName(identity,by,titles)} color={resolved.get(identity.key)?.color??identity.color}/>)}</div>,
   });
   return (
     <AnalyticsPanel ref={panel} className="activity" title={t('activity.title')} chart history={history} loading={loading} error={error} retry={()=>{boardPeriod.retry();quotaHistory.retry();}}
@@ -353,8 +267,6 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             history={history}
             detailFrame={detailFrame}
             renderDetails={renderDetails}
-            subset={subset}
-            scoped={scoped}
             activity={drawnActivity ?? EMPTY_ACTIVITY}
             currentActivity={activity ?? EMPTY_ACTIVITY}
             origin={drawing?.since ?? from}
@@ -373,8 +285,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             authority={authority}
             navigation={navigation}
             by={by}
-            valueContext={JSON.stringify([board,activityMutedKeys(prefs.muted,by)])}
-            allMuted={!emptyFrame && presentation.identities.length > 0 && presentation.shown.length === 0}
+            valueContext={board??''}
             empty={!history ? empty : emptyFrame}
           />
 
@@ -395,13 +306,12 @@ export const stacksHeight = (width: number) => (width < 560 ? 160 : 200);
 const EMPTY_CELLS: PlotGroup['cells'] = [];
 
 /** A stationary readout advances its clipped numbers without waking the SVG. */
-function ActivityReadout({history,by,hover,barMs,bar,parts,tipProps,subset,scoped,model,retained=false}:{model?:SubsetModel;retained?:boolean;subset:ActivitySelection;scoped:boolean;history:ActivityHistory|null;by:ActivityDimension;hover:number;barMs:number;bar:number[];parts:{key:string;name:string;color:string;ms:number}[];tipProps:Omit<ComponentProps<typeof Tooltip>,'children'>}) {
+function ActivityReadout({history,by,hover,barMs,bar,parts,tipProps,retained=false}:{history:ActivityHistory|null;by:ActivityDimension;hover:number;barMs:number;bar:number[];parts:{key:string;name:string;color:string;ms:number}[];tipProps:Omit<ComponentProps<typeof Tooltip>,'children'>;retained?:boolean}) {
   const values=(activity:ActivityData)=>parts.map(part=>({...part,ms:activity.by[by].find(group=>group.key===part.key)?.agentMs??0})).filter(part=>part.ms>0);
-  const base=useActivityNumbers(history,by,value=>JSON.stringify([...metricsText(value),...values(value).map(part=>[part.key,workHours(part.ms)])]),!scoped,hover,undefined,retained);
-  const local=useSubsetNumbers(subset,history,scoped,hover,model);
-  const activity=scoped?local.activity:base;
+  const base=useActivityNumbers(history,by,value=>JSON.stringify([...metricsText(value),...values(value).map(part=>[part.key,workHours(part.ms)])]),true,hover,undefined,retained);
+  const activity=base;
   const current=activity?values(activity):parts,agentMs=activity?.agentMs??bar[2],activeMs=activity?.activeMs??bar[1],agents=activity?.agents??bar[3];
-  if(!current.length||scoped&&!activity)return null;
+  if(!current.length)return null;
   return <Tooltip {...tipProps}>
     <div className="tooltip-time">{cellLabel(hover,barMs)}</div>
     <div data-time="activity-readout"><Metrics agentMs={agentMs} activeMs={activeMs} agents={agents}/>
@@ -416,8 +326,6 @@ function ActivityReadout({history,by,hover,barMs,bar,parts,tipProps,subset,scope
 const Stacks = memo(function Stacks({
   detailFrame,
   renderDetails,
-  subset,
-  scoped,
   activity: incomingActivity,
   currentActivity,
   origin: incomingOrigin,
@@ -437,20 +345,17 @@ const Stacks = memo(function Stacks({
   navigation,
   by,
   valueContext='',
-  allMuted,
   empty,
 }: {
   history?: History|null;
   detailFrame:DetailFrame|null;
   renderDetails:(frame:DetailFrame|null,retained:boolean)=>{summary:ReactNode;legend:ReactNode};
-  subset:ActivitySelection;
-  scoped:boolean;
   activity: ActivityData;
   /** Exact boundary bars and readout advance without rebuilding interior stacks. */
   currentActivity?: ActivityData;
   /** Where the answer begins: the bars are drawn from there, so their numbers stay small however old the hub. */
   origin: number;
-  /** The groups switched on in the legend, bottom to top, each with its colour and name. */
+  /** The groups admitted by board filters, bottom to top, each with its colour and name. */
   groups: {group: PlotGroup; color: string; name: string}[];
   paint:ReadonlyMap<string,string>;
   registry?:ActivityRegistry|null;
@@ -468,7 +373,6 @@ const Stacks = memo(function Stacks({
   navigation: AxisNavigation;
   by: ActivityDimension;
   valueContext?:string;
-  allMuted: boolean;
   empty: string | null;
 }) {
   const locale = useLocale();
@@ -522,8 +426,6 @@ const Stacks = memo(function Stacks({
   }, [...inputs, requested.from, requested.to, requested.end], `${authority}:${by}:${width}:${height}:${valueContext}`, incomingReady);
   const model = prepared.value;
   const coherent=incomingReady&&prepared.ready;
-  useLayoutEffect(()=>subset.retain(detailFrame?.model??null),[subset,detailFrame?.model]);
-  useLayoutEffect(()=>subset.retain(model?.detailFrame?.model??null),[subset,model?.detailFrame?.model]);
   useLayoutEffect(()=>detailFrame?.history?.projection?boardPeriod.retainActivity(detailFrame.history.projection):undefined,[detailFrame?.history?.projection]);
   useLayoutEffect(()=>model?.detailFrame?.history?.projection?boardPeriod.retainActivity(model.detailFrame.history.projection):undefined,[model?.detailFrame?.history?.projection]);
   const details=renderDetails(model?.detailFrame??null,!coherent);
@@ -621,12 +523,11 @@ const Stacks = memo(function Stacks({
     for (const at of starts) {
       const bar = strip && target ? plotBar(strip, at, target, by) : null;
       if (strip && !bar) continue;
-      const local=!strip&&scoped?subset.numbers(hubNow(),at,model?.detailFrame?.model??null):null;
       let total = 0;
       const gap = perMs * barMs >= 8 ? 0.5 : 0;
       const a = x(at) + gap, b = x(at + barMs) - gap;
       groups.forEach(({group}, i) => {
-        const ms = strip ? bar?.groups.get(group.key)?.ms ?? 0 : local?local.by[by].find(part=>part.key===group.key)?.agentMs??0:activity.by[by].find(g => g.key === group.key)?.cells.find(([start]) => start === at)?.[1] ?? 0;
+        const ms = strip ? bar?.groups.get(group.key)?.ms ?? 0 : activity.by[by].find(g => g.key === group.key)?.cells.find(([start]) => start === at)?.[1] ?? 0;
         if (!ms) return;
         const low = total;
         total += ms;
@@ -711,14 +612,14 @@ const Stacks = memo(function Stacks({
         <g clipPath={(strip || currentActivity) && !active ? `url(#${CSS.escape(innerClip)})` : undefined}>
           <g ref={valueBand}><g transform={`translate(${(left + (pathOrigin - basis.from) * perMs).toFixed(1)} 0)`}>
             {groups.map(({group, color}, i) => (
-              <path key={group.key} d={paths[i]} fill={color} className="activity-stack" style={seriesFocusStyle(mutedKey(by, group.key))}/>
+              <path key={group.key} d={paths[i]} fill={color} className="activity-stack" style={seriesFocusStyle(activitySeriesKey(by, group.key))}/>
             ))}
           </g></g>
         </g>
       </PlotLayer>
       {(strip || currentActivity) && (
         <PlotLayer width={width} height={height} scale={scale} left={left} right={right}>
-          <g ref={edges}>{groups.map(({group, color}) => <path key={group.key} fill={color} className="activity-stack" style={seriesFocusStyle(mutedKey(by, group.key))}/>)}</g>
+          <g ref={edges}>{groups.map(({group, color}) => <path key={group.key} fill={color} className="activity-stack" style={seriesFocusStyle(activitySeriesKey(by, group.key))}/>)}</g>
         </PlotLayer>
       )}
       <PlotOverlay width={width} height={height}>
@@ -728,9 +629,8 @@ const Stacks = memo(function Stacks({
         )}
       </PlotOverlay>
       {empty && <div className="chart-empty">{empty}</div>}
-      {allMuted && <div className="chart-empty">{t('activity.allOff')}</div>}
       {hover !== null && bar && parts.length > 0 && !drag && (
-        <ActivityReadout subset={subset} scoped={model?.detailFrame?.scoped??scoped} model={model?.detailFrame?.model??null} retained={!coherent} history={model?.detailFrame?.history??null} by={by} hover={hover} barMs={barMs} bar={bar} parts={parts} tipProps={{tip,className:narrow?'is-below':'',style:tipStyle}}/>
+        <ActivityReadout retained={!coherent} history={model?.detailFrame?.history??null} by={by} hover={hover} barMs={barMs} bar={bar} parts={parts} tipProps={{tip,className:narrow?'is-below':'',style:tipStyle}}/>
       )}
     </div>
     {details.legend}

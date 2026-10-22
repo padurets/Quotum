@@ -347,7 +347,7 @@ async function main() {
     const credits=await creditPhase(demo,stand,cdp);
     problems.push(...credits.problems);
     const monetary=await moneyPhase(demo,stand,cdp);
-    say('checking fixed Activity subsets, late-work cells, cancellation and shared preparation costs at 24h/30d');
+    say('checking paint-only emphasis and shared Activity filters, late-work cells and cancellation at 24h/30d');
     const selectedActivity=await fixedActivity(browser,stand);
     problems.push(...selectedActivity.problems);
     problems.push(...monetary.problems);

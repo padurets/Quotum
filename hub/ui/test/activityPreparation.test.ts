@@ -27,7 +27,7 @@ test('the actual activity edge painter advances clipped bars without preparing t
   const clips: number[][] = []; let draft: {token: number} | null = null;
   const node = (values: Map<string, string>) => ({getAttribute: (name: string) => values.get(name), setAttribute: (name: string, value: string) => values.set(name, value)});
   const context = {navigationAt,navigationKey,navigation:{context:'test',range:'live'},timeRange:()=>null,valueContext:'',valuePin:{current:null},activityScale,heights:new Map(),paintValue:()=>{},bandClip: {current: {}}, mask: {current: node(attributes)}, edges: {current: {querySelectorAll: () => [node(path)]}},
-    scoped:false,currentActivity: {}, activity: {by: {source: [{key: 's', cells: [[0, 25_000], [60_000, 60_000], [120_000, 5_000]]}]}},
+    currentActivity: {}, activity: {by: {source: [{key: 's', cells: [[0, 25_000], [60_000, 60_000], [120_000, 5_000]]}]}},
     strip: null, groups: [{group: {key: 's'}}], from: 15_000, to: 135_000, by: 'source', barMs: 60_000, vertical: {max: 60_000}, height: 100, perMs: 0.001,
     left: 0, right: 0, width: 120, scale: 1, x: (at: number) => at / 1000, y: (ms: number) => 100 - ms / 1000,
     axis: {held: false, visualGeometry: () => ({})}, pan: {get: () => draft}, painted: {current: ''}, clipPlot: (_node: unknown, ...bounds: number[]) => clips.push(bounds), cellStart,plotBar,targetOf,
@@ -58,10 +58,10 @@ test('ordinary Activity frames allocate unpinned colours by current rank while m
   const region=source.slice(start,source.indexOf('  // Numerical consumers keep',start));
   type Model={identities:ProjectIdentity[]};
   type Presentation={model:Model|null;identities:ProjectIdentity[]};
-  const context={...hooks,resolveProjectColors,groupRegistry,numeric:{history:null,model:null,scoped:false,allOff:false,since:null},subset:{retain:()=>()=>{}},muted:{},activityMutedKeys:()=>[],panning:null,loading:false,error:null,scoped:false,allOff:false,local:{model:null,loading:false,error:null},
+  const context={...hooks,resolveProjectColors,groupRegistry,numeric:{history:null,since:null},panning:null,loading:false,error:null,
     usePrepared:(work:()=>Generator<void,unknown,void>,deps:readonly unknown[],scope:unknown=null,enabled=true)=>hooks.usePrepared(()=>{preparations++;return work();},deps,scope,enabled),
     groups:[] as ActivityGroup[],colors:[] as string[],shown:[] as {group:ActivityGroup;color:string;name:string}[],strip:null,registry:{current:null},
-    pins:[] as ProjectColorPins,colorsReady:true,authority:0,history:{board:'b'},drawing:{range:'24h'},by:'project',arrange:{view:{}},titles:{},prefs:{muted:{}},locale:'en',
+    pins:[] as ProjectColorPins,colorsReady:true,authority:0,history:{board:'b'},drawing:{range:'24h'},by:'project',arrange:{view:{}},titles:{},prefs:{},locale:'en',
     render:null as unknown as ()=>Presentation,
   };
   runInNewContext(ts.transpileModule(`function render(){${region}\nreturn {model:prepared.value,identities:presentation.identities};}\nglobalThis.render=render;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
@@ -90,11 +90,8 @@ test('ordinary Activity frames allocate unpinned colours by current rank while m
   const repeated=render();
   assert.equal(repeated.model,ranked.model);assert.equal(repeated.identities.at(-1)!.color,OTHER_COLOR,'releasing a manual slot does not promote a neutral survivor');
   assert.equal(preparations,beforeColors,'colour-only changes do not prepare another numeric model');
-  context.prefs={muted:{one:true}};context.shown=context.shown.slice(1);
-  const muted=settle();assert.notEqual(muted.model,ranked.model);
-  assert.equal(muted.identities.at(-1)!.color,OTHER_COLOR,'legend metadata keeps the same allocation basis');
   const beforeReset=preparations;context.pins=[];
-  const reset=render();assert.equal(reset.model,muted.model);assert.equal(reset.identities.at(-1)!.color,OTHER_COLOR);assert.equal(preparations,beforeReset);
+  const reset=render();assert.equal(reset.model,ranked.model);assert.equal(reset.identities.at(-1)!.color,OTHER_COLOR);assert.equal(preparations,beforeReset);
 
   frame(names);render();context.pins=[['P2',CATEGORY_COLORS[0]]];render();hooks.finish();
   assert.equal(render().identities.find(group=>group.name==='P2')!.color,CATEGORY_COLORS[0],'pending numeric preparation resolves the latest pins when it commits');
@@ -111,14 +108,14 @@ test('actual Activity composition resolves retained stacks and the new legend to
   const axis={box:{current:null},svg:{current:null},width:400,scale:1,hover:null,drag:null,clip:'c',handlers:{},basis:{from:0,to:length,end:length},active:false,screenX:(at:number)=>at,commitDrawing:()=>{}};
   type Row={group:ActivityGroup;color:string;name:string};
   type Frame={element:React.ReactElement<Record<string,unknown>>;legend:React.ReactNode;prepared:{value:unknown}};
-  const context={...parent,React,numeric:null as any,muted:{},loading:false,local:{model:null,loading:false,error:null},allOff:false,focus:{},Totals:()=>null,activityMutedKeys:()=>[],memo:(fn:unknown)=>fn,useEffect:()=>{},useId:()=> 'c',seriesFocusStyle:()=>({}),mutedKey:(_by:string,key:string)=>key,
+  const context={...parent,React,numeric:null as any,loading:false,focus:{},Totals:()=>null,memo:(fn:unknown)=>fn,useEffect:()=>{},useId:()=> 'c',seriesFocusStyle:()=>({}),activitySeriesKey:(_by:string,key:string)=>key,
     StackPaths:CountedPaths,stacksHeight:()=>160,activityScale,niceTicks,cellStart,navigationKey,MINUTE:60_000,CSS:{escape:(id:string)=>id},pan:{active:()=>null,subscribe:()=>()=>{},onStop:()=>()=>{}},
     useLocale:()=> 'en',useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),PlotLayer:()=>null,PlotOverlay:()=>null,
-    clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',t:(key:string)=>key,LegendItem:()=>null,groupName:(group:{name:string|null})=>group.name??'',groupMuted:()=>false,
-    EMPTY_CELLS:[],registry:{current:null},groups:[] as ActivityGroup[],colors:[] as string[],shown:[] as Row[],strip:null,by:'project',prefs:{muted:{}},locale:'en',
+    clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',t:(key:string)=>key,LegendItem:()=>null,groupName:(group:{name:string|null})=>group.name??'',
+    EMPTY_CELLS:[],registry:{current:null},groups:[] as ActivityGroup[],colors:[] as string[],shown:[] as Row[],strip:null,by:'project',prefs:{},locale:'en',
     history:{board:'b'},authority:1,arrange:{view:{}},titles:{},drawing:{range:'24h',since:0},pins:[['A',CATEGORY_COLORS[8]]] as ProjectColorPins,colorsReady:true,resolveProjectColors,groupRegistry,
     activity:{barMs:60_000,by:{project:[] as ActivityGroup[]},cells:[]},drawnActivity:{barMs:60_000,by:{project:[] as ActivityGroup[]},cells:[]},currentGroups:[] as ActivityGroup[],
-    subset:{retain:()=>()=>{}},board:'b',scoped:false,EMPTY_ACTIVITY:{},emptyFrame:null,panning:null,answered:true,error:undefined,from:0,to:length,since:null,onBase:()=>{},setTimeRange:()=>{},plot:undefined,navigation:{context:'b',range:'24h'},
+    board:'b',EMPTY_ACTIVITY:{},emptyFrame:null,panning:null,answered:true,error:undefined,from:0,to:length,since:null,onBase:()=>{},setTimeRange:()=>{},plot:undefined,navigation:{context:'b',range:'24h'},
     render:null as unknown as ()=>Frame,Stacks:null as unknown as (props:object)=>React.ReactNode,
   };
   runInNewContext(ts.transpileModule(`function render(){${region}\n${details}\nreturn {element:(${element}),prepared};}\nglobalThis.render=render;\n${source.slice(source.indexOf('const Stacks = memo(function Stacks('))}\nglobalThis.Stacks=Stacks;`,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React}}).outputText,context);
@@ -126,7 +123,7 @@ test('actual Activity composition resolves retained stacks and the new legend to
     context.groups=names.map(name=>({key:JSON.stringify(name),name,cells:Array.from({length:480},(_,i):[number,number]=>[i*60_000,60_000]),agentMs:60_000,activeMs:60_000,agents:1}));
     context.colors=groupColors(context.groups,'project',{} as Parameters<typeof groupColors>[2],()=> '');
     context.shown=context.groups.map((group,i)=>({group,color:context.colors[i],name:group.name!}));
-    context.activity=context.drawnActivity={barMs:60_000,by:{project:context.groups},cells:[]};context.currentGroups=context.groups;context.numeric={history:{range:'24h',activity:context.activity},model:null,scoped:false,allOff:false,since:null};
+    context.activity=context.drawnActivity={barMs:60_000,by:{project:context.groups},cells:[]};context.currentGroups=context.groups;context.numeric={history:{range:'24h',activity:context.activity},since:null};
   };
   const nodes=(node:React.ReactNode):React.ReactElement<Record<string,unknown>>[]=>Array.isArray(node)?node.flatMap(nodes):React.isValidElement<Record<string,unknown>>(node)?[node,...nodes(node.props.children as React.ReactNode)]:[];
   const render=()=>{
@@ -181,9 +178,9 @@ test('actual Activity generators hold one coherent model and produce exact stack
   type Model = {identities: {key: string; name: string | null}[]; shown: {group: PlotGroup; color: string; name: string}[]; strip: PlotBuffer};
   const navigation = {context: 'test', range: 'range'};
   const axis = {box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {from: 0, to: length, end: length}, active: false, screenX: (at: number) => 48 + (at - axis.basis.from) / length * 340, commitDrawing: () => {}};
-  const context = {numeric:{history:null,model:null,scoped:false,allOff:false,since:null},subset:{retain:()=>()=>{}},muted:{},activityMutedKeys:()=>[],panning:null,loading:false,error:null,scoped:false,allOff:false,local:{model:null,loading:false,error:null},resolveProjectColors,pins:[] as ProjectColorPins,paint:new Map<string,string>(),colorsReady:true,drawing:{range:undefined},navigationKey, React, ...parent, memo: (fn: unknown) => fn, useState: child.useState, useEffect: () => {}, seriesFocusStyle:()=>({}), useId: () => 'c',
-    EMPTY_CELLS: [], registry: {current: null}, groups: [], colors: [], shown: [], strip: buffer(0), by: 'project', prefs: {muted: {}}, locale: 'en', history: {board: 'b'}, authority: 0, arrange: {view: {}}, titles: {},
-    groupMuted:()=>false,groupRegistry, groupName: (group: {key: string}) => group.key, mutedKey: (_by: string, key: string) => key,
+  const context = {numeric:{history:null,since:null},panning:null,loading:false,error:null,resolveProjectColors,pins:[] as ProjectColorPins,paint:new Map<string,string>(),colorsReady:true,drawing:{range:undefined},navigationKey, React, ...parent, memo: (fn: unknown) => fn, useState: child.useState, useEffect: () => {}, seriesFocusStyle:()=>({}), useId: () => 'c',
+    EMPTY_CELLS: [], registry: {current: null}, groups: [], colors: [], shown: [], strip: buffer(0), by: 'project', prefs: {}, locale: 'en', history: {board: 'b'}, authority: 0, arrange: {view: {}}, titles: {},
+    groupRegistry, groupName: (group: {key: string}) => group.key, activitySeriesKey: (_by: string, key: string) => key,
     plotGroupsPrepared: function* (...args: Parameters<typeof plotGroupsPrepared>) {aggregates++; return yield* plotGroupsPrepared(...args);},
     StackPaths: CountedPaths, stacksHeight: () => 160, activityScale, niceTicks: (...args: Parameters<typeof niceTicks>) => {tickFrame = [args[0], args[1]]; return niceTicks(...args);}, cellStart,plotBar,targetOf, MINUTE: 60_000,
     CSS: {escape: (id: string) => id}, pan: {active: () => 1, subscribe: () => () => {},onStop:()=>()=>{}}, useLocale: () => 'en',
@@ -214,7 +211,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
     if (!React.isValidElement<{className?: string; d?: string; children?: React.ReactNode}>(node)) return [];
     return node.props.className === 'activity-stack' && node.props.d !== undefined ? [node.props.d] : pathsOf(node.props.children);
   };
-  const props = {subset:{retain:()=>()=>{}},detailFrame:null,renderDetails:()=>({summary:null,legend:null}),activity: {barMs}, origin: 0, groups: current.shown,paint:context.paint, from: 0, to: length, unknownTo: null, plot: undefined, onBase: () => {}, onSelect: () => {}, strip: current.strip as PlotBuffer | null, prepared: true, navigation, by: 'project', allMuted: false, empty: null};
+  const props = {detailFrame:null,renderDetails:()=>({summary:null,legend:null}),activity: {barMs}, origin: 0, groups: current.shown,paint:context.paint, from: 0, to: length, unknownTo: null, plot: undefined, onBase: () => {}, onSelect: () => {}, strip: current.strip as PlotBuffer | null, prepared: true, navigation, by: 'project',  empty: null};
   const renderChild = () => {Object.assign(context, child); child.begin(); return pathsOf(context.Stacks(props));};
   assert.deepEqual(renderChild(), []); assert.equal(draws, 0); child.commit(); child.finish();
   const actual = renderChild();
@@ -254,7 +251,7 @@ test('native Activity value projection excludes a departed peak before release a
   const band=element(),edges={...element(),querySelectorAll:()=>[]},axis={held:false,visualGeometry:()=>({from:visualFrom}),screenX:(at:number)=>at/M};
   const context={navigationAt,navigationKey,navigation:{context:'test',range:'live'},timeRange:()=>selected,valueContext:'',valuePin:{current:null as {context:string;range:string;maximum:number}|null},activityScale,workHours,valueBand:{current:band},valueAxis:{current:{children:rows}},paintedValue:{current:''},vertical:{max:12*H},height:300,top:12,bottom:28,
     heights:new Map([[0,12*H],[M,H],[-M,100*H]]),bandClip:{current:{}},mask:{current:element()},edges:{current:edges},pan:{get:()=>draft},axis,strip:null,
-    scoped:false,groups:[{group:{key:'s'}}],activity:{by:{source:[]}},currentActivity:{},from:0,to:2*M,barMs:M,by:'source',left:0,right:0,width:120,scale:1,perMs:1/M,x:(at:number)=>at/M,y:(value:number)=>272-value/(12*H)*260,
+    groups:[{group:{key:'s'}}],activity:{by:{source:[]}},currentActivity:{},from:0,to:2*M,barMs:M,by:'source',left:0,right:0,width:120,scale:1,perMs:1/M,x:(at:number)=>at/M,y:(value:number)=>272-value/(12*H)*260,
     cellStart,plotBar,targetOf,clipPlot:()=>{},painted:{current:''},paint:null as unknown as (range?:{from:number;to:number},pin?:boolean)=>void};
   const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8'),start=source.indexOf('  const paintValue=');
   const body=source.slice(start,source.indexOf('  // Value projection follows the committed time pose',start));

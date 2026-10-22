@@ -15,7 +15,7 @@ for(const replace of [false,true])test(`all-visible ${replace?'retained replacem
   const a=paint.settle();displayedProps=a.totals;numerical=clockConsumer('Totals',clock,h.period,displayedProps,()=>panning,()=>gestureAt);assert.ok(numerical.render().includes('data-agent-ms="1000"'));legend=clockConsumer('LegendItem',clock,h.period,a.entries[0],()=>panning,()=>gestureAt);legend.render();
   if(replace){
    h.store.creditWork(h.device,NOW-17*M,NOW-14*M,[{source:h.source,client:'codex',origin:'terminal',project:'New project',folder:'New project',startedAt:NOW-H,identity:{kind:'stable',sessionId:'New project'}}]);h.events.flush();await flush();
-   const held=paint.render();assert.deepEqual(held.paths,a.paths);assert.equal(held.totals.scoped,false);assert.equal(held.totals.retained,true);displayedProps=held.totals;numerical.update(displayedProps);
+   const held=paint.render();assert.deepEqual(held.paths,a.paths);assert.equal(held.totals.retained,true);displayedProps=held.totals;numerical.update(displayedProps);
   }
   const expectedEnd=NOW+2000;
   for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>expectedEnd)break;now=next[1].at;h.advance(now);timers.delete(next[0]);next[1].run();numerical.render();legend.render();}

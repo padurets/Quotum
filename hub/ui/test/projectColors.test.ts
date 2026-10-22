@@ -38,7 +38,7 @@ test('released slots do not promote neutral survivors, while new entries may tak
   assert.equal(reset.find(g=>g.name==='P8')!.color,OTHER_COLOR);assert.equal(reset[0].color,C[0]);
 });
 
-test('the navigation registry keeps muted/offscreen seeds reserved, releases only retired transients and preserves old no-pin allocation',()=>{
+test('the navigation registry keeps offscreen seeds reserved, releases only retired transients and preserves old no-pin allocation',()=>{
   const seed=colors(['seed']),first=groupRegistry(seed,seed,[group('late'),group('other')]);
   const pinned=resolveProjectColors(first,[['seed',C[1]]],seed);
   assert.deepEqual(pinned.map(g=>g.color),[C[1],C[0],C[2]]);

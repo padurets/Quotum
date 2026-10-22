@@ -27,7 +27,7 @@ for(const language of ['en','ru'] as const)test(`${language} actual unnamed key 
   assert.equal(series.end,'98765433');assert.equal(series.semantics?.label,null);assert.equal(series.role,undefined);
   const source=readFileSync(new URL('ui/components/MoneyAnalytics.tsx',root),'utf8'),start=source.indexOf('  const descriptions=useMemo'),end=source.indexOf('  const noSelection=',start);
   let descriptions=source.slice(start,end)+'\nexports.entries=descriptions;';
-  const context:any={exports:{},useMemo:(f:any)=>f(),amounts:{current:new Map()},original:[series],sources:[{id,title:'Wallet account'}],moneyIdentity,moneySeriesDetail,nameOf:moneySeriesName,money,context:defaultCurrencyContext,family:'budget',muted:{},settings:{},widget:'budget-history',locale:language,isMuted:()=>false};
+  const context:any={exports:{},useMemo:(f:any)=>f(),amounts:{current:new Map()},original:[series],sources:[{id,title:'Wallet account'}],moneyIdentity,moneySeriesDetail,nameOf:moneySeriesName,money,context:defaultCurrencyContext,family:'budget',legendValues:'fixture',authority:0,board,settings:{},widget:'budget-history',locale:language};
   runInNewContext(compile(descriptions),context);const entries=context.exports.entries,keyId=entries[0].key;
   const panel={current:{querySelectorAll:()=>[]}},react={useRef:(current:any)=>({current}),useLayoutEffect:(f:any)=>f(),useSyncExternalStore:(_subscribe:any,get:any)=>get()};
   const ui:any={exports:{},require:(name:string)=>name==='react'?react:name==='react-dom'?{createPortal:(n:any)=>n}:name==='react/jsx-runtime'?{jsx,jsxs:jsx}:{useBubble:()=>({current:null})}};

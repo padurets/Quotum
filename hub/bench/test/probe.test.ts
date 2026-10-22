@@ -12,7 +12,7 @@ class Element {
     readonly tagName: string,
     readonly className: string,
     private readonly attributes: Record<string, string>,
-    readonly parentElement: Element | null,
+    public parentElement: Element | null,
   ) {parentElement?.children.push(this);}
   hasAttribute(name: string) {
     return Object.hasOwn(this.attributes, name);
@@ -86,6 +86,48 @@ test("a component's work is counted in the part of the page its first element is
   assert.equal(host.child, empty);
   assert.equal(nodeOf(empty, NODES), card);
   assert.equal(nodeOf(fiber(FUNCTION, {children: [fiber(HOST, {stateNode: el('main', null)})]}), NODES), null, 'outside every part: the page');
+});
+
+test('opening and closing legend details stay separate while real chart renders remain counted',()=>{
+  const p=page(),panel=el('section',null,{'data-time':'chart'},'budget-history');
+  const detail=el('span',null,{'data-series-details':''},'tooltip series-tip');
+  const opened=fiber(FUNCTION,{children:[fiber(HOST,{stateNode:detail})]});
+  const closed=fiber(FUNCTION,{flags:PERFORMED,was:opened});
+  fiber(HOST,{stateNode:panel,children:[closed]});
+  assert.equal(nodeOf(opened,NODES),detail);
+  assert.equal(nodeOf(closed,NODES),detail,'an empty detail fiber must not fall back to its chart ancestor');
+  p.hook.onCommitFiberRoot(1,{current:closed});
+  assert.equal(p.bench.read().renders[0].kind,null);
+  p.bench.reset();
+  p.hook.onCommitFiberRoot(1,{current:fiber(FUNCTION,{children:[fiber(HOST,{stateNode:panel,children:[opened]})]})});
+  assert.ok(p.bench.read().renders.some(part=>part.kind==='chart'),'the detail exemption cannot hide work in a chart data consumer');
+});
+
+test('a legend focus description renders its entry while a real chart render still counts',()=>{
+  const p=page(),panel=el('section',null,{'data-time':'chart'},'activity');
+  const entry=el('div',panel,{'data-series-legend':''},'activity-legend-item');
+  const focused=fiber(FUNCTION,{children:[fiber(HOST,{stateNode:el('button',entry)})]});
+  p.hook.onCommitFiberRoot(1,{current:focused});
+  assert.equal(nodeOf(focused,NODES),entry);
+  assert.ok(!p.bench.read().renders.some(part=>part.kind==='chart'));
+  p.hook.onCommitFiberRoot(1,{current:fiber(FUNCTION,{children:[fiber(HOST,{stateNode:panel,children:[focused]})]})});
+  assert.ok(p.bench.read().renders.some(part=>part.kind==='chart'));
+});
+
+test('a removed legend keeps the region where it rendered without exempting later header work',()=>{
+  const p=page(),panel=el('section',null,{'data-time':'chart'},'history');
+  const entry=el('button',panel,{'data-series-legend':''},'legend-item');
+  const root=fiber(FUNCTION,{children:[fiber(HOST,{stateNode:entry})]});
+  p.hook.onCommitFiberRoot(1,{current:root});p.mutate(entry);
+  entry.parentElement=null;
+  const removed=p.bench.read();
+  assert.equal(removed.renders[0].region,'analytics','reading after removal cannot turn past chart work into page work');
+  assert.equal(removed.renders[0].widget,'quota');assert.equal(removed.mutations[0].region,'analytics');
+  entry.parentElement=el('header',null,{},'topbar');
+  p.hook.onCommitFiberRoot(1,{current:root});
+  assert.deepEqual(p.bench.read().renders.map(row=>[row.region,row.count]),[['analytics',1],['header',1]],'the same element rendering in a forbidden region must still fail');
+  p.bench.reset();entry.parentElement=null;p.hook.onCommitFiberRoot(1,{current:root});
+  assert.equal(p.bench.read().renders[0].region,'page','a legend marker grants no blanket analytics exemption');
 });
 
 /** Runs the probe as the browser gets it, in a context of its own with a stand-in DOM. */

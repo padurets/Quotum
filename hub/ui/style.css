@@ -598,13 +598,12 @@ td.muted, small.muted { color: var(--text-3); }
 
 /* Under its chart, as on either chart. */
 .legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 12px 0 0; font-size: 12.5px; }
-.legend-item { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; border: 0; background: none; font-size: inherit; color: var(--text-2); text-align: left; opacity: calc(var(--series-focus, 1) * var(--legend-opacity, 1)); transition: opacity .15s; }
+.legend-item { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; border: 0; background: none; font-size: inherit; color: var(--text-2); text-align: left; opacity: var(--series-focus, 1); transition: opacity .15s; }
 /* A long name (a project's path) breaks anywhere rather than widening the row; its value stays whole. */
 .legend-item span { min-width: 0; overflow-wrap: anywhere; }
 .legend-item b { color: var(--text); font-weight: 500; white-space: nowrap; }
 .series-focus { opacity: var(--series-focus, 1); }
-.legend-item[aria-pressed=false] { --legend-opacity: .35; }
-.legend-item:hover { --legend-opacity: 1; color: var(--text); }
+.legend-item:hover { color: var(--text); }
 .legend-empty { color: var(--text-4); padding: 4px 0; }
 
 .chart { position: relative; margin-top: 18px; }
@@ -632,8 +631,6 @@ td.muted, small.muted { color: var(--text-3); }
 /* One information area explains the enabled series without moving the plot on hover. */
 .chart-info { margin-top: 6px; color: var(--text-3); font-size: 12.5px; container-type: inline-size; }
 .chart-info + .chart { margin-top: 12px; }
-.activity-info { position: relative; }
-.activity-info > .reader-state { position: absolute; right: 0; bottom: 0; }
 .activity-totals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, 36px); gap: 2px 16px; font-variant-numeric: tabular-nums; }
 .activity-totals > span { display: flex; flex-direction: column; min-width: 0; }
 .activity-total-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

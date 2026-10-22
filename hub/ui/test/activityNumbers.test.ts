@@ -1,6 +1,5 @@
 import {activityClockConsumer as consumer} from './activityClockFixture';
 import {projectColorBindings} from './projectColorBindings';
-import {chartSeriesMuted} from '../lib/prefs';
 import {ACTIVITY} from '../../server/domain/widgets';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +9,7 @@ import {createRequire} from 'node:module';
 import ts from 'typescript';
 import {PageClock} from '../lib/clock';
 import {workHours,stamp} from '../lib/format';
-import {mutedKey} from '../lib/activity';
+import {activitySeriesKey} from '../lib/activity';
 import {t,setLocale} from '../i18n';
 import {PeriodActivity} from '../lib/periodActivity';
 import {PeriodCurves,WorkTimeline} from '../../server/domain/periodCurves';
@@ -19,9 +18,7 @@ import type {WorkTrace} from '../../server/domain/periodWork';
 import {fixture,drawings,NOW,H,M} from './periodRuntimeFixture';
 import {preparationFixture} from './preparationFixture';
 import {activityEmpty,groupColors} from '../lib/activity';
-import {ActivitySelection} from '../lib/activitySelection';
-import {HistoryPool} from '../lib/historyPool';
-import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
+import {defaultFilters} from '../../server/domain/dataFilters';
 import {flush} from './periodRuntimeFixture';
 import {CHART_SERIES_SCENES} from '../../demo/catalogue';
 import {groupRegistry} from '../lib/plotRegistry';
@@ -33,12 +30,13 @@ const compile=(code:string)=>ts.transpileModule(code,{compilerOptions:{target:ts
 test('a mouse-focused legend keeps its own metric description when keyboard modality changes',async test=>{
   test.mock.method(Date,'now',()=>NOW);setLocale('en');const h=await fixture(),d=await drawings(h);
   const history=d.render().history!,group=history.activity.by.project[0],clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}});
-  const props={history,by:'project',groupKey:group.key,group,name:'Work project',color:'red',muted:true},view=consumer('LegendItem',clock,h.period,props);
+  const props={history,by:'project',groupKey:group.key,group,name:'Work project',color:'red'},view=consumer('LegendItem',clock,h.period,props);
   try{
-    assert.ok(view.render().includes(t('activity.seriesHidden')));view.focus(false);
-    const enabled=view.update({...props,muted:false});
-    for(const key of ['activity.agentHours','activity.active','activity.agents','activity.atOnce'] as const)assert.ok(enabled.includes(t(key)),key);
-    assert.ok(enabled.includes('aria-describedby="legend-description"'));
+    assert.ok(view.render().includes('aria-pressed="false"'));view.focus(false);
+    const focused=view.render();
+    for(const key of ['activity.agentHours','activity.active','activity.agents','activity.atOnce'] as const)assert.ok(focused.includes(t(key)),key);
+    assert.ok(focused.includes('aria-describedby="legend-description"'));
+    view.focus(true);assert.equal(view.render(),focused);
   }finally{view.close();d.close();await h.close();}
 });
 
@@ -50,7 +48,7 @@ for(const periodName of ['1h','30d'])test(`${periodName}: PageClock updates fina
   let now=NOW;const timers=new Map<object,{at:number;run:()=>void}>();
   const clock=new PageClock({now:()=>now,visible:()=>true,setTimeout:(run,ms)=>{const token={};timers.set(token,{at:now+ms,run});return token;},clearTimeout:token=>{timers.delete(token as object);}});
   const drawn=d.render(),history=drawn.history!;assert.equal(history.activity.agents,1);
-  const group=history.activity.by.project[0],base={history,by:'project',groupKey:group.key,group,muted:{},since:null};
+  const group=history.activity.by.project[0],base={history,by:'project',groupKey:group.key,group,since:null};
   const totals=consumer('Totals',clock,h.period,base),amount=consumer('LegendAmount',clock,h.period,base),metrics=consumer('LegendMetrics',clock,h.period,{...base,active:true});
   const hover=Math.floor(to/history.activity.barMs)*history.activity.barMs;
   const readout=consumer('ActivityReadout',clock,h.period,{...base,hover,barMs:history.activity.barMs,bar:[hover,90_000,90_000,1],parts:[{key:group.key,name:'Work project',color:'red',ms:90_000}],tipProps:{}});
@@ -76,7 +74,7 @@ for(const lang of ['en','ru'] as const)test(`${lang}: all four Activity metrics 
   test.mock.method(Date,'now',()=>NOW);setLocale(lang);
   const h=await fixture({initialFilters:defaultFilters(),creditFrom:NOW-4*M,creditTo:NOW-2*M}),d=await drawings(h);
   const clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}});
-  const props={history:d.renderActivity().drawing,by:'project',muted:{},since:null},totals=consumer('Totals',clock,h.period,props);
+  const props={history:d.renderActivity().drawing,by:'project',since:null},totals=consumer('Totals',clock,h.period,props);
   const held=h.hold();
   try{
     const first=totals.render();assert.equal((first.match(/<b>/g)??[]).length,4);
@@ -100,7 +98,7 @@ for(const lang of ['en','ru'] as const)test(`${lang}: all four Activity metrics 
 test('numerical labels freeze during a gesture and retire on an authority replacement',async test=>{
   test.mock.method(Date,'now',()=>NOW);const h=await fixture(),d=await drawings(h);let now=NOW,panning:number|null=1;
   const timers=new Set<object>();const clock=new PageClock({now:()=>now,visible:()=>true,setTimeout:()=>{const token={};timers.add(token);return token;},clearTimeout:token=>{timers.delete(token as object);}});
-  const history=d.render().history,props={history,by:'project',muted:{},since:null},totals=consumer('Totals',clock,h.period,props,()=>panning);
+  const history=d.render().history,props={history,by:'project',since:null},totals=consumer('Totals',clock,h.period,props,()=>panning);
   try {
     const before=totals.render();assert.ok(before);assert.equal(timers.size,0);
     now=NOW+H;h.advance(now);assert.equal(totals.render(),before);
@@ -114,7 +112,7 @@ test('fixed-period numerical consumers never subscribe to a time deadline',async
   const clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>{timers++;return {};},clearTimeout:()=>{}});
   const history={range:`${NOW-H}/${NOW}`,activity:{known:{from:NOW-H,to:NOW},activeMs:M,agentMs:M,agents:1,by:{project:[],source:[],device:[]}}} as unknown as History;
   history.range=h.period.workRangeKey;
-  const totals=consumer('Totals',clock,h.period,{history,by:'project',muted:{},since:null});
+  const totals=consumer('Totals',clock,h.period,{history,by:'project',since:null});
   try{assert.ok(totals.render());assert.equal(timers,0);}finally{totals.close();await h.close();}
 });
 
@@ -129,32 +127,58 @@ test('many legend groups read only their own contexts rather than every session 
   }finally{WorkTimeline.prototype.read=read;WorkTimeline.prototype.next=next;}
 });
 
-test('the actual summary uses one selected or preview cohort in EN/RU, including pending and all-off states',async test=>{
+test('the actual summary always describes the board cohort; transient preview describes one exact group in EN/RU',async test=>{
   test.mock.method(Date,'now',()=>NOW);const h=await fixture({personal:true}),d=await drawings(h),seen=new Set<string>();
-  const reader=new ActivitySelection({pool:new HistoryPool(),now:()=>NOW,read:()=>({trace:h.period.get().value,ready:true,error:null}),scheduler:()=>null,send:async()=>{throw Error('live hover must not request');}});
   let selected:string|null=null;
   try{
     for(const [project,from,to] of [['A',NOW-50*M,NOW-30*M],['B',NOW-40*M,NOW-20*M],['C',NOW-20*M,NOW-10*M]] as const){
       h.store.creditWork(h.device,from,to,[{source:h.source,client:'codex',origin:'terminal',project,folder:'',startedAt:NOW-H,identity:{kind:'stable',sessionId:project}}]);
     }
     h.events.flush();await flush();
-    reader.configure({board:h.board,authority:'one',by:'project',muted:['"C"','"Work project"'],filters:workFilter(defaultFilters()),selection:{mode:'live',periodMs:H},rangeKey:'1h',barMs:M});await flush();
     const history=d.render().history!,clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}});
-    const focus={get:()=>selected,subscribe:()=>()=>{}},props={history,by:'project',subset:reader,scoped:true,allOff:false,since:null,focus,groups:history.activity.by.project};
+    const focus={get:()=>selected,subscribe:()=>()=>{}},props={history,by:'project',since:null,focus};
+    const expected=history.activity;
     for(const locale of ['en','ru'] as const){
       setLocale(locale);const view=consumer('Totals',clock,h.period,props);
       try{
-        const html=view.render();assert.ok(html.includes('data-agent-ms="2400000"'));assert.ok(html.includes(workHours(40*M)));assert.ok(html.includes(workHours(30*M)));assert.ok(html.includes(t('activity.agents')+'</span><b>2'));
-        seen.add('selected-summary');seen.add('exact-union');seen.add('distinct-sessions');
-        selected=mutedKey('project','"A"');const preview=view.update(props);assert.ok(preview.includes('data-series-context='));assert.ok(preview.includes('data-agent-ms="1200000"'));assert.ok(preview.includes(t('activity.agents')+'</span><b>1'));seen.add('one-group-preview');
-        selected=null;const allOff=view.update({...props,allOff:true});assert.ok(allOff.includes(t('activity.noSeries')));assert.ok(!allOff.includes('data-agent-ms='));seen.add('no-selected-series');
-        const pending=view.update({...props,subset:{get:()=>({model:null,loading:true,error:null}),subscribe:()=>()=>{},changesAt:()=>null,numbers:()=>null}});
-        assert.ok(!pending.includes(t('activity.pendingRange')));assert.equal((pending.match(/<b>—<\/b>/g)??[]).length,4);assert.ok(!pending.includes('data-agent-ms='));seen.add('pending-without-wider-totals');
-        assert.ok(!html.includes(t('activity.noSeries'))&&!html.includes('activity-legend-tip'));
+        const html=view.render();assert.ok(html.includes('data-agent-ms="'+expected.agentMs+'"'));assert.ok(html.includes(workHours(expected.activeMs)));assert.ok(html.includes(t('activity.agents')+'</span><b>'+expected.agents));
+        seen.add('board-summary');seen.add('exact-union');seen.add('distinct-sessions');
+        selected=activitySeriesKey('project','"A"');const preview=view.update(props);assert.ok(preview.includes('data-series-context='));assert.ok(preview.includes('data-agent-ms="1200000"'));assert.ok(preview.includes(t('activity.agents')+'</span><b>1'));seen.add('one-group-preview');
+        selected=null;assert.equal(view.update(props),html,'leaving preview restores the complete board cohort');
+        seen.add('restored-summary');
       }finally{view.close();}
     }
     for(const scene of CHART_SERIES_SCENES)for(const code of scene.expect)assert.ok(seen.has(code),scene.id+': '+code);
-  }finally{setLocale('en');reader.reset();d.close();await h.close();}
+  }finally{setLocale('en');d.close();await h.close();}
+});
+
+test('a retained legend identity previews confirmed zero when its work leaves the selected interval',async test=>{
+  test.mock.method(Date,'now',()=>NOW);const h=await fixture({personal:true}),d=await drawings(h);
+  try{
+    for(const [project,from,to] of [['A',NOW-50*M,NOW-30*M],['B',NOW-20*M,NOW-10*M]] as const)
+      h.store.creditWork(h.device,from,to,[{source:h.source,client:'codex',origin:'terminal',project,folder:'',startedAt:NOW-H,identity:{kind:'stable',sessionId:project}}]);
+    h.events.flush();await flush();
+    const initial:History=d.renderActivity().drawing!,seed=initial.activity.by.project.map(group=>({...group,color:'#aaa'}));
+    const range={from:NOW-25*M,to:NOW-5*M};h.selectRange(range);d.loader.choose('1h',range);await flush();
+    const history:History=d.renderActivity().drawing!,groups=history.activity.by.project;
+    assert.ok(history.activity.agentMs>0);assert.ok(!groups.some(group=>group.key==='"A"'));
+    assert.ok(groupRegistry(seed,seed,groups).some(group=>group.key==='"A"'),'the current strip can retain A as a valid legend target');
+    let selected:string|null=activitySeriesKey('project','"A"');
+    const focus={get:()=>selected,subscribe:()=>()=>{}};
+    const clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}});
+    const view=consumer('Totals',clock,h.period,{history,by:'project',since:null,focus});
+    try{
+      const html=view.render();assert.ok(html.includes('data-series-context='));assert.ok(html.includes('data-agent-ms="0"'),'an absent preview must not borrow the positive board cohort');
+      assert.ok(html.includes(t('activity.agents')+'</span><b>0'));
+      for(const label of ['activity.agentHours','activity.active'] as const)assert.ok(html.includes(t(label)+'</span><b>'+workHours(0)));
+      assert.ok(html.includes(t('activity.atOnce')+'</span><b>—'));
+      const unknown=view.update({history:{...history,activity:{...history.activity,known:null}},by:'project',since:null,focus});
+      assert.ok(!unknown.includes('data-agent-ms='));assert.ok(unknown.includes(t('activity.knownFrom',{time:stamp(history.activity.since)})));
+      const unavailable=view.update({history:{...history,activity:{...history.activity,available:false}},by:'project',since:null,focus});
+      assert.ok(!unavailable.includes('data-agent-ms='));assert.ok(unavailable.includes(t('activity.noSessions')));
+      selected=null;assert.ok(view.update({history,by:'project',since:null,focus}).includes('data-agent-ms="'+history.activity.agentMs+'"'));
+    }finally{view.close();}
+  }finally{d.close();await h.close();}
 });
 
 test('a retained legend group with no work in the selected interval previews zero instead of another group',async test=>{
@@ -172,14 +196,14 @@ test('a retained legend group with no work in the selected interval previews zer
     assert.equal(h.period.activityProjectionState(history).ready,true);
     assert.equal(history.activity.agentMs,10*M);assert.equal(groups.length,1);assert.notEqual(groups[0].key,old.key);
     assert.ok(legend.some(group=>group.key===old.key),'the actual registry retains the old legend identity');
-    let selected:string|null=mutedKey('project',old.key);const focus={get:()=>selected,subscribe:()=>()=>{}};
+    let selected:string|null=activitySeriesKey('project',old.key);const focus={get:()=>selected,subscribe:()=>()=>{}};
     h.requests.length=0;
     for(const locale of ['en','ru'] as const)for(const scoped of [false,true]){
       setLocale(locale);const props={history,by:'project',groups,focus,scoped,since:null},view=consumer('Totals',clock,h.period,props);
       try{
         const html=view.render();assert.ok(html.includes('data-series-context='),'the absent group remains the preview context');assert.ok(html.includes('data-agent-ms="0"'));assert.ok(html.includes(t('activity.agents')+'</span><b>0'));
         selected=null;const all=view.update({...props,scoped:false});assert.ok(all.includes('data-agent-ms="600000"'));assert.ok(!all.includes('data-series-context='));
-        selected=mutedKey('project',old.key);
+        selected=activitySeriesKey('project',old.key);
       }finally{view.close();}
     }
     assert.equal(h.requests.length,0,'hover and focus only read accepted evidence');
@@ -189,13 +213,13 @@ test('a retained legend group with no work in the selected interval previews zer
 test('the Activity clock advances the plot without invalidating unchanged numerical consumers',async test=>{
   test.mock.method(Date,'now',()=>NOW);const h=await fixture(),d=await drawings(h),hooks=preparationFixture();
   let now=NOW,shown={...d.render(),presentation:0};
-  const prefs={range:'1h',activityBy:'project',muted:{}},titles={},view=h.page.get().board!.view;
-  const context:any={...projectColorBindings(h.page),boardPeriod:h.period,activityMutedKeys:()=>[],chartSeriesMuted,ACTIVITY,exports:{},require,memo:(value:any)=>value,...hooks,
+  const prefs={range:'1h',activityBy:'project'},titles={},view=h.page.get().board!.view;
+  const context:any={...projectColorBindings(h.page),boardPeriod:h.period,ACTIVITY,exports:{},require,memo:(value:any)=>value,...hooks,
     useMemo:(read:any,deps:any[])=>{const box=hooks.useRef(null) as any;if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;},
-    useSyncExternalStore:(_subscribe:any,get:any)=>get(),useActivitySubset:()=>({get:()=>({model:null,loading:false,error:null}),subscribe:()=>()=>{},retain:()=>()=>{}}),useActivityHistory:()=>shown,useHistoryPlot:()=>null,usePlot:()=>({}),useLineup:()=>[],usePersonalBoard:()=>false,useTitles:()=>titles,
-    useChartMuted:()=>prefs.muted,usePref:(key:keyof typeof prefs)=>prefs[key],useSeriesFocus:()=>{},useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=>h.board,useClock:()=>now,usePanning:()=>null,useHistoryBegins:()=>0,
+    useSyncExternalStore:(_subscribe:any,get:any)=>get(),useActivityHistory:()=>shown,useHistoryPlot:()=>null,usePlot:()=>({}),useLineup:()=>[],usePersonalBoard:()=>false,useTitles:()=>titles,
+    usePref:(key:keyof typeof prefs)=>prefs[key],useSeriesFocus:()=>{},useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=>h.board,useClock:()=>now,usePanning:()=>null,useHistoryBegins:()=>0,
     axisNavigation:()=>({context:h.board,range:'1h'}),frameOf:()=>({from:now-H,to:now}),measuredTo:()=>now,
-    activityEmpty,groupColors,groupName:(group:any)=>group.name,mutedKey,stamp,t,useLayoutEffect:hooks.useLayoutEffect,
+    activityEmpty,groupColors,groupName:(group:any)=>group.name,activitySeriesKey,stamp,t,useLayoutEffect:hooks.useLayoutEffect,
     isHidden:()=>false,cardId:(id:string)=>id,quotaHistory:{},setTimeRange:()=>{},pan:{get:()=>null},
     AnalyticsPanel:()=>null,ActivitySettings:()=>null,Totals:()=>null,Stacks:()=>null,LegendItem:()=>null,EMPTY_ACTIVITY:shown.history!.activity,
   };
@@ -211,23 +235,4 @@ test('the Activity clock advances the plot without invalidating unchanged numeri
     shown={...shown,history:null,drawing:null,presentation:1};const retired=render();
     assert.equal(retired.legend.length,0);assert.equal(retired.totals.history,null,'a new authority cannot retain withdrawn numerical evidence');
   }finally{hooks.dispose();d.close();await h.close();}
-});
-
-test('frozen selected numbers retire during a gesture even when the same scope text is configured again',async test=>{
-  test.mock.method(Date,'now',()=>NOW);setLocale('en');
-  const h=await fixture(),d=await drawings(h),pool=new HistoryPool();let panning:number|null=null;
-  const subset=new ActivitySelection({pool,now:()=>NOW,scheduler:()=>null,read:()=>({trace:h.period.get().value,ready:true,error:null}),send:async()=>{throw Error('unexpected transport');}});
-  subset.configure({board:h.board,authority:'same',by:'project',muted:['"other"'],filters:workFilter(defaultFilters()),selection:{mode:'live',periodMs:H},rangeKey:'1h',barMs:M});
-  await flush();const model=subset.get().model;assert.ok(model);
-  const clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}});
-  const props={history:d.render().history,by:'project',subset,model,scoped:true,since:null},view=consumer('Totals',clock,h.period,props,()=>panning);
-  try{
-    assert.ok(view.render().includes(`data-agent-ms="${M}"`));panning=1;
-    assert.ok(view.update(props).includes(`data-agent-ms="${M}"`));
-    subset.invalidate();assert.equal(subset.sameScope(model),false);
-    assert.ok(!view.update(props).includes('data-agent-ms='),'the old frozen value cannot bypass the lifetime guard');
-    await flush();const next=subset.get().model;assert.ok(next);assert.notEqual(next,model);
-    assert.ok(!view.update({...props,model:next}).includes('data-agent-ms='),'a replacement waits until accounting resumes after the gesture');
-    panning=null;assert.ok(view.update({...props,model:next}).includes(`data-agent-ms="${M}"`));
-  }finally{view.close();subset.reset();await flush();assert.equal(pool.estimatedBytes,0);d.close();await h.close();}
 });

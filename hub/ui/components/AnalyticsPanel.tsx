@@ -25,13 +25,13 @@ export function AnalyticsPanel({ref, className, title, controls, settings, histo
   </section>;
 }
 
-/** Both histories toggle a series without changing their table's selection. */
-export function SeriesLegendItem({seriesKey, name, description, color, dash, muted, onToggle, children}: {
-  seriesKey: string; name: string; description?: string; color: string; dash?: string; muted: boolean; onToggle: () => void; children: ReactNode;
+/** The panel's arbiter owns emphasis; a legend never filters its data. */
+export function SeriesLegendItem({seriesKey, name, description, color, dash, children}: {
+  seriesKey: string; name: string; description?: string; color: string; dash?: string; children: ReactNode;
 }) {
   const id=useId();
-  return <><button type="button" className="legend-item" data-series-key={seriesKey} style={seriesFocusStyle(seriesKey)} aria-describedby={description?id:undefined} aria-pressed={!muted} onClick={onToggle}>
+  return <><button type="button" className="legend-item" data-series-legend data-series-key={seriesKey} style={seriesFocusStyle(seriesKey)} aria-describedby={description?id:undefined} aria-pressed={false}>
     <svg width="18" height="6" aria-hidden="true"><line x1="1" x2="17" y1="3" y2="3" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeDasharray={dash || undefined}/></svg>
     <span>{name}</span>{children}
-  </button>{description&&<span id={id} className="sr-only">{muted?t('activity.seriesHidden'):description}</span>}</>;
+  </button>{description&&<span id={id} className="sr-only">{description}</span>}</>;
 }
