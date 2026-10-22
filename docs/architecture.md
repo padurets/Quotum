@@ -1620,7 +1620,11 @@ without rebuilding geometry or polling. Null history, registered zero and
 observation completeness remain distinct.
 An explicit interval/day action changes the common selection and focuses its ready
 grid after the requested evidence and geometry commit. Temporary unknown cells
-cannot consume that focus handoff; a newer navigation cancels it. Only elapsed retained
+cannot consume that focus handoff. Later deliberate input or focus revokes permission
+to move focus; selection or authority changes retire the request altogether. An explicit
+calendar Retry can continue its still-pending drill, while background recovery cannot
+reclaim that permission. A committed ready grid completes the request even when focus
+stays elsewhere. Only elapsed retained
 evidence is counted. Fixed thresholds scale with the displayed interval, use the
 first Nord Warm colour and remain independent of the filtered sample.
 

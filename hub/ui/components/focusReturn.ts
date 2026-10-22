@@ -2,7 +2,7 @@ import {useCallback,useRef} from 'react';
 
 let restoring=0;
 export const isFocusReturn=()=>restoring>0;
-const available=(element:HTMLElement)=>element.isConnected&&!element.matches(':disabled')&&!element.closest('[hidden],[inert]')&&element.getClientRects().length>0;
+const available=(element:HTMLElement)=>element.isConnected&&!element.matches(':disabled')&&!element.closest('[hidden],[inert]')&&element.getClientRects().length>0&&getComputedStyle(element).visibility==='visible';
 
 /** A contextual return is not a new reader navigation. */
 export function returnFocus(element:HTMLElement|null|undefined){

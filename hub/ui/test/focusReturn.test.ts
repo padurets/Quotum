@@ -17,7 +17,7 @@ function fixture(header=false){
   const document={activeElement:null as Element|null};
   let focus:any;
   class Element{
-    isConnected=true;disabled=false;hidden=false;inert=false;
+    isConnected=true;disabled=false;hidden=false;inert=false;visibility='visible';
     parent:Element|null=null;children:Element[]=[];
     constructor(readonly name:string,readonly kind:string,parent?:Element){if(parent){this.parent=parent;parent.children.push(this);}}
     contains(element:Element|null):boolean{return !!element&&(element===this||this.children.some(child=>child.contains(element)));}
@@ -40,7 +40,7 @@ function fixture(header=false){
   const jsx=(type:unknown,props:Record<string,any>)=>({type,props});
   const useCallback=(fn:unknown,deps:readonly unknown[])=>hooks.useMemo(()=>fn,deps);
   const vm=(file:string,modules:Record<string,any>,slice?:(source:string)=>string)=>{
-    const context={exports:{} as any,document,require:(name:string)=>modules[name]};
+    const context={exports:{} as any,document,getComputedStyle:(element:Element)=>({visibility:element.visibility}),require:(name:string)=>modules[name]};
     const source=readFileSync(new URL(file,import.meta.url),'utf8');
     runInNewContext(ts.transpileModule(slice?slice(source):source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);return context.exports;
   };
@@ -79,6 +79,10 @@ test('a readonly panel without heading controls uses its existing heading',()=>{
 });
 test('hidden or inert contextual controls cannot receive a recovery return',()=>{
   const f=fixture();f.settings.inert=true;f.render({error:'history_failed',retry:()=>{}});f.document.activeElement=f.retry;
+  f.render({retry:()=>{}});assert.equal(f.document.activeElement,f.heading);f.hooks.dispose();
+});
+test('a control with CSS visibility hidden cannot take the contextual return',()=>{
+  const f=fixture();f.settings.visibility='hidden';f.render({error:'history_failed',retry:()=>{}});f.document.activeElement=f.retry;
   f.render({retry:()=>{}});assert.equal(f.document.activeElement,f.heading);f.hooks.dispose();
 });
 

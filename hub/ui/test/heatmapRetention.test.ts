@@ -6,6 +6,7 @@ import ts from 'typescript';
 import {fixture,flush,NOW,M} from './periodRuntimeFixture';
 import {preparationFixture} from './preparationFixture';
 import {heatmapLayoutPrepared} from '../lib/heatmap';
+import {focusEventsFixture} from './focusEventsFixture';
 
 type Node={type:unknown;props:Record<string,any>};
 const nodes=(value:any):Node[]=>Array.isArray(value)?value.flatMap(nodes):value&&typeof value==='object'?[value,...nodes(value.props.children)]:[];
@@ -14,7 +15,7 @@ test('actual calendar failure and retry retain the complete heatmap until author
   t.mock.method(Date,'now',()=>NOW);
   const h=await fixture({heatmap:true}),calendar=h.period.calendar,hooks=preparationFixture(),jsx=(type:unknown,props:Node['props'])=>({type,props}),plot={clientWidth:350,querySelector:()=>null};
   t.after(()=>h.close());
-  const context={exports:{} as Record<string,(props:unknown)=>Node>,require:()=>({jsx,jsxs:jsx}),memo:(f:unknown)=>f,...hooks,
+  const context={exports:{} as Record<string,(props:unknown)=>Node>,require:()=>({jsx,jsxs:jsx}),memo:(f:unknown)=>f,...hooks,document:focusEventsFixture().document,isFocusReturn:()=>false,
     useSyncExternalStore:(_s:unknown,read:()=>unknown)=>read(),usePref:()=> 'matrix',useLocale:()=> 'en',formatLocale:()=> 'en',useTimeRange:()=>null,useSizing:()=>null,
     heatmapLayoutPrepared,HEATMAP_MIN:160,HEATMAP_NATURAL:300,boardPeriod:h.period,t:(key:string)=>key,num:String,CATEGORY_COLORS:['blue'],CALENDAR_OPACITY:[0,.2,.4,.6,.8,1],
     ResizeObserver:class{observe(){}disconnect(){}},Popover:'popover',Segmented:'segmented',SlidersIcon:'icon',ReadState:'state'};

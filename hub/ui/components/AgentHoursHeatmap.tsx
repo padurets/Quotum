@@ -16,6 +16,7 @@ import {Segmented} from './Kit';
 import {useBubble} from './Tooltip';
 import {ReadState} from './ReadState';
 import {fillOf,pixels,same,useSizing} from './sizing';
+import {isFocusReturn} from './focusReturn';
 
 function Details({heading,label,interval,item}:{heading:boolean;label:string;interval:string;item:HeatCell}){
   return <>{heading&&<strong>{label}</strong>}{interval&&<p className="heatmap-interval">{interval}</p>}<p>{item.cell.agentMs===null?t('calendar.unavailable'):item.cell.agentMs===0?t('calendar.zero'):`${exactAgentHours(item.cell.agentMs,formatLocale())} ${t('calendar.hours')}`}</p>{item.partial&&<p>{t('calendar.partial')}</p>}</>;
@@ -78,12 +79,22 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
   const {value,loading,error,window}=reading,root=useRef<HTMLElement>(null),matrix=useRef<HTMLDivElement>(null),sizing=useSizing();
   const [focused,setFocused]=useState(''),[settings,setSettings]=useState(false),[width,setWidth]=useState(0),[height,setHeight]=useState(0);
   const [preview]=useState(()=>new HeatmapPreview());
-  const focusRange=useRef<{from:number;to:number}|null>(null);
-  const context=JSON.stringify([boardPeriod.calendar.presentationKey(),!!value,window.zone,view,width,height,locale,selection]);
+  const drill=useRef<{range:{from:number;to:number};context:string;focus:boolean}|null>(null);
+  const presentation=boardPeriod.calendar.presentationKey();
+  const context=JSON.stringify([presentation,!!value,window.zone,view,width,height,locale,selection]);
   const aligned=!selection||window.range.from===selection.from&&window.range.to===selection.to;
   const prepared=usePrepared(()=>heatmapLayoutPrepared(reading,width,view,formatLocale(),height),[window,value,width,view,locale,height],context,aligned);
   const empty:HeatmapLayout={cells:[],labels:[],height:Math.max(HEATMAP_MIN,height||HEATMAP_NATURAL),naturalHeight:HEATMAP_NATURAL,span:3_600_000,kind:'strip'};
   const layout=prepared.value??empty;
+  useLayoutEffect(()=>{
+    const revoke=()=>{if(drill.current)drill.current.focus=false;};
+    const focused=(event:FocusEvent)=>{if(event.target!==document.body&&event.target!==document.documentElement&&!isFocusReturn())revoke();};
+    // Observe producer context changes even when React coalesces A → B → A.
+    const stop=boardPeriod.calendar.subscribe(()=>{if(drill.current?.context!==boardPeriod.calendar.presentationKey())drill.current=null;});
+    document.addEventListener('pointerdown',revoke,true);document.addEventListener('keydown',revoke,true);
+    document.addEventListener('wheel',revoke,{capture:true,passive:true});document.addEventListener('focusin',focused,true);
+    return()=>{drill.current=null;stop();document.removeEventListener('pointerdown',revoke,true);document.removeEventListener('keydown',revoke,true);document.removeEventListener('wheel',revoke,true);document.removeEventListener('focusin',focused,true);};
+  },[]);
   const measure=useRef(()=>{});
   measure.current=()=>{
     const node=root.current,plot=matrix.current;if(!node||!plot||!plot.clientWidth)return;setWidth(plot.clientWidth);
@@ -95,15 +106,24 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
   useLayoutEffect(()=>{const node=root.current;if(!node)return;const observer=new ResizeObserver(()=>measure.current());observer.observe(node);return()=>observer.disconnect();},[]);
   useLayoutEffect(()=>()=>sizing?.report(null),[sizing?.report]);
   const tab=layout.cells.find(c=>c.key===focused)??layout.cells.reduce<HeatCell|undefined>((best,c)=>!best||Math.abs(c.from-Number(focused))<Math.abs(best.from-Number(focused))?c:best,undefined);
-  const openRange=(range:{from:number;to:number})=>{focusRange.current=range;setFocused(String(range.from));setTimeRange(range);};
+  const openRange=(range:{from:number;to:number})=>{
+    drill.current=null;setFocused(String(range.from));setTimeRange(range);
+    drill.current={range,context:boardPeriod.calendar.presentationKey(),focus:true};
+  };
+  const retry=()=>{
+    const request=drill.current;
+    if(request&&request.context===presentation&&presentation===boardPeriod.calendar.presentationKey()&&selection?.from===request.range.from&&selection.to===request.range.to)request.focus=true;
+    boardPeriod.retry();
+  };
   useLayoutEffect(()=>{
-    const range=focusRange.current;if(!range)return;
-    if(selection?.from!==range.from||selection?.to!==range.to){focusRange.current=null;return;}
+    const request=drill.current;if(!request)return;
+    const {range}=request;
+    if(request.context!==presentation||selection?.from!==range.from||selection?.to!==range.to){drill.current=null;return;}
     // Placeholder cells retire again when the requested evidence arrives.
     if(!value||!prepared.ready||window.range.from!==range.from||window.range.to!==range.to||!tab)return;
     const button=matrix.current?.querySelector<HTMLButtonElement>(`[data-heatmap-cell="${tab.key}"]`);
-    if(button){focusRange.current=null;button.focus({preventScroll:true});}
-  },[selection,window,tab?.key,value,prepared.ready]);
+    if(button){drill.current=null;if(request.focus)button.focus({preventScroll:true});}
+  },[selection,presentation,window,tab?.key,value,prepared.ready]);
   const key=(event:KeyboardEvent<HTMLButtonElement>,item:HeatCell)=>{
     const {key,ctrlKey}=event;let candidates:HeatCell[]=[];
     if(key==='Home'||key==='End')candidates=layout.cells.filter(c=>ctrlKey||c.row===item.row).sort((a,b)=>ctrlKey?a.from-b.from:a.column-b.column);
@@ -117,7 +137,7 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
   const unit=layout.span<3_600_000?60_000:3_600_000,thresholds=[0,0,layout.span*.5,layout.span,layout.span*2,layout.span*4];
   return <section ref={root} className={`panel agent-hours-heatmap${loading?' is-loading':''}`} aria-label={t('calendar.title')} aria-busy={loading||!prepared.ready} data-calendar-ready={!!value&&prepared.ready}
     onFocusCapture={event=>{if(!(event.target as Element).closest('[data-heatmap-cell]'))preview.dismiss();}}>
-    <div className="panel-head"><h2 className="panel-heading" tabIndex={-1}>{t('calendar.title')}</h2><div className="panel-controls"><ReadState error={error} loading={loading&&!!selection&&!!value} range={reading.basis?.range} retry={boardPeriod.retry}/><Popover label={t('calendar.settings')} icon={<SlidersIcon/>} open={settings} onOpenChange={setSettings}>
+    <div className="panel-head"><h2 className="panel-heading" tabIndex={-1}>{t('calendar.title')}</h2><div className="panel-controls"><ReadState error={error} loading={loading&&!!selection&&!!value} range={reading.basis?.range} retry={retry}/><Popover label={t('calendar.settings')} icon={<SlidersIcon/>} open={settings} onOpenChange={setSettings}>
       <div className="popover-section"><div className="popover-title">{t('calendar.view')}</div><div className="popover-pad"><Segmented value={view} onChange={heatmapView=>setPrefs({heatmapView})} options={['matrix','calendar'].map(key=>[key as 'matrix'|'calendar',t(key==='matrix'?'calendar.matrix':'calendar.calendar')])} label={t('calendar.view')}/></div></div>
       {arrange.owner&&<HideRow onHide={()=>arrange.update(view=>withHidden(view,AGENT_HOURS_HEATMAP,true))}>{t('widget.hide')}</HideRow>}
     </Popover></div></div>
