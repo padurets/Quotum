@@ -8,6 +8,7 @@ export type DiagnosticOrigin={startedAt:number;navigation:()=>{requested?:Docume
 type Options = {mode?: 'canonical' | 'diagnostic'; profileBeforeInput?: boolean; postmortem?:boolean; closeTarget?: () => Promise<void>;signal?:AbortSignal;origin?:DiagnosticOrigin};
 type Process = {type: string; id: number; cpuTime: number};
 type ProcessSample = {status: 'pending' | 'observed' | 'unavailable'; fromMs: number; toMs: number | null; processes?: ProcessIdentity[]; omitted?: number};
+const PAGE_LIVENESS = '({visibility:document.visibilityState,focus:document.hasFocus(),ready:document.readyState})';
 let serial = 0;
 
 /** Cancellation releases the underlying CDP waiters, not just the outer Promise. */
@@ -90,6 +91,23 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
     } catch {report.livenessStatus = 'unavailable';}
     finally {control?.close();}
   };
+  const freshPageLiveness = async (pending: AbortSignal) => {
+    if (!browser.owned || !page.endpoint || !page.snapshot().failure) return;
+    const probe = {status: 'unavailable', connected: false, fromMs: performance.now(), toMs: null as number | null};
+    report.freshPage = probe;
+    let connection: Cdp | undefined;
+    try {
+      // Browser liveness cannot distinguish a stalled page from its original session.
+      await bounded('fresh page liveness', async alive => {
+        const connected = await Cdp.connect(page.endpoint!, alive);
+        if (alive.aborted) {connected.close(); alive.throwIfAborted();}
+        connection = connected; probe.connected = true;
+        await connection.evaluate(PAGE_LIVENESS, alive);
+        alive.throwIfAborted(); probe.status = 'responded';
+      }, 2000, pending);
+    } catch {probe.status = probe.connected ? 'unresponsive' : 'unavailable';}
+    finally {connection?.close(); probe.toMs = performance.now();}
+  };
   const collect = async (label: string) => {
     report.scenario = label; report.command = page.snapshot();
     if(options.origin){
@@ -103,8 +121,9 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
         await Promise.all([
           sampleProcesses(pending).then(sample => {if (!pending.aborted) report.failedProcesses = sample;}),
           liveness(pending),
+          freshPageLiveness(pending),
           bounded('page liveness', async probe => {
-            report.page = await page.evaluate('({visibility:document.visibilityState,focus:document.hasFocus(),ready:document.readyState})', probe);
+            report.page = await page.evaluate(PAGE_LIVENESS, probe);
           }, 2000, pending).catch(() => {report.page = 'unresponsive';}),
         ]);
         // A failed owned page can be inspected after its original deadline;
