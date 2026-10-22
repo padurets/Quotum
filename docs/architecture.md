@@ -1997,6 +1997,10 @@ its own exclusive endpoint. A later change preserves earlier evidence and bounds
 shift proofs at the first changed instant; it cannot be replayed into the changed tail.
 Calendar curves can retain that unchanged prefix of a wider interval. Authority changes
 retire their evidence immediately, independently of event timestamps.
+Adopting a newer compatible revision preserves those prefixes. Each segment stops at
+its observed range and first changed instant; a fresh tail can complete their union.
+Retained live proofs keep their observation cutoff as the clock moves, while historical
+curves alone cannot satisfy an unread live tail. Missing coverage requires a read.
 Fixed summaries also describe exact duration and timestamp changes between
 observation, work, availability and grid boundaries. Nearby endpoint cells use sparse
 changes between those intervals and an immutable starting summary. The initial reply

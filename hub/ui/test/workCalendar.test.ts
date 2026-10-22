@@ -173,6 +173,34 @@ test('a monthly heatmap replacement preserves other loaded history inside the sh
   }finally{retained=0;await h.close();}
 });
 
+test('a fresh live calendar revision preserves an unaffected historical prefix for the shifted repeat',async t=>{
+  let now=NOW;t.mock.method(Date,'now',()=>now);const h=await fixture({heatmap:true,periodName:'30d',creditFrom:NOW-25*DAY+1234,creditTo:NOW-24*DAY+5678});t.after(()=>h.close());
+  const cold={from:NOW-45*DAY,to:NOW-15*DAY};h.selectRange(cold);await flush();
+  assert.equal(h.requests.filter(r=>r.calendar).length,1);h.requests.length=0;
+  h.credit(NOW-M,NOW);h.events.flush();await flush();
+  assert.equal(h.requests.filter(r=>r.calendar).length,0,'recent work cannot invalidate a selected month ending fifteen days ago');
+  now+=2517;h.jump(now);h.selectRange(null);await flush();
+  assert.equal(h.requests.filter(r=>r.calendar).length,1,'the affected live tail requires fresh evidence');h.requests.length=0;
+  const repeat={from:cold.from+2517,to:cold.to+2517};h.selectRange(repeat);await flush();
+  assert.equal(h.requests.filter(r=>r.calendar).length,0,'a newer live revision must not erase reusable historical integrals');
+  const fresh=expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,{version:1,selection:{mode:'range',...repeat},evaluatedAt:now,calendar:{zone:h.period.calendar.state.window.zone}})));
+  if(fresh.calendar?.state!=='complete')throw new Error('oracle');assert.deepEqual(h.period.calendar.state.value.cells,fresh.calendar.value.cells);
+  const before=h.period.calendar.state.value.cells.reduce((sum:number,c:CalendarCell)=>sum+(c.agentMs??0),0);h.requests.length=0;
+  h.store.creditWork(h.device,NOW-20*DAY,NOW-20*DAY+H,[{source:h.source,accountBy:'login',client:'codex',origin:'terminal',startedAt:NOW-21*DAY,project:'Late project',folder:'Late folder',identity:{kind:'stable',sessionId:'d'.repeat(32)}}]);h.events.flush();await flush();
+  assert.equal(h.requests.filter(r=>r.calendar).length,1,'a genuinely relevant historical credit still refreshes the selected calendar');
+  assert.equal(h.period.calendar.state.value.cells.reduce((sum:number,c:CalendarCell)=>sum+(c.agentMs??0),0),before+H);
+});
+
+test('historical calendar evidence cannot impersonate a live tail after the live proof is evicted',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({heatmap:true,periodName:'30d'});t.after(()=>h.close());
+  const live=h.period.calendar.state.value.cells;assert.ok(live.some((c:CalendarCell)=>(c.agentMs??0)>0));
+  h.selectRange({from:NOW-45*DAY,to:NOW-15*DAY});await flush();h.requests.length=0;
+  const entries=h.period.calendar.evictionCandidates();assert.equal(entries.length,2);entries[0].drop();
+  h.selectRange(null);await flush();
+  assert.equal(h.requests.filter(r=>r.calendar).length,1,'the unobserved fifteen-day tail requires actual evidence');
+  assert.deepEqual(h.period.calendar.state.value.cells,live,'the ready live calendar retains recent credited work');
+});
+
 test('a fresh baseline adopts UTC or local date rollover before the civil clock wakes',t=>{
   let zone='UTC';const resolved=Intl.DateTimeFormat.prototype.resolvedOptions;
   t.mock.method(Intl.DateTimeFormat.prototype,'resolvedOptions',function(this:Intl.DateTimeFormat){return {...resolved.call(this),timeZone:zone};});

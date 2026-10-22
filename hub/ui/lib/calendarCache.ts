@@ -21,11 +21,13 @@ export class CalendarCache {
   evictionCandidates(){return [...this.entries].map(e=>({bytes:e.bytes,shownAt:e.at,drop:()=>{this.entries.delete(e);}}));}
   add(basis:CalendarBasis,value:CalendarValue,reserve:(bytes:number)=>boolean,staging:number){
     const proof=value.proof;if(!proof)return;
-    if([...this.entries].some(e=>e.basis.run!==basis.run||e.basis.revision!==basis.revision))this.clear();
+    // A newer revision can change only a tail. dirty() already bounded every
+    // affected proof; unrelated news must not discard its reusable prefix.
+    if([...this.entries].some(e=>e.basis.run!==basis.run||e.basis.filterKey!==basis.filterKey||e.basis.workAuthority!==basis.workAuthority||e.zone!==value.zone))this.clear();
     let bytes=staging;
     try{
       const result=calendarCurve(proof,basis.range,basis.evidenceCut,value.availableFrom,size=>{bytes+=size;if(!reserve(bytes))throw new Error('calendar_cache_limit');});
-      const entry:Entry={basis,zone:value.zone,from:basis.range.from,to:basis.range.to,cut:basis.evidenceCut,validBefore:Infinity,known:value.availableFrom,retained:value.retainedFrom,retention:proof.retentionMs,period:proof.periodMs,cursor:value.cursor,curve:result.curve,bytes:1024+result.bytes,at:basis.evaluatedAt};
+      const entry:Entry={basis,zone:value.zone,from:basis.range.from,to:basis.range.to,cut:Math.min(basis.range.to,basis.evidenceCut),validBefore:Infinity,known:value.availableFrom,retained:value.retainedFrom,retention:proof.retentionMs,period:proof.periodMs,cursor:value.cursor,curve:result.curve,bytes:1024+result.bytes,at:basis.evaluatedAt};
       if(!reserve(bytes+1024))return;
       for(const prior of this.entries)if(prior.from===entry.from&&prior.to===entry.to)this.entries.delete(prior);
       this.entries.add(entry);
@@ -33,8 +35,12 @@ export class CalendarCache {
     finally{reserve(staging);}
   }
   read(window:ReturnType<typeof calendarWindow>,selection:PeriodSelection,now:number,reserve:(bytes:number)=>boolean):CalendarReading|null {
-    const entries=[...this.entries].filter(e=>e.zone===window.zone&&e.basis.evidenceCut<=now&&window.range.to<=e.validBefore);if(!entries.length)return null;
-    const latest=entries.reduce((a,b)=>a.cut>b.cut?a:b),range=window.range,cut=Math.min(range.to,latest.cut),segments:CalendarSegment[]=[];
+    const entries=[...this.entries].filter(e=>e.zone===window.zone&&e.basis.evidenceCut<=now);if(!entries.length)return null;
+    const latest=entries.reduce((a,b)=>a.basis.evidenceCut>b.basis.evidenceCut?a:b),range=window.range,segments:CalendarSegment[]=[];
+    // A live proof can retain its own observation cutoff as the clock moves.
+    // Historical-only curves must cover the live tail, never declare it empty.
+    const liveCut=selection.mode==='live'?entries.reduce((cut,e)=>e.period===selection.periodMs?Math.max(cut,e.basis.evidenceCut):cut,-Infinity):-Infinity;
+    const cut=Math.min(range.to,selection.mode==='live'?(Number.isFinite(liveCut)?liveCut:now):latest.basis.evidenceCut);
     const retained=Math.max(latest.retained,now-latest.retention);if(range.to<=retained||range.from>=now)return null;
     if(selection.mode==='range'&&range.to>latest.cut&&!entries.some(e=>e.from<=range.from&&e.to>=range.to))return null;
     let from=range.from;
@@ -47,7 +53,7 @@ export class CalendarCache {
     if(!reserve(this.bytes+1024+window.edges.length*256+window.dates.length*256))return null;
     const available=entries.flatMap(e=>e.known===null?[]:[e.known]),known=available.length?Math.min(...available):null;
     const cells=calendarProjection(window.edges,range,cut,known,retained,latest.retention,selection.mode==='live'?selection.periodMs:undefined,segments);
-    const day=86_400_000,cursor=entries.find(e=>selection.mode==='range'?e.period===undefined&&e.basis.range.from===range.from&&e.basis.range.to===range.to:e.period===selection.periodMs&&e.validBefore===Infinity&&Math.floor(e.from/day)*day===window.edges[0]&&Math.ceil(e.to/day)*day===window.edges.at(-1));
+    const day=86_400_000,cursor=entries.find(e=>selection.mode==='range'?e.period===undefined&&range.to<=e.validBefore&&e.basis.range.from===range.from&&e.basis.range.to===range.to:e.period===selection.periodMs&&e.validBefore===Infinity&&Math.floor(e.from/day)*day===window.edges[0]&&Math.ceil(e.to/day)*day===window.edges.at(-1));
     for(const e of entries)if(segments.some(s=>s.curve===e.curve))e.at=now;
     return {window,value:{zone:window.zone,edges:window.edges,availableFrom:known,retainedFrom:retained,cursor:cursor?.cursor??'',cells},basis:{...(cursor??latest).basis,evaluatedAt:now,evidenceCut:cut,range},loading:false,error:null};
   }
