@@ -9,9 +9,16 @@ type Entry={basis:CalendarBasis;zone:string;from:number;to:number;cut:number;kno
 /** Only anonymous integrals are retained; the board's shared pool can evict any frame. */
 export class CalendarCache {
   private entries=new Set<Entry>();
-  get bytes(){return [...this.entries].reduce((n,e)=>n+e.bytes,0);}
-  clear(){this.entries.clear();}
-  evictionCandidates(){return [...this.entries].map(e=>({bytes:e.bytes,shownAt:e.at,drop:()=>{this.entries.delete(e);}}));}
+  private borrowed=new Map<Entry,number>();
+  private revision=0;
+  get bytes(){
+    let bytes=0;for(const entry of this.entries)bytes+=entry.bytes;
+    for(const entry of this.borrowed.keys())if(!this.entries.has(entry))bytes+=entry.bytes;
+    return bytes;
+  }
+  clear(){this.revision++;this.entries.clear();}
+  // Evicting a cache owner cannot free storage still borrowed by a projection.
+  evictionCandidates(){return [...this.entries].map(e=>({bytes:this.borrowed.has(e)?0:e.bytes,shownAt:e.at,drop:()=>{this.entries.delete(e);}}));}
   add(basis:CalendarBasis,value:CalendarValue,reserve:(bytes:number)=>boolean,staging:number){
     const proof=value.proof;if(!proof)return;
     if([...this.entries].some(e=>e.basis.run!==basis.run||e.basis.revision!==basis.revision))this.clear();
@@ -36,12 +43,19 @@ export class CalendarCache {
       const to=Math.min(cut,next.cut);segments.push({from,to,curve:next.curve});from=to;
     }
     if(!segments.length&&!entries.some(e=>e.from<=range.from&&e.to>=range.to))return null;
-    // A trim may evict these entries while this projection still reads their curves.
-    if(!reserve(this.bytes+1024+window.edges.length*256+window.dates.length*256))return null;
-    const available=entries.flatMap(e=>e.known===null?[]:[e.known]),known=available.length?Math.min(...available):null;
-    const cells=calendarProjection(window.edges,range,cut,known,retained,latest.retention,selection.mode==='live'?selection.periodMs:undefined,segments);
-    const day=86_400_000,cursor=entries.find(e=>selection.mode==='range'?e.period===undefined&&e.from===range.from&&e.to===range.to:e.period===selection.periodMs&&Math.floor(e.from/day)*day===window.edges[0]&&Math.ceil(e.to/day)*day===window.edges.at(-1));
-    for(const e of entries)if(segments.some(s=>s.curve===e.curve))e.at=now;
-    return {window,value:{zone:window.zone,edges:window.edges,availableFrom:known,retainedFrom:retained,cursor:cursor?.cursor??'',cells},basis:{...(cursor??latest).basis,evaluatedAt:now,evidenceCut:cut,range},loading:false,error:null};
+    // LRU removal retires the cache owner, but a synchronous projection still owns
+    // its captured curves. Count that shared storage once until the last read ends.
+    const revision=this.revision;
+    for(const entry of entries)this.borrowed.set(entry,(this.borrowed.get(entry)??0)+1);
+    try{
+      if(!reserve(1024+window.edges.length*256+window.dates.length*256)||revision!==this.revision)return null;
+      const available=entries.flatMap(e=>e.known===null?[]:[e.known]),known=available.length?Math.min(...available):null;
+      const cells=calendarProjection(window.edges,range,cut,known,retained,latest.retention,selection.mode==='live'?selection.periodMs:undefined,segments);
+      const day=86_400_000,cursor=entries.find(e=>selection.mode==='range'?e.period===undefined&&e.from===range.from&&e.to===range.to:e.period===selection.periodMs&&Math.floor(e.from/day)*day===window.edges[0]&&Math.ceil(e.to/day)*day===window.edges.at(-1));
+      for(const e of entries)if(segments.some(s=>s.curve===e.curve))e.at=now;
+      return {window,value:{zone:window.zone,edges:window.edges,availableFrom:known,retainedFrom:retained,cursor:cursor?.cursor??'',cells},basis:{...(cursor??latest).basis,evaluatedAt:now,evidenceCut:cut,range},loading:false,error:null};
+    }finally{
+      for(const entry of entries){const remaining=this.borrowed.get(entry)!-1;if(remaining)this.borrowed.set(entry,remaining);else this.borrowed.delete(entry);}
+    }
   }
 }

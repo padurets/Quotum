@@ -108,7 +108,7 @@ test('returning from settings resumes the actual period coordinator after prefer
   let reads=0;
   const board={meta:{personal:true},id:'board',lineup:[],view:{hidden:[]}},state={board};
   const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed():void}},
-    hubNow:()=>5_000_000,retention,historyPool:{register:()=>{},release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
+    hubNow:()=>5_000_000,retention,historyPool:new HistoryPool(),clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{change(){reads++;}reset(){}},fetchPeriod:()=>{},page:{get:()=>state},preparations:()=>null,
     evaluatedRange,periodKey,empty:()=>({value:null,basis:null,loading:false,error:null}),
     timeRange:()=>({from:1_400_000,to:5_000_000}),prefs:()=>({range:'1h'}),periodOf:()=>({ms:3_600_000}),cellOf:()=>60_000,
@@ -142,7 +142,7 @@ test('a complete temporal index distinguishes equal totals, changes ranking and 
 test('monetary evidence refreshes only the selected resource family',()=>{
   const board={meta:{personal:true},id:'b',lineup:['wallet','credit','unselected'],view:{hidden:[]},cards:{wallet:{id:'wallet'},credit:{id:'credit'},unselected:{id:'unselected'}}},state={board};
   const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed(event:unknown):void;dirtyScopes:Set<string>;workNeeded:boolean;valuesNeeded:boolean}},
-    hubNow:()=>5_000_000,retention,historyPool:{register:()=>{},release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
+    hubNow:()=>5_000_000,retention,historyPool:new HistoryPool(),clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{change(){}reset(){}},fetchPeriod:()=>{},page:{get:()=>state},preparations:()=>null,
     evaluatedRange,periodKey,empty:()=>({value:null,basis:null,loading:false,error:null}),
     timeRange:()=>null,prefs:()=>({range:'1h'}),periodOf:()=>({ms:3_600_000}),cellOf:()=>60_000,subscriptionSelection:()=>undefined,
