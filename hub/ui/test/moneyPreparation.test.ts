@@ -2,6 +2,7 @@ import * as widgets from '../../server/domain/widgets';
 import {chartSeriesMuted} from '../lib/prefs';
 import {moneyBalanceSeries} from '../lib/moneyTable';
 import {defaultCurrencyContext} from '../../server/domain/currency';
+import {axisNavigation} from '../lib/axisNavigation';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -45,7 +46,7 @@ test('balance and funds drawing facts do not depend on the visible quantity fram
   for(const [family,meterSeries] of [['budget',[balance,cap]],['funds',[funds]]] as const) {
     const chunks=[{from:0,meterSeries:[...meterSeries]}],drawing={meterSeries:composeMeters(chunks,minute,0,4*minute)};
     const draw=(quantities:{from:number;to:number}|undefined)=>{
-      const context={authority:0,family,moneyBalanceSeries,isMuted:()=>false,accounting:()=>true,settings:{},context:defaultCurrencyContext,strip:{meterChunks:chunks,cell:minute,from:0,to:4*minute,meterFrame:quantities},drawing,history:drawing,unit:'USD',prefs:{muted:{}},sources:[{id:'wallet',provider:'openrouter'},{id:'subscription',provider:'codex'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:meterSeries.map(s=>[s.source,s.meter])},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof drawing.meterSeries;lines:Record<string,unknown>[];origin:bigint;span:bigint;pad:bigint}};
+      const context={authority:0,family,axisNavigation,selected:null,panning:null,muted:{},useRef:(value:unknown)=>({current:value}),moneyBalanceSeries,isMuted:()=>false,accounting:()=>true,settings:{},context:defaultCurrencyContext,strip:{meterChunks:chunks,cell:minute,from:0,to:4*minute,meterFrame:quantities},drawing,history:drawing,unit:'USD',prefs:{range:'1h',horizon:'auto',muted:{}},sources:[{id:'wallet',provider:'openrouter'},{id:'subscription',provider:'codex'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:meterSeries.map(s=>[s.source,s.meter])},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof drawing.meterSeries;lines:Record<string,unknown>[];origin:bigint;span:bigint;pad:bigint}};
       runInNewContext(ts.transpileModule(region+'\nglobalThis.model=prepared.value;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
       return context.model;
     };
