@@ -36,8 +36,6 @@ unrelated updates fail. This exception permits no extra page rendering or reques
 retains the 0.3 ms/s idle script budget.
 The idle artifact retains the original performance timestamps, script-duration counters
 and unrounded probe time used in its calculation, so the reported rate can be recomputed.
-A separate `idle-script-clock` artifact retains gross thread-time script counters between
-outer timer tasks. It includes observer overhead and changes no elapsed idle verdict or budget.
 CI runs the unchanged history traffic matrix and dashboard phases on separate runners,
 each with a 20-minute job limit. `--scope history` selects the matrix, including native
 traffic and cancellation checks; `--scope dashboard` selects idle, measurements, work,

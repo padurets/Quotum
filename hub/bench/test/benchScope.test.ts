@@ -13,7 +13,6 @@ import {idleProblems,chartProblems,measuredProblems,percentile,HISTORY_BYTES_PER
 import {DOT_STILL_AFTER,fixtureTiming,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil} from '../still.js';
 import {delta,round,scriptPerSecond,tally} from '../report.js';
 import {idleRetentionScript,idleRetentionProblems} from '../idleRetention.js';
-import {ScriptClock} from '../scriptClock.js';
 
 // Execute the actual caller and parser, not a second implementation of its phase branches.
 // Leaf phases and browser IO are stand-ins; these tests prove routing/failure propagation only.
@@ -42,7 +41,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   const browser={owned:true,endpoint:'fixture',launchReport:()=>({mode:'owned'}),close:async()=>{
     mark('browser-close');if(fault==='browser-close')throw Error('browser-close-red');
   }};
-  const cdp={on:()=>{},off:()=>{},send:async()=>({}),evaluate:async(expression:string)=>{
+  const cdp={send:async()=>({}),evaluate:async(expression:string)=>{
     if(expression.includes(".card:not(.is-loading)"))return 1;
     if(expression.includes('.agent-hours-heatmap[data-calendar-ready='))return true;
     if(expression==='__quotumBench.read()')return reading;
@@ -90,7 +89,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   };
   const context={exports:{},process:{argv:['node','index.ts',...(ci?['--ci']:[]),...args],env:{CI:'1',...env},pid:1,platform:'linux',
       on:(name:string,fn:()=>void)=>{listeners.set(name,fn);},exit:(code:number)=>{exits.push(code);terminal();}},
-    Date:class extends Date {static now(){return now;}},console:{log:()=>{},error:(value:unknown)=>{logs.push(String(value));}},path,Buffer,RunOwner,Demo,Evidence,Requests,Stop,ChromeLaunchError,IdleCpuDiagnostic,ScriptClock,
+    Date:class extends Date {static now(){return now;}},console:{log:()=>{},error:(value:unknown)=>{logs.push(String(value));}},path,Buffer,RunOwner,Demo,Evidence,Requests,Stop,ChromeLaunchError,IdleCpuDiagnostic,
     mkdirSync:()=>{},writeFileSync:(file:string,body:string)=>diagnosticFiles.set(path.basename(file,'.json'),JSON.parse(body)),sourceIdentity:()=>({checkoutSha:'fixture'}),
     USAGE:'fixture usage',IDLE:{ci:120,full:300},SHOWN_MS:30_000,MEASURED:'fixture',HISTORY_BYTES_PER_MEASUREMENT,
     SETS:[set],fixtureTiming,panningSet:(value:unknown)=>value,people:()=>[{id:'ana'}],freePort:async()=>{mark('freePort');return 1234;},
