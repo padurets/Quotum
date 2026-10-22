@@ -414,7 +414,7 @@ async function main() {
     evidence.save('money', monetary);
     evidence.begin('fixed-activity');
     say('checking paint-only emphasis and shared Activity filters, late-work cells and cancellation at 24h/30d');
-    const selectedActivity=await fixedActivity(browser,stand);
+    const selectedActivity=await fixedActivity(browser,stand,evidence);
     problems.push(...selectedActivity.problems);
     evidence.save('fixed-activity', selectedActivity);
     problems.push(...monetary.problems);

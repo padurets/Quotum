@@ -12,6 +12,7 @@ import {openTab,type Browser,type Cdp} from './cdp.js';
 import {historyPoolReceiptScript} from './historyPoolReceipt.js';
 import {historyIdentityScript} from './historyTrafficBrowser.js';
 import {probeScript,type Reading} from './probe.js';
+import type {Evidence} from './evidence.js';
 
 /** The supported shared-filter path keeps the existing combined transport/preparation
  * ceilings. Emphasis owns no reader and receives no extra-read allowance. */
@@ -236,7 +237,7 @@ function traffic(cdp:Cdp){
 }
 
 /** Actual mounted widget and shared work filters, including late work and retired responses. */
-export async function fixedActivity(browser:Browser,stand:Stand){
+export async function fixedActivity(browser:Browser,stand:Stand,evidence?:Pick<Evidence,'save'>){
   const owner=stand.people.get(people(stand.set)[0].id)!,card=cards(stand.set).find(card=>card.id==='antigravity')!,reports:Record<string,unknown>[]=[];
   // Earlier money scenarios save a one-account selection. This scenario needs
   // the stand's full resource cohort before applying its own project filter.
@@ -508,6 +509,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       await phase('through upper bound',async()=>{await actor.through(selection.to);},1);
       await phase('outside range',async()=>{await actor.through(selection.to+100);await waitFor(`window.__quotumFixedActivity.heardSince(${selection.to})`);},0);
       const receipt=await cdp.evaluate<{status:string;members:{kind:string}[];[key:string]:unknown}>(`(()=>{__quotumHistoryPoolReceipt.mark(2,3);return __quotumHistoryPoolReceipt.read();})()`);
+      evidence?.save(`fixed-activity-pool-${days===1?'24h':'30d'}`,{days,receipt});
       assert.equal(receipt.status,'complete',JSON.stringify(Object.fromEntries(['status','attached','registrationOrderQualified','omitted','errors','snapshotOmitted','summaryOmitted','nearOmitted','sendingUnknown','lastCheckpoint'].map(key=>[key,receipt[key]]))));assert.equal(receipt.members.length,4);assert.ok(!receipt.members.some(member=>member.kind==='activity'));
     }finally{await tab.close();await actor.close();}
   }
