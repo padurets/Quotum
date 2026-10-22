@@ -1166,7 +1166,7 @@ if (typeof window !== 'undefined') {
 function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false,activity=false):Shown&{drawing:History|null} {
   const shown=useSyncExternalStore(financial?loader.subscribeFinancial:loader.subscribe,financial?loader.getFinancial:loader.get,financial?loader.getFinancial:loader.get);
   const panning=pan.active();
-  const revision=useSyncExternalStore(listener=>boardPeriod.subscribeProjection(loader===fundsHistory?'funds':loader.scope??'quota',listener),()=>(financial?boardPeriod.getFinancialProjectionRevision:boardPeriod.getProjectionRevision)(loader===fundsHistory?'funds':loader.scope??'quota'));
+  const revision=useSyncExternalStore(listener=>boardPeriod.subscribeProjection(loader===fundsHistory?'funds':loader.scope??'quota',listener),()=>(financial?boardPeriod.getFinancialProjectionSnapshot:boardPeriod.getProjectionRevision)(loader===fundsHistory?'funds':loader.scope??'quota'));
   const retained=useRef<{board:string;history:History;deadline:number}|null>(null);
   const now=useClock(at=>{
     const next=Math.min(rolling?frameChangesAt(timeRange(),shown.history?.cellMs??60_000,at)??Infinity:Infinity,boardPeriod.projectionChangesAt(loader===fundsHistory?'funds':loader.scope??'quota',at)??Infinity,retained.current?.deadline??Infinity);
@@ -1178,7 +1178,7 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false,acti
   // Phase bookkeeping runs even when the retained accounting frame stays the
   // same. Only a changed snapshot should render a table or its static measure.
   const read=useMemo(()=>()=>{
-    const shownNow=(financial?loader.getFinancial:loader.get)(),revisionNow=(financial?boardPeriod.getFinancialProjectionRevision:boardPeriod.getProjectionRevision)(loader===fundsHistory?'funds':loader.scope??'quota'),panning=pan.active();
+    const shownNow=(financial?loader.getFinancial:loader.get)(),revisionNow=(financial?boardPeriod.getFinancialProjectionSnapshot:boardPeriod.getProjectionRevision)(loader===fundsHistory?'funds':loader.scope??'quota'),panning=pan.active();
     const presentation=activity?loader.getActivityPresentation():shownNow.presentation;
     const board=page.get().board?.id??'';
     const selected=timeRange(),target=board+':'+(selected?timeRangeKey(selected):prefs().range);

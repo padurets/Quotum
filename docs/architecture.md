@@ -2223,6 +2223,9 @@ Their error state and retry belong to activity alone: new native measurements st
 read and commit their own cells, including while activity waits for memory or its
 retry deadline. Retry also repeats failed selected period evidence. Native failures
 remain visible to their own chart while its last complete frame is retained.
+Financial consumers observe resource readiness and errors alongside native accounting
+authority. A successful retry clears the error even when financial values are
+unchanged; ordinary work-only publications keep financial snapshots stable.
 Replacing native quota windows or monetary meter choices retires their own projection;
 it does not retire an authorized Activity frame with the same selected work scope.
 A stored work predicate that exceeds the executable limit makes selected activity

@@ -65,6 +65,7 @@ export const ANALYTICS_SCENES=[
  * Whole-frame reply ordering and live expiry are held by activityFrame and
  * activityRetainedClock; resource disclosure evidence by historicalPlanDisclosure
  * and unnamedMoneyDisclosure. Money strip-to-exact value poses are held by moneyPanDomain.
+ * Financial error recovery with unchanged native values is held by financialRetryStatus.
  */
 export const CHART_SERIES_SCENES=[
   {id:'enabled-subset',expect:['selected-summary','exact-union','distinct-sessions']},

@@ -110,6 +110,7 @@ class BoardPeriod {
   private readonly tapes=new Map<PeriodScope,{tape:PeriodTape;accounting:PeriodAccounting;generation:number;proofEpoch:number;sourceEpoch?:number;selection:PeriodSelection;rangeKey:string;queryKey:string;basisRange?:PeriodBasis['range']}>();
   private readonly projectionRevision={quota:0,budget:0,funds:0};
   private readonly projectionErrors:Partial<Record<PeriodScope,'history_limit'|'history_failed'>>={};
+  private readonly financialSnapshots:Partial<Record<PeriodScope,{authority:object|null;ready:boolean;error?:'history_limit'|'history_failed'}>>={};
   private readonly projectionListeners={quota:new Set<()=>void>(),budget:new Set<()=>void>(),funds:new Set<()=>void>()};
   private workRows:WorkedSession[]=[];
   private rowsBySource=new Map<string,WorkedSession[]>();
@@ -177,6 +178,14 @@ class BoardPeriod {
   }
   get=()=>this.workState;
   getFinancialProjectionRevision=(scope:PeriodScope)=>this.tapes.get(scope)?.accounting.financialAuthority??null;
+  /** Recovery is observable even when the financial curves are unchanged. */
+  getFinancialProjectionSnapshot=(scope:PeriodScope)=>{
+    const tape=this.tapes.get(scope),authority=this.getFinancialProjectionRevision(scope),error=this.projectionErrors[scope];
+    const ready=!!tape&&tape.queryKey===this.scopeKeys[scope]&&this.tapeCovers(tape,evaluatedRange(this.selection,this.evaluatedAt));
+    const previous=this.financialSnapshots[scope];
+    if(previous&&previous.authority===authority&&previous.ready===ready&&previous.error===error)return previous;
+    return this.financialSnapshots[scope]={authority,ready,error};
+  };
   getProjectionRevision=(scope:PeriodScope)=>this.projectionRevision[scope];
   projectionChangesAt=(scope:PeriodScope,now:number)=>this.selection.mode==='range'?this.tapes.get(scope)?.accounting.changesAt(now,0)??null:null;
   subscribeProjection=(scope:PeriodScope,listener:()=>void)=>{this.projectionListeners[scope].add(listener);return()=>{this.projectionListeners[scope].delete(listener);};};
