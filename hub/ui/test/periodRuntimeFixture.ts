@@ -117,7 +117,8 @@ export async function fixture({heatmap=false,personal=false,ownerDevice=false,tr
   assert.equal(period.get().error,limited?'filters_limit':null);assert.equal(period.get().rows.length,limited?0:1);const initialRequests=requests.slice();requests.length=0;frames.length=0;
   const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=next[1].at;timers.delete(next[0]);next[1].run();events.flush();}now=at;if(!clocked)period.tick();};
   const jump=(at:number)=>{now=at;for(const [token,timer] of [...timers])if(timer.at<=at){timers.delete(token);timer.run();}events.flush();if(clocked)pageClock.wakeDue();else period.tick();};
-  return {hub,device,owner,advance,jump,pan,selectedRange:()=>selectedRange,selectRange:(range:typeof selectedRange)=>{selectedRange=range;period.changed();},clock:pageClock,initialRequests,prepareWith:(value:Preparations|null)=>{preparer=value;},settings,pool,get reader(){return reader;},store,directory,board,alice,bob,source,credit,get events(){return events;},period,page,frames,requests,
+  const consumers=new Set<()=>void>();
+  return {onClose:(stop:()=>void)=>{consumers.add(stop);return()=>consumers.delete(stop);},hub,device,owner,advance,jump,pan,selectedRange:()=>selectedRange,selectRange:(range:typeof selectedRange)=>{selectedRange=range;period.changed();},clock:pageClock,initialRequests,prepareWith:(value:Preparations|null)=>{preparer=value;},settings,pool,get reader(){return reader;},store,directory,board,alice,bob,source,credit,get events(){return events;},period,page,frames,requests,
     report:(working=false,at=NOW)=>{now=at;hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(at).toISOString(),sessions:[{provider:'codex',...(funding?{account:(privateWork?'b':'a').repeat(24)}:{}),sessionId:stable?'c'.repeat(32):null,origin:'terminal',project:'Work project',folder:'Private folder',startedAt:new Date(start).toISOString(),lastWorkedAt:new Date(NOW-2*M).toISOString(),working}]},at);events.flush();},
     endIdle:()=>{hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(NOW).toISOString(),sessions:[]},NOW);events.flush();},
     event:(event:HubEvent)=>page.dispatch({type:'hub',event}),
@@ -131,7 +132,7 @@ export async function fixture({heatmap=false,personal=false,ownerDevice=false,tr
       return ()=>feed(baseline);
     },
     fresh:()=>expandPeriod(JSON.parse(reader.read(board,alice.id,{version:1,selection:{mode:'live',periodMs:H},evaluatedAt:NOW,sessions:{}}))) as PeriodReply,
-    close:async()=>{period.activate(false);connection?.close();stream?.close();opened.close();events.close();await new Promise(resolve=>setImmediate(resolve));store.close();assert.equal(pool.estimatedBytes,0);assert.equal(pool.activeFlights,0);}};
+    close:async()=>{for(const stop of [...consumers])stop();period.activate(false);connection?.close();stream?.close();opened.close();events.close();await new Promise(resolve=>setImmediate(resolve));store.close();assert.equal(pool.estimatedBytes,0);assert.equal(pool.activeFlights,0);}};
 }
 
 
@@ -179,7 +180,9 @@ export function consumer(h: any, options:{muted?:Record<string,boolean>;subset?:
     const render=()=>{const props=renderParent();parent.commit();const paths=renderChild(props);child.commit();const legend=(node:any):any[]=>{if(Array.isArray(node))return node.flatMap(legend);if(!React.isValidElement(node))return [];const p=node.props as any;return node.type===context.LegendItem?[p]:legend(p.children);};
       const result={paths,names:names(latestChild),ready:props.prepared};return Object.defineProperties(result,{entries:{value:legend(latestChild)},tree:{value:latestChild},totals:{value:find(latestChild,context.Totals)?.props},incomingModel:{value:props.detailFrame?.model}}) as typeof result&{entries:any[];tree:any;totals:any;incomingModel:any};};
     const settle=()=>{for(let i=0;i<4;i++){render();parent.finish();child.finish();}return render();};
-    return {setMask:(next:Record<string,boolean>)=>{prefs.muted=next;},render,settle,queuedParent:()=>parent.scheduler.size,queuedChild:()=>child.scheduler.size,finishParent:parent.finish,finishChild:child.finish,close:()=>{parent.dispose();child.dispose();},pan:()=>{panning=1;axis.active=true;}};
+    let closed=false;const close=()=>{if(closed)return;closed=true;unregister();parent.dispose();child.dispose();};
+    const unregister=h.onClose(close);
+    return {setMask:(next:Record<string,boolean>)=>{prefs.muted=next;},render,settle,queuedParent:()=>parent.scheduler.size,queuedChild:()=>child.scheduler.size,finishParent:parent.finish,finishChild:child.finish,close,pan:()=>{panning=1;axis.active=true;}};
 }
 
 
