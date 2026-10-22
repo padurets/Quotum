@@ -1,4 +1,5 @@
 import type {Cdp} from './cdp.js';
+import {deadline} from './deadline.js';
 import {formatLocale, setLocale} from '../ui/i18n/index.js';
 import {timeRangeLabel} from '../ui/lib/timeRange.js';
 import {PERIODS, periodLabel} from '../ui/lib/periods.js';
@@ -21,7 +22,7 @@ export async function captionGeometry(cdp:Pick<Cdp,'send'|'evaluate'>,signal:Abo
     }
   } finally {setLocale(original,false);}
   const failures:{case:number;width:number;font:number;reason:string}[]=[];
-  let checks=0;
+  let checks=0,failed=false;
   try {
     for(const width of [320,360,480,679,680,681,1024,1280]) {
       await cdp.send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false},signal);
@@ -46,7 +47,7 @@ export async function captionGeometry(cdp:Pick<Cdp,'send'|'evaluate'>,signal:Abo
           const base=root.getBoundingClientRect(),rect=box=>[box.x-base.x,box.y-base.y,box.width,box.height];
           const range=document.createRange();range.selectNodeContents(text);
           return [...['.period','.period .text-button','.period-name','.period-name>svg',...Array.from(root.querySelectorAll('.period .icon-button'),(_,i)=>'.period .icon-button:nth-of-type('+(i+1)+')')].map(selector=>{
-            const node=root.querySelector(selector);return node?rect(node.getBoundingClientRect()):null;
+            const node=root.querySelector(selector);return node?.getClientRects().length?rect(node.getBoundingClientRect()):null;
           }),rect(text.getBoundingClientRect()),[...range.getClientRects()].map(rect)];
         };
         const same=(a,b)=>Array.isArray(a)&&Array.isArray(b)?a.length===b.length&&a.every((v,i)=>same(v,b[i])):a===null||b===null?a===b:Math.abs(a-b)<=1/64;
@@ -67,6 +68,10 @@ export async function captionGeometry(cdp:Pick<Cdp,'send'|'evaluate'>,signal:Abo
       })()`,signal);
       checks+=result.checks;failures.push(...result.failures);
     }
-  } finally {await cdp.send('Emulation.clearDeviceMetricsOverride',{},signal);}
+  } catch(error) {failed=true;throw error;}
+  finally {
+    try {await deadline(2000,cleanup=>cdp.send('Emulation.clearDeviceMetricsOverride',{},cleanup));}
+    catch(error) {if(!failed)throw error;}
+  }
   return {cases:labels.length,checks,failures};
 }
