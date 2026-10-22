@@ -16,6 +16,11 @@ on:
         description: SHA256 of the previously received compiled client
         required: true
         type: string
+      history_failure_probe:
+        description: Observe one complete history run with postfailure page-session probes
+        required: false
+        type: boolean
+        default: false
       trace_only:
         description: Observe the original idle window without CPU sampling or alignment
         required: false
@@ -107,7 +112,7 @@ jobs:
           fi
 
   bench-history:
-    if: ${{ !inputs.diagnostic_ref && !startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ !startsWith(github.ref, 'refs/tags/') && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && inputs.history_failure_probe)) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -115,6 +120,8 @@ jobs:
         working-directory: hub
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.diagnostic_ref || github.sha }}
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -122,6 +129,24 @@ jobs:
           cache-dependency-path: hub/package-lock.json
       - run: npm ci
       - run: npm run build
+      - name: Verify the history observation source and compiled client
+        if: ${{ inputs.history_failure_probe }}
+        run: |
+          node --import tsx --input-type=module <<'JS'
+          import {execFileSync} from 'node:child_process';
+          import {clientIdentity} from './bench/evidence.ts';
+          const requested=process.env.REQUESTED_SOURCE,expected=process.env.EXPECTED_CLIENT_SHA256;
+          const actual=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),client=clientIdentity();
+          if(!/^[a-f0-9]{40}$/.test(requested??'')||actual!==requested||!/^[a-f0-9]{64}$/.test(expected??'')||client.status!=='available'||client.sha256!==expected)throw Error('History observation source or client mismatch');
+          if([process.env.NATIVE_TRACE,process.env.NATIVE_PROFILE,process.env.CAPTION_CONTROL].some(value=>value==='true'))throw Error('History observation must run alone');
+          console.log('History observation source and compiled client verified');
+          JS
+        env:
+          REQUESTED_SOURCE: ${{ inputs.diagnostic_ref }}
+          EXPECTED_CLIENT_SHA256: ${{ inputs.expected_client_sha256 }}
+          NATIVE_TRACE: ${{ inputs.native_trace }}
+          NATIVE_PROFILE: ${{ inputs.native_profile }}
+          CAPTION_CONTROL: ${{ inputs.caption_control }}
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope history
         env:
           QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-bench-history
@@ -198,7 +223,7 @@ jobs:
           if-no-files-found: warn
 
   idle-cpu-control:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.history_failure_probe }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
