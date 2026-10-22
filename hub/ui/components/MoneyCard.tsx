@@ -17,6 +17,7 @@ import {
   historicalCurrencyContext,
   money,
   keyName,
+  compareKeys,
   capLeft,
   capPercent,
   capStale,
@@ -352,7 +353,7 @@ export function MoneyValues({source,keys,names=keys,meters,allowances=keys.filte
   const {remaining, limits} = budgetView(source, keys.filter(key=>allowances.includes(key.id)), meters, context),
     groups = remaining.values;
   const selectedCount=allowances.length,selected=selectedCount>0;
-  const logical=names.filter(key=>allowances.includes(key.id)).sort((a,b)=>(a.name??'').localeCompare(b.name??'')||a.id.localeCompare(b.id));
+  const logical=names.filter(key=>allowances.includes(key.id)).sort(compareKeys);
   const first=logical.length===selectedCount?logical[0]:undefined,primary=first&&limits.find(limit=>limit.scope.id===first.id);
   const unavailable=allowances.filter(id=>!limits.some(limit=>limit.scope.id===id));
   const disclosureLabel=[t('money.breakdown'),selectedCount?t('money.selectedAllowances',{count:selectedCount}):null].filter(Boolean).join('\n');

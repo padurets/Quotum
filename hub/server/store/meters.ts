@@ -1,7 +1,7 @@
 import type {DatabaseSync} from 'node:sqlite';
 import {balanceDescriptor,monetaryOf,sourceCounterOf,quotaMeter,providerOf} from '../domain/providers.js';
 import {amount} from '../domain/amount.js';
-import {balanceStatusOf,calendarSpending,spending,utcPeriods, sameMeter, validateMeter, type Meter, type MeterMeasurement, type MeterSpan, type Reading, type QuotaObservation, QUOTA_IDS} from '../domain/meters.js';
+import {balanceStatusOf,calendarSpending,spending,utcPeriods, sameMeter, validateMeter, compareKeys, type Meter, type MeterMeasurement, type MeterSpan, type Reading, type QuotaObservation, QUOTA_IDS} from '../domain/meters.js';
 import type {SourceState} from '../domain/quota.js';
 import {MeterContexts} from './meterContexts.js';
 import {meterCells, type MeterGroup, type MeterSelection, type MeterSeriesCells} from '../domain/meterHistory.js';
@@ -88,7 +88,7 @@ export class MeterStore {
       error: previous.provider === 'codex' ? previous.error : accountSuccess||balanceStatus ? null : previous.error,
       ...(measurement.creditBalance ? {creditBalance:measurement.creditBalance} : {}),
       ...(balanceStatus?{balanceStatus}:{}),
-      meters: [...current.values()], keys: [...keys.values()].sort((a,b) => (a.name ?? '').localeCompare(b.name ?? '') || a.id.localeCompare(b.id)),
+      meters: [...current.values()], keys: [...keys.values()].sort(compareKeys),
       ...(measurement.quota || previous.provider === 'codex' ? {} : {inventory: {complete: measurement.inventoryComplete, observed: observed.size, missing: [...keys.values()].filter(k => k.presence === 'missing').length, error: measurement.inventoryError}}),
     };
     this.db.prepare('INSERT OR REPLACE INTO state VALUES (?,?)').run(source, JSON.stringify(state));

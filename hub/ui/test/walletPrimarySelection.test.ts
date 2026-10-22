@@ -27,17 +27,21 @@ for(const compact of [false,true])for(const locale of ['en','ru'] as const)for(c
 
   const tree=render(missing==='absent-key'?[part('b')]:names,[cap('b')]),shown=primary(tree);
 
-  assert.ok(!shown?.props.limit||shown.props.limit.scope.id==='a','an absent first selected cap must remain unknown, rather than borrowing selected b');
+  assert.ok(shown,'the unavailable primary keeps its disclosure');assert.equal(shown.type,'missing-cap');assert.equal(shown.props.name,'Full selected a','the absent first cap keeps its own complete logical name');
 
  setLocale('en');
 });
 
 for(const missing of [false,true])test(`actual Store logical first cap when historical A ${missing?'is missing':'and B both arrived'}`,async test=>{
- test.mock.method(Date,'now',()=>NOW);const h=await fixture({personal:true});
+ test.mock.method(Date,'now',()=>NOW);
+ const russian=new Intl.Collator('ru-RU');
+ test.mock.method(String.prototype,'localeCompare',function(this:string,other:string){return russian.compare(String(this),other);});
+ assert.ok('Alpha'.localeCompare('Бета')>0,'the control exercises a Russian runtime default, independently of the UI catalogue');
+ const h=await fixture({personal:true});
  try{
  const id=h.store.source('openrouter','b'.repeat(24),NOW-H);h.store.hold(id,h.alice.id,NOW-H);
  const a='bbbbbbbbbbbb',b='aaaaaaaaaaaa';
- const key=(id:string,at:number)=>({id,name:id===a?'Alpha logical first':'Beta logical second',disabled:false,presence:'observed' as const,expiresAt:null,includeByok:false,at,staleAfterMs:H,periods:{day:null,week:null,month:null},missCount:0});
+ const key=(id:string,at:number)=>({id,name:id===a?'Alpha logical first':'Бета logical second',disabled:false,presence:'observed' as const,expiresAt:null,includeByok:false,at,staleAfterMs:H,periods:{day:null,week:null,month:null},missCount:0});
  const meter=(id:string,kind:any,at:number,amount:string,limit:string|null=null)=>({id,kind,at,amount,limit,unit:'USD',staleAfterMs:H,stale:false,resetAt:null,minutes:null,scope:null,label:null});
  const record=(at:number,keys:string[])=>h.store.record(id,{type:'meters',observedAt:at,staleAfterMs:H,meters:[meter('credits','counter',at,'20000000'),meter('usage','counter',at,'5000000'),...keys.map(id=>meter(`key:${id}:cap`,'cap',at,id===a?'1000000':'8000000','10000000'))],keys:keys.map(id=>key(id,at)),inventoryComplete:true,inventoryError:null});
  record(NOW-30*M,[b]);record(NOW-10*M,[b,a]);h.events.flush();await flush();

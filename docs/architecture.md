@@ -2309,7 +2309,8 @@ of supplier reply order or remaining amounts. Every selected native window
 remains in their existing measurement disclosure. Wallet cards show one available
 balance, or the first selected cap when the balance is excluded; other caps and exact
 amounts remain in the balance disclosure.
-The first cap follows current key-name and ID order before it joins historical evidence.
+The first cap follows canonical English key-name and ID order before it joins historical
+evidence, independently of server or browser locale.
 An absent first cap stays unavailable instead of promoting a later arrived cap; unresolved
 selected names keep the primary unknown until their bounded metadata read completes.
 Native choices combine current descriptors with historical-only windows. A selected
@@ -2328,7 +2329,8 @@ repeating "Available balance". Scoped key limits keep their names; balance compo
 roles and currency provenance remain reachable in card details.
 Monetary table values open their exact amount and existing provenance through the shared
 Popover even when the rounded value fits. The same timed cell supplies both presentations,
-including in narrow lists; static row measurement adds no interactive controls.
+including in narrow lists; static row measurement adds no interactive controls. Closed
+details schedule nothing; an open time-dependent detail owns its shared-clock deadline.
 
 On charts narrower than 560 SVG units, reset and exhaustion labels show the name
 and countdown, with an arrow only beyond the visible edge. Their backing is bounded

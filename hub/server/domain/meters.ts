@@ -15,6 +15,9 @@ export type KeyPart = {
   byokUsage?: {total:string|null;day:string|null;week:string|null;month:string|null};
   createdAt?:number|null; updatedAt?:number|null;
 };
+const keyNames=new Intl.Collator('en-US');
+/** A selected cap keeps the same identity across server and browser locales. */
+export const compareKeys=(a:Pick<KeyPart,'id'|'name'>,b:Pick<KeyPart,'id'|'name'>)=>keyNames.compare(a.name??'',b.name??'')||(a.id<b.id?-1:a.id>b.id?1:0);
 /** Confirmed uncapped key IDs let partial rounds end a cap while retaining its history. */
 export type QuotaIssue = 'empty' | 'unsupported' | 'invalid' | 'missing';
 export type QuotaStatus = {observedAt: number; generation: 'credit' | null; complete: boolean; issue: QuotaIssue | null};
