@@ -5,6 +5,7 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {Pan} from '../lib/pan';
 import {navigationAt, navigationKey} from '../lib/axisNavigation';
+import {tickKeyframes, tickPresentation, tickVisible} from '../lib/axisTicks';
 
 const offsetIs = (transform: string, expected: number, message?: string) => assert.ok(Math.abs(Number(transform.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0) - expected) < 1e-9, message);
 
@@ -150,7 +151,7 @@ test('the actual drawing commit preserves two landmarks through pending, replace
   const pose = {current: {...initial, offset: initial.offset - delta / (visual.to - visual.from) * inner * scale}};
   const known = [H / 2, H];
   const before = known.map(at => scale * (pose.current.a * (left + at / (old.to - old.from) * inner) + pose.current.b) + pose.current.offset);
-  const context = {paintDrawing:{current:undefined},paintTicks:{current:()=>{}},shown: {current: old}, drawing: {current: old}, svg: {current: {dataset: {} as Record<string, string>}}, box: {current: {querySelectorAll: () => slides}},
+  const context = {document:{timeline:{currentTime:0}},animateTicks:{current:()=>[]},paintDrawing:{current:undefined},paintTicks:{current:()=>{}},shown: {current: old}, drawing: {current: old}, svg: {current: {dataset: {} as Record<string, string>}}, box: {current: {querySelectorAll: () => slides}},
     panLayers: {current: layers}, pose, pan: {active: () => null}, paintPan: {current: () => {}},
     navigationKey, wanted: {current: {navigation: {context: 'test', range: 'range'}, projection: {from: selected.from, to: selected.to, end: selected.to}}}, requestedNavigation: {context: 'test', range: 'range'}, motion: {current: null}, captured: {current: null},
     finished: {current: {navigation: {context: 'test', range: 'range'}, visual, stop: {range: selected, canceled: false}} as {navigation: {context: string; range: string}; visual: typeof visual; stop: {range: typeof selected; canceled: boolean}} | null},
@@ -183,7 +184,7 @@ test('sampling and freezing an owned fold keeps its matrix after cancelling the 
   const start = source.indexOf('  const freezeSlides = '), body = source.slice(start, source.indexOf('  const geometry = ', start));
   const layer = {style: {transform: ''}}, other = {style: {transform: ''}}, animations = {current: new Map([[layer, {}]])};
   const pose = {current: {a: 1, b: 0, offset: 17}};
-  const context = {box: {current: {querySelector: () => layer, querySelectorAll: () => [layer, other]}}, animations, pose,
+  const context = {paintTicks:{current:()=>{}},box: {current: {querySelector: () => layer, querySelectorAll: () => [layer, other]}}, animations, pose,
     getComputedStyle: () => ({transform: 'matrix'}), DOMMatrix: class {a = .6; e = 21;}, cancelSlides: () => animations.current.clear(), freeze: null as unknown as () => void};
   runInNewContext(ts.transpileModule(`${body}\nglobalThis.freeze=freezeSlides;`, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
   context.freeze();
@@ -218,10 +219,10 @@ test('the actual last-input RAF uses the gesture CSS scale rather than the mount
 });
 
 test('committed axis ticks reuse shaped widths across frames and measure only changed glyphs',async()=>{
-  const {tickPresentation,tickVisible}=await import('../lib/axisTicks');let reads=0;
+  let reads=0;
   const tick=(text:string,x:number)=>({textContent:text,x,style:{visibility:'',transform:''},getAttribute:()=>String(x),getComputedTextLength:()=>{reads++;return 44;}});
   const ticks=[tick('14 Oct',60),tick('15 Oct',200)];
-  const context={box:{current:{querySelectorAll:()=>ticks}},tickWidths:{current:new Map()},tickGlyphs:{current:new WeakMap()},paintTicks:{current:()=>{}},pose:{current:{a:1,b:0,offset:0}},scale:.73,left:48,right:12,width:920,tickPresentation,tickVisible,
+  const context={tickElements:{current:[]},animateTicks:{current:()=>[]},motion:{current:null},animations:{current:new Map()},animateSlide:()=>{throw Error('no animation without motion');},tickKeyframes,box:{current:{querySelectorAll:()=>ticks}},tickWidths:{current:new Map()},tickGlyphs:{current:new WeakMap()},paintTicks:{current:()=>{}},pose:{current:{a:1,b:0,offset:0}},scale:.73,left:48,right:12,width:920,tickPresentation,tickVisible,
     useLayoutEffect:(run:()=>void)=>run(),measure:null as unknown as ()=>void};
   const source=readFileSync(new URL('../components/timeAxis.ts',import.meta.url),'utf8'),start=source.indexOf('  useLayoutEffect(() => {\n    // Measure only after DOM commit.');
   const body=source.slice(start,source.indexOf('\n  return {box, svg',start));
@@ -237,11 +238,10 @@ test('committed axis ticks reuse shaped widths across frames and measure only ch
 });
 
 test('native tick movement never reparses unchanged glyph transforms after CSS rounds their coordinates',async()=>{
-  const {tickPresentation,tickVisible}=await import('../lib/axisTicks');
   let writes=0,gets=0,presentations=0,wanted='',serialized='';
   const tick=(x:number)=>({x,textContent:'14 Oct',style:{visibility:'',get transform(){gets++;return serialized;},set transform(value:string){writes++;wanted=value;serialized=value.replace(/-?\d+(?:\.\d+)?/g,n=>String(Number(Number(n).toPrecision(6))));}},getAttribute(){return String(this.x);},getComputedTextLength:()=>44});
   const ticks=[tick(500.123456789)],pose={current:{a:.731231231,b:4.123456789,offset:0}};
-  const context={box:{current:{querySelectorAll:()=>ticks}},tickWidths:{current:new Map()},tickGlyphs:{current:new WeakMap()},paintTicks:{current:()=>{}},pose,scale:.73,left:48,right:12,width:920,tickVisible,tickPresentation:(...args:Parameters<typeof tickPresentation>)=>{presentations++;return tickPresentation(...args);},
+  const context={tickElements:{current:[]},animateTicks:{current:()=>[]},motion:{current:null},animations:{current:new Map()},animateSlide:()=>{throw Error('no animation without motion');},tickKeyframes,box:{current:{querySelectorAll:()=>ticks}},tickWidths:{current:new Map()},tickGlyphs:{current:new WeakMap()},paintTicks:{current:()=>{}},pose,scale:.73,left:48,right:12,width:920,tickVisible,tickPresentation:(...args:Parameters<typeof tickPresentation>)=>{presentations++;return tickPresentation(...args);},
     useLayoutEffect:(run:()=>void)=>run(),measure:null as unknown as ()=>void};
   const source=readFileSync(new URL('../components/timeAxis.ts',import.meta.url),'utf8'),start=source.indexOf('  useLayoutEffect(() => {\n    // Measure only after DOM commit.');
   const body=source.slice(start,source.indexOf('\n  return {box, svg',start));
@@ -249,7 +249,7 @@ test('native tick movement never reparses unchanged glyph transforms after CSS r
   context.measure();assert.notEqual(wanted,serialized,'the browser normalizes a fractional CSS transform');
   assert.equal(writes,1);
   for(let i=0;i<100;i++){pose.current.offset=-i*4;context.paintTicks.current();context.measure();}
-  assert.equal(writes,1,'translation changes visibility, not the glyph scale');
+  assert.equal(writes,1,'native translation changes visibility without rewriting the glyph transform');
   assert.equal(presentations,1,'translation does not rebuild the unchanged glyph transform string');
   assert.equal(gets,0,'native frames do not read a normalized string just to write its equivalent again');
   assert.equal(ticks[0].style.visibility,'hidden');

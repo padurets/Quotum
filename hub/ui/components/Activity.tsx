@@ -685,12 +685,11 @@ const Stacks = memo(function Stacks({
           </g>
         );})}</g>
       </svg>
-      <PlotLayer width={width} height={height} scale={scale} left={left} right={right} main>
-        {ticks.map(tick => (
+      <PlotLayer width={width} height={height} scale={scale} left={left} right={right} main ticks={ticks.map(tick => (
           <text key={tick} x={x(tick)} y={height - 8} textAnchor="middle" className="tick">
             {daily ? shortDay(tick) : clock(tick)}
           </text>
-        ))}
+        ))}>
 
         {unknownTo !== null && (
           <g className="activity-unknown">

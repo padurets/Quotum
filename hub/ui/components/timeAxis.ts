@@ -7,7 +7,7 @@ import {periodOf} from '../lib/periods';
 import {useHistoryBegins} from '../lib/history';
 import {useSizing} from './sizing';
 import {axisNavigation, navigationAt, navigationKey, type AxisNavigation} from '../lib/axisNavigation';
-import {tickPresentation,tickVisible} from '../lib/axisTicks';
+import {tickKeyframes,tickPresentation,tickVisible} from '../lib/axisTicks';
 
 /** How long a finger rests on a chart before it starts a range. */
 const HOLD_MS = 450;
@@ -17,6 +17,8 @@ const SLIDE_MS = 220;
 
 export type DrawingGeometry = {from: number; to: number; end: number};
 type Pose = {a: number; b: number; offset: number};
+type Motion = {key: string; until: number; fold: boolean; start: Pose; end: Pose; options: KeyframeAnimationOptions; started: Animation['startTime']};
+type Tick = {element: SVGTextElement; x: number; length: number};
 
 /**
  * How far a chart's content slides in after it steps through time, in pixels: from
@@ -81,11 +83,12 @@ export function useTimeAxis({
   const [folding, setFolding] = useState(false);
   const [, present] = useState(0);
   const foldTicket = useRef(0);
-  const animations = useRef(new Map<SVGGElement, Animation>());
+  const animations = useRef(new Map<SVGElement, Animation>());
   // The axis owns these animations; finding them through the DOM flushes styles.
-  const animateSlide = (layer: SVGGElement, frames: Keyframe[], options: KeyframeAnimationOptions) => {
+  const animateSlide = (layer: SVGElement, frames: Keyframe[], options: KeyframeAnimationOptions, started: Animation['startTime'] = null) => {
     animations.current.get(layer)?.cancel();
     const animation = layer.animate(frames, options);
+    if (started !== null) animation.startTime = started;
     animations.current.set(layer, animation);
     const release = () => {if (animations.current.get(layer) === animation) animations.current.delete(layer);};
     animation.finished.then(release, release);
@@ -107,15 +110,17 @@ export function useTimeAxis({
   const finalFrame = useRef<number | null>(null);
   const requestedNavigation: AxisNavigation = {context: `${navigation.context}:${left}:${right}:${width}:${scale}`, range: navigation.range};
   const wanted = useRef({navigation: requestedNavigation, projection: {from, to, end}, positioned: false});
-  const motion = useRef<{key: string; until: number; fold: boolean} | null>(null);
+  const motion = useRef<Motion | null>(null);
   const finished = useRef<{visual: DrawingGeometry; stop: PanStop; navigation: AxisNavigation} | null>(null);
   const wheelBounds = useRef<DOMRect | null>(null);
   const panLayers = useRef<HTMLElement[]>([]);
   const paintTicks = useRef(() => {});
+  const animateTicks = useRef<(running: Motion) => Animation[]>(() => []);
   const paintDrawing = useRef<((stop?: PanStop) => void) | undefined>(undefined);
   // Strips replace nodes; their shared axis font keeps the same shaped glyphs.
   const tickWidths=useRef(new Map<string,number>());
-  const tickGlyphs=useRef(new WeakMap<SVGTextElement,{x:number;a:number;transform:string}>());
+  const tickGlyphs=useRef(new WeakMap<SVGTextElement,{x:number;a:number;b:number;transform:string;motion?:Motion;length?:number}>());
+  const tickElements=useRef<Tick[]>([]);
   useEffect(()=>{
     const fonts=document.fonts;
     const changed=()=>{tickWidths.current.clear();present(value=>value+1);};
@@ -183,6 +188,7 @@ export function useTimeAxis({
     }
     cancelSlides();
     for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) layer.style.transform = `translateX(${pose.current.b}px) scaleX(${pose.current.a})`;
+    paintTicks.current();
   };
   const geometry = useRef({end, future: to - end});
   useLayoutEffect(() => {geometry.current = {end: drawing.current.end, future: Math.max(0, visualGeometry().to - visualGeometry().from - (timeRange() ? timeRange()!.to - timeRange()!.from : periodOf(prefs().range).ms))};});
@@ -430,10 +436,22 @@ export function useTimeAxis({
     const moving: Animation[] = [];
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (!reduced && duration > 0 && (Math.abs(start.a - end.a) > 1e-9 || Math.abs(start.b - end.b) > 1e-9)) {
-      for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) moving.push(animateSlide(layer, [{transform: `translateX(${start.b}px) scaleX(${start.a})`}, {transform: `translateX(${end.b}px) scaleX(${end.a})`}], {duration, easing: fold ? 'ease-out' : 'cubic-bezier(.2, .7, .3, 1)'}));
+      const options = {duration, easing: fold ? 'ease-out' : 'cubic-bezier(.2, .7, .3, 1)'};
+      const running: Motion = {key, until: performance.now() + duration, fold, start, end, options, started: document.timeline.currentTime};
+      for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) moving.push(animateSlide(layer, [{transform: `translateX(${start.b}px) scaleX(${start.a})`}, {transform: `translateX(${end.b}px) scaleX(${end.a})`}], options, running.started));
+      if (moving.length) {
+        motion.current = running;
+        moving.push(...animateTicks.current(running));
+        // An inactive document starts all effects when its timeline becomes
+        // available. Replacement labels inherit that same original start.
+        if (running.started === null) moving[0].ready.then(() => {
+          if (motion.current !== running) return;
+          running.started = moving[0].startTime;
+          if (running.started !== null) for (const animation of animations.current.values()) animation.startTime = running.started;
+        }, () => {});
+      }
     }
     if (!moving.length) {motion.current = null; setFolding(false); return;}
-    motion.current = {key, until: performance.now() + duration, fold};
     setFolding(fold);
     Promise.allSettled(moving.map(animation => animation.finished)).then(() => {
       if (foldTicket.current === ticket && !pan.active() && navigationKey(wanted.current.navigation) === key) {motion.current = null; setFolding(false);}
@@ -507,7 +525,7 @@ export function useTimeAxis({
   useLayoutEffect(() => {
     // Measure only after DOM commit. Native input reuses these widths without
     // reading layout, and hides a whole edge date instead of clipping its digits.
-    const ticks=[...(box.current?.querySelectorAll<SVGTextElement>('.slides text.tick')??[])].map(element=>{
+    const ticks=[...(box.current?.querySelectorAll<SVGTextElement>('.time-ticks text.tick')??[])].map(element=>{
       const text=element.textContent??'';let length=tickWidths.current.get(text);
       if(length===undefined){
         length=element.getComputedTextLength();
@@ -516,6 +534,12 @@ export function useTimeAxis({
       }
       return {element,x:Number(element.getAttribute('x')),length};
     });
+    const retained=new Set(ticks.map(tick=>tick.element));
+    for(const {element} of tickElements.current)if(!retained.has(element)){
+      animations.current.get(element)?.cancel();
+      animations.current.delete(element);
+    }
+    tickElements.current=ticks;
     paintTicks.current=()=>{
       for(const {element,x,length} of ticks){
         const visibility=tickVisible(x,length,pose.current,scale,left,width-right)?'':'hidden';
@@ -523,14 +547,25 @@ export function useTimeAxis({
         // CSS rounds fractional transforms; comparing its serialization would
         // parse the same glyph transform again on every translated frame.
         const glyph=tickGlyphs.current.get(element);
-        if(glyph?.a!==pose.current.a||glyph.x!==x){
+        if(glyph?.a!==pose.current.a||glyph.b!==pose.current.b||glyph.x!==x){
           const transform=tickPresentation(x,length,pose.current,scale,left,width-right).transform;
           if(glyph?.transform!==transform)element.style.transform=transform;
-          tickGlyphs.current.set(element,{x,a:pose.current.a,transform});
+          tickGlyphs.current.set(element,{x,a:pose.current.a,b:pose.current.b,transform});
         }
       }
     };
     paintTicks.current();
+    animateTicks.current=running=>{
+      const moving:Animation[]=[];
+      for(const {element,x,length} of ticks){
+        const glyph=tickGlyphs.current.get(element)!;
+        if(glyph.motion===running&&glyph.length===length)continue;
+        moving.push(animateSlide(element,tickKeyframes(x,length,running.start,running.end,left,width-right),running.options,running.started));
+        tickGlyphs.current.set(element,{...glyph,motion:running,length});
+      }
+      return moving;
+    };
+    if(motion.current)animateTicks.current(motion.current);
   });
 
   return {box, svg, width, scale, commitDrawing, visualGeometry, screenX: (at: number) => {if (animations.current.size) {const visible = visualGeometry(); return left + (at - visible.from) / (visible.to - visible.from) * (width - left - right);} const base = drawing.current; return pose.current.a * (left + (at - base.from) / Math.max(60_000, base.to - base.from) * (width - left - right)) + pose.current.b + pose.current.offset / scale;}, get held() {return finished.current !== null;}, hover: shifting || panning || folding || finished.current !== null || hover === null ? null : Math.floor(hover / cellMs) * cellMs, hoverAt: hover,rawHover: hover, drag, x, drawX, timeAt, clip, handlers, basis, active: panning !== null, panning: shifting || panning !== null || folding || finished.current !== null};

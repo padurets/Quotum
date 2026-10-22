@@ -177,6 +177,8 @@ export const SESSION_ACTIVITY_SCENES=[
  * wheel and Shift-drag with delayed history on all five charts. Cooperative preparation
  * and the held final pose are checked by ui/test/prepare.test.ts, history.test.ts and
  * timeAxisMotion.test.ts; they add no lasting demo state.
+ * Animated date clipping, glyph width and shared-clock replacements are held by
+ * ui/test/axisTicks.test.ts and axisTickAnimation.test.ts, including reduced motion.
  * Activity's atomic X/Y cancellation frame is held by ui/test/activityAxisCancel.test.ts.
  * Same-run baseline refresh and new-run retirement are held by ui/test/activityBaseline.test.ts.
  * Native catalogue changes retain selected work in ui/test/activityCoherence.test.ts;

@@ -17,7 +17,7 @@ export function axisPresentationFixture(base: DrawingGeometry, navigation: AxisN
   const drawing = {current: base}, pose = {current: {a: 1, b: 0, offset: 0}};
   const wanted = {current: {navigation, projection: base, positioned: false}};
   const active = {current: null as number | null};
-  const context = {paintTicks:{current:()=>{}},paintDrawing:{current:undefined},drawing, pose, wanted, navigationKey, slideOf, width, scale, left, right,
+  const context = {paintTicks:{current:()=>{}},animateTicks:{current:()=>[]},document:{timeline:{currentTime:0}},paintDrawing:{current:undefined},drawing, pose, wanted, navigationKey, slideOf, width, scale, left, right,
     from: base.from, to: base.to, end: base.end, requestedNavigation: navigation,
     svg: {current: {dataset: {} as Record<string, string>, classList: {toggle: (name: string, on: boolean) => {if (on) classes.add(name); else classes.delete(name);}}}},
     box: {current: {querySelectorAll: () => slides}}, panLayers: {current: layers},

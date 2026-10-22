@@ -2095,6 +2095,11 @@ last displayed time-to-pixel mapping, including its future margin, through pendi
 reads, the complete answer and later ordinary updates. Returning to live can unfold
 the future over 160 ms; reduced motion skips that transition. Release within eight
 source pixels of now restores the chosen live preset.
+Time labels share the moving HTML owner but sit outside the scaled SVG data group.
+Their translation and whole-label visibility use the data animation's easing and
+document timeline. Replacement labels join its original start; interruption freezes
+both at the sampled pose. Glyphs keep their width, and a date crossing an edge is
+shown only while it fits entirely inside the clip.
 One changed gesture creates one address entry; cancellation or returning to the exact
 origin creates none. A horizontal wheel ends after a 200 ms pause. Shift-wheel keeps
 one captured scale across pauses and ends when Shift is released, like a held drag;

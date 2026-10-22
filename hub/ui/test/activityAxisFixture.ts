@@ -10,7 +10,7 @@ import {StackPaths} from '../lib/stackPaths';
 import {workHours} from '../lib/format';
 import {cellStart,targetOf} from '../../server/domain/history';
 import {plotBar} from '../lib/historyPlot';
-import {tickVisible,tickPresentation} from '../lib/axisTicks';
+import {tickKeyframes,tickVisible,tickPresentation} from '../lib/axisTicks';
 import {niceTicks} from '../lib/periods';
 const M=60000,H=3600000;
 const source=(file:string)=>readFileSync(new URL('../../'+file,import.meta.url),'utf8');
@@ -55,7 +55,7 @@ export function activityAxisFixture(live:boolean){
   host.children=commitHost(p.children,path+'.children',host);host.props=p;if(p.ref){if(typeof p.ref==='function')p.ref(host);else p.ref.current=host;}return [host];
  }
  const hooks={useRef,useState,useLayoutEffect,useEffect:useLayoutEffect,useMemo,useSyncExternalStore};
- const context:any={...hooks,React:{createElement},memo:(fn:any)=>fn,useId:()=>useRef('id').current,pan,usePanning:()=>useSyncExternalStore(pan.onPhase,pan.active),useShifting:()=>useSyncExternalStore(pan.onPhase,pan.shifting),hubNow:()=>now,timeRange:()=>selected,periodOf:()=>({ms:2*M}),prefs:()=>({range:'2m'}),useHistoryBegins:()=>0,useSizing:()=>({width:'400'}),axisNavigation,navigationAt,navigationKey,tickVisible,tickPresentation,requestAnimationFrame:frame,cancelAnimationFrame:(id:number)=>rafs.delete(id),ResizeObserver:class{observe(){}disconnect(){}},document:{fonts:{addEventListener(){},removeEventListener(){}}},window:{},matchMedia:()=>({matches:true}),performance:{now:()=>0},useLocale:()=> 'en',useTip:()=>({tip:{current:null},style:{}}),activityScale,stacksHeight:()=>160,StackPaths,niceTicks,MINUTE:M,cellStart,plotBar,targetOf,seriesFocusStyle:()=>({}),mutedKey:(_by:string,key:string)=>key,workHours,clock:()=>'',shortDay:()=>'',stamp:()=>'',t:(key:string)=>key,CSS:{escape:(s:string)=>s},getComputedStyle:()=>({transform:'none'}),slideOf:null};
+ const context:any={...hooks,React:{createElement},memo:(fn:any)=>fn,useId:()=>useRef('id').current,pan,usePanning:()=>useSyncExternalStore(pan.onPhase,pan.active),useShifting:()=>useSyncExternalStore(pan.onPhase,pan.shifting),hubNow:()=>now,timeRange:()=>selected,periodOf:()=>({ms:2*M}),prefs:()=>({range:'2m'}),useHistoryBegins:()=>0,useSizing:()=>({width:'400'}),axisNavigation,navigationAt,navigationKey,tickKeyframes,tickVisible,tickPresentation,requestAnimationFrame:frame,cancelAnimationFrame:(id:number)=>rafs.delete(id),ResizeObserver:class{observe(){}disconnect(){}},document:{timeline:{currentTime:0},fonts:{addEventListener(){},removeEventListener(){}}},window:{},matchMedia:()=>({matches:true}),performance:{now:()=>0},useLocale:()=> 'en',useTip:()=>({tip:{current:null},style:{}}),activityScale,stacksHeight:()=>160,StackPaths,niceTicks,MINUTE:M,cellStart,plotBar,targetOf,seriesFocusStyle:()=>({}),mutedKey:(_by:string,key:string)=>key,workHours,clock:()=>'',shortDay:()=>'',stamp:()=>'',t:(key:string)=>key,CSS:{escape:(s:string)=>s},getComputedStyle:()=>({transform:'none'}),slideOf:null};
  const compile=(code:string)=>ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React,module:ts.ModuleKind.CommonJS}}).outputText;
  context.exports={};context.require=(name:string)=>name==='react'?hooks:{prepare:(owner:any,work:any,valid:any,ready:any)=>prepare(owner,work,valid,ready,scheduler),preparations:()=>scheduler};
  runInNewContext(compile(source('ui/components/prepared.ts')),context);Object.assign(context,context.exports);

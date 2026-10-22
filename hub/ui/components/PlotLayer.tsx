@@ -3,13 +3,14 @@ import type {ReactNode, Ref} from 'react';
 type Geometry = {width: number; height: number};
 
 /** SVG keeps its coordinates; only its HTML owner moves on each input frame. */
-export function PlotLayer({width, height, scale, left, right, children, under = false, main = false, clipRef, top = 0, bottom = 0}: Geometry & {
-  scale: number; left: number; right: number; children: ReactNode;
+export function PlotLayer({width, height, scale, left, right, children, ticks, under = false, main = false, clipRef, top = 0, bottom = 0}: Geometry & {
+  scale: number; left: number; right: number; children: ReactNode; ticks?: ReactNode;
   under?: boolean; main?: boolean; clipRef?: Ref<HTMLDivElement>; top?: number; bottom?: number;
 }) {
   const artwork = <div className="plot-move" data-plot-main={main || undefined} style={{left: -left * scale, width: width * scale}}>
     <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
       <g className="slides">{children}</g>
+      {ticks && <g className="time-ticks">{ticks}</g>}
     </svg>
   </div>;
   return (
