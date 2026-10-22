@@ -23,6 +23,9 @@ function section(selection:PeriodSelection,at=now):Extract<CalendarSection,{stat
   const decoded=expandCalendar(packCalendar(part,part.basis,()=>{}),part.basis,()=>{},()=>{});
   assert.ok(decoded?.state==='complete');assert.deepEqual(decoded.value.cells,cells,'the real proof codec preserves the independent row oracle');return decoded;
 }
+function proofBytes(selection:PeriodSelection){
+  const cache=new CalendarCache(),part=section(selection);cache.add(part.basis,part.value,()=>true,0);return cache.bytes;
+}
 function fixture(t:TestContext){
   const resolved=Intl.DateTimeFormat.prototype.resolvedOptions;
   t.mock.method(Intl.DateTimeFormat.prototype,'resolvedOptions',function(this:Intl.DateTimeFormat){return {...resolved.call(this),timeZone:'UTC'};});
@@ -52,30 +55,78 @@ test('a cache HIT borrows each resident curve once and preserves the shifted rep
   t.diagnostic(JSON.stringify({budget:h.pool.budget,curves,projection,headroom,padding,evictions:h.evictions}));
 });
 
+test('restoring a covered period can release unrelated calendar proofs under the shared budget',t=>{
+  const h=fixture(t),older:PeriodSelection={mode:'range',from:now-75*DAY,to:now-46*DAY};
+  h.configure(older);h.receive(older);assert.equal(h.cache.evictionCandidates().length,3);
+  const part=section(cold),usedBytes=proofBytes(cold),unusedBytes=h.cache.bytes-usedBytes,window=calendarWindow(now,'UTC',cold);
+  const projection=1024+window.edges.length*256+window.dates.length*256,headroom=projection-Math.floor(unusedBytes/2);
+  let padding=h.pool.budget-h.calendar.bytes-headroom;
+  assert.ok(usedBytes>0&&unusedBytes>0&&padding>0);
+  h.pool.register({get estimatedBytes(){return padding;},evictionCandidates:()=>[]});t.after(()=>{padding=0;});
+  h.configure(cold);
+  assert.equal(h.calendar.needed,false,'unrelated proofs must remain evictable while a covered target is projected');
+  assert.equal(h.calendar.demand(),undefined,'restoring the covered period needs no calendar HTTP');
+  assert.deepEqual(h.calendar.get().value!.cells,part.value.cells,'every projected cell matches the production row oracle');
+  assert.ok(h.evictions.some(bytes=>bytes>0),'admission releases real unused storage');
+  assert.ok(h.cache.bytes>=usedBytes,'the used proof remains resident after the read');
+  assert.ok(h.pool.estimatedBytes<=h.pool.budget);assert.equal(h.pool.activeFlights,0);
+  t.diagnostic(JSON.stringify({budget:h.pool.budget,usedBytes,unusedBytes,projection,headroom,padding,evictions:h.evictions}));
+});
+
 for(const change of ['drop','clear','invalidate','hide','replace','nested','throw','refuse'] as const)test(`borrowed calendar curves remain charged through ${change} and release after the read`,t=>{
-  const h=fixture(t),before=h.cache.bytes,window=calendarWindow(now+8801,'UTC',live);let observed=0,calls=0;
+  const h=fixture(t),before=h.cache.bytes,usedBytes=proofBytes(live),window=calendarWindow(now+8801,'UTC',live);let observed=0,calls=0;
   const read=()=>h.cache.read(window,live,now+8801,()=>{
     if(++calls>1)return true;
-    assert.ok(h.cache.evictionCandidates().every(candidate=>candidate.bytes===0),'dropping a cache owner cannot release a borrowed curve');
+    const candidates=h.cache.evictionCandidates();
+    assert.equal(candidates.filter(candidate=>candidate.bytes===0).length,1,'the selected curve remains borrowed');
+    assert.equal(candidates.reduce((bytes,candidate)=>bytes+candidate.bytes,0),before-usedBytes,'unused curves remain releasable');
     if(change==='drop')for(const e of h.cache.evictionCandidates())e.drop();
     if(change==='clear'||change==='throw'||change==='refuse')h.cache.clear();
     if(change==='invalidate')h.cache.invalidate(-Infinity);
     if(change==='hide')h.calendar.configure(false,'same-context',now);
     if(change==='replace')h.calendar.configure(true,'replacement-authority',now);
     if(change==='nested'){
-      const nested=h.cache.read(window,live,now+8801,()=>{h.cache.clear();assert.equal(h.cache.bytes,before);return true;});
+      const nested=h.cache.read(window,live,now+8801,()=>{h.cache.clear();assert.equal(h.cache.bytes,usedBytes);return true;});
       assert.equal(nested,null,'a clear retires the nested answer');
     }
-    observed=h.cache.bytes;assert.equal(observed,before,'LRU/authority removal does not free storage still borrowed by a projection');
-    if(change==='hide')assert.equal(h.calendar.bytes,before,'a hidden calendar still accounts outstanding borrows');
-    if(change==='replace')assert.ok(h.calendar.bytes>before,'the replacement shell and outstanding borrows both remain charged');
+    observed=h.cache.bytes;assert.equal(observed,usedBytes,'LRU/authority removal releases only curves not borrowed by the projection');
+    if(change==='hide')assert.equal(h.calendar.bytes,usedBytes,'a hidden calendar still accounts outstanding borrows');
+    if(change==='replace')assert.ok(h.calendar.bytes>usedBytes,'the replacement shell and outstanding borrows both remain charged');
     if(change==='throw')throw new Error('projection reservation failed');
     return change!=='refuse';
   });
   if(change==='throw')assert.throws(read,/projection reservation failed/);else{
     const result=read();if(change==='drop')assert.ok(result,'LRU removal alone does not change authority');else assert.equal(result,null,'retired or refused work cannot publish a cached answer');
   }
-  assert.equal(calls,1);assert.equal(observed,before);assert.equal(h.cache.bytes,0,'the last borrowed owner releases storage on every exit');
+  assert.equal(calls,1);assert.equal(observed,usedBytes);assert.equal(h.cache.bytes,0,'the last borrowed owner releases storage on every exit');
+});
+
+for(const change of ['evict','clear','nested','refuse','throw'] as const)test(`a multi-proof calendar projection owns every used curve through ${change}`,t=>{
+  const h=fixture(t),older:PeriodSelection={mode:'range',from:now-75*DAY,to:now-46*DAY};
+  h.configure(older);h.receive(older);
+  const selection:PeriodSelection={mode:'range',from:now-31*DAY,to:now-DAY},window=calendarWindow(now,'UTC',selection);
+  const usedBytes=proofBytes(live)+proofBytes(cold),unusedBytes=h.cache.bytes-usedBytes;
+  assert.ok(unusedBytes>0);let called=0;
+  const read=()=>h.cache.read(window,selection,now,()=>{
+    called++;const candidates=h.cache.evictionCandidates();
+    assert.equal(candidates.filter(candidate=>candidate.bytes===0).length,2,'both segments stay owned, even when they overlap');
+    assert.equal(candidates.reduce((bytes,candidate)=>bytes+candidate.bytes,0),unusedBytes);
+    if(change==='nested'){
+      const nested=h.cache.read(window,selection,now,()=>{h.cache.clear();assert.equal(h.cache.bytes,usedBytes);return true;});
+      assert.equal(nested,null);assert.equal(h.cache.bytes,usedBytes,'the outer read still owns both curves after the nested release');
+    }else if(change==='clear')h.cache.clear();
+    else for(const candidate of candidates)candidate.drop();
+    assert.equal(h.cache.bytes,usedBytes);
+    if(change==='throw')throw new Error('multi-proof reservation failed');
+    return change!=='refuse';
+  });
+  if(change==='throw')assert.throws(read,/multi-proof reservation failed/);
+  else{
+    const reading=read();
+    if(change==='evict'){assert.ok(reading);assert.deepEqual(reading.value!.cells,section(selection).value.cells);}
+    else assert.equal(reading,null);
+  }
+  assert.equal(called,1);assert.equal(h.cache.bytes,0,'all used roots release after the last owner on every exit');
 });
 
 for(const change of ['hide','replace','clear'] as const)test(`a reentrant ${change} during cache admission cannot restore the previous calendar context`,t=>{
@@ -99,10 +150,10 @@ test('the accepted numeric reading takes over its scratch charge before publicat
 });
 
 test('LRU pressure can retire cache entries but cannot use borrowed storage to admit an oversized read',t=>{
-  const h=fixture(t),before=h.cache.bytes,window=calendarWindow(now+8801,'UTC',live),projection=1024+window.edges.length*256+window.dates.length*256;
-  let padding=h.pool.budget-h.calendar.bytes-projection+1;h.pool.register({get estimatedBytes(){return padding;},evictionCandidates:()=>[]});t.after(()=>{padding=0;});
+  const h=fixture(t),usedBytes=proofBytes(live),unusedBytes=h.cache.bytes-usedBytes,window=calendarWindow(now+8801,'UTC',live),projection=1024+window.edges.length*256+window.dates.length*256;
+  let padding=h.pool.budget-h.calendar.bytes-projection+unusedBytes+1;h.pool.register({get estimatedBytes(){return padding;},evictionCandidates:()=>[]});t.after(()=>{padding=0;});
   try{
-    const result=h.cache.read(window,live,now+8801,bytes=>{const admitted=h.reserve(bytes);assert.equal(h.cache.bytes,before,'trim cannot pretend a borrowed curve was freed');assert.equal(admitted,false);return admitted;});
+    const result=h.cache.read(window,live,now+8801,bytes=>{const admitted=h.reserve(bytes);assert.equal(h.cache.bytes,usedBytes,'trim cannot pretend a borrowed curve was freed');assert.equal(admitted,false);return admitted;});
     assert.equal(result,null);assert.equal(h.evictions.length,2,'ordinary LRU still considers each cache owner');assert.equal(h.cache.bytes,0);
   }finally{h.pool.release(h.flight);}
   assert.ok(h.pool.estimatedBytes<=h.pool.budget);

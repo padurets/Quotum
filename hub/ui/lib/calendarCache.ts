@@ -48,9 +48,9 @@ export class CalendarCache {
     }catch(error){failed=true;if(!(error instanceof Error)||error.message!=='calendar_cache_limit')throw error;}
     finally{try{reserve(staging);}catch(error){if(!failed)throw error;}}
   }
-  read(window:ReturnType<typeof calendarWindow>,selection:PeriodSelection,now:number,reserve:(bytes:number)=>boolean):CalendarReading|null {
+  private plan(window:ReturnType<typeof calendarWindow>,selection:PeriodSelection,now:number) {
     const entries=[...this.entries].filter(e=>e.zone===window.zone&&e.basis.evidenceCut<=now);if(!entries.length)return null;
-    const latest=entries.reduce((a,b)=>a.basis.evidenceCut>b.basis.evidenceCut?a:b),range=window.range,segments:CalendarSegment[]=[];
+    const latest=entries.reduce((a,b)=>a.basis.evidenceCut>b.basis.evidenceCut?a:b),range=window.range,segments:CalendarSegment[]=[],used=new Set<Entry>();
     // A live proof can retain its own observation cutoff as the clock moves.
     // Historical-only curves must cover the live tail, never declare it empty.
     const liveCut=selection.mode==='live'?entries.reduce((cut,e)=>e.period===selection.periodMs?Math.max(cut,e.basis.evidenceCut):cut,-Infinity):-Infinity;
@@ -60,22 +60,26 @@ export class CalendarCache {
     let from=range.from;
     while(from<cut){
       const next=entries.filter(e=>e.from<=from&&e.cut>from).sort((a,b)=>b.cut-a.cut)[0];if(!next)return null;
-      const to=Math.min(cut,next.cut);segments.push({from,to,curve:next.curve});from=to;
+      const to=Math.min(cut,next.cut);segments.push({from,to,curve:next.curve});used.add(next);from=to;
     }
     if(!segments.length&&!entries.some(e=>e.from<=range.from&&e.to>=range.to))return null;
-    // LRU removal retires the cache owner, but a synchronous projection still owns
-    // its captured curves. Count that shared storage once until the last read ends.
+    const available=entries.flatMap(e=>e.known===null?[]:[e.known]),known=available.length?Math.min(...available):null;
+    const day=86_400_000,cursor=entries.find(e=>selection.mode==='range'?e.period===undefined&&range.to<=e.validBefore&&e.basis.range.from===range.from&&e.basis.range.to===range.to:e.period===selection.periodMs&&e.validBefore===Infinity&&Math.floor(e.from/day)*day===window.edges[0]&&Math.ceil(e.to/day)*day===window.edges.at(-1));
+    return {entries:[...used],segments,cut,known,retained,retention:latest.retention,cursor:cursor?.cursor??'',basis:{...(cursor??latest).basis,evaluatedAt:now,evidenceCut:cut,range}};
+  }
+  read(window:ReturnType<typeof calendarWindow>,selection:PeriodSelection,now:number,reserve:(bytes:number)=>boolean):CalendarReading|null {
+    // Planning releases all unused Entry references before reservation can evict
+    // them. Metadata alone must not keep an unrelated proof curve alive.
+    const plan=this.plan(window,selection,now);if(!plan)return null;
     const revision=this.revision;
-    for(const entry of entries)this.borrowed.set(entry,(this.borrowed.get(entry)??0)+1);
+    for(const entry of plan.entries)this.borrowed.set(entry,(this.borrowed.get(entry)??0)+1);
     try{
       if(!reserve(1024+window.edges.length*256+window.dates.length*256)||revision!==this.revision)return null;
-      const available=entries.flatMap(e=>e.known===null?[]:[e.known]),known=available.length?Math.min(...available):null;
-      const cells=calendarProjection(window.edges,range,cut,known,retained,latest.retention,selection.mode==='live'?selection.periodMs:undefined,segments);
-      const day=86_400_000,cursor=entries.find(e=>selection.mode==='range'?e.period===undefined&&range.to<=e.validBefore&&e.basis.range.from===range.from&&e.basis.range.to===range.to:e.period===selection.periodMs&&e.validBefore===Infinity&&Math.floor(e.from/day)*day===window.edges[0]&&Math.ceil(e.to/day)*day===window.edges.at(-1));
-      for(const e of entries)if(segments.some(s=>s.curve===e.curve))e.at=now;
-      return {window,value:{zone:window.zone,edges:window.edges,availableFrom:known,retainedFrom:retained,cursor:cursor?.cursor??'',cells},basis:{...(cursor??latest).basis,evaluatedAt:now,evidenceCut:cut,range},loading:false,error:null};
+      const cells=calendarProjection(window.edges,window.range,plan.cut,plan.known,plan.retained,plan.retention,selection.mode==='live'?selection.periodMs:undefined,plan.segments);
+      for(const entry of plan.entries)entry.at=now;
+      return {window,value:{zone:window.zone,edges:window.edges,availableFrom:plan.known,retainedFrom:plan.retained,cursor:plan.cursor,cells},basis:plan.basis,loading:false,error:null};
     }finally{
-      for(const entry of entries){const remaining=this.borrowed.get(entry)!-1;if(remaining)this.borrowed.set(entry,remaining);else this.borrowed.delete(entry);}
+      for(const entry of plan.entries){const remaining=this.borrowed.get(entry)!-1;if(remaining)this.borrowed.set(entry,remaining);else this.borrowed.delete(entry);}
     }
   }
 }

@@ -1615,8 +1615,10 @@ changes invalidate these patterns; eviction falls back to the common transport.
 Wire decoding releases its temporary anonymous sweep after projecting numeric cells,
 before expanding other reply sections. Restored cells and the original packed proof
 keep their own charge in the shared history budget.
-Cache projections borrow the existing anonymous curves rather than charging a
-second copy. A removed cache entry stays charged while a synchronous read still
+Cache projections borrow only the anonymous curves used by their selected segments,
+without charging a second copy. Planning releases references to unrelated entries
+before reserving the projection, so those proofs remain available for eviction.
+A removed cache entry stays charged while a synchronous read still
 owns it; authority changes retire that read's answer immediately. Curve construction
 releases temporary arrays as it proceeds, and an accepted numeric reading takes
 over its projection reservation before notifying subscribers.
