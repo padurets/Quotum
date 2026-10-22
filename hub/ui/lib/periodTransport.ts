@@ -197,7 +197,12 @@ export class PeriodTransport implements HistoryMember {
         for(const demand of demands)demand.reject(error);
         if(extras){const current=this.intent();if(current?.generation===intent.generation&&current.revision===intent.revision){const section={state:'error' as const,error:error instanceof ApiError&&error.code==='history_limit'?'history_limit' as const:'unavailable' as const};this.receive({basis:{run:'',revision:'',evaluatedAt:intent.request.evaluatedAt,evidenceCut:0,range:{from:0,to:0}},...Object.fromEntries(PERIOD_SCOPES.filter(scope=>appliedIntent.request[scope]).map(scope=>[scope,section])),...(body.values?{values:section}:{}),...(body.sessions?{sessions:section}:{}),...(body.facets?{facets:section}:{}),...(body.sourceWork?{sourceWork:section}:{}),...(body.calendar?{calendar:section}:{})},appliedIntent);}}
       })
-        .finally(async()=>{try{if(flight.controller.signal.aborted)for(const demand of demands)demand.reject(aborted());if(demands.some(demand=>demand.owner))await Promise.allSettled(demands.map(demand=>demand.owner?.finished));}finally{for(const release of flight.releases)release();flight.releases.clear();this.pool.release(flight);this.flights.delete(flight);if(resetEpoch===this.resetEpoch)this.schedule();}});
+        .finally(async()=>{try{if(flight.controller.signal.aborted)for(const demand of demands)demand.reject(aborted());if(demands.some(demand=>demand.owner))await Promise.allSettled(demands.map(demand=>demand.owner?.finished));}finally{
+          for(const release of flight.releases)release();flight.releases.clear();this.pool.release(flight);this.flights.delete(flight);
+          // A new entry can await this reset flight's actual lifetime before its
+          // cold baseline fits. A same-intent reset must not restart that read.
+          const current=this.intent();if(resetEpoch===this.resetEpoch||current&&(current.board!==intent.board||this.key(current)!==key))this.schedule();
+        }});
     };
     this.pool.request(this,flight,start,()=>this.abort(flight));
     if(this.queue.length)this.schedule();

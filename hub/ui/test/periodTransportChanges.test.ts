@@ -38,6 +38,26 @@ import {AGENTS,ACTIVITY,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,widgetVi
 
 const NOW=5_000_000;
 
+for(const replacement of ['same intent','inactive'] as const)test(`reset finishing an owned flight does not retry ${replacement}`,async()=>{
+  const pool=new HistoryPool(),basis={run:'run',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range:{from:0,to:NOW}};
+  let intent:PeriodIntent|null={board:'board',generation:1,revision:1,request:{version:1,selection:{mode:'live',periodMs:NOW},evaluatedAt:NOW,quota:{},sessions:{}}};
+  let sent=0,finish!:()=>void,release!:()=>void,role:'visible'|null='visible';
+  const finished=new Promise<void>(resolve=>{finish=resolve;}),pending=new Promise<void>(resolve=>{release=resolve;});
+  const transport=new PeriodTransport(pool,()=>intent,()=>{},async(_board,_body,signal,reserve)=>{
+    sent++;assert.equal(reserve(1234),true);await abortable(pending,signal);return {basis};
+  });
+  const read=transport.read('quota',{},undefined,{finished,role:()=>role,cancel:()=>{role=null;}}).catch(error=>error);
+  try{
+    await flush();assert.equal(sent,1);assert.equal(pool.activeFlights,1);assert.equal(pool.estimatedBytes,1234);
+    if(replacement==='inactive')intent=null;
+    transport.reset();await flush();assert.equal((await read).name,'AbortError');
+    assert.equal(pool.activeFlights,1,'the aborted producer still owns its slot until the reader finishes');
+    assert.equal(pool.estimatedBytes,1234,'the reader lifetime preserves the real flight reservation');
+    finish();await flush();assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);
+    assert.equal(sent,1,'a reset without a new current intent cannot wake another read');
+  }finally{intent=null;finish();release();transport.reset();await flush();}
+});
+
 for(const failure of ['memory refusal','cancelled preparation'] as const)test('late native evidence survives '+failure+' and recovers through the actual coordinator',async t=>{
   t.mock.method(Date,'now',()=>runtimeNow);publishDataFilters(defaultFilters(),true);
   const h=await runtimeFixture(),jobs:(()=>void)[]=[];let pinned=0,time=0;

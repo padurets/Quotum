@@ -1,6 +1,109 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {fixture,drawings,flush,NOW,H,M} from './periodRuntimeFixture';
+import {Preparations} from '../lib/prepare';
+
+for(const reentry of ['inactive','direct','calendar','projection','work'] as const)test(`completed period preparation cannot publish after deactivation with ${reentry} reentry`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const h=await fixture({personal:true,heatmap:true}),jobs:(()=>void)[]=[];
+  let time=0,armed=false,reentered=0,insideCalendar=false,earlyNotifications=0,drawing:'pending'|'complete'|'error'|null=null;
+  const scheduler=new Preparations({now:()=>time++,post:run=>jobs.push(run)}),delivered:number[]=[];
+  const range={from:NOW-H,to:NOW},notifications={calendar:0,projection:0,work:0};
+  const enter=()=>{if(armed&&!h.period.active){
+    armed=false;reentered++;h.period.activate(true);
+    if(reentry==='calendar'){
+      const query=h.period.intent()?.request.quota;assert.ok(query);drawing='pending';
+      void h.period.transport.read('quota',query).then(()=>{drawing='complete';},()=>{drawing='error';});
+    }
+  }};
+  const stops=[
+    h.period.calendar.subscribe(()=>{notifications.calendar++;insideCalendar=true;try{if(reentry==='calendar')enter();}finally{insideCalendar=false;}}),
+    h.period.subscribeProjection('quota',()=>{notifications.projection++;if(insideCalendar)earlyNotifications++;if(reentry==='projection')enter();}),
+    h.period.subscribe(()=>{notifications.work++;if(insideCalendar)earlyNotifications++;if(h.period.get().value)delivered.push(h.period.activity.summary(range,'source').agentMs);if(reentry==='work')enter();}),
+  ];
+  const empty=()=>{
+    assert.equal(h.period.get().value,null);assert.equal(h.period.get().rows.length,0);
+    assert.equal(h.period.tapes.size,0);assert.equal(h.period.values.size,0);assert.equal(h.period.activity,null);
+    assert.equal(h.period.storage.size,0);assert.equal(h.period.retained.size,0);assert.equal(h.period.restoring.size,0);
+    assert.equal(h.period.valueCache.size,0);assert.equal(h.period.activityLeases.size,0);
+  };
+  try{
+    h.prepareWith(scheduler);h.credit(NOW-M,NOW);h.events.flush();await flush();
+    assert.equal(scheduler.size,1,'the actual transport is awaiting cooperative adoption');
+    for(let slices=0;scheduler.size;slices++){
+      assert.ok(slices<1000);const run=jobs.shift();assert.ok(run);run();
+      if(scheduler.size)await flush();
+    }
+    // The final slice resolved prepareAsync, but its adoption continuation has not run.
+    assert.equal(h.pool.activeFlights,1);assert.ok(h.pool.estimatedBytes>h.period.estimatedBytes);
+    const flight=[...h.period.transport.flights][0] as {releases:Set<()=>void>};
+    assert.equal(flight.releases.size,1,'the decoded calendar remains pinned by this flight');
+    armed=true;h.period.activate(false);
+    assert.equal(h.pool.activeFlights,1,'abort retains the slot until its adoption continuation settles');
+    assert.equal(flight.releases.size,1,'abort does not release a still-owned decoded calendar');
+    if(reentry==='direct')h.period.activate(true);
+    assert.equal(reentered,reentry==='calendar'||reentry==='projection'||reentry==='work'?1:0);
+    assert.equal(earlyNotifications,0,'a nested clear preserves the outer notification owner until calendar publication returns');
+    empty();delivered.length=0;
+    const cleared={...notifications};await flush();
+    empty();assert.deepEqual(delivered,[],'the completed old preparation never publishes into the cleared or reentered period');
+    assert.equal(flight.releases.size,0,'the finished flight releases its calendar pin');
+    assert.equal(h.period.transport.flights.has(flight),false);
+    if(reentry==='calendar')assert.equal(drawing,'complete','the outer clear preserves the reentered drawing and its first cells reply');
+    if(reentry==='inactive'){
+      assert.deepEqual(notifications,cleared,'settling the old adoption adds no notification');
+      assert.equal(h.period.calendar.get().value,null);assert.equal(h.period.calendar.bytes,0);
+      assert.equal(h.period.calendar.retained.size,0);assert.equal(h.pool.estimatedBytes,0);assert.equal(h.pool.activeFlights,0);
+    }else{
+      assert.equal(scheduler.size,1,'reentry owns a fresh preparation after the old flight finishes');
+      for(let slices=0;jobs.length||h.pool.activeFlights;slices++){assert.ok(slices<1000);jobs.shift()?.();await flush();}
+      assert.deepEqual(delivered,[2*M],'only the fresh entry publishes the complete current work');
+      if(reentry==='calendar')assert.equal(drawing,'complete','the reentered drawing receives its actual transport reply');
+      assert.ok(h.period.calendar.get().value);assert.equal(h.period.calendar.retained.size,0);
+      assert.equal(h.pool.activeFlights,0);assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes);
+      const requests=h.requests.length;h.period.changed();await flush();
+      assert.equal(h.requests.length,requests,'the outer clear preserves the new entry identity and its accepted baseline');
+      h.period.activate(false);h.period.activate(false);await flush();empty();
+      assert.equal(h.period.calendar.bytes,0);assert.equal(h.pool.estimatedBytes,0);assert.equal(h.pool.activeFlights,0);
+    }
+  }finally{for(const stop of stops)stop();h.page.dispatch({type:'board-close'});await h.close();scheduler.dispose();}
+});
+
+for(const boundary of ['calendar','facets','value','source','projection','work'] as const)test(`fixed cached period ${boundary} deactivation notifies a fully cleared snapshot before reentry`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const h=await fixture({personal:true,fixed:true,heatmap:true}),drawing=await drawings(h);
+  let stop=()=>{},releaseFacets=()=>{},reentered=0;
+  try{
+    const a={from:NOW-H,to:NOW},b={from:NOW-2*H,to:NOW-H},original=h.period.get().value;
+    h.selectRange(b);await flush();assert.ok(h.period.retained.size>0);
+    const reads=h.requests.length;h.selectRange(a);await flush();
+    assert.equal(h.requests.length,reads,'the fixed A→B→A return must actually reuse retained evidence');
+    assert.equal(h.period.get().value,original);assert.ok(h.period.retained.size>0);
+    releaseFacets=h.period.demandFacets();await flush();assert.ok(h.period.getFacets().value);
+    const listener=()=>{
+      if(h.period.active||reentered)return;
+      reentered++;
+      assert.equal(h.period.get().value,null);assert.equal(h.period.get().rows.length,0);
+      assert.equal(h.period.getValue(h.source).value??null,null);assert.equal(h.period.values.size,0);
+      assert.equal(h.period.getSource(h.source).length,0);assert.equal(h.period.getFacets().value,null);
+      assert.equal(h.period.calendar.get().value,null);assert.equal(h.period.index,null);assert.equal(h.period.activity,null);
+      assert.equal(h.period.tapes.size,0);assert.equal(h.period.sourceTape,null);assert.equal(h.period.sourceCurves,undefined);
+      assert.equal(h.period.retained.size,0);assert.equal(h.period.restoring.size,0);assert.equal(h.period.valueCache.size,0);
+      assert.equal(h.period.bytes,0);assert.equal(h.period.storage.size,0);
+      h.period.activate(true);
+    };
+    stop=boundary==='calendar'?h.period.calendar.subscribe(listener):boundary==='facets'?h.period.subscribeFacets(listener):boundary==='value'?h.period.subscribeValue(h.source,listener):boundary==='source'?h.period.subscribeSource(h.source,listener):boundary==='projection'?h.period.subscribeProjection('quota',listener):h.period.subscribe(listener);
+    h.requests.length=0;h.period.activate(false);await flush();
+    assert.equal(reentered,1);assert.notEqual(h.period.get().value,original,'a deactivated retained root cannot restore itself');
+    assert.equal(h.period.workSelection.mode,'range');assert.deepEqual(h.period.work.basis.range,a);
+    assert.equal(h.period.activity.summary(a,'source').agentMs,M);assert.ok(h.period.getValue(h.source).value);
+    assert.ok(h.period.calendar.get().value);assert.ok(h.period.getFacets().value);
+    assert.ok(h.requests.some(request=>request.sessions&&!request.sessions.cursor),'reentry reads a fresh complete work basis');
+    assert.equal(h.pool.activeFlights,0);assert.equal(h.period.calendar.retained.size,0);assert.ok(drawing.loader.estimatedBytes>0);
+    assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes+drawing.loader.estimatedBytes,'the period and actual drawing reader account for every retained byte');
+    const requests=h.requests.length;h.period.changed();await flush();assert.equal(h.requests.length,requests,'the outer clear does not erase the fresh entry identity');
+  }finally{stop();releaseFacets();drawing.close();h.page.dispatch({type:'board-close'});await h.close();}
+});
 
 for(const boundary of ['facets','value','source','work','projection'] as const)for(const replacement of ['clear','live','history'] as const)test(`fresh period ${boundary} notification can ${replacement} without reviving its captured reply`,async t=>{
   t.mock.method(Date,'now',()=>NOW);

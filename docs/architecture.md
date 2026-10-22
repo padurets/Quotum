@@ -1953,6 +1953,9 @@ or restoring the same IDs cannot bring back a retired result. Board, access,
 currency, resource selections, visible consumers and request generations prevent a late
 response from acquiring a newer label. Superseded period reads leave the transport queue;
 retrying an analytical widget repeats its failed exact evidence as well as its drawing cells.
+Leaving the board invalidates pending numerical preparation before clearing its data.
+Subscribers see the complete cleared period before they can reopen it. Old flights keep
+their memory and slots until their readers finish, then wake a newer entry if one exists.
 A bounded signed frontier lets the next read replace changed work and measurement
 intervals or extend missing older evidence. Each bounded work and measurement journal
 has its own monotonic proof boundary. Session cursors require the work proof, quota

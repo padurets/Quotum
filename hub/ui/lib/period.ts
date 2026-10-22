@@ -91,7 +91,7 @@ class BoardPeriod {
   // Facts can change while closed; a live range can also move without a new event.
   demandFacets=()=>{const first=this.facetsDemand++===0;if(!this.facetState.value||this.facetsNeeded||first&&this.selection.mode==='live'&&this.facetAt!==hubNow()){this.facetsNeeded=true;this.facetState={...this.facetState,loading:true};for(const listener of this.facetListeners)listener();this.revision++;this.transport.change();}return()=>{this.facetsDemand--;};};
   private invalidateFacets(){this.facetGeneration++;this.facetsNeeded=true;}
-  private resetFacets(){this.invalidateFacets();this.facetAt=null;this.facetState={value:null,loading:this.facetsDemand>0,error:null};for(const listener of this.facetListeners)listener();}
+  private resetFacets(){this.invalidateFacets();this.facetAt=null;this.facetState={value:null,loading:this.facetsDemand>0,error:null};this.notify(this.facetListeners);}
   private facetBytes(value=this.facetState.value){if(!value)return 0;const choices=[value,...(value.retained?[value.retained]:[])];return 256+JSON.stringify(value).length*3+choices.reduce((bytes,value)=>bytes+value.projects.length*32+value.devices.length*96+value.clients.length*32+value.funding.length*32,0);}
   private wantsWork=false;
   private workNeeded=false;
@@ -494,18 +494,25 @@ class BoardPeriod {
     this.measureBytes();this.publishProjection(['budget','funds']);
   }
   private clear() {
-    this.activityLifetime={};
-    this.calendar.clear();
-    this.sourceTape=null;this.sourceCurves=undefined;this.sourceCursor=undefined;this.resetFacets();
-    this.workEvidence++;this.retirementAt=Infinity;
-    this.proofEpoch++;this.workProofEpoch=-1;this.valuesProofEpoch=-1;this.validBefore=Infinity;this.dirtyScopes.clear();
-    this.retained.clear();this.cacheKey='';
-    preparations()?.cancel(this.preparationOwner);this.transport.reset();this.work=empty();this.cursor=undefined;this.index=null;this.activity=null;this.activityRetained=null;this.tapes.clear();delete this.projectionErrors.quota;delete this.projectionErrors.budget;delete this.projectionErrors.funds;this.valueCache.clear();this.liveEvidence=false;this.bytes=0;this.storage=new Map();this.workRows=[];this.publishProjection();
-    for(const id of this.values.keys())this.setValue(id,noValue);this.values.clear();
-    const previous=this.rowsBySource;this.rowsBySource=new Map();for(const id of previous.keys())for(const listener of this.sourceListeners.get(id)??[])listener();
-    this.publishWork();clock.due(this.watch,null,hubNow());
+    const previousNotifications=this.notifications,notifications=previousNotifications??new Set<Set<()=>void>>();this.notifications=notifications;
+    try{
+      preparations()?.cancel(this.preparationOwner);this.transport.reset();
+      this.activityLifetime={};
+      this.sourceTape=null;this.sourceCurves=undefined;this.sourceCursor=undefined;this.resetFacets();
+      this.workEvidence++;this.retirementAt=Infinity;
+      this.proofEpoch++;this.workProofEpoch=-1;this.valuesProofEpoch=-1;this.validBefore=Infinity;this.dirtyScopes.clear();
+      this.retained.clear();this.cacheKey='';
+      this.work=empty();this.cursor=undefined;this.index=null;this.activity=null;this.activityRetained=null;this.tapes.clear();delete this.projectionErrors.quota;delete this.projectionErrors.budget;delete this.projectionErrors.funds;this.valueCache.clear();this.liveEvidence=false;this.bytes=0;this.storage=new Map();this.workRows=[];this.publishProjection();
+      for(const id of this.values.keys())this.setValue(id,noValue);this.values.clear();
+      const previous=this.rowsBySource;this.rowsBySource=new Map();for(const id of previous.keys())this.notify(this.sourceListeners.get(id));
+      this.publishWork();clock.due(this.watch,null,hubNow());
+      // Calendar subscribers can reactivate the period. Finish every old-context
+      // write before crossing its independent publication boundary.
+      this.calendar.clear();
+    }finally{this.notifications=previousNotifications;}
+    if(!previousNotifications)for(const listeners of notifications)this.notify(listeners);
   }
-  activate(active:boolean){if(this.active===active)return;this.active=active;if(!active){this.clear();this.identity='';}else this.changed();}
+  activate(active:boolean){if(this.active===active)return;this.active=active;if(!active){this.identity='';this.generation++;this.clear();}else this.changed();}
   changed(event?:PageEvent,state:PageState=page.get()) {
     const board=state.board;
     if(!board||event?.type==='board-close'){this.identity='';this.generation++;this.clear();return;}
