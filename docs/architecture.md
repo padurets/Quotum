@@ -2187,7 +2187,11 @@ An ordinary same-context refresh retains one complete, coherent set of all four
 metrics, including while replacement preparation fails; its retained model remains
 charged to the shared pool. The summary, legend amounts, previews and bar readout
 commit with the prepared stacks. Neither an early local reply nor an early shared
-reply can replace only part of that frame. Fixed subsets compare admitted context
+reply can replace only part of that frame.
+Legend controls also follow the authorized group catalogue while a changed selection
+retires its numerical frame. Names and toggles stay available for another immediate
+click before replacement numbers prepare.
+Fixed subsets compare admitted context
 totals and work endpoints with the shared selected work, while live subsets bind to
 its evidence generation; unrelated measurement revisions do not delay them. Parent
 and drawing preparation share a retained-model lease until replacement, and a retired

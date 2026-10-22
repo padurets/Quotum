@@ -65,6 +65,8 @@ export const ANALYTICS_SCENES=[
  * Whole-frame reply ordering and live expiry are held by activityFrame and
  * activityRetainedClock; resource disclosure evidence by historicalPlanDisclosure
  * and unnamedMoneyDisclosure. Money strip-to-exact value poses are held by moneyPanDomain.
+ * Legend controls across immediate mask changes are held by activityLegendControls;
+ * pending numerical model accounting by activityPreparationRetention.
  * Financial error recovery with unchanged native values is held by financialRetryStatus.
  */
 export const CHART_SERIES_SCENES=[

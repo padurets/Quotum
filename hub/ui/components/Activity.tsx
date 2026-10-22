@@ -270,6 +270,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     return {groups, colors, names, muted, shown};
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drawnActivity, by, arrange.view, titles, prefs.muted, locale]);
+  const controls=useMemo(()=>groups.map((group,i)=>({key:group.key,name:group.name,color:colors[i]})),[groups,colors]);
   const prepared = usePrepared(function* () {
     const data = new Map<string, PlotGroup>();
     const found = new Map<string, Pick<PlotGroup, 'key' | 'name'>>();
@@ -277,7 +278,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
       for (const group of yield* plotGroupsPrepared(strip, {k0: strip.from / strip.cell, k1: strip.to / strip.cell - 1}, by)) {data.set(group.key, group); yield;}
       for (const row of strip.activityCells.values()) for (const [key, part] of row.parts[by]) {found.set(key, {key, name: part.name}); yield;}
     }
-    const seed = groups.map((group, i) => ({key: group.key, name: group.name, color: colors[i]}));
+    const seed = controls;
     if (!strip) return {numeric,identities: seed, shown, strip, registry: by==='project'?{authority,token:-1,range:drawing?.range,by,basis:groups,seed,groups:seed}:null};
     const previous = registry.current?.authority === authority && registry.current.token === strip.token && registry.current.by === by ? registry.current : {authority, token: strip.token,range:drawing?.range, by, seed, groups: seed};
     const identities = groupRegistry(previous.seed, previous.groups, [...found.values()], by === 'source' ? key => key==='unknown'||key==='notProvided'?'var(--other)' : colorOf(arrange.view, key, titles[key]?.provider ?? '') : undefined);
@@ -334,7 +335,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const detailFrame=useMemo(()=>geometry?{...geometry.numeric,identities:geometry.identities}:null,[geometry]);
   const renderDetails=(frame:DetailFrame|null,retained:boolean)=>({
     summary:<Totals history={frame?.history??null} model={frame?.model??null} retained={retained} by={by} subset={subset} scoped={scoped} allOff={allOff} since={frame?.since??null} focus={focus}/>,
-    legend:<div className="legend">{(emptyFrame?[]:frame?.identities??[]).map(identity=><LegendItem key={identity.key} subset={subset} model={frame?.model??null} scoped={scoped} retained={retained} history={frame?.history??null} groupKey={identity.key} by={by} group={frame?.history?.activity.by[by].find(group=>group.key===identity.key)??null} name={groupName(identity,by,titles)} color={resolved.get(identity.key)?.color??identity.color} muted={!!groupMuted(identity.key)}/>)}</div>,
+    legend:<div className="legend">{(emptyFrame?[]:frame?.identities??controls).map(identity=><LegendItem key={identity.key} subset={subset} model={frame?.model??null} scoped={scoped} retained={retained} history={frame?.history??null} groupKey={identity.key} by={by} group={frame?.history?.activity.by[by].find(group=>group.key===identity.key)??null} name={groupName(identity,by,titles)} color={resolved.get(identity.key)?.color??identity.color} muted={!!groupMuted(identity.key)}/>)}</div>,
   });
   return (
     <AnalyticsPanel ref={panel} className="activity" title={t('activity.title')} chart history={history} loading={loading} error={error} retry={()=>{boardPeriod.retry();quotaHistory.retry();}}

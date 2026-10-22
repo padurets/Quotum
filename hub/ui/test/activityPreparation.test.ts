@@ -54,7 +54,7 @@ test('the actual activity edge painter advances clipped bars without preparing t
 test('ordinary Activity frames allocate unpinned colours by current rank while metadata retains the numeric basis', () => {
   const hooks=preparationFixture();let preparations=0;
   const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
-  const start=source.indexOf('  const prepared = usePrepared(');
+  const start=source.indexOf('  const controls=useMemo(');
   const region=source.slice(start,source.indexOf('  // Numerical consumers keep',start));
   type Model={identities:ProjectIdentity[]};
   type Presentation={model:Model|null;identities:ProjectIdentity[]};
@@ -105,7 +105,7 @@ test('actual Activity composition resolves retained stacks and the new legend to
   let groupPreparations=0,stackPreparations=0,draws=0;
   class CountedPaths extends StackPaths {override *drawPrepared(...args:Parameters<StackPaths['drawPrepared']>){draws++;return yield*super.drawPrepared(...args);}}
   const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
-  const start=source.indexOf('  const prepared = usePrepared('),region=source.slice(start,source.indexOf('  // Numerical consumers keep',start));
+  const start=source.indexOf('  const controls=useMemo('),region=source.slice(start,source.indexOf('  // Numerical consumers keep',start));
   const elementStart=source.indexOf('<Stacks\n'),element=source.slice(elementStart,source.indexOf('/>',elementStart)+2);
   const detailStart=source.indexOf('  const detailFrame='),details=source.slice(detailStart,source.indexOf('  return (\n    <AnalyticsPanel ref={panel} className="activity"',detailStart));
   const axis={box:{current:null},svg:{current:null},width:400,scale:1,hover:null,drag:null,clip:'c',handlers:{},basis:{from:0,to:length,end:length},active:false,screenX:(at:number)=>at,commitDrawing:()=>{}};
@@ -176,7 +176,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
   const parent = preparationFixture(), child = preparationFixture(); let aggregates = 0, draws = 0, tickFrame: [number, number] = [0, 0];
   class CountedPaths extends StackPaths {override *drawPrepared(...args: Parameters<StackPaths['drawPrepared']>) {draws++; return yield* super.drawPrepared(...args);}}
   const source = readFileSync(new URL('../components/Activity.tsx', import.meta.url), 'utf8');
-  const start = source.indexOf('  const prepared = usePrepared(');
+  const start = source.indexOf('  const controls=useMemo(');
   const region = source.slice(start, source.indexOf('  // Numerical consumers keep', start));
   type Model = {identities: {key: string; name: string | null}[]; shown: {group: PlotGroup; color: string; name: string}[]; strip: PlotBuffer};
   const navigation = {context: 'test', range: 'range'};

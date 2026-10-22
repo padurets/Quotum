@@ -148,7 +148,7 @@ import {niceTicks} from '../lib/periods';
 import {navigationKey} from '../lib/axisNavigation';
 import {cardId,isHidden} from '../lib/view';
 
-export function consumer(h: any, options:{muted?:Record<string,boolean>;subset?:ActivitySelection;now?:()=>number}={}) {
+export function consumer(h: any, options:{muted?:Record<string,boolean>;subset?:ActivitySelection;now?:()=>number;hook?:(...args:any[])=>ActivitySelection}={}) {
   const parent=preparationFixture(),child=preparationFixture();
   const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
   const axis={box:{current:null},svg:{current:null},width:400,scale:1,hover:null,drag:null,clip:'c',handlers:{},basis:{from:NOW-H,to:NOW,end:NOW},active:false,screenX:(at:number)=>48+(at-(NOW-H))/H*340,commitDrawing:()=>{}};
@@ -159,7 +159,7 @@ export function consumer(h: any, options:{muted?:Record<string,boolean>;subset?:
   const idleSubset={get:()=>({model:null,loading:false,error:null}),subscribe:()=>()=>{},retain:()=>()=>{}};
   const context={...projectColorBindings(h.page),chartSeriesMuted,ACTIVITY,
     exports:{} as any,React,...parent,memo:(f:any)=>f,useMemo:(f:any,deps:any[])=>{const slot=parent.useRef(null) as any;if(!slot.current||deps.some((v,i)=>!Object.is(v,slot.current.deps[i])))slot.current={deps,value:f()};return slot.current.value;},
-    activityMutedKeys:()=>Object.keys(prefs.muted).filter(key=>prefs.muted[key]&&key.startsWith('activity:project:')).map(key=>key.slice('activity:project:'.length)),useActivitySubset:()=>options.subset??idleSubset,useSyncExternalStore:(_subscribe:any,get:any)=>get(),useEffect:()=>{},useSeriesFocus:()=>({subscribe:()=>()=>{},get:()=>null}),seriesFocusStyle:()=>({}),useId:()=> 'c',useActivityHistory:()=>h.renderActivity(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
+    useActivitySubset:(...args:any[])=>options.hook?options.hook(...args):options.subset??idleSubset,useSyncExternalStore:(_subscribe:any,get:any)=>get(),useEffect:()=>{},useSeriesFocus:()=>({subscribe:()=>()=>{},get:()=>null}),seriesFocusStyle:()=>({}),useId:()=> 'c',useActivityHistory:()=>h.renderActivity(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
     useLineup:()=>h.page.get().board!.lineup,usePersonalBoard:()=>false,useTitles:()=>titles,
     useChartMuted:()=>prefs.muted,usePref:(key:keyof typeof prefs)=>prefs[key],useLocale:()=> 'en',useTimeRange:()=>h.selectedRange(),useBoardId:()=>h.board,
     axisNavigation:()=>({context:'b',range:'1h'}),useClock:()=>options.now?.()??NOW,usePanning:()=>panning,
@@ -169,7 +169,7 @@ export function consumer(h: any, options:{muted?:Record<string,boolean>;subset?:
     setTimeRange:()=>{},timeRangeKey,navigationKey,useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),
     PlotLayer:()=>null,PlotOverlay:()=>null,Tooltip:()=>null,clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',
     CSS:{escape:(id:any)=>id},Stacks:null as any};
-  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export function activityMutedKeys('),source.indexOf('function useActivitySubset('))+source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   function find(node:any,type:any):any{if(Array.isArray(node))return node.map(n=>find(n,type)).find(Boolean);if(!React.isValidElement(node))return null;if(node.type===type)return node;return find((node.props as any).children,type);}
   const pathsOf=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(pathsOf);if(!React.isValidElement(node))return [];const p=node.props as any;return p.className==='activity-stack'&&p.d!==undefined?[p.d]:pathsOf(p.children);};
   let latestParent:any,latestChild:any;const renderParent=()=>{Object.assign(context,parent);parent.begin();latestParent=context.exports.Activity({arrange:{view:h.page.get().board!.view}});return find(latestParent,context.Stacks).props;};
@@ -179,7 +179,7 @@ export function consumer(h: any, options:{muted?:Record<string,boolean>;subset?:
     const render=()=>{const props=renderParent();parent.commit();const paths=renderChild(props);child.commit();const legend=(node:any):any[]=>{if(Array.isArray(node))return node.flatMap(legend);if(!React.isValidElement(node))return [];const p=node.props as any;return node.type===context.LegendItem?[p]:legend(p.children);};
       const result={paths,names:names(latestChild),ready:props.prepared};return Object.defineProperties(result,{entries:{value:legend(latestChild)},tree:{value:latestChild},totals:{value:find(latestChild,context.Totals)?.props},incomingModel:{value:props.detailFrame?.model}}) as typeof result&{entries:any[];tree:any;totals:any;incomingModel:any};};
     const settle=()=>{for(let i=0;i<4;i++){render();parent.finish();child.finish();}return render();};
-    return {render,settle,queuedParent:()=>parent.scheduler.size,queuedChild:()=>child.scheduler.size,finishParent:parent.finish,finishChild:child.finish,close:()=>{parent.dispose();child.dispose();},pan:()=>{panning=1;axis.active=true;}};
+    return {setMask:(next:Record<string,boolean>)=>{prefs.muted=next;},render,settle,queuedParent:()=>parent.scheduler.size,queuedChild:()=>child.scheduler.size,finishParent:parent.finish,finishChild:child.finish,close:()=>{parent.dispose();child.dispose();},pan:()=>{panning=1;axis.active=true;}};
 }
 
 
