@@ -1,12 +1,21 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {runInNewContext} from 'node:vm';
-import {activityOracle,assertActivityOverlap,assertActivityOutside,assertActivityCancellation,FIXED_ACTIVITY_BUDGET,fixedActivityGestureScript} from '../fixedActivity';
+import {activityOracle,assertActivityOverlap,assertActivityOutside,assertActivityCancellation,assertActivityGestureRange,FIXED_ACTIVITY_BUDGET,fixedActivityGestureScript} from '../fixedActivity';
 import {packWork,type WorkTrace} from '../../server/domain/periodWork';
 import type {PeriodRequest} from '../../server/domain/periodRead';
 import {fixture,drawings,flush,NOW} from '../../ui/test/periodRuntimeFixture';
 import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
 import {publishDataFilters} from '../../ui/lib/filterSelection';
+
+test('native gesture range compares URL endpoints with a full historical selection',()=>{
+  const selection={mode:'range' as const,from:123,to:1000};
+  const params=new URL('http://fixture.invalid/?from=123&to=1000').searchParams;
+  const range={from:Number(params.get('from')),to:Number(params.get('to'))};
+  assertActivityGestureRange(range,selection);
+  assert.throws(()=>assertActivityGestureRange({...range,from:124},selection));
+  assert.throws(()=>assertActivityGestureRange({...range,to:1001},selection));
+});
 
 // Execute the shipped diagnostic script. DOM stand-ins qualify its bounds and
 // rejection paths; they do not establish native input delivery or chart movement.

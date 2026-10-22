@@ -100,6 +100,10 @@ function observationScript(period:string){return historyPoolReceiptScript()+`;((
   },ready:()=>{const s=status();return s.ready&&!s.calendarPending&&!s.transportPending&&s.flights===0&&s.preparing===0&&!document.querySelector('.chart>svg[data-draw-ready="false"],.activity.is-loading,.history.is-loading,.budget-history.is-loading,.subscription-funds.is-loading');}};
 })();`;}
 
+export function assertActivityGestureRange(actual:{from:number;to:number},selection:{from:number;to:number}){
+  assert.deepEqual(actual,{from:selection.from,to:selection.to},'gesture setup must preserve its requested historical range');
+}
+
 /** Gesture diagnostics precede measured phases. Only time coordinates and DOM ownership
  * are retained; account labels, full URLs and event targets never leave the page. */
 export function fixedActivityGestureScript(){return `(() => {
@@ -198,7 +202,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       const poseStart=bodies.bodies.length;
       const shownRange=()=>cdp.evaluate<{from:number;to:number}>(`(()=>{const p=new URLSearchParams(location.search);if(!p.has('from')||!p.has('to'))throw Error('the gesture must remain historical');return {from:Number(p.get('from')),to:Number(p.get('to'))};})()`);
       // Establish the real release-owned value domains before exercising S/H.
-      const gestureStart=await shownRange();assert.deepEqual(gestureStart,selection,'gesture setup must preserve its requested historical range');
+      const gestureStart=await shownRange();assertActivityGestureRange(gestureStart,selection);
       type GestureReceipt={complete:boolean;events?:{type:string;trusted:boolean;shift:boolean;target:string|null}[]};
       let gestureReceipt:GestureReceipt|null=null;
       try{
