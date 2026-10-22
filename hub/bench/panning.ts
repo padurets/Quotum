@@ -53,7 +53,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       at('load');
       // A newly opened board gives each input owner an independently unread edge.
       progress(`${initiator}/reload`);
-      const familyTrace=initiator==='budget'?nativeTrace?.():undefined;
+      const familyTrace=initiator==='activity'?nativeTrace?.():undefined;
       await panningReload(cdp,initiator,diagnoseReload);
       progress(`${initiator}/charts-open`);
       await cdp.evaluate(`(async()=>{window.__quotumBench?.pause();const until=Date.now()+15000;while(!['quota-history','quota-session-history','activity','budget-history','subscription-funds'].every(id=>document.querySelector('[data-widget="'+id+'"] .chart>svg'))){if(Date.now()>until)throw new Error('panning charts did not open');await new Promise(r=>setTimeout(r,20));}})()`);

@@ -27,7 +27,7 @@ on:
         type: boolean
         default: false
       native_trace:
-        description: Trace budget at 24h within the complete original dashboard checks
+        description: Trace activity at 24h within the complete original dashboard checks
         required: false
         type: boolean
         default: false
