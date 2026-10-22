@@ -49,7 +49,7 @@ const noValue=empty<PeriodValues>(),noSessions:WorkedSession[]=[];
 export type SessionOrder={key:unknown;worked?:readonly WorkOrder[];activity?:ActivityOrder};
 export type ActivityProjection={projector:PeriodActivity|null;selection:Extract<PeriodSelection,{mode:'live'}>;rangeKey:string;basis:PeriodBasis['range'];lifetime:object;bytes:number};
 class BoardPeriod {
-  readonly calendar=new WorkCalendar();
+  readonly calendar=new WorkCalendar(listeners=>this.notify(listeners));
   private readonly workOrders=new Set<(rows:WorkedSession[])=>SessionOrder|null>();
   private active=false;
   private readonly preparationOwner={};
@@ -89,7 +89,7 @@ class BoardPeriod {
   getFacets=()=>this.facetState;
   subscribeFacets=(listener:()=>void)=>{this.facetListeners.add(listener);return()=>{this.facetListeners.delete(listener);};};
   // Facts can change while closed; a live range can also move without a new event.
-  demandFacets=()=>{const first=this.facetsDemand++===0;if(!this.facetState.value||this.facetsNeeded||first&&this.selection.mode==='live'&&this.facetAt!==hubNow()){this.facetsNeeded=true;this.facetState={...this.facetState,loading:true};for(const listener of this.facetListeners)listener();this.revision++;this.transport.change();}return()=>{this.facetsDemand--;};};
+  demandFacets=()=>this.transaction(()=>{const first=this.facetsDemand++===0;if(!this.facetState.value||this.facetsNeeded||first&&this.selection.mode==='live'&&this.facetAt!==hubNow()){this.facetsNeeded=true;this.facetState={...this.facetState,loading:true};this.notify(this.facetListeners);this.revision++;this.transport.change();}return()=>{this.facetsDemand--;};});
   private invalidateFacets(){this.facetGeneration++;this.facetsNeeded=true;}
   private resetFacets(){this.invalidateFacets();this.facetAt=null;this.facetState={value:null,loading:this.facetsDemand>0,error:null};this.notify(this.facetListeners);}
   private facetBytes(value=this.facetState.value){if(!value)return 0;const choices=[value,...(value.retained?[value.retained]:[])];return 256+JSON.stringify(value).length*3+choices.reduce((bytes,value)=>bytes+value.projects.length*32+value.devices.length*96+value.clients.length*32+value.funding.length*32,0);}
@@ -226,7 +226,21 @@ class BoardPeriod {
   private notify(listeners:Set<()=>void>|undefined){
     if(!listeners)return;
     if(this.notifications)this.notifications.add(listeners);
-    else for(const listener of [...listeners])if(listeners.has(listener))listener();
+    else this.deliver(listeners);
+  }
+  private deliver(listeners:Set<()=>void>){for(const listener of [...listeners])if(listeners.has(listener))listener();}
+  /** A subscriber sees the completed synchronous mutation, including its storage and clocks. */
+  private transaction<T>(change:()=>T):T {
+    const previous=this.notifications,notifications=previous??new Set<Set<()=>void>>();this.notifications=notifications;
+    try{return change();}
+    finally{
+      if(previous)this.notifications=previous;
+      else try{
+        // A callback may complete another mutation. Keep its groups queued until
+        // that callback returns; already delivered groups can then read newer state.
+        while(notifications.size){const listeners=notifications.values().next().value!;notifications.delete(listeners);this.deliver(listeners);}
+      }finally{this.notifications=null;}
+    }
   }
   private publishProjection(scopes:readonly PeriodScope[]=PERIOD_SCOPES){this.forgetProjection(scopes);for(const scope of scopes){this.projectionRevision[scope]++;this.notify(this.projectionListeners[scope]);}}
   private forgetProjection(scopes:readonly PeriodScope[]=PERIOD_SCOPES){for(const scope of scopes)delete this.projectFrames[scope];}
@@ -413,14 +427,14 @@ class BoardPeriod {
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
   subscribeWorkOrder=(read:(rows:WorkedSession[])=>SessionOrder|null)=>{this.workOrders.add(read);this.scheduleClock();return()=>{this.workOrders.delete(read);this.scheduleClock();};};
   wakeCalendar=()=>{
-    this.tickCalendar(hubNow(),true);
-    this.scheduleClock();
+    this.transaction(()=>{this.tickCalendar(hubNow(),true);this.scheduleClock();});
   };
   private tickCalendar(now:number,checkZone=false){
+    if(!this.active||!page.get().board)return;
     const generation=this.calendar.generation;this.calendar.tick(now,checkZone);
     if(generation!==this.calendar.generation&&this.calendar.needed){this.revision++;this.transport.change();}
   }
-  refreshWorkClock=()=>{const now=hubNow();if(this.evaluatedAt!==now)this.tick();else{this.retireExpired(now);this.scheduleClock();}};
+  refreshWorkClock=()=>this.transaction(()=>{const now=hubNow();if(this.evaluatedAt!==now)this.tick();else{this.retireExpired(now);this.scheduleClock();}});
   subscribeSource=(id:string,listener:()=>void)=>{let set=this.sourceListeners.get(id);if(!set)this.sourceListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   subscribeValue=(id:string,listener:()=>void)=>{let set=this.valueListeners.get(id);if(!set)this.valueListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   private queryKey(query:HistoryQuery,scope?:PeriodScope){const board=page.get().board;return JSON.stringify([query.meters,query.unit,query.currency,query.work,scope==='quota'?query.sources??board?.lineup:scope&&board?.lineup.map(id=>[id,board.cards[id]?.budget])]);}
@@ -474,7 +488,7 @@ class BoardPeriod {
     this.work=empty();this.cursor=undefined;this.index=null;this.activity=null;this.activityRetained=null;this.workProofEpoch=-1;
     this.tapes.delete('quota');delete this.projectionErrors.quota;this.transport.forgetEvidence('quota');
     this.workRows=[];
-    const previous=this.rowsBySource;this.rowsBySource=new Map();for(const id of previous.keys())for(const listener of this.sourceListeners.get(id)??[])listener();
+    const previous=this.rowsBySource;this.rowsBySource=new Map();for(const id of previous.keys())this.notify(this.sourceListeners.get(id));
     this.workNeeded=this.wantsWork;this.work={...this.work,loading:this.wantsWork};this.publishWork();this.publishProjection(['quota','budget']);
     this.measureBytes();clock.due(this.watch,null,hubNow());
   }
@@ -494,8 +508,7 @@ class BoardPeriod {
     this.measureBytes();this.publishProjection(['budget','funds']);
   }
   private clear() {
-    const previousNotifications=this.notifications,notifications=previousNotifications??new Set<Set<()=>void>>();this.notifications=notifications;
-    try{
+    this.transaction(()=>{
       preparations()?.cancel(this.preparationOwner);this.transport.reset();
       this.activityLifetime={};
       this.sourceTape=null;this.sourceCurves=undefined;this.sourceCursor=undefined;this.resetFacets();
@@ -506,14 +519,15 @@ class BoardPeriod {
       for(const id of this.values.keys())this.setValue(id,noValue);this.values.clear();
       const previous=this.rowsBySource;this.rowsBySource=new Map();for(const id of previous.keys())this.notify(this.sourceListeners.get(id));
       this.publishWork();clock.due(this.watch,null,hubNow());
-      // Calendar subscribers can reactivate the period. Finish every old-context
-      // write before crossing its independent publication boundary.
+      // Calendar subscribers share this complete clear's publication boundary.
       this.calendar.clear();
-    }finally{this.notifications=previousNotifications;}
-    if(!previousNotifications)for(const listeners of notifications)this.notify(listeners);
+    });
   }
-  activate(active:boolean){if(this.active===active)return;this.active=active;if(!active){this.identity='';this.generation++;this.clear();}else this.changed();}
+  activate(active:boolean){if(this.active===active)return;this.transaction(()=>{this.active=active;if(!active){this.identity='';this.generation++;this.clear();}else this.changed();});}
   changed(event?:PageEvent,state:PageState=page.get()) {
+    this.transaction(()=>this.change(event,state));
+  }
+  private change(event:PageEvent|undefined,state:PageState) {
     const board=state.board;
     if(!board||event?.type==='board-close'){this.identity='';this.generation++;this.clear();return;}
     if(!this.active)return;
@@ -567,7 +581,7 @@ class BoardPeriod {
     if(selectedChanged){
       this.invalidateFacets();
       this.generation++;this.revision++;preparations()?.cancel(this.preparationOwner);this.cursor=undefined;this.index=null;this.activity=null;this.activityRetained=null;
-      this.workEvidence++;this.work={...empty(),loading:wantsWork};this.workRows=[];const oldSources=[...this.rowsBySource.keys()];this.rowsBySource.clear();for(const id of oldSources)for(const listener of this.sourceListeners.get(id)??[])listener();this.workNeeded=wantsWork;this.publishWork();
+      this.workEvidence++;this.work={...empty(),loading:wantsWork};this.workRows=[];const oldSources=[...this.rowsBySource.keys()];this.rowsBySource.clear();for(const id of oldSources)this.notify(this.sourceListeners.get(id));this.workNeeded=wantsWork;this.publishWork();
       if(selection.mode==='range')for(const scope of PERIOD_SCOPES)if(scopeKeys[scope])this.dirtyScopes.add(scope);
       this.transport.change();
       this.publishProjection(['quota','budget']);
@@ -720,13 +734,14 @@ class BoardPeriod {
       staged.clear();reserve(cellsBytes);
     }
     if(reply.calendar&&intent.board===page.get().board?.id){
-      this.calendar.receive(reply.calendar,intent.calendarGeneration??-1,{reserve:bytes=>replace('calendar',bytes),handoff:bytes=>{
+      this.transaction(()=>{this.calendar.receive(reply.calendar!,intent.calendarGeneration??-1,{reserve:bytes=>replace('calendar',bytes),handoff:bytes=>{
         const release=this.calendar.retain(this.calendar.get());
         try{if(replace('calendar',bytes)){retain(release);return true;}}
         catch(error){release();throw error;}
         release();return false;
       }});
       this.scheduleClock();
+      });
     }
     // Calendar authority is independent of resource-only intent changes. An older
     // sibling reply still owns its unadopted payload until its transport completes.
@@ -824,8 +839,7 @@ class BoardPeriod {
     const staleFacets=!!reply.facets&&intent.facetGeneration!==this.facetGeneration;
     // Subscribers may close the board, navigate or admit new evidence. Finish the
     // whole snapshot and its storage handoff before crossing that boundary.
-    const notifications=new Set<Set<()=>void>>();this.notifications=notifications;
-    try{
+    this.transaction(()=>{
       for(const scope of PERIOD_SCOPES){const part=reply[scope];if(part){if(part.state==='error'){this.projectionErrors[scope]=part.error==='history_limit'?'history_limit':'history_failed';this.dirtyScopes.delete(scope);}else delete this.projectionErrors[scope];changed.add(scope);}}
       this.sourceTape=nextSourceTape;this.sourceCurves=nextSourceCurves;this.sourceCursor=nextSourceCursor;
       this.evaluatedAt=hubNow();this.tapes.clear();for(const [scope,tape] of prepared.tapes)this.tapes.set(scope,tape);
@@ -854,14 +868,10 @@ class BoardPeriod {
       release();
       this.publishProjection([...changed]);
       this.retirementAt=intent.request.selection.mode==='live'?prepared.edge+intent.request.selection.periodMs:Infinity;
-    }finally{this.notifications=null;}
-    // Only notification groups are queued, never captured snapshots. A surviving
-    // subscriber still reads the latest state after another group reenters.
-    for(const listeners of notifications)this.notify(listeners);
-    this.scheduleClock();
-    // Source-wide summaries remain usable while direct hours or facet choices need
-    // a newer reply. Reconsider even an already completed transport intent.
-    if(valid()&&(selectedFixedPending.length||staleFacets&&this.facetsDemand>0))this.transport.retry();
+      this.scheduleClock();
+      // Reconsider source-wide evidence before subscribers can replace this intent.
+      if(selectedFixedPending.length||staleFacets&&this.facetsDemand>0)this.transport.retry();
+    });
   }
   private async planRetirement(){
     if(this.selection.mode!=='live'){this.retirementAt=Infinity;return;}
@@ -923,11 +933,13 @@ class BoardPeriod {
       try{
         this.retirementPreparing=true;
         const result=await prepareAsync(this.preparationOwner,build(),valid);if(!result||!valid())return;
-        this.work={...this.work,value:result.work};this.index=result.index;if(result.activity)this.activity=result.activity;
-        this.tapes.clear();for(const [scope,entry] of result.tapes)this.tapes.set(scope,entry);
-        // Compaction changes storage, not evidence or a chart's drawing revision.
-        this.retirementAt=result.edge+period;
-        this.workState={...this.workState,value:result.work};this.tick();this.measureBytes();committed=true;
+        this.transaction(()=>{
+          this.work={...this.work,value:result.work};this.index=result.index;if(result.activity)this.activity=result.activity;
+          this.tapes.clear();for(const [scope,entry] of result.tapes)this.tapes.set(scope,entry);
+          // Compaction changes storage, not evidence or a chart's drawing revision.
+          this.retirementAt=result.edge+period;
+          this.workState={...this.workState,value:result.work};this.tick();this.measureBytes();committed=true;
+        });
       }catch(error){if(error!==limited)throw error;historyPool.release(staging);await this.planRetirement();}
       finally{this.retirementPreparing=false;historyPool.release(staging);}
     };
@@ -967,6 +979,9 @@ class BoardPeriod {
     });
   }
   private tick(fromClock=true) {
+    this.transaction(()=>this.update(fromClock));
+  }
+  private update(fromClock:boolean) {
     if(!this.active)return;
     const now=hubNow();
     this.tickCalendar(now);
@@ -1021,6 +1036,7 @@ class BoardPeriod {
   }
   private scheduleClock(){
     const now=hubNow();
+    if(!this.active||!page.get().board){this.nativeDue=Infinity;clock.due(this.watch,null,now);return;}
     const demands=this.active&&this.workAdvances(now)?[...this.workOrders].flatMap(read=>read(this.workRows)??[]):[];
     const orders=demands.flatMap(order=>order.worked??[]);
     const due=this.workAdvances(now)?this.index?.changesAt(now,this.workSelection.mode==='live'?this.workSelection.periodMs:0,orders)??null:null;
@@ -1031,18 +1047,21 @@ class BoardPeriod {
     clock.due(this.watch,Number.isFinite(next)?next:null,Math.min(now,this.evaluatedAt));
   }
   retryHistory(scope:PeriodScope){
+    this.transaction(()=>this.retryResource(scope));
+  }
+  private retryResource(scope:PeriodScope){
     if(!this.projectionErrors[scope])return;
     delete this.projectionErrors[scope];this.dirtyScopes.add(scope);this.revision++;
     this.publishProjection([scope]);this.transport.retry();
   }
-  retry=()=>{
+  retry=()=>this.transaction(()=>{
     let needed=!!this.calendar.state.error&&this.calendar.dirty();
     if(this.work.error&&this.wantsWork){needed=this.workNeeded=true;this.work={...this.work,loading:true,error:null};this.publishWork();this.publishProjection(['quota']);}
     if(this.selection.mode==='range'&&[...this.values.values()].some(value=>value.error)){
       needed=this.valuesNeeded=true;for(const id of this.sourceIds)this.setValue(id,{...this.getValue(id),loading:true,error:null});
     }
     if(needed){this.revision++;this.transport.retry();}
-  };
+  });
 }
 
 // Each context also belongs to three numerical group indexes (arrays of shared curve references).

@@ -7,26 +7,27 @@ for(const replacement of ['live','clear'] as const)test(`a value listener ${repl
   const h=await fixture({personal:true,fixed:true}),drawing=await drawings(h);
   let stop=()=>{};
   try{
-    const first={...h.selectedRange()!};
+    const first={...h.selectedRange()!},original=h.period.get().value;
     assert.ok(h.period.transport.evidence().size>0,'the complete target must own real transport evidence');
     h.selectRange({from:NOW-2*H,to:NOW-H});await flush();
     assert.ok(h.period.retained.size>0,'the first fixed target must have an actual complete cache entry');
     // Observe the production restore boundary without reproducing its algorithm.
     // The same wrapper works before and after the ownership implementation changes.
-    let inside=0,reentered=0;
+    let restored=false,reentered=0;
     for(const entry of h.period.retained.values()){
       const restore=entry.restore;
-      entry.restore=function(...args:unknown[]){inside++;try{return restore.apply(this,args);}finally{inside--;}};
+      entry.restore=function(...args:unknown[]){const result=restore.apply(this,args);restored=true;return result;};
     }
     stop=h.period.subscribeValue(h.source,()=>{
-      if(!inside||reentered)return;
+      if(!restored||reentered)return;
+      assert.equal(h.period.get().value,original,'the publication must come from the actual restored numerical root');
       reentered++;
       if(replacement==='live')h.selectRange(null);
       else h.page.dispatch({type:'board-close'});
     });
     h.requests.length=0;
     h.selectRange(first);await flush();
-    assert.equal(reentered,1,'the actual setValue notification must reenter inside restore');
+    assert.equal(reentered,1,'the completed restore publication must permit synchronous replacement');
     if(replacement==='live'){
       assert.equal(h.period.selection.mode,'live');
       assert.equal(h.period.workSelection.mode,'live','the old fixed work selection must not be revived');
@@ -53,17 +54,18 @@ test('relevant same-context history inside a value listener keeps the restored t
   t.mock.method(Date,'now',()=>NOW);
   const h=await fixture({personal:true,fixed:true}),drawing=await drawings(h);let stop=()=>{};
   try{
-    const first={...h.selectedRange()!},before=h.period.activity.summary(first,'source').agentMs;
+    const first={...h.selectedRange()!},original=h.period.get().value,before=h.period.activity.summary(first,'source').agentMs;
     assert.equal(before,M);
     h.selectRange({from:NOW-2*H,to:NOW-H});await flush();
     assert.ok(h.period.retained.size>0);
-    let inside=0,reentered=0,observed:Record<string,number|boolean>|null=null;
+    let restored=false,reentered=0,observed:Record<string,number|boolean>|null=null;
     for(const entry of h.period.retained.values()){
       const restore=entry.restore;
-      entry.restore=function(...args:unknown[]){inside++;try{return restore.apply(this,args);}finally{inside--;}};
+      entry.restore=function(...args:unknown[]){const result=restore.apply(this,args);restored=true;return result;};
     }
     stop=h.period.subscribeValue(h.source,()=>{
-      if(!inside||reentered)return;reentered++;
+      if(!restored||reentered)return;reentered++;
+      assert.equal(h.period.get().value,original,'new evidence arrives after the real cache root is restored');
       const generation=h.period.generation,key=h.period.cacheKey,revision=h.period.revision,proof=h.period.proofEpoch;
       // The actual producer adds a disjoint minute inside A without changing
       // its date, source selection or authority. Only its evidence becomes old.

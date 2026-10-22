@@ -60,14 +60,17 @@ export class WorkCalendar {
   state:CalendarReading={window:calendarWindow(Date.now()),value:null,basis:null,loading:false,error:null};
   presentationKey=()=>JSON.stringify([this.context,periodKey(this.selection)]);
   private listeners=new Set<()=>void>();
+  private readonly delivery=new Set([()=>this.deliver()]);
   private retained=new Map<CalendarReading,number>();
   private accountedBytes:number|null=null;
   private cache=new CalendarCache();
+  constructor(private readonly notify:(listeners:Set<()=>void>)=>void=listeners=>{for(const listener of listeners)listener();}){}
   get=()=>this.state;
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
-  private publish(){
+  private publish(){this.notify(this.delivery);}
+  private deliver(){
     const release=this.retain(this.state);
-    try{for(const listener of this.listeners)listener();}finally{release();}
+    try{for(const listener of [...this.listeners])if(this.listeners.has(listener))listener();}finally{release();}
   }
   /** Captured preparations and displayed grids can outlive the current reading. */
   retain(reading:CalendarReading){
