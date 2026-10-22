@@ -168,7 +168,7 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
   const definitions = MONEY_COLUMNS.map(({id, label, width}) => ({id, title: t(label), width, align: 'right' as const}));
   const columns = definitions.filter(column => columnShown(arrange.view, widget, column.id));
   const panel=useRef<HTMLElement>(null);
-  const cellAt=(original:MeterHistory,id:MoneyColumn,now:number):{content:string;title?:string;partial?:boolean;activeMs?:number}=>{
+  const cellAt=(original:MeterHistory,id:MoneyColumn,now:number):{content:string;title?:string;details?:string;partial?:boolean;activeMs?:number}=>{
     const s=history?.live?boardPeriod.moneyAt(original,now,history.range):original;
     const range=history?.live?boardPeriod.rangeAt('budget',now,history.range):null;
     const work=boardPeriod.moneyWorkAt(s.sourceId,now,history?.range);
@@ -183,18 +183,21 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
       }
       const proof=work?[t('money.workEstimate'),t('filters.sourceWide'),t('money.workBasis',{active:activeHours(String(work.eligibleActiveMs))}),work.partial?t('money.partial'):null].filter(Boolean).join('\n'):t('money.noWorkRate');
       if(id==='remaining')return {content:activeHours(eligible.remaining),title:proof};
-      return {content:money(eligible.rate,s.unit,false,context),title:eligible.rate===null?t('money.workInsufficient')+'\n'+proof:proof};
+      const title=eligible.rate===null?t('money.workInsufficient')+'\n'+proof:proof;
+      return {content:money(eligible.rate,s.unit,false,context),title,details:[money(eligible.rate,s.unit,true,context),title].join('\n')};
     }
-    if(id==='value')return {title:money(values.value,s.unit,true,context),content:money(values.value,s.unit,false,context)};
+    if(id==='value')return {title:money(values.value,s.unit,true,context),details:money(values.value,s.unit,true,context),content:money(values.value,s.unit,false,context)};
     if(s.topup===null)return {title:t('money.noSpending'),content:t('money.unavailable')};
     if(s.kind!=='balance')return {content:'—'};
     const total=moneyTotal(s,range?.from??history!.since,range?.to??history!.to,true),steps=s.topupUnlocated;
     const title=[total.unknown?t('money.unknown'):total.partial?t('money.partial'):'',...steps.map(p=>`${money(p.amount,s.unit,true,context)}\n${stamp(p.from)} — ${stamp(p.to)}`)].filter(Boolean).join('\n');
-    return {title,content:money(values[id],s.unit,false,context),partial:total.partial};
+    return {title,details:[money(values[id],s.unit,true,context),title].filter(Boolean).join('\n'),content:money(values[id],s.unit,false,context),partial:total.partial};
   };
   const cellOf=(s:MeterHistory,id:MoneyColumn):Cell|TimedCell=>{
-    const at=(now:number):Cell=>{const {partial,content,activeMs,...cell}=cellAt(s,id,now);return {...cell,content:<><span {...(activeMs===undefined?{}:{'data-work-source':s.sourceId,'data-active-ms':activeMs})}>{content}</span>{partial&&<small className="money-partial">*</small>}</>};};
-    const textAt=(now:number)=>{const {activeMs:_,...visible}=cellAt(s,id,now);return JSON.stringify(visible);};
+    const detailAt=(now:number)=>cellAt(s,id,now).details??'';
+    const details=history?.live?{at:detailAt,changesAt:(now:number)=>boardPeriod.cellChangesAt('budget',now,detailAt,undefined,s.sourceId,history.range)}:undefined;
+    const at=(now:number):Cell=>{const {partial,content,activeMs,...cell}=cellAt(s,id,now);return {...cell,...(cell.details===undefined?{}:{details:details??cell.details}),content:<><span {...(activeMs===undefined?{}:{'data-work-source':s.sourceId,'data-active-ms':activeMs})}>{content}</span>{partial&&<small className="money-partial">*</small>}</>};};
+    const textAt=(now:number)=>{const {activeMs:_,details:_detail,...visible}=cellAt(s,id,now);return JSON.stringify(visible);};
     return history?.live?{time:'money-'+id,changesAt:now=>boardPeriod.cellChangesAt('budget',now,textAt,undefined,s.sourceId,history.range),at}:at(hubNow());
   };
   // Retained rows stay mounted through pan-only panel updates; their cells own
