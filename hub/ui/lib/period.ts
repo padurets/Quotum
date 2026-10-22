@@ -16,7 +16,7 @@ import {mergeWorkPrepared,packWorkPrepared,workPreparationBytes,type WorkedSessi
 import type {LiveSession} from './types';
 import type {PeriodReply} from '../../server/domain/periodRead';
 import {AGENTS,ACTIVITY,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,widgetVisible} from '../../server/domain/widgets';
-import {PeriodTransport,fetchPeriod,type PeriodIntent} from './periodTransport';
+import {PeriodTransport,fetchPeriod,type PeriodIntent,type PeriodReservation} from './periodTransport';
 import {PeriodIndex} from './periodIndex';
 import type {WorkOrder} from '../../server/domain/periodIndex';
 import {historyPool} from './historyPool';
@@ -98,7 +98,7 @@ class BoardPeriod {
   private financialIdentity='';
   private workAuthority:string|undefined;
   private hubEpoch:string|undefined;
-  private readonly valueCache=new Map<string,{values:Map<string,Reading<PeriodValues>>;to:number;validBefore:number;bytes:number;at:number}>();
+  private readonly valueCache=new Map<string,{values:Map<string,Reading<PeriodValues>>;to:number;validBefore:number;bytes:number;storage:Map<object,number>;metadata:number;at:number}>();
   private readonly values=new Map<string,Reading<PeriodValues>>();
   private readonly valueListeners=new Map<string,Set<()=>void>>();
   private work:Reading<WorkTrace>=empty();
@@ -124,36 +124,46 @@ class BoardPeriod {
   private workState={...this.work,rows:this.workRows,evidence:this.workEvidence};
   private readonly watch=clock.watch();
   private bytes=0;
+  private storage=new Map<object,number>();
   private cacheKey='';
-  private readonly retained=new Map<string,{bytes:number;activity:PeriodActivity|null;activityBytes:number;copyBytes:number;at:number;invalidate:(data:Extract<import('./board').HubEvent,{type:'history'}>['data'])=>boolean;valid:(selection:PeriodSelection)=>boolean;fits:(selection:PeriodSelection)=>boolean;restore:(selection:PeriodSelection)=>void}>();
+  private readonly restoring=new Set<{storage:Map<object,number>;metadata:number}>();
+  private readonly retained=new Map<string,{bytes:number;storage:Map<object,number>;metadata:number;activity:PeriodActivity|null;activityBytes:number;copyBytes:number;at:number;invalidate:(data:Extract<import('./board').HubEvent,{type:'history'}>['data'])=>boolean;valid:(selection:PeriodSelection)=>boolean;fits:(selection:PeriodSelection)=>boolean;restore:(selection:PeriodSelection)=>boolean}>();
   readonly transport=new PeriodTransport(historyPool,()=>this.intent(),(reply,intent,reserve)=>this.receive(reply,intent,reserve),fetchPeriod,()=>{page.dispatch({type:'board-close'});if(typeof window!=='undefined')window.dispatchEvent(new Event(UNAUTHORIZED));});
   constructor(){historyPool.register(this);clock.subscribe(this.watch,()=>this.tick());}
+  private staging(operation:'calendar-projection'|'values'|'restore'|'adoption'|'retirement'){return {role:'visible' as const,historyMember:this,operation};}
   private configureCalendar(visible:boolean,context:string,now:number,limited:boolean,selection:PeriodSelection){
-    const staging={role:'visible' as const};
+    const staging=this.staging('calendar-projection');
     try{return this.calendar.configure(visible,context,now,limited,selection,bytes=>historyPool.reserve(staging,bytes));}
     finally{historyPool.release(staging);}
   }
   get estimatedBytes(){
-    let bytes=this.bytes+this.calendar.bytes+[...this.valueCache.values()].reduce((sum,c)=>sum+c.bytes,0);
-    const projectors=new Map<PeriodActivity,number>();
-    if(this.activity){const storage=this.activityBytes(this.activity);projectors.set(this.activity,storage);if(this.activity.trace===this.work.value)bytes-=storage;}
-    // Current, cached and preparing frames may share the same numerical storage.
-    for(const entry of this.retained.values()){
-      bytes+=entry.bytes-entry.activityBytes;
-      if(entry.activity)projectors.set(entry.activity,this.activityBytes(entry.activity));
+    let bytes=this.bytes-this.storageBytes(this.storage)+this.calendar.bytes;
+    const storage=new Map(this.storage);
+    // Scope changes can retain the exact tapes and indexes still used on screen.
+    // Metadata belongs to each owner; identical numerical roots belong to their union.
+    for(const entry of [...this.retained.values(),...this.restoring,...this.valueCache.values()]){
+      bytes+=entry.metadata;
+      for(const [root,size] of entry.storage)storage.set(root,Math.max(storage.get(root)??0,size));
     }
-    for(const [projector,lease] of this.activityLeases)projectors.set(projector,Math.max(projectors.get(projector)??0,lease.bytes));
-    return bytes+[...projectors.values()].reduce((sum,storage)=>sum+storage,0);
+    for(const [projector,lease] of this.activityLeases)storage.set(projector,Math.max(storage.get(projector)??0,lease.bytes));
+    return bytes+this.storageBytes(storage);
+  }
+  private storageBytes(storage:Map<object,number>){return [...storage.values()].reduce((sum,bytes)=>sum+bytes,0);}
+  private valueStorage(values:Map<string,Reading<PeriodValues>>){
+    const storage=new Map<object,number>();
+    for(const reading of values.values())if(reading.value)storage.set(reading.value,JSON.stringify(reading.value).length*3);
+    return storage;
   }
   evictionCandidates(){return [...this.valueCache].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.valueCache.delete(key);}})).concat([...this.retained].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.retained.delete(key);}})),this.calendar.evictionCandidates());}
   private retainCurrent(){
     if(!this.cacheKey)return;
     if(!this.valuesNeeded&&this.valuesProofEpoch===this.proofEpoch&&this.selection.mode==='range'&&[...this.values.values()].every(v=>v.value&&!v.loading&&!v.error)){
-      const values=new Map(this.values);this.valueCache.set(periodKey(this.selection),{values,to:this.selection.to,validBefore:this.validBefore,bytes:JSON.stringify([...values]).length*3,at:hubNow()});
+      const values=new Map(this.values),storage=this.valueStorage(values),bytes=JSON.stringify([...values]).length*3;
+      this.valueCache.set(periodKey(this.selection),{values,to:this.selection.to,validBefore:this.validBefore,bytes,storage,metadata:bytes-this.storageBytes(storage),at:hubNow()});
     }
     const range=evaluatedRange(this.selection,hubNow());
     if(!this.active||!page.get().board||this.workNeeded||this.work.loading||this.work.error||this.valuesNeeded||[...this.values.values()].some(value=>value.loading||value.error)||PERIOD_SCOPES.some(scope=>this.projectionErrors[scope]||this.scopeKeys[scope]&&this.needsTape(scope,this.scopeKeys[scope]!,range)))return;
-    const tapes=new Map([...this.tapes].map(([scope,tape])=>[scope,{...tape}])),work=this.work,index=this.index,activity=this.activity,workSelection=this.workSelection,workRangeKey=this.workRangeKey,cursor=this.cursor,liveEvidence=this.liveEvidence,values=new Map(this.values),cursors=this.transport.evidence(),bytes=this.bytes-this.facetBytes();
+    const tapes=new Map([...this.tapes].map(([scope,tape])=>[scope,{...tape}])),work=this.work,index=this.index,activity=this.activity,workSelection=this.workSelection,workRangeKey=this.workRangeKey,cursor=this.cursor,liveEvidence=this.liveEvidence,values=new Map(this.values),cursors=this.transport.evidence(),bytes=this.bytes-this.facetBytes(),storage=new Map(this.storage);
     const sourceTape=this.sourceTape,sourceCurves=this.sourceCurves,sourceCursor=this.sourceCursor;
     const context=JSON.stringify([this.authority,this.scopeKeys,this.filterKey,this.financialIdentity]);
     const selection=this.selection,sources=[...this.sourceIds];let validBefore=this.validBefore;
@@ -165,23 +175,26 @@ class BoardPeriod {
       +JSON.stringify([...values.values()]).length*3;
     this.valueCache.delete(periodKey(this.selection));
     const valid=(target:PeriodSelection)=>target.mode==='range'?target.to<=validBefore:validBefore===Infinity;
-    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,activity,activityBytes:activity&&activity.trace===work.value?this.activityBytes(activity):0,copyBytes,at:hubNow(),valid,invalidate:data=>{
+    const metadata=bytes-this.storageBytes(storage)+this.cacheKey.length*2+context.length*2+256;
+    this.retained.set(this.cacheKey,{bytes:metadata+this.storageBytes(storage),storage,metadata,activity,activityBytes:activity&&activity.trace===work.value?this.activityBytes(activity):0,copyBytes,at:hubNow(),valid,invalidate:data=>{
       const since=Math.min(data.sources.some(id=>sources.includes(id))?data.since:Infinity,workChange(data,sources).since);
       if(since===Infinity)return true;
       validBefore=Math.min(validBefore,since);return selection.mode==='range'&&selection.to<=validBefore;
     },fits:selection=>valid(selection)&&reusable&&selection.mode==='range'&&work.value?.fixed!==undefined&&canShift(work.value.fixed,selection)&&context===JSON.stringify([this.authority,this.scopeKeys,this.filterKey,this.financialIdentity])&&[...tapes.values()].every(({tape})=>tape.fixed&&canShift(tape.fixed,selection))&&[...values.values()].every(v=>hasPeriodValue(v.value,Math.min(selection.to,hubNow()))),restore:selection=>{
+      const generation=this.generation,revision=this.revision,proofEpoch=this.proofEpoch,key=this.cacheKey;
+      const current=()=>generation===this.generation&&revision===this.revision&&proofEpoch===this.proofEpoch&&key===this.cacheKey;
       this.validBefore=validBefore;
       this.workEvidence++;
       this.tapes.clear();for(const [scope,tape] of tapes)this.tapes.set(scope,tape);
-      this.work=work;this.index=index;this.activity=activity;this.activityRetained=null;this.workSelection=workSelection;this.workRangeKey=workRangeKey;this.cursor=cursor;this.liveEvidence=liveEvidence;this.bytes=bytes;
+      this.work=work;this.index=index;this.activity=activity;this.activityRetained=null;this.workSelection=workSelection;this.workRangeKey=workRangeKey;this.cursor=cursor;this.liveEvidence=liveEvidence;this.bytes=bytes;this.storage=storage;
       this.sourceTape=sourceTape;this.sourceCurves=sourceCurves;this.sourceCursor=sourceCursor;
-      for(const id of new Set([...this.values.keys(),...values.keys()]))this.setValue(id,values.get(id)??noValue);
+      for(const id of new Set([...this.values.keys(),...values.keys()])){this.setValue(id,values.get(id)??noValue);if(!current())return false;}
       if(selection.mode==='range'&&workSelection.mode==='range'&&periodKey(selection)!==periodKey(workSelection)){
         const value={...work.value!,fixed:shifted(work.value!.fixed!,selection)!};
         this.work={...work,value,basis:work.basis?{...work.basis,range:selection}:null};this.index=new PeriodIndex(value);this.activity=new PeriodActivity(value,this.index.curves);
         this.workSelection=selection;this.workRangeKey=periodKey(selection);
         for(const [scope,entry] of tapes){const tape={...entry.tape,fixed:shifted(entry.tape.fixed!,selection)!};this.tapes.set(scope,{...entry,tape,accounting:new PeriodAccounting(tape,value),selection,rangeKey:periodKey(selection)});}
-        for(const [id,reading] of values)this.setValue(id,{...reading,value:periodValueAt(reading.value,Math.min(selection.to,hubNow()))!,basis:reading.basis?{...reading.basis,range:selection}:null});
+        for(const [id,reading] of values){this.setValue(id,{...reading,value:periodValueAt(reading.value,Math.min(selection.to,hubNow()))!,basis:reading.basis?{...reading.basis,range:selection}:null});if(!current())return false;}
       }
       this.measureBytes();
       this.transport.restoreEvidence(cursors);this.workNeeded=false;this.valuesNeeded=false;
@@ -190,6 +203,7 @@ class BoardPeriod {
       if(reusable)for(const tape of this.tapes.values())tape.proofEpoch=this.proofEpoch;
       // A cached live ledger may have crossed all of its old deadlines while hidden.
       this.retirementAt=selection.mode==='live'?hubNow():Infinity;
+      return true;
     }});
   }
   get=()=>this.workState;
@@ -437,7 +451,7 @@ class BoardPeriod {
     this.workEvidence++;this.retirementAt=Infinity;
     this.proofEpoch++;this.workProofEpoch=-1;this.valuesProofEpoch=-1;this.validBefore=Infinity;this.dirtyScopes.clear();
     this.retained.clear();this.cacheKey='';
-    preparations()?.cancel(this.preparationOwner);this.transport.reset();this.work=empty();this.cursor=undefined;this.index=null;this.activity=null;this.activityRetained=null;this.tapes.clear();delete this.projectionErrors.quota;delete this.projectionErrors.budget;delete this.projectionErrors.funds;this.valueCache.clear();this.liveEvidence=false;this.bytes=0;this.workRows=[];this.publishProjection();
+    preparations()?.cancel(this.preparationOwner);this.transport.reset();this.work=empty();this.cursor=undefined;this.index=null;this.activity=null;this.activityRetained=null;this.tapes.clear();delete this.projectionErrors.quota;delete this.projectionErrors.budget;delete this.projectionErrors.funds;this.valueCache.clear();this.liveEvidence=false;this.bytes=0;this.storage=new Map();this.workRows=[];this.publishProjection();
     for(const id of this.values.keys())this.setValue(id,noValue);this.values.clear();
     const previous=this.rowsBySource;this.rowsBySource=new Map();for(const id of previous.keys())for(const listener of this.sourceListeners.get(id)??[])listener();
     this.publishWork();clock.due(this.watch,null,hubNow());
@@ -515,7 +529,7 @@ class BoardPeriod {
       let cached=this.valueCache.get(periodKey(selection));
       if(cached&&selection.mode==='range'&&selection.to>cached.validBefore)cached=undefined;
       if(!cached&&selection.mode==='range')cached=[...this.valueCache.values()].find(c=>selection.to<=c.validBefore&&sources.every(id=>hasPeriodValue(c.values.get(id)?.value,Math.min(selection.to,hubNow()))));
-      const valueStaging={role:'visible' as const};
+      const valueStaging=this.staging('values');
       if(cached&&!historyPool.reserve(valueStaging,cached.bytes))cached=undefined;
       if(cached)this.validBefore=cached.validBefore;
       this.valuesNeeded=selection.mode==='range'&&!cached;
@@ -535,17 +549,18 @@ class BoardPeriod {
       // The previous target's supplier evidence now belongs to its evictable LRU
       // entry. Fixed summaries do not need a second visible copy of that ledger.
       this.sourceTape=null;this.sourceCurves=undefined;this.sourceCursor=undefined;
-      this.bytes=JSON.stringify([...this.values.values()]).length*3+JSON.stringify(this.workRows).length*3+(this.activityRetained?JSON.stringify(this.activityRetained).length*3:0);
+      this.measureBytes();
       historyPool.release(valueStaging);
       this.workNeeded=wantsWork&&(!this.work.value||range.from<this.work.value.anchor||range.to>(this.work.value.cut??0)&&!this.liveEvidence);
       const saved=this.retained.get(cacheKey)?.valid(selection)?[cacheKey,this.retained.get(cacheKey)!] as const:[...this.retained].find(([,entry])=>entry.fits(selection));
       if(saved){
-        const staging={role:'visible' as const},before=this.bytes;
-        this.retained.delete(saved[0]);this.bytes+=saved[1].bytes;
+        const staging=this.staging('restore'),generation=this.generation,revision=this.revision,proofEpoch=this.proofEpoch;
+        const current=()=>generation===this.generation&&revision===this.revision&&proofEpoch===this.proofEpoch&&this.cacheKey===cacheKey;
+        this.restoring.add(saved[1]);this.retained.delete(saved[0]);
         // The removed cache entry remains owned until its exact shifted copy is ready.
-        if(saved[0]===cacheKey||historyPool.reserve(staging,saved[1].copyBytes)){saved[1].restore(selection);this.tick(false);}
-        else this.bytes=before;
-        historyPool.release(staging);
+        try{if((saved[0]===cacheKey||historyPool.reserve(staging,saved[1].copyBytes))&&current()&&saved[1].restore(selection))this.tick(false);}
+        finally{this.restoring.delete(saved[1]);historyPool.release(staging);}
+        if(!current())return;
       }
       if(!this.workNeeded&&this.work.basis){this.workSelection=selection;this.workRangeKey=selection.mode==='range'?periodKey(selection):prefs().range;this.tick(false);}
       for(const tape of this.tapes.values())if(this.tapeCovers(tape,range)){tape.selection=selection;tape.rangeKey=selection.mode==='range'?periodKey(selection):prefs().range;}
@@ -596,45 +611,75 @@ class BoardPeriod {
       }
     }
   }
-  private receive(reply:PeriodReply,intent:PeriodIntent,reserve?:(bytes:number)=>boolean) {
+  private receive(reply:PeriodReply,intent:PeriodIntent,reserve?:PeriodReservation) {
     // A replacement read must confirm the run that revoked the old work basis.
     // Local transport failures have no run and still need their error state.
     if(reply.basis.run&&this.hubEpoch&&reply.basis.run!==this.hubEpoch)return;
     // Sibling resource replies share one retained projection. Let each commit before
     // taking the next snapshot, so a later chart cannot cancel values or sessions.
     if(this.retirementPreparing)preparations()?.cancel(this.preparationOwner);
-    if(reply.calendar&&intent.board===page.get().board?.id){
-      const staging={role:'visible' as const};
-      try{this.calendar.receive(reply.calendar,intent.calendarGeneration??-1,reserve??(bytes=>historyPool.reserve(staging,bytes)));}
-      finally{if(!reserve)historyPool.release(staging);}
-      this.scheduleClock();
-    }
     const next=this.receiving.then(()=>this.applyReply(reply,intent,reserve));
     this.receiving=next.catch(()=>{});return next;
   }
-  private async applyReply(reply:PeriodReply,intent:PeriodIntent,transferred?:(bytes:number)=>boolean) {
-    if(intent.generation!==this.generation||intent.revision!==this.revision)return;
+  private async applyReply(reply:PeriodReply,intent:PeriodIntent,transferred?:PeriodReservation) {
+    const releases=new Set<()=>void>(),staging=this.staging('adoption');
+    const reservation=transferred??(bytes=>historyPool.reserve(staging,bytes));
+    try{await this.adoptReply(reply,intent,reservation,release=>{if(transferred?.retain)transferred.retain(release);else releases.add(release);});}
+    finally{try{for(const release of releases)release();}finally{if(!transferred)historyPool.release(staging);}}
+  }
+  private async adoptReply(reply:PeriodReply,intent:PeriodIntent,reserve:PeriodReservation,retain:(release:()=>void)=>void) {
+    const current=()=>intent.generation===this.generation&&intent.revision===this.revision;
+    if(!current()&&(!reply.calendar||intent.board!==page.get().board?.id||intent.calendarGeneration!==this.calendar.generation))return;
     const proofEpoch=intent.proofEpoch??this.proofEpoch;
-    if(!reply.values&&!reply.sessions&&!reply.facets&&!reply.sourceWork&&!PERIOD_SCOPES.some(scope=>reply[scope]?.state==='complete'?reply[scope].value.tape:reply[scope]?.state==='error'&&intent.request[scope]?.evidence!=='skip'))return;
+    if(!reply.calendar&&!reply.values&&!reply.sessions&&!reply.facets&&!reply.sourceWork&&!PERIOD_SCOPES.some(scope=>reply[scope]?.state==='complete'?reply[scope].value.tape:reply[scope]?.state==='error'&&intent.request[scope]?.evidence!=='skip'))return;
     const changed=new Set<PeriodScope>();
-    const staging={role:'visible' as const};
     // Decoding has released its byte buffers. Reuse its reservation for the
     // same reply's retained evidence and prefixes, instead of charging it twice.
-    const reserve=transferred??((bytes:number)=>historyPool.reserve(staging,bytes));
-    const release=()=>{if(transferred)transferred(cellsBytes);else historyPool.release(staging);};
+    const release=()=>{reserve(cellsBytes+(staged.get('calendar')??0));};
     // Keep the previous complete presentation if the new evidence cannot fit.
     // Charge decoded dictionaries and all derived prefixes before building them.
     const cellsBytes=PERIOD_SCOPES.reduce((bytes,scope)=>{const part=reply[scope];if(part?.state!=='complete')return bytes;const {tape:_,...cells}=part.value;return bytes+JSON.stringify(cells).length*3;},0);
     const staged=new Map<string,number>(),limited=new Error('history_limit');
-    const charge=(key:string,bytes:number)=>{const prior=staged.get(key)??0;staged.set(key,bytes);if(!reserve(cellsBytes+[...staged.values()].reduce((a,b)=>a+b,0))){staged.set(key,prior);throw limited;}};
+    // Every sibling is already decoded. Establish the whole ledger before the
+    // first shrink, even when calendar publication synchronously starts another read.
+    for(const scope of PERIOD_SCOPES){const part=reply[scope];if(part?.state==='complete'&&part.value.tape)staged.set(scope,tapeBytes(part.value.tape,true));}
+    if(reply.sessions&&reply.sessions.state!=='error')staged.set('work',workBytes(reply.sessions.value,0));
+    if(reply.values?.state==='complete')staged.set('values',JSON.stringify(reply.values.value).length*3+reply.values.value.length*768);
+    if(reply.facets?.state==='complete')staged.set('facets',this.facetBytes(reply.facets.value));
+    if(reply.sourceWork&&reply.sourceWork.state!=='error')staged.set('sourceWork',JSON.stringify(reply.sourceWork.value).length*3);
+    if(reply.calendar)staged.set('calendar',this.calendar.incomingBytes(reply.calendar));
+    const total=()=>cellsBytes+[...staged.values()].reduce((sum,bytes)=>sum+bytes,0);
+    const replace=(key:string,bytes:number)=>{
+      const prior=staged.get(key)??0;staged.set(key,bytes);
+      try{if(reserve(total()))return true;staged.set(key,prior);return false;}
+      catch(error){staged.set(key,prior);throw error;}
+    };
+    if(!reserve(total())){
+      for(const scope of PERIOD_SCOPES)if(reply[scope])reply[scope]={state:'error',error:'history_limit'};
+      if(reply.sessions)reply.sessions={state:'error',error:'history_limit'};
+      if(reply.values)reply.values={state:'error',error:'history_limit'};
+      if(reply.facets)reply.facets={state:'error',error:'history_limit'};
+      if(reply.sourceWork)reply.sourceWork={state:'error',error:'history_limit'};
+      if(reply.calendar)reply.calendar={state:'error',error:'history_limit'};
+      staged.clear();reserve(cellsBytes);
+    }
+    if(reply.calendar&&intent.board===page.get().board?.id){
+      this.calendar.receive(reply.calendar,intent.calendarGeneration??-1,{reserve:bytes=>replace('calendar',bytes),handoff:bytes=>{
+        const release=this.calendar.retain(this.calendar.get());
+        try{if(replace('calendar',bytes)){retain(release);return true;}}
+        catch(error){release();throw error;}
+        release();return false;
+      }});
+      this.scheduleClock();
+    }
+    // Calendar authority is independent of resource-only intent changes. An older
+    // sibling reply still owns its unadopted payload until its transport completes.
+    if(!current())return;
+    if(!reply.values&&!reply.sessions&&!reply.facets&&!reply.sourceWork&&!PERIOD_SCOPES.some(scope=>reply[scope]?.state==='complete'?reply[scope].value.tape:reply[scope]?.state==='error'&&intent.request[scope]?.evidence!=='skip')){release();return;}
+    const charge=(key:string,bytes:number)=>{if(!replace(key,bytes))throw limited;};
     const discard=(key:string)=>{staged.delete(key);reserve(cellsBytes+[...staged.values()].reduce((a,b)=>a+b,0));};
     const ownTape=(tape:PeriodTape,prior?:PeriodTape)=>({...tape,quota:tape.quota.filter(row=>!prior?.quota.includes(row)),money:tape.money.filter(row=>!prior?.money.includes(row))});
     const failScope=(scope:PeriodScope)=>{reply[scope]={state:'error',error:'history_limit'};discard(scope);};
-    for(const scope of PERIOD_SCOPES){const part=reply[scope];if(part?.state==='complete'&&part.value.tape)try{charge(scope,tapeBytes(part.value.tape,true));}catch(error){if(error!==limited)throw error;failScope(scope);}}
-    if(reply.sessions&&reply.sessions.state!=='error')try{charge('work',workBytes(reply.sessions.value,0));}catch(error){if(error!==limited)throw error;reply.sessions={state:'error',error:'history_limit'};}
-    // Card states are adopted unchanged; only their reading wrappers are new.
-    if(reply.values?.state==='complete')try{charge('values',JSON.stringify(reply.values.value).length*3+reply.values.value.length*768);}catch(error){if(error!==limited)throw error;reply.values={state:'error',error:'history_limit'};}
-    if(reply.facets?.state==='complete')try{charge('facets',this.facetBytes(reply.facets.value));}catch(error){if(error!==limited)throw error;reply.facets={state:'error',error:'history_limit'};}
     const priorWork=this.work.value,priorIndex=this.index,priorTapes=new Map(this.tapes);
     const previousSourceCurves=this.sourceCurves,previousSourceTape=this.sourceTape,sourceEpoch=this.sourceEpoch;
     let nextSourceTape=this.sourceTape,nextSourceCurves=previousSourceCurves,nextSourceCursor=this.sourceCursor;
@@ -766,7 +811,7 @@ class BoardPeriod {
     const run=async()=>{
       if(!valid())return;
       const sourceCurves=this.sourceCurves;
-      const previousWork=this.work.value,previousIndex=this.index,previousTapes=new Map(this.tapes),staging={role:'visible' as const};
+      const previousWork=this.work.value,previousIndex=this.index,previousTapes=new Map(this.tapes),staging=this.staging('retirement');
       const limited=new Error('history_limit'),sizes=new Map<string,number>();
       const charge=(key:string,bytes:number)=>{sizes.set(key,bytes);if(!historyPool.reserve(staging,[...sizes.values()].reduce((a,b)=>a+b,0)))throw limited;};
       const build=function*():Preparation<{work:WorkTrace|null;index:PeriodIndex|null;activity:PeriodActivity|null;tapes:typeof previousTapes;edge:number}> {
@@ -812,7 +857,15 @@ class BoardPeriod {
   private measureBytes(){
     // Decoding scratch has gone; retain the tape and the actual shared typed
     // buffers, as for the selected work index, rather than its construction maps.
-    this.bytes=this.facetBytes()+(this.sourceTape?JSON.stringify(this.sourceTape).length*3:0)+(this.sourceCurves?.bytes??0)+JSON.stringify([...this.values.values()]).length*3+(this.activity&&this.activity.trace===this.work.value?this.activityBytes(this.activity):workBytes(this.work.value,this.index?.curves.bytes))+(this.work.value?0:JSON.stringify(this.workRows).length*3)+(this.activityRetained?JSON.stringify(this.activityRetained).length*3:0)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape)+t.accounting.bytes,0);
+    const storage=new Map<object,number>();
+    if(this.sourceTape)storage.set(this.sourceTape,JSON.stringify(this.sourceTape).length*3);
+    if(this.sourceCurves)storage.set(this.sourceCurves,this.sourceCurves.bytes??0);
+    let valuesBytes=JSON.stringify([...this.values.values()]).length*3;
+    for(const reading of this.values.values())if(reading.value){const bytes=JSON.stringify(reading.value).length*3;storage.set(reading.value,bytes);valuesBytes-=bytes;}
+    if(this.work.value){const root=this.activity?.trace===this.work.value?this.activity:this.index??this.work.value;storage.set(root,root===this.activity?this.activityBytes(this.activity!):workBytes(this.work.value,this.index?.curves.bytes));}
+    for(const entry of this.tapes.values()){storage.set(entry.tape,tapeBytes(entry.tape));storage.set(entry.accounting,entry.accounting.bytes);}
+    this.storage=storage;
+    this.bytes=this.facetBytes()+valuesBytes+(this.work.value?0:JSON.stringify(this.workRows).length*3)+(this.activityRetained?JSON.stringify(this.activityRetained).length*3:0)+this.storageBytes(storage);
   }
   /** The current stream is authoritative even while an older analytical reply is being prepared. */
   private present(rows:WorkedSession[]) {

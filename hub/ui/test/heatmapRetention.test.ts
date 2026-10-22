@@ -14,7 +14,7 @@ const nodes=(value:any):Node[]=>Array.isArray(value)?value.flatMap(nodes):value&
 test('actual calendar failure and retry retain the complete heatmap until authority changes',async t=>{
   t.mock.method(Date,'now',()=>NOW);
   const h=await fixture({heatmap:true}),calendar=h.period.calendar,hooks=preparationFixture(),jsx=(type:unknown,props:Node['props'])=>({type,props}),plot={clientWidth:350,querySelector:()=>null};
-  t.after(()=>h.close());
+  t.after(async()=>{hooks.dispose();await h.close();});
   const context={exports:{} as Record<string,(props:unknown)=>Node>,require:()=>({jsx,jsxs:jsx}),memo:(f:unknown)=>f,...hooks,document:focusEventsFixture().document,isFocusReturn:()=>false,
     useSyncExternalStore:(_s:unknown,read:()=>unknown)=>read(),usePref:()=> 'matrix',useLocale:()=> 'en',formatLocale:()=> 'en',useTimeRange:()=>null,useSizing:()=>null,
     heatmapLayoutPrepared,HEATMAP_MIN:160,HEATMAP_NATURAL:300,boardPeriod:h.period,t:(key:string)=>key,num:String,CATEGORY_COLORS:['blue'],CALENDAR_OPACITY:[0,.2,.4,.6,.8,1],

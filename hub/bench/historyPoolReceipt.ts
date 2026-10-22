@@ -17,6 +17,8 @@ export function historyPoolReceiptScript() {
     const reservationOwner=(pool,flight)=>{
       const transport=members.find(m=>m.kind==='period'&&m.value.transport?.flights?.has(flight));
       if(transport)return{memberId:transport.id,kind:'transport',ownSlot:flight.ownSlot===true,extras:flight.extras===true,preparing:flight.preparing===true,demands:bounded(flight.demands??[],demandOwner)};
+      const period=members.find(m=>m.kind==='period'&&m.value===flight.historyMember);
+      if(period&&['calendar-projection','values','restore','adoption','retirement'].includes(flight.operation))return{memberId:period.id,kind:'period-staging',operation:flight.operation};
       const admitted=pool.active.get(flight)?.owner,known=admitted?members.find(m=>m.value===admitted||m.value.transport===admitted):null;
       if(known)return{memberId:known.id,kind:known.value.transport===admitted?'transport':known.kind};
       const chart=members.find(m=>m.kind==='chart'&&(m.value.flights.has(flight)||m.value.responses.has(flight)||[...m.value.reservations.values()].includes(flight)));
@@ -34,9 +36,11 @@ export function historyPoolReceiptScript() {
         const value=m.value,base={memberId:m.id,estimatedBytes:n(value.estimatedBytes)};
         if(m.kind!=='period')return{...base,tiles:retained(value).values.map(v=>v.row)};
         const calendar=value.calendar,cache=calendar?.cache;
-        return{...base,currentBytes:n(value.bytes),current:keepGraph(graph(value)),
-          retained:bounded(value.retained.values(),entry=>{const captured=retainedOwnership.get(entry);if(captured===undefined)ownershipMissing++;return{id:id(entry),bytes:n(entry.bytes),activityBytes:n(entry.activityBytes),copyBytes:n(entry.copyBytes),activity:id(entry.activity),activityTrace:id(entry.activity?.trace),captured:captured??null};}),
-          valueCache:bounded(value.valueCache.values(),entry=>({id:id(entry),bytes:n(entry.bytes),values:id(entry.values),readings:bounded(entry.values instanceof Map?entry.values.values():[],reading=>[id(reading),id(reading.value),id(reading.basis)])})),
+        const storage=entry=>bounded(entry.storage instanceof Map?entry.storage:[],([root,size])=>[id(root),n(size)]);
+        return{...base,currentBytes:n(value.bytes),current:keepGraph(graph(value)),storage:storage(value),
+          retained:bounded(value.retained.values(),entry=>{const captured=retainedOwnership.get(entry);if(captured===undefined)ownershipMissing++;return{id:id(entry),bytes:n(entry.bytes),activityBytes:n(entry.activityBytes),copyBytes:n(entry.copyBytes),metadata:n(entry.metadata),storage:storage(entry),activity:id(entry.activity),activityTrace:id(entry.activity?.trace),captured:captured??null};}),
+          valueCache:bounded(value.valueCache.values(),entry=>({id:id(entry),bytes:n(entry.bytes),metadata:n(entry.metadata),storage:storage(entry),values:id(entry.values),readings:bounded(entry.values instanceof Map?entry.values.values():[],reading=>[id(reading),id(reading.value),id(reading.basis)])})),
+          restoring:bounded(value.restoring??[],entry=>{const captured=retainedOwnership.get(entry);if(captured===undefined)ownershipMissing++;return{id:id(entry),bytes:n(entry.bytes),metadata:n(entry.metadata),storage:storage(entry),captured:captured??null};}),
           leases:bounded(value.activityLeases instanceof Map?value.activityLeases:[],([projector,lease])=>({projector:id(projector),trace:id(projector.trace),count:n(lease.count),bytes:n(lease.bytes)})),
           calendar:calendar?{id:id(calendar),bytes:n(calendar.bytes),state:id(calendar.state),readingValue:id(calendar.state?.value),readingCells:id(calendar.state?.value?.cells),readingEdges:id(calendar.state?.value?.edges),readingBasis:id(calendar.state?.basis),cacheBytes:n(cache?.bytes),entries:bounded(cache?.entries??[],entry=>({id:id(entry),curve:id(entry.curve),bytes:n(entry.bytes),from:n(entry.from),to:n(entry.to),cut:n(entry.cut),at:n(entry.at),period:n(entry.period)})),borrowed:bounded(cache?.borrowed??[],([entry,count])=>[id(entry),n(count)])}:null};
       }),reservations:bounded(pool.reservations,([flight,bytes])=>({flightId:id(flight),bytes:n(bytes),owner:reservationOwner(pool,flight)}))};

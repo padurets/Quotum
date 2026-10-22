@@ -6,8 +6,9 @@ import {expandPeriod,type PeriodWireReply} from '../../server/domain/periodWire'
 import type {HistoryPool,HistoryMember} from './historyPool';
 
 export type PeriodIntent={board:string;generation:number;resourceGeneration?:number;facetGeneration?:number;calendarGeneration?:number;revision:number;proofEpoch?:number;request:PeriodRequest};
+export type PeriodReservation=((bytes:number)=>boolean)&{retain?(release:()=>void):void};
 type Demand={scope:PeriodScope;query:HistoryQuery;signal?:AbortSignal;activityOnly:boolean;releaseSlot?:()=>void;resolve(value:HistoryReply):void;reject(error:unknown):void};
-type Flight={role:'visible';intent:PeriodIntent;controller:AbortController;demands:Demand[];ownSlot:boolean;extras:boolean;preparing?:boolean};
+type Flight={role:'visible';intent:PeriodIntent;controller:AbortController;demands:Demand[];ownSlot:boolean;extras:boolean;preparing?:boolean;releases:Set<()=>void>};
 const aborted=()=>new DOMException('Aborted','AbortError');
 const cursorKey=(board:string,scope:PeriodScope,query:HistoryQuery)=>JSON.stringify([board,scope,query.meters,query.unit,query.currency,query.sources]);
 
@@ -40,7 +41,7 @@ export class PeriodTransport implements HistoryMember {
   private readonly baselineParts=new Set<string>();
   private readonly cursors=new Map<string,string>();
   private readonly metadata=new Map<PeriodScope,{board:string;sources?:string;meters?:string;unit?:string;currency?:string;work?:string;tag:string}>();
-  constructor(private readonly pool:HistoryPool,private readonly intent:()=>PeriodIntent|null,private readonly receive:(reply:PeriodReply,intent:PeriodIntent,reserve?:(bytes:number)=>boolean)=>void|Promise<void>,
+  constructor(private readonly pool:HistoryPool,private readonly intent:()=>PeriodIntent|null,private readonly receive:(reply:PeriodReply,intent:PeriodIntent,reserve?:PeriodReservation)=>void|Promise<void>,
     private readonly send:(board:string,body:PeriodRequest,signal:AbortSignal,reserve:(bytes:number)=>boolean)=>Promise<PeriodReply>,private readonly accessLost:()=>void=()=>{}) {}
   get estimatedBytes(){return 0;}
   evictionCandidates(){return [];}
@@ -68,7 +69,11 @@ export class PeriodTransport implements HistoryMember {
   private retire(){for(const flight of this.flights)if(flight.extras&&!this.current(flight.intent)&&!this.resourcesCurrent(flight.intent))this.abort(flight);}
   private async adopt(reply:PeriodReply,intent:PeriodIntent,flight:Flight,heldBytes=0){
     flight.preparing=true;
-    await this.receive(reply,intent,bytes=>this.pool.reserve(flight,heldBytes+bytes));
+    const reservation:PeriodReservation=bytes=>this.pool.reserve(flight,heldBytes+bytes);
+    // Adopted numerical roots can outlive their current view while the decoded
+    // reply still belongs to this flight and its chart recipients.
+    reservation.retain=release=>{flight.releases.add(release);};
+    await this.receive(reply,intent,reservation);
     if(flight.controller.signal.aborted||!this.current(intent))return false;
     // Preparation can reject individual sections. Only adopted evidence can name a later delta.
     for(const scope of PERIOD_SCOPES){const part=reply[scope],query=intent.request[scope];if(query&&part?.state==='complete'){
@@ -89,7 +94,7 @@ export class PeriodTransport implements HistoryMember {
     if(!this.queue.length&&!extras)return;
     const demands:Demand[]=[];
     for(const scope of PERIOD_SCOPES){const index=this.queue.findIndex(d=>d.scope===scope&&!d.signal?.aborted);if(index!==-1)demands.push(this.queue.splice(index,1)[0]);}
-    const flight:Flight={role:'visible',intent,controller:new AbortController(),demands,ownSlot:!demands.length,extras};
+    const flight:Flight={role:'visible',intent,controller:new AbortController(),demands,ownSlot:!demands.length,extras,releases:new Set()};
     this.flights.add(flight);
     const body:PeriodRequest={...intent.request,...(!extras?{values:undefined,sessions:undefined,facets:undefined,sourceWork:undefined,calendar:undefined,quota:undefined,budget:undefined,funds:undefined}:{}),...Object.fromEntries(demands.map(d=>[d.scope,d.activityOnly&&d.scope==='quota'&&!intent.request.quota
       ?{cell:d.query.cell,from:d.query.from,to:d.query.to,sources:'[]',evidence:'skip',meta:''}
@@ -163,7 +168,7 @@ export class PeriodTransport implements HistoryMember {
         for(const demand of demands)demand.reject(error);
         if(extras){const current=this.intent();if(current?.generation===intent.generation&&current.revision===intent.revision){const section={state:'error' as const,error:error instanceof ApiError&&error.code==='history_limit'?'history_limit' as const:'unavailable' as const};this.receive({basis:{run:'',revision:'',evaluatedAt:intent.request.evaluatedAt,evidenceCut:0,range:{from:0,to:0}},...Object.fromEntries(PERIOD_SCOPES.filter(scope=>appliedIntent.request[scope]).map(scope=>[scope,section])),...(body.values?{values:section}:{}),...(body.sessions?{sessions:section}:{}),...(body.facets?{facets:section}:{}),...(body.sourceWork?{sourceWork:section}:{}),...(body.calendar?{calendar:section}:{})},appliedIntent);}}
       })
-        .finally(()=>{for(const demand of demands){if(flight.controller.signal.aborted)demand.reject(aborted());demand.releaseSlot?.();}this.pool.release(flight);this.flights.delete(flight);if(resetEpoch===this.resetEpoch)this.schedule();});
+        .finally(()=>{try{for(const demand of demands){if(flight.controller.signal.aborted)demand.reject(aborted());demand.releaseSlot?.();}}finally{for(const release of flight.releases)release();flight.releases.clear();this.pool.release(flight);this.flights.delete(flight);if(resetEpoch===this.resetEpoch)this.schedule();}});
     };
     if(flight.ownSlot)this.pool.request(this,flight,start,()=>this.abort(flight));else start();
     if(this.queue.length)this.schedule();

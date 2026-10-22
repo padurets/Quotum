@@ -20,7 +20,7 @@ test('cold heatmap preparation leaves render cheap, retains compatible cells and
   const plot={clientWidth:1200,querySelector:()=>null},root={};let resize=()=>{};
   const context={exports:{} as any,require:()=>({jsx,jsxs:jsx}),memo:(f:unknown)=>f,...hooks,document:focusEventsFixture().document,isFocusReturn:()=>false,
     useSyncExternalStore:(_subscribe:unknown,read:()=>unknown)=>read(),usePref:()=> 'matrix',useLocale:()=> 'en',formatLocale:()=> 'en',useTimeRange:()=>null,useSizing:()=>null,
-    heatmapLayout,heatmapLayoutPrepared,HEATMAP_MIN:160,HEATMAP_NATURAL:300,boardPeriod:{calendar:{subscribe:()=>()=>{},get:()=>reading,presentationKey:()=>authority}},t:(key:string)=>key,num:String,CATEGORY_COLORS:['blue'],CALENDAR_OPACITY:[0,.2,.4,.6,.8,1],
+    heatmapLayout,heatmapLayoutPrepared,HEATMAP_MIN:160,HEATMAP_NATURAL:300,boardPeriod:{calendar:{subscribe:()=>()=>{},get:()=>reading,retain:()=>()=>{},presentationKey:()=>authority}},t:(key:string)=>key,num:String,CATEGORY_COLORS:['blue'],CALENDAR_OPACITY:[0,.2,.4,.6,.8,1],
     ResizeObserver:class{constructor(read:()=>void){resize=read;}observe(){}disconnect(){}},Popover:'popover',Segmented:'segmented',SlidersIcon:'icon',ReadState:'state',
   };
   const source=readFileSync(new URL('../components/AgentHoursHeatmap.tsx',import.meta.url),'utf8').replace(/^import .*;$/mg,'');
@@ -55,7 +55,7 @@ test('heatmap rows follow physical order and an explicit drill focuses the new g
   const focused:string[]=[],plot={clientWidth:1200,querySelector:(selector:string)=>({focus:()=>focused.push(selector)})},root={};
   const context={exports:{} as any,require:()=>({jsx,jsxs:jsx}),...hooks,memo:(f:unknown)=>f,document:focusEventsFixture().document,isFocusReturn:()=>false,
     useSyncExternalStore:(_subscribe:unknown,read:()=>unknown)=>read(),usePref:()=> 'matrix',useLocale:()=> 'en',formatLocale:()=> 'en',useTimeRange:()=>selection,useSizing:()=>null,
-    heatmapLayout,heatmapLayoutPrepared,HEATMAP_MIN:160,HEATMAP_NATURAL:300,boardPeriod:{calendar:{subscribe:()=>()=>{},get:()=>reading,presentationKey:()=> 'fixture'}},t:(key:string)=>key,num:String,CATEGORY_COLORS:['blue'],CALENDAR_OPACITY:[0,.2,.4,.6,.8,1],
+    heatmapLayout,heatmapLayoutPrepared,HEATMAP_MIN:160,HEATMAP_NATURAL:300,boardPeriod:{calendar:{subscribe:()=>()=>{},get:()=>reading,retain:()=>()=>{},presentationKey:()=> 'fixture'}},t:(key:string)=>key,num:String,CATEGORY_COLORS:['blue'],CALENDAR_OPACITY:[0,.2,.4,.6,.8,1],
     setTimeRange:(range:{from:number;to:number})=>{selection=range;},ResizeObserver:class{observe(){}disconnect(){}},Popover:'popover',Segmented:'segmented',SlidersIcon:'icon',ReadState:'state',
   };
   const source=readFileSync(new URL('../components/AgentHoursHeatmap.tsx',import.meta.url),'utf8').replace(/^import .*;$/mg,'');

@@ -83,9 +83,11 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
   const presentation=boardPeriod.calendar.presentationKey();
   const context=JSON.stringify([presentation,!!value,window.zone,view,width,height,locale,selection]);
   const aligned=!selection||window.range.from===selection.from&&window.range.to===selection.to;
-  const prepared=usePrepared(()=>heatmapLayoutPrepared(reading,width,view,formatLocale(),height),[window,value,width,view,locale,height],context,aligned);
+  useLayoutEffect(()=>boardPeriod.calendar.retain(reading),[reading]);
+  const prepared=usePrepared(function*(){return {reading,layout:yield*heatmapLayoutPrepared(reading,width,view,formatLocale(),height)};},[window,value,width,view,locale,height],context,aligned);
+  useLayoutEffect(()=>prepared.value?boardPeriod.calendar.retain(prepared.value.reading):undefined,[prepared.value?.reading]);
   const empty:HeatmapLayout={cells:[],labels:[],height:Math.max(HEATMAP_MIN,height||HEATMAP_NATURAL),naturalHeight:HEATMAP_NATURAL,span:3_600_000,kind:'strip'};
-  const layout=prepared.value??empty;
+  const layout=prepared.value?.layout??empty;
   useLayoutEffect(()=>{
     const revoke=()=>{if(drill.current)drill.current.focus=false;};
     const focused=(event:FocusEvent)=>{if(event.target!==document.body&&event.target!==document.documentElement&&!isFocusReturn())revoke();};

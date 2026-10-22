@@ -57,7 +57,7 @@ export const NOW=1_800_000_000_000,H=3_600_000,M=60_000;
 export const flush=async()=>{for(let i=0;i<300;i++)await Promise.resolve();};
 
 /** Actual producer, wire JSON boundary, page reducer, transport and bounded server reader. */
-export async function fixture({heatmap=false,personal=false,ownerDevice=false,transportLive=false,privateWork=false,unknown=false,current=false,stable=true,fixed=false,tableOnly=false,periodName="1h",creditFrom=NOW-3*M,creditTo=NOW-2*M,clocked=false,sessionMs=24*H,initialFilters=null as filterModelBindings.DataFilters|null,initialFailure=false}={}) {
+export async function fixture({heatmap=false,personal=false,ownerDevice=false,transportLive=false,privateWork=false,unknown=false,current=false,stable=true,fixed=false,tableOnly=false,periodName="1h",creditFrom=NOW-3*M,creditTo=NOW-2*M,clocked=false,sessionMs=24*H,initialFilters=null as filterModelBindings.DataFilters|null,initialFailure=false,periodSource=undefined as string|undefined}={}) {
   let selectedRange=fixed?{from:NOW-H,to:NOW}:null;
   const start=NOW-Math.max(3*H,periodOf(periodName).ms+H);
   const store=new Store(':memory:',start),directory=new Directory(store.db);
@@ -99,7 +99,7 @@ export async function fixture({heatmap=false,personal=false,ownerDevice=false,tr
   if(!initial||initial==='limit')throw new Error('stream did not open');let opened=initial;feed(opened.frames);
   if(connection)await flush();
   const settings={range:periodName,kind:'session',money:DEFAULT_MONEY,funds:DEFAULT_MONEY};
-  const code=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
+  const code=periodSource??readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
   let wait:Promise<void>|null=null,preparer:Preparations|null=null,failInitial=initialFailure;
   const pageClock=new PageClock({now:()=>now,visible:()=>true,setTimeout:(run,ms)=>{const token={};timers.set(token,{at:now+ms,run});return token;},clearTimeout:token=>{timers.delete(token as object);}});
   const pan=new Pan({now:()=>now,commit:()=>{},requestFrame:run=>{run();return null;},cancelFrame:()=>{},setTimeout:()=>null,clearTimeout:()=>{}});

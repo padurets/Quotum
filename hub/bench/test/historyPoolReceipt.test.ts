@@ -219,3 +219,33 @@ test('ownership observation failures and bounded omissions cannot turn into comp
  const broken=fixture();broken.run(`Object.defineProperty(period,'work',{get(){throw Error('private-observer-error');}});result=pool.reserve(flight,pool.budget+1);`);
  assert.equal(broken.context.result,false);assert.ok(broken.read().errors>0);assert.equal(broken.read().status,'insufficient-evidence');assert.ok(!JSON.stringify(broken.read()).includes('private-observer-error'));
 });
+
+test('temporary period owners and a removed restoring entry retain their actual root identities',()=>{
+ const h=fixture();h.run(`
+  for(const value of [quota,budget,funds])value.env.read('synthetic',60,0,60);
+  root={};period.work={value:root};period.storage=new Map([[root,300]]);period.retainCurrent();
+  saved=[...period.retained.values()][0];saved.storage=period.storage;saved.metadata=30;
+  period.retained.clear();period.restoring=new Set([saved]);
+  temporary={role:'visible',historyMember:period,operation:'restore'};
+  result=pool.reserve(temporary,pool.budget+1);__quotumHistoryPoolReceipt.mark(2,3);
+ `);
+ const receipt=h.read();assert.equal(receipt.status,'complete');assert.equal(receipt.ownershipMissing,0);assert.equal(h.context.result,false);
+ const event=receipt.entries.find((entry:{kind:string})=>entry.kind==='reserve-critical');
+ assert.equal(event.owner.kind,'period-staging');assert.equal(event.owner.operation,'restore');assert.equal(event.owner.memberId,receipt.members[0].id);
+ const member=receipt.ownershipRows[0].members[0];assert.equal(member.retained.length,0);assert.equal(member.restoring.length,1);
+ assert.deepEqual(member.storage,member.restoring[0].storage);assert.equal(member.restoring[0].metadata,30);
+ const captured=receipt.ownershipGraphs.find((row:{id:number})=>row.id===member.restoring[0].captured);
+ assert.equal(captured.workValue,member.storage[0][0]);
+});
+
+test('unbound or unrecognized temporary ownership never guesses a period owner or exposes its label',()=>{
+ const h=fixture();h.run(`
+  for(const value of [quota,budget,funds])value.env.read('synthetic',60,0,60);
+  pool.reserve({role:'visible',historyMember:period,operation:'private-operation-value'},pool.budget+1);
+  pool.reserve({role:'visible',historyMember:{},operation:'restore'},pool.budget+1);
+  __quotumHistoryPoolReceipt.mark(2,3);
+ `);
+ const receipt=h.read();assert.equal(receipt.status,'complete');
+ for(const event of receipt.entries.filter((entry:{kind:string})=>entry.kind==='reserve-critical'))assert.equal(event.owner.kind,'unknown');
+ assert.ok(!JSON.stringify(receipt).includes('private-operation-value'));
+});
