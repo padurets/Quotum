@@ -2107,6 +2107,11 @@ The final historical value scale is also retained through exact edge replacement
 a smaller partial boundary bar cannot enlarge all the unchanged interior stacks.
 Higher newly read work can expand that scale; another navigation, legend selection,
 authority or explicit geometry change establishes a new value projection.
+Budget and subscription-funds charts also preserve the monetary value domain painted
+at a historical gesture's release. Replacing an overscan strip with exact cells cannot
+rescale unchanged balances. New values may expand the domain; another navigation,
+currency, resource selection or authority establishes a new one. Its bounds stay in
+integer millionths independently of the prepared path's numeric offset.
 Activity publishes a replacement only when its selected work and native drawing
 are both ready. A quota answer arriving first cannot publish its pending-work
 placeholder as an empty Activity chart. The previous complete work frame and its

@@ -117,6 +117,17 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
   const noSelection=!(selection?.ids.length);
   const noResources=!sources.some(source=>supportsBudget(providerOf(source.provider)));
   const modelContext=JSON.stringify([authority,family,board,history?.board,unit,selection?.ids]);
+  const baseNavigation=axisNavigation(board,selected,prefs),navigation={...baseNavigation,context:JSON.stringify([baseNavigation.context,unit,authority])};
+  type Domain={low:bigint;high:bigint};
+  const pose=useRef<{context:string;range:string;pan:number|null;domain:Domain|null;held:Domain|null}|null>(null);
+  const poseContext=JSON.stringify([modelContext,navigation.context,muted]);
+  if(pose.current?.context!==poseContext)pose.current={context:poseContext,range:navigation.range,pan:panning,domain:null,held:null};
+  const previous=pose.current;
+  if(panning!==null&&previous.pan===null)previous.held=null;
+  else if(panning===null&&previous.pan!==null)previous.held=selected&&previous.range!==navigation.range?previous.domain:null;
+  else if(panning===null&&previous.range!==navigation.range)previous.held=null;
+  previous.pan=panning;previous.range=navigation.range;
+  const held=previous.held;
   const prepared=usePrepared(function* () {
     const entries:MeterHistory[]=[],visible:MeterHistory[]=[];
     let low:bigint|null=null,high:bigint|null=null;
@@ -129,6 +140,9 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
       visible.push(entry);
       for(const point of entry.points){const value=BigInt(point.value);if(low===null||value<low)low=value;if(high===null||value>high)high=value;yield;}
     }
+    // Exact composition must preserve the value pose painted at release. New
+    // evidence can expand it; another navigation or display context releases it.
+    if(held){low=low===null||held.low<low?held.low:low;high=high===null||held.high>high?held.high:high;}
     const origin=low??0n,span=(high??origin)-origin||1_000_000n,pad=span/10n||1n,lines:Line[]=[];
     for(const series of visible) {
       const card=sources.find(c=>c.id===series.sourceId),scaled=(value:string)=>Number(BigInt(value)-origin)/1_000_000;
@@ -136,10 +150,10 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
       for(const point of series.points){points.push([point.at,scaled(point.value),point.segment,point.validUntil]);yield;}
       lines.push({sourceId:series.sourceId,windowId:series.meterId,key:moneyIdentity(series),name:nameOf(series,card?.title??series.sourceId,context,family),provider:card?.provider??'',kind:'other',label:series.semantics?.label??null,minutes:null,color:colorOf(arrange.view,series.sourceId,card?.provider??''),dash:series.kind==='cap'?'7 5':'',current:scaled(series.end??'0'),consumed:0,coveredMs:series.coveredMs,remainingAtStart:series.start===null?null:scaled(series.start),remainingAtEnd:series.end===null?null:scaled(series.end),pointMode:series.pointMode,staleAfterMs:86_400_000,points,work:null,...(series.kind==='cap'?{capCells:series.points.flatMap(p=>p.knownFrom!==undefined&&p.knownUntil!==undefined?[{at:p.at,from:p.knownFrom,to:p.knownUntil,value:scaled(p.value)}]:[])}:{})});yield;
     }
-    return {entries,lines,origin,span,pad,strip};
-  },[drawing,strip,prefs.muted,unit,sources,arrange.view,locale,context],modelContext);
+    return {entries,lines,origin,span,pad,strip,domain:low===null||high===null?null:{low,high}};
+  },[drawing,strip,prefs.muted,unit,sources,arrange.view,locale,context,held],modelContext);
   const model=prepared.value,entries=model?.entries??[],lines=model?.lines??[];
-  const baseNavigation=axisNavigation(board,selected,prefs),navigation={...baseNavigation,context:JSON.stringify([baseNavigation.context,unit,authority])};
+  previous.domain=model?.domain??null;
   const axis=useMemo(()=>{
     const origin=model?.origin??0n,span=model?.span??1_000_000n,pad=model?.pad??1n;
     const min=-Number(pad)/1_000_000,max=Number(span+pad)/1_000_000;
