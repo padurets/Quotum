@@ -58,7 +58,7 @@ export class WorkCalendar {
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
   private publish(){this.accountedState=null;for(const listener of this.listeners)listener();}
   get bytes(){
-    if(!this.visible||!this.context)return 0;
+    if(!this.visible||!this.context)return this.cache.bytes;
     if(this.accountedState!==this.state){this.accountedState=this.state;this.accountedBytes=readingBytes(this.state);}
     return this.accountedBytes+this.cache.bytes;
   }
@@ -72,8 +72,15 @@ export class WorkCalendar {
     if(changed){
       this.generation++;this.context=context;const window=calendarWindow(now,calendarZone(),selection);
       if(window.zone!==this.state.window.zone)this.cache.clear();
-      this.state=visible&&!limited?this.cache.read(window,selection,now,reserve)??{window,value:null,basis:null,loading:true,error:null}:{window,value:null,basis:null,loading:false,error:null};
+      const current=this.generation,previous=this.state;
+      const reading=visible&&!limited?this.cache.read(window,selection,now,reserve)??{window,value:null,basis:null,loading:true,error:null}:{window,value:null,basis:null,loading:false,error:null};
+      if(current!==this.generation||previous!==this.state)return true;
+      this.state=reading;this.accountedState=null;
       this.needed=visible&&!this.state.value;
+      // This reservation belongs only to configure's projection. The accepted
+      // reading is now resident; publication must not charge the same cells twice.
+      reserve(0);
+      if(current!==this.generation||reading!==this.state)return true;
     }
     else this.tick(now,true);
     if(visible&&limited){this.needed=false;this.state={...this.state,value:null,basis:null,loading:false,error:'filters_limit'};}
