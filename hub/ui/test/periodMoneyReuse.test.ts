@@ -1,3 +1,4 @@
+import {workChange} from '../lib/workChanges';
 import * as periodValueClockBindings from '../../server/domain/periodValues';
 import {WorkCalendar} from '../lib/workCalendar';
 import {AGENT_HOURS_HEATMAP} from '../../server/domain/widgets';
@@ -92,7 +93,7 @@ for(const acrossHour of [false,true])test('money preparation keeps cold history 
   const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as any,hubNow:()=>clockNow,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod,page:{get:()=>({board}),dispatch:console.error},pan:{get:()=>panning?{}:null},preparations:()=>preparer,
    prepareAsync:(owner:object,work:any,valid:()=>boolean)=>productionPrepareAsync(owner,work,valid,preparer),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,
    empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>selected,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
-  runInNewContext(coordinatorCode,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));const period=new context.exports.BoardPeriod();
+  runInNewContext(coordinatorCode,Object.assign(context,{workChange},periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));const period=new context.exports.BoardPeriod();
   const readers:HistoryStore[]=[];
   for(const [i,scope] of (['quota','budget','budget'] as const).entries()){
    const meter=i===0?undefined:moneyReadSelection(snapshot.sources,board.view,i===2?settings.funds:settings.money,board.currencies,i===2?'funds':'budget');

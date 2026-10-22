@@ -1,12 +1,12 @@
-import {AnalyticsPanel, AnalyticsNote, SeriesLegendItem, SeriesInformation} from './AnalyticsPanel';
+import {AnalyticsPanel, AnalyticsNote, SeriesLegendItem} from './AnalyticsPanel';
 import {AnalyticsTable, TableSettings, type AnalyticsRow, type AnalyticsColumn, type Cell, type TimedCell} from './AnalyticsTable';
 import {providerOf,supportsBudget,type MoneyFamily} from '../../server/domain/providers';
 import {memo,useCallback,useLayoutEffect,useMemo,useRef,useState,useSyncExternalStore,type ComponentProps,type RefObject} from 'react';
 import {DEFAULT_CURRENCY,currencySymbol} from '../../server/domain/currency';
 import {useBoardId,useNamed,useServerView,useCurrencyContext} from '../lib/board';
 import {useBudgetFinancialHistory,useBudgetHistory,useHistoryBegins,useBudgetHistoryPlot,budgetHistory,fundsHistory} from '../lib/history';
-import {usePref,setPrefs,setMuted,useChartMuted,chartSeriesMuted,chartMuteKey} from '../lib/prefs';
-import {moneySelection,fundsLegacyMuted} from '../lib/moneySelection';
+import {usePref,setPrefs} from '../lib/prefs';
+import {moneySelection} from '../lib/moneySelection';
 import {money,activeHours} from '../lib/money';
 import {moneySeriesName as nameOf,moneySeriesDetail,moneyTableValues,moneyWorkValues,moneyBalanceSeries,moneyComparator,nextMoneySort,visibleMoneySort,type MoneyColumn} from '../lib/moneyTable';
 import {moneyIdentity,moneyPointAt,meterPointIn,moneyTotal,type MeterHistory} from '../lib/moneyView';
@@ -28,6 +28,7 @@ import {composeMetersPrepared} from '../../server/domain/meterHistory';
 import type {History} from '../lib/types';
 import {useTableWidget,WidgetPages,TableMeasure,TableSortMenu} from './TableWidget';
 import {useSeriesFocus} from './seriesFocus';
+import {SeriesDetails} from './SeriesDetails';
 
 function SelectionNotice({family='budget'}:{family?:MoneyFamily}) {
   const sources=useNamed(undefined,family),view=useServerView(),settings=usePref(family==='funds'?'funds':'money'),context=useCurrencyContext();
@@ -88,10 +89,9 @@ const MoneyLegendAmount=memo(function MoneyLegendAmount({value,unit,context}:{va
 export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:MoneyFamily}) {
   const widget=family==='funds'?SUBSCRIPTION_FUNDS:BUDGET_HISTORY;
   const context=useCurrencyContext(),board=useBoardId(),locale=useLocale(),{history,drawing,loading,error,presentation:authority}=useBudgetFinancialHistory(family,true),sources=useNamed(arrange.view.names,family);
-  const range=usePref('range'),horizon=usePref('horizon'),muted=useChartMuted(widget),moneyPrefs=usePref(family==='funds'?'funds':'money');
-  const prefs=useMemo(()=>({range,horizon,muted,money:moneyPrefs,funds:moneyPrefs}),[range,horizon,muted,moneyPrefs]);
+  const range=usePref('range'),horizon=usePref('horizon'),moneyPrefs=usePref(family==='funds'?'funds':'money');
+  const prefs=useMemo(()=>({range,horizon,money:moneyPrefs,funds:moneyPrefs}),[range,horizon,moneyPrefs]);
   const funds=family==='funds',settings=moneyPrefs,reader=funds?fundsHistory:budgetHistory;
-  const isMuted=(series:MeterHistory)=>chartSeriesMuted(muted,widget,series.sourceId,series.meterId,funds&&fundsLegacyMuted(settings,series.sourceId,series.meterId));
   const strip=useBudgetHistoryPlot(family),panning=usePanning();
   const selected=useTimeRange(),start=useHistoryBegins(),panel=useRef<HTMLElement>(null),{plot,onBase}=usePlot(panel);
 
@@ -99,9 +99,15 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
   const frame=frameOf(selected,{range:prefs.range,horizon:prefs.horizon},now,start),measured=measuredTo(frame,history,selected,prefs.range);
   const unit=settings.unit===DEFAULT_CURRENCY?context.target.id:settings.unit??DEFAULT_CURRENCY,symbol=currencySymbol(unit,context);
   const original=useMemo(()=>history?.meterSeries?.filter(s=>s.unit===unit&&moneyBalanceSeries(s))??[],[history?.meterSeries,unit]);
+  // Rolling accounting replaces series even when every fact the legend shows is
+  // unchanged. Keep its JSX and details independent of history cells and coverage.
+  const legendValues=JSON.stringify(original.map(s=>[
+    s.sourceId,s.meterId,s.kind,s.unit,s.end,s.role,s.semantics?.label,s.semantics?.scope,
+    s.semantics?.conversion?.original.unit,s.semantics?.conversion?.rate.source,
+  ]));
   const selection=moneySelection(sources,arrange.view.hidden,settings,context,family).selection;
-  const focus=useSeriesFocus(panel,JSON.stringify([authority,board,history?.range,unit,selection?.ids]));
-  const descriptions=useMemo(()=>original.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId),detail=moneySeriesDetail(s,context);return {key,name:nameOf(s,card?.title??s.sourceId,context,family),detail:detail?[money(s.end,s.unit,true,context),detail].join('\n'):'',muted:isMuted(s)};}),[original,sources,context,family,muted,settings,widget,locale]);
+  const focus=useSeriesFocus(panel,JSON.stringify([board,family]),{kind:family,unit:settings.unit??DEFAULT_CURRENCY},JSON.stringify([authority,history?.range,unit]));
+  const descriptions=useMemo(()=>original.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId),detail=moneySeriesDetail(s,context);return {key,name:nameOf(s,card?.title??s.sourceId,context,family),detail:detail?[money(s.end,s.unit,true,context),detail].join('\n'):''};}),[legendValues,sources,context,family,settings,widget,locale,authority,board]);
   const noSelection=!(selection?.ids.length);
   const noResources=!sources.some(source=>supportsBudget(providerOf(source.provider)));
   const modelContext=JSON.stringify([authority,family,board,history?.board,unit,selection?.ids]);
@@ -113,7 +119,6 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
       if(source.unit!==unit||!moneyBalanceSeries(source))continue;
       const entry=source;
       entries.push(entry);
-      if(isMuted(entry))continue;
       visible.push(entry);
       for(const point of entry.points){const value=BigInt(point.value);if(low===null||value<low)low=value;if(high===null||value>high)high=value;yield;}
     }
@@ -125,7 +130,7 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
       lines.push({sourceId:series.sourceId,windowId:series.meterId,key:moneyIdentity(series),name:nameOf(series,card?.title??series.sourceId,context,family),provider:card?.provider??'',kind:'other',label:series.semantics?.label??null,minutes:null,color:colorOf(arrange.view,series.sourceId,card?.provider??''),dash:series.kind==='cap'?'7 5':'',current:scaled(series.end??'0'),consumed:0,coveredMs:series.coveredMs,remainingAtStart:series.start===null?null:scaled(series.start),remainingAtEnd:series.end===null?null:scaled(series.end),pointMode:series.pointMode,staleAfterMs:86_400_000,points,work:null,...(series.kind==='cap'?{capCells:series.points.flatMap(p=>p.knownFrom!==undefined&&p.knownUntil!==undefined?[{at:p.at,from:p.knownFrom,to:p.knownUntil,value:scaled(p.value)}]:[])}:{})});yield;
     }
     return {entries,lines,origin,span,pad,strip};
-  },[drawing,strip,prefs.muted,unit,sources,arrange.view,locale,context],modelContext);
+  },[drawing,strip,unit,sources,arrange.view,locale,context],modelContext);
   const model=prepared.value,entries=model?.entries??[],lines=model?.lines??[];
   const baseNavigation=axisNavigation(board,selected,prefs),navigation={...baseNavigation,context:JSON.stringify([baseNavigation.context,unit])};
   const axis=useMemo(()=>{
@@ -145,13 +150,13 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
         return <>{point?.semantics?.limit!==null&&point?.semantics?.limit!==undefined&&<div>{t('money.limitTotal')}: {money(point.semantics.limit,unit,true,context)}{point.semantics.resetAt!==null&&<div>{stamp(point.semantics.resetAt)}</div>}</div>}{point?.steps.map(step=><div key={step.from+':'+step.to}>{t('money.unlocated')}: {money(step.amount,unit,true,context)}<div>{stamp(step.from)} — {stamp(step.to)}</div></div>)}</>;
       }};
   },[model,unit,locale,context,strip?.cell,history?.cellMs]);
-  const legend=useMemo(()=><div className="legend">{original.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId);return <SeriesLegendItem key={key} seriesKey={key} name={nameOf(s,card?.title??s.sourceId,context,family)} description={descriptions.find(entry=>entry.key===key)?.detail} color={colorOf(arrange.view,s.sourceId,card?.provider??'')} dash={s.kind==='cap'?'7 5':undefined} muted={isMuted(s)} onToggle={()=>setMuted(chartMuteKey(widget,s.sourceId,s.meterId),!isMuted(s))}><b><MoneyLegendAmount value={s.end} unit={s.unit} context={context}/></b></SeriesLegendItem>;})}</div>,[original,sources,context,family,history,arrange.view,muted,settings,widget,locale,authority,board,descriptions]);
+  const legend=useMemo(()=><div className="legend">{original.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId);return <SeriesLegendItem key={key} seriesKey={key} name={nameOf(s,card?.title??s.sourceId,context,family)} description={descriptions.find(entry=>entry.key===key)?.detail} color={colorOf(arrange.view,s.sourceId,card?.provider??'')} dash={s.kind==='cap'?'7 5':undefined}><b><MoneyLegendAmount value={s.end} unit={s.unit} context={context}/></b></SeriesLegendItem>;})}</div>,[legendValues,sources,context,family,arrange.view,settings,widget,locale,authority,board,descriptions]);
   const answered=history?.range===(selected?timeRangeKey(selected):prefs.range);
   return <AnalyticsPanel ref={panel} className={funds?'subscription-funds':'budget-history'} title={t(funds?'widgets.subscriptionFunds':'widgets.budgetHistory')} chart history={history} loading={loading} error={error} retry={reader.retry}
     settings={<MoneyChartSettings arrange={arrange} widget={widget} family={family} sources={sources} series={history?.meterSeries??[]}/>}>
     <SelectionNotice family={family}/>
-    <SeriesInformation focus={focus} entries={descriptions}/>
-    <Chart lines={lines} axis={axis} stepped from={frame.from} now={strip?now:measured} to={frame.to} cellMs={strip?.cell??history?.cellMs??60_000} strip={model?.strip??null} prepared={prepared.ready&&(panning!==null||answered||!!error)} empty={error?null:!history?t('history.loading'):noResources?t(funds?'analytics.noFunds':'analytics.noBudget'):noSelection?t('analytics.noSelection'):entries.length&&!lines.length?t('analytics.allMuted'):t('money.unknown')} plot={plot} onBase={onBase} onSelect={setTimeRange} navigation={navigation} live={frame.live} clock={now} modelContext={modelContext}/>
+    <SeriesDetails focus={focus} entries={descriptions} panel={panel}/>
+    <Chart lines={lines} axis={axis} stepped from={frame.from} now={strip?now:measured} to={frame.to} cellMs={strip?.cell??history?.cellMs??60_000} strip={model?.strip??null} prepared={prepared.ready&&(panning!==null||answered||!!error)} empty={error?null:!history?t('history.loading'):noResources?t(funds?'analytics.noFunds':'analytics.noBudget'):noSelection?t('analytics.noSelection'):t('money.unknown')} plot={plot} onBase={onBase} onSelect={setTimeRange} navigation={navigation} live={frame.live} clock={now} modelContext={modelContext}/>
     {legend}
   </AnalyticsPanel>;
 }

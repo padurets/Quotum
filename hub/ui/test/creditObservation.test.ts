@@ -1,5 +1,4 @@
 import * as widgets from '../../server/domain/widgets';
-import {chartSeriesMuted} from '../lib/prefs';
 import {test,type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -25,7 +24,7 @@ import * as moneyView from '../lib/moneyView';
 import * as money from '../lib/money';
 import * as moneyTable from '../lib/moneyTable';
 import {seriesFocusStyle} from '../components/seriesFocus';
-import {moneySelection,fundsLegacyMuted,DEFAULT_MONEY} from '../lib/moneySelection';
+import {moneySelection,DEFAULT_MONEY} from '../lib/moneySelection';
 import * as periods from '../lib/periods';
 import {plotPathPrepared,observationRunsPrepared} from '../lib/plotPath';
 import {clipPrepared} from '../lib/forecast';
@@ -107,7 +106,7 @@ type SeriesProps={'data-series'?:string;'data-last'?:string;'data-observation'?:
 function drawing(h:Awaited<ReturnType<typeof creditHistory>>,initial:Update,page:ReturnType<typeof observedPage>) {
   const outer=preparationFixture(),inner=preparationFixture();let current=initial,presentation=0;
   const history=():History=>({board:'board',range:'24h',live:true,since:current.now-DAY,to:current.now,cellMs:h.cell,historyStart:current.historyStart,series:[],meterSeries:[current.series],events:[],activity:{since:0,known:null,barMs:h.cell,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}});
-  let shown=history();const sources=[h.sourceCard],prefs={money:DEFAULT_MONEY,funds:DEFAULT_MONEY,muted:{},range:'24h',horizon:'auto'};
+  let shown=history();const sources=[h.sourceCard],prefs={money:DEFAULT_MONEY,funds:DEFAULT_MONEY,range:'24h',horizon:'auto'};
   const Chart=()=>null;
   const memo=(read:()=>unknown,deps:unknown[])=>{const box=outer.useRef(null) as {current:{deps:unknown[];value:unknown}|null};if(!box.current||deps.some((value,i)=>!Object.is(value,box.current!.deps[i])))box.current={deps,value:read()};return box.current.value;};
   const modules:Record<string,unknown>={
@@ -115,7 +114,7 @@ function drawing(h:Awaited<ReturnType<typeof creditHistory>>,initial:Update,page
     '../../server/domain/providers':providers,'../../server/domain/currency':currency,'../../server/domain/meterHistory':{composeMetersPrepared},
     '../lib/board':{useBoardId:()=> 'board',useCurrencyContext:()=>currency.defaultCurrencyContext,useNamed:()=>sources},
     '../lib/history':{useBudgetFinancialHistory:()=>({history:shown,drawing:shown,loading:false,presentation}),useBudgetHistoryPlot:()=>null,useHistoryBegins:()=>current.historyStart,fundsHistory:{retry(){}}},
-    '../lib/prefs':{useChartMuted:()=>prefs.muted,chartSeriesMuted,usePref:(key:keyof typeof prefs)=>prefs[key]},'../lib/moneySelection':{moneySelection,fundsLegacyMuted},'../lib/moneyView':moneyView,'../lib/money':money,'../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},
+    '../lib/prefs':{usePref:(key:keyof typeof prefs)=>prefs[key]},'../lib/moneySelection':{moneySelection},'../lib/moneyView':moneyView,'../lib/money':money,'../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},
     '../lib/view':{...widgets,colorOf:()=> '#fff'},'../lib/periods':periods,'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>current.now},'../lib/pan':{usePanning:()=>null},
     '../lib/axisNavigation':{axisNavigation:()=>({context:'board'})},'../i18n':{t:(key:string)=>key,useLocale:()=> 'en'},
     './prepared':{usePrepared:outer.usePrepared},'./sizing':{usePlot:()=>({plot:160,onBase(){}})},'./Chart':{Chart},

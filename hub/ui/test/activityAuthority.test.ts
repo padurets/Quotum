@@ -1,5 +1,4 @@
 import {projectColorBindings} from './projectColorBindings';
-import {chartSeriesMuted} from '../lib/prefs';
 import {ACTIVITY} from '../../server/domain/widgets';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -10,7 +9,7 @@ import {harness, H, NOW} from './historyAuthorityFixture';
 import {test} from 'node:test';
 import {preparationFixture} from './preparationFixture';
 import {activityScale,
-  activityEmpty,groupColors,mutedKey} from '../lib/activity';
+  activityEmpty,groupColors,activitySeriesKey} from '../lib/activity';
 import {plotGroupsPrepared} from '../lib/historyPlot';
 import {StackPaths} from '../lib/stackPaths';
 import {groupRegistry} from '../lib/plotRegistry';
@@ -27,15 +26,15 @@ function consumer(h: ReturnType<typeof harness>) {
   const EMPTY_ACTIVITY={since:0,known:null,barMs:60_000,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}};
   const titles={removed:{provider:'codex',title:'Removed'},kept:{provider:'codex',title:'Kept'}};
   let panning:number|null=null;
-  const prefs={range:'1h',activityBy:'project',muted:{}};
-  const context={...projectColorBindings(h.page),chartSeriesMuted,ACTIVITY,
+  const prefs={range:'1h',activityBy:'project'};
+  const context={...projectColorBindings(h.page),ACTIVITY,
     exports:{} as any,React,...parent,memo:(f:any)=>f,useMemo:(f:any,deps:any[])=>{const slot=parent.useRef(null) as any;if(!slot.current||deps.some((v,i)=>!Object.is(v,slot.current.deps[i])))slot.current={deps,value:f()};return slot.current.value;},
-    activityMutedKeys:()=>[],useActivitySubset:()=>({}),useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useHistory:()=>h.render(),useActivityHistory:()=>h.render(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
+    useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useActivityHistory:()=>h.render(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
     useLineup:()=>h.page.get().board!.lineup,usePersonalBoard:()=>false,useTitles:()=>titles,
-    useChartMuted:()=>prefs.muted,usePref:(key:keyof typeof prefs)=>prefs[key],useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=> 'b',
+    usePref:(key:keyof typeof prefs)=>prefs[key],useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=> 'b',
     axisNavigation:()=>({context:'b',range:'1h'}),useClock:()=>NOW,usePanning:()=>panning,
     pan:{get:()=>null,active:()=>null,subscribe:()=>()=>{}},useHistoryBegins:()=>0,frameOf:()=>({from:NOW-H,to:NOW,live:true}),measuredTo:()=>NOW,
-    activityEmpty,groupColors,groupRegistry,mutedKey,plotGroupsPrepared,StackPaths,stacksHeight:()=>160,activityScale,niceTicks,cellStart,MINUTE:60_000,EMPTY_ACTIVITY,groupName:(g:any)=>g.name??g.key,cardId,isHidden,t:(s:any)=>s,
+    activityEmpty,groupColors,groupRegistry,activitySeriesKey,plotGroupsPrepared,StackPaths,stacksHeight:()=>160,activityScale,niceTicks,cellStart,MINUTE:60_000,EMPTY_ACTIVITY,groupName:(g:any)=>g.name??g.key,cardId,isHidden,t:(s:any)=>s,
     quotaHistory:{retry:()=>{}},AnalyticsPanel:()=>null,ActivitySettings:()=>null,Totals:()=>null,LegendItem:()=>null,
     setTimeRange:()=>{},navigationKey,useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),
     PlotLayer:()=>null,PlotOverlay:()=>null,Tooltip:()=>null,clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',

@@ -14,6 +14,7 @@ import {readout} from '../lib/readout';
 import {drain} from '../lib/prepare';
 import {plotPathPrepared} from '../lib/plotPath';
 import {clipPrepared} from '../lib/forecast';
+import {seriesFocusStyle} from '../components/seriesFocus';
 import {preparationFixture} from './preparationFixture';
 
 const known = {work:0,sources:{s:0}}, cell = 60_000, to = 900_000;
@@ -60,7 +61,7 @@ function pointed(line:PlotSeries, at:number) {
     move:null as unknown as (event:{clientX:number;pointerId:number;pointerType:string})=>void};
   runInNewContext(pointerCode,pointer);
   pointer.move({clientX:at,pointerId:1,pointerType:'mouse'});
-  const context = {React,...lineContract,prepared:{ready:true,value:{basis:{from:0,to},lines:[{...line,key:'s w'}],plans:[],forecasts:[],markers:[],paths:[],strip:null}},
+  const context = {React,seriesFocusStyle,...lineContract,prepared:{ready:true,value:{basis:{from:0,to},lines:[{...line,key:'s w'}],plans:[],forecasts:[],markers:[],paths:[],strip:null}},
     valueAxis:undefined,currentClock:to,desiredFrom:0,desiredNow:to,desiredTo:to,desiredLive:true,incomingReady:true,cellMs:cell,
     width:to,left:0,right:0,height:220,top:12,bottom:28,
     axis:{hover:hover===null?null:Math.floor(hover/cell)*cell,hoverAt:hover,screenX:(time:number)=>time,commitDrawing:()=>{}},

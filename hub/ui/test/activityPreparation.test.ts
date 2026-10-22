@@ -59,7 +59,7 @@ test('ordinary Activity frames allocate unpinned colours by current rank while m
   const context={...hooks,resolveProjectColors,groupRegistry,
     usePrepared:(work:()=>Generator<void,unknown,void>,deps:readonly unknown[],scope:unknown=null,enabled=true)=>hooks.usePrepared(()=>{preparations++;return work();},deps,scope,enabled),
     groups:[] as ActivityGroup[],colors:[] as string[],shown:[] as {group:ActivityGroup;color:string;name:string}[],strip:null,registry:{current:null},
-    pins:[] as ProjectColorPins,colorsReady:true,authority:0,history:{board:'b'},drawing:{range:'24h'},by:'project',arrange:{view:{}},titles:{},prefs:{muted:{}},locale:'en',
+    pins:[] as ProjectColorPins,colorsReady:true,authority:0,history:{board:'b'},drawing:{range:'24h'},by:'project',arrange:{view:{}},titles:{},prefs:{},locale:'en',
     render:null as unknown as ()=>Presentation,
   };
   runInNewContext(ts.transpileModule(`function render(){${region}\nreturn {model:prepared.value,identities:presentation.identities};}\nglobalThis.render=render;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
@@ -88,11 +88,8 @@ test('ordinary Activity frames allocate unpinned colours by current rank while m
   const repeated=render();
   assert.equal(repeated.model,ranked.model);assert.equal(repeated.identities.at(-1)!.color,OTHER_COLOR,'releasing a manual slot does not promote a neutral survivor');
   assert.equal(preparations,beforeColors,'colour-only changes do not prepare another numeric model');
-  context.prefs={muted:{one:true}};context.shown=context.shown.slice(1);
-  const muted=settle();assert.notEqual(muted.model,ranked.model);
-  assert.equal(muted.identities.at(-1)!.color,OTHER_COLOR,'legend metadata keeps the same allocation basis');
   const beforeReset=preparations;context.pins=[];
-  const reset=render();assert.equal(reset.model,muted.model);assert.equal(reset.identities.at(-1)!.color,OTHER_COLOR);assert.equal(preparations,beforeReset);
+  const reset=render();assert.equal(reset.model,ranked.model);assert.equal(reset.identities.at(-1)!.color,OTHER_COLOR);assert.equal(preparations,beforeReset);
 
   frame(names);render();context.pins=[['P2',CATEGORY_COLORS[0]]];render();hooks.finish();
   assert.equal(render().identities.find(group=>group.name==='P2')!.color,CATEGORY_COLORS[0],'pending numeric preparation resolves the latest pins when it commits');
@@ -109,14 +106,14 @@ test('actual Activity composition resolves retained stacks and the new legend to
   const axis={box:{current:null},svg:{current:null},width:400,scale:1,hover:null,drag:null,clip:'c',handlers:{},basis:{from:0,to:length,end:length},active:false,screenX:(at:number)=>at,commitDrawing:()=>{}};
   type Row={group:ActivityGroup;color:string;name:string};
   type Frame={element:React.ReactElement<Record<string,unknown>>;legend:React.ReactNode;prepared:{value:unknown}};
-  const context={...parent,React,memo:(fn:unknown)=>fn,useEffect:()=>{},useId:()=> 'c',seriesFocusStyle:()=>({}),mutedKey:(_by:string,key:string)=>key,
+  const context={...parent,React,memo:(fn:unknown)=>fn,useEffect:()=>{},useId:()=> 'c',seriesFocusStyle:()=>({}),
     StackPaths:CountedPaths,stacksHeight:()=>160,activityScale,niceTicks,cellStart,navigationKey,MINUTE:60_000,CSS:{escape:(id:string)=>id},pan:{active:()=>null,subscribe:()=>()=>{}},
-    useLocale:()=> 'en',useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),PlotLayer:()=>null,PlotOverlay:()=>null,
-    clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',t:(key:string)=>key,LegendItem:()=>null,groupName:(group:{name:string|null})=>group.name??'',groupMuted:()=>false,
-    EMPTY_CELLS:[],registry:{current:null},groups:[] as ActivityGroup[],colors:[] as string[],shown:[] as Row[],strip:null,by:'project',prefs:{muted:{}},locale:'en',
+    useLocale:()=> 'en',useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),PlotLayer:()=>null,PlotOverlay:()=>null,activitySeriesKey:(_by:string,key:string)=>key,
+    clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',t:(key:string)=>key,LegendItem:()=>null,groupName:(group:{name:string|null})=>group.name??'',
+    EMPTY_CELLS:[],registry:{current:null},groups:[] as ActivityGroup[],colors:[] as string[],shown:[] as Row[],strip:null,by:'project',prefs:{},locale:'en',
     history:{board:'b'},authority:1,arrange:{view:{}},titles:{},drawing:{range:'24h',since:0},pins:[['A',CATEGORY_COLORS[8]]] as ProjectColorPins,colorsReady:true,resolveProjectColors,groupRegistry,
     activity:{barMs:60_000,by:{project:[] as ActivityGroup[]},cells:[]},drawnActivity:{barMs:60_000,by:{project:[] as ActivityGroup[]},cells:[]},currentGroups:[] as ActivityGroup[],
-    subset:{},scoped:false,EMPTY_ACTIVITY:{},emptyFrame:null,panning:null,answered:true,error:undefined,from:0,to:length,since:null,onBase:()=>{},setTimeRange:()=>{},plot:undefined,navigation:{context:'b',range:'24h'},
+    EMPTY_ACTIVITY:{},emptyFrame:null,panning:null,answered:true,error:undefined,from:0,to:length,since:null,onBase:()=>{},setTimeRange:()=>{},plot:undefined,navigation:{context:'b',range:'24h'},
     render:null as unknown as ()=>Frame,Stacks:null as unknown as (props:object)=>React.ReactNode,StackArtwork:null as unknown as (props:object)=>React.ReactNode,
   };
   runInNewContext(ts.transpileModule(`function render(){${region}\nreturn {element:(${element}),legend:(${legend}),prepared};}\nglobalThis.render=render;\n${source.slice(source.indexOf('const StackArtwork = memo(function StackArtwork('))}\nglobalThis.Stacks=Stacks;globalThis.StackArtwork=StackArtwork;`,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React}}).outputText,context);
@@ -182,8 +179,8 @@ test('actual Activity generators hold one coherent model and produce exact stack
   const navigation = {context: 'test', range: 'range'};
   const axis = {box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {from: 0, to: length, end: length}, active: false, screenX: (at: number) => 48 + (at - axis.basis.from) / length * 340, commitDrawing: () => {}};
   const context = {resolveProjectColors,pins:[] as ProjectColorPins,paint:new Map<string,string>(),colorsReady:true,drawing:{range:undefined},navigationKey, React, ...parent, memo: (fn: unknown) => fn, useState: child.useState, useEffect: () => {}, seriesFocusStyle:()=>({}), useId: () => 'c',
-    EMPTY_CELLS: [], registry: {current: null}, groups: [], colors: [], shown: [], strip: buffer(0), by: 'project', prefs: {muted: {}}, locale: 'en', history: {board: 'b'}, authority: 0, arrange: {view: {}}, titles: {},
-    groupMuted:()=>false,groupRegistry, groupName: (group: {key: string}) => group.key, mutedKey: (_by: string, key: string) => key,
+    EMPTY_CELLS: [], registry: {current: null}, groups: [], colors: [], shown: [], strip: buffer(0), by: 'project', prefs: {}, locale: 'en', history: {board: 'b'}, authority: 0, arrange: {view: {}}, titles: {},
+    groupRegistry, groupName: (group: {key: string}) => group.key, activitySeriesKey: (_by: string, key: string) => key,
     plotGroupsPrepared: function* (...args: Parameters<typeof plotGroupsPrepared>) {aggregates++; return yield* plotGroupsPrepared(...args);},
     StackPaths: CountedPaths, stacksHeight: () => 160, activityScale, niceTicks: (...args: Parameters<typeof niceTicks>) => {tickFrame = [args[0], args[1]]; return niceTicks(...args);}, cellStart, MINUTE: 60_000,
     CSS: {escape: (id: string) => id}, pan: {active: () => 1, subscribe: () => () => {}}, useLocale: () => 'en',
@@ -215,7 +212,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
     if (node.type === context.StackArtwork) return pathsOf(context.StackArtwork(node.props));
     return node.props.className === 'activity-stack' && node.props.d !== undefined ? [node.props.d] : pathsOf(node.props.children);
   };
-  const props = {activity: {barMs}, origin: 0, groups: current.shown,paint:context.paint, from: 0, to: length, unknownTo: null, plot: undefined, onBase: () => {}, onSelect: () => {}, strip: current.strip as PlotBuffer | null, prepared: true, navigation, by: 'project', allMuted: false, empty: null};
+  const props = {activity: {barMs}, origin: 0, groups: current.shown,paint:context.paint, from: 0, to: length, unknownTo: null, plot: undefined, onBase: () => {}, onSelect: () => {}, strip: current.strip as PlotBuffer | null, prepared: true, navigation, by: 'project', empty: null};
   const renderChild = () => {Object.assign(context, child); child.begin(); return pathsOf(context.Stacks(props));};
   assert.deepEqual(renderChild(), []); assert.equal(draws, 0); child.commit(); child.finish();
   const actual = renderChild();

@@ -729,9 +729,8 @@ agent-hours, in order: red, orange, yellow, green, teal, frost, blue, deep blue 
 Those past them share a neutral one. Each group is its own however
 small. Above the stacks are agent-hours, active time, recorded sessions and the average
 at once (agent-hours divided by active time). Active time is not drawn: it is in the
-totals and tooltips. A bar's tooltip gives these totals first, then its enabled group parts.
-The summary and bar numbers describe the intersection of board work filters and the
-chart's enabled legend series. All four metrics change together: active time is an
+totals and tooltips. A bar's tooltip gives these totals first, then all admitted group parts.
+The summary and bar numbers describe all data admitted by board work filters. All four metrics change together: active time is an
 interval union and recorded sessions are distinct identities across the selected work.
 Empty selection, confirmed zero, unavailable work and pending exact evidence remain
 separate states. Zero active time has no average concurrency.
@@ -739,8 +738,8 @@ The four metrics sit directly below the heading, without a separate group-name r
 Pointing to a visible legend entry or focusing it with the keyboard temporarily shows
 that group's metrics in the same space. Pointer takes visual priority over keyboard
 focus; each focused entry keeps its own accessible description. Escape dismisses the
-preview, and a tap toggles visibility and holds an enabled entry's preview for four
-seconds. A hidden entry supplies no preview or peer dimming. Shift and panning suppress
+preview, and a tap toggles emphasis and holds that entry's preview for four
+seconds. Click choices do not alter the summary or bar numbers. Shift and panning suppress
 temporary readouts. The heading area, plot and widget retain their geometry throughout.
 A subscription's activity grouping includes all admitted work. Its quota work columns
 use the separate source-grant cutoff, so work before a subscription was provided can
@@ -1737,8 +1736,8 @@ Hiding it preserves the selected period and shared chart horizon; while open,
 it keeps them available during scrolling. Board navigation and widget management
 stay in the header. Five-hour limits, weekly limits and wallet balance
 each have independent chart/table pairs. The common Resources control selects logical windows, wallet balances and key caps
-for cards, charts and tables together. Each chart's legend controls
-only its own visibility. Subscription funds use their own filter family. Projects, devices and clients
+for cards, charts and tables together. Each chart's legend emphasizes
+its own series without changing data membership. Subscription funds use their own filter family. Projects, devices and clients
 intersect the session cohort before aggregation; source-wide quota and financial
 estimates retain a separate source-only work sweep from the same authorized read. Table columns
 remain owner settings, while shared data controls are available to every reader. Each
@@ -1876,12 +1875,12 @@ is sticky after its last source or series disappears. Explicit hidden intent win
 `enabledWhenEmpty` applies to agents and activity; analytics placement lives in `shown`.
 What
 is only about how one person looks (the board's period, the chart's
-horizon, lines and groups switched off in either chart's legend, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
+horizon, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
 the agents and quota tables' sort orders, the chosen board and language) stays in their browser.
 The controls above the mixed widget grid own the common period and forecast
 horizon. Shared wallet data selection lives in the common Resources filter and remains
 accessible when either wallet widget is hidden. Each widget keeps its display settings, such as
-columns, forecast visibility, stacking and legend choices.
+columns, forecast visibility and stacking. Legend emphasis lives only in the open chart.
 A fixed accounting interval is exactly `[from,to)`: card values use the latest retained
 observation strictly before `to`, with validity evaluated at `to`. Missing predecessors
 stay unknown. Native membership follows the last retained nonempty measurement batch;
@@ -2029,23 +2028,37 @@ preparation uses the shared cancellable scheduler; aggregate benchmark traffic i
 composite and detail reads, cancellations and responses that finish after measurement.
 
 Quota history, wallet budgets, subscription funds and agent activity read and move along time alike
-(`ui/components/timeAxis.ts`), each with its legend under it. Pointing to a legend
-entry or focusing it with the keyboard highlights that series and dims its peers.
-Monetary legend details and currency provenance appear in the reserved heading area,
-using the existing exact money presentation. They do not open native tooltips over the
-plot. Limit charts without such details reserve no information strip.
+(`ui/components/timeAxis.ts`), each with its legend under it. Clicks independently
+emphasize several series; pointer or keyboard focus-visible previews one with pointer
+priority. Previewed series retain their normal paint, other chosen series use 65% and
+unchosen series 40%. Without a preview, chosen series are normal; with no represented
+choices, every series is normal. Each multiplier preserves the layer's intrinsic
+opacity. Shared plans take their strongest associated series multiplier.
+Activity preview replaces the four useful summary metrics without changing their
+geometry. A retained legend identity with no work in the interval previews confirmed
+zero, preserving unknown and unavailable evidence rather than borrowing the board total.
+Monetary details and currency provenance appear in the shared glass tooltip
+anchored to the legend entry, using exact money presentation. They occupy no space
+at rest and do not constrain a widget's minimum height. Quota charts reserve no strip.
 The common Resources filter selects accounts, key caps and subscription funds
 across cards, charts and tables. An account selects its total balance; a key selects
 its reported remaining cap within the shared 32-meter bound. Balance components
-remain in card details. Widget settings retain presentation and placement; each
-chart has independent legend visibility. Board opening defaults are saved separately
-from each tab's current selection. Legacy per-unit subsets remain intact until an
-explicit family edit materializes that unit or a reset clears the family; they do
-not create a second picker or change admission when a legend is clicked.
+remain in card details. Board opening defaults are saved separately from each tab's
+current selection. Existing per-unit data subsets retain their shared-filter semantics;
+old legend hiding and its monetary visibility fallbacks are no longer read.
 
 All five charts share `ui/components/seriesFocus.ts`: inherited CSS variables change
-paint without rebuilding prepared paths, updating reader preferences or rendering data
-consumers. Muted entries retain their visibility toggle and do not dim visible series.
+paint without rebuilding paths, writing preferences, requesting history or rendering
+data consumers. Choices remain in memory in that board/chart; dates, pan, data updates
+and unrelated filter edits preserve them. A temporarily absent identity stays dormant
+and only its represented intersection contributes to dimming. A relevant applied
+selection edit resets only that legend immediately: Activity's grouping dimension,
+each quota kind's source/window choices, or money's sources and active-unit wallet/funds
+rule. Canonical ref order, menu/search, Save and presentation revisions are not edits.
+Board/grouping changes and real authorized-context revocation clear affected choices
+and previews; delayed replies cannot restore them. A financial grant revision retires
+its money legend even if the source stays on the board; an ordinary first-observation
+anchor does not. Escape dismisses only preview.
 A time range selected on any chart becomes the board's period, including card measurements, session lists and
 accounting tables; it lives in the page's
 address (`?from=&to=`), so a reload keeps it, Back undoes it and a link to it can be shared on the board.
@@ -2108,7 +2121,7 @@ keep their colours through rank changes and reversal; new projects and machines 
 the next free Nord Warm colour, or neutral when all nine are in use. Present manual
 project pins reserve their distinct swatches first, including low-ranked groups and
 repeated choices. A reservation displaces only conflicting automatic groups. Absent
-pins reserve nothing; muted/offscreen registry entries retain their colours, and a
+pins reserve nothing; offscreen registry entries retain their colours, and a
 released slot does not promote surviving neutral groups. Current paint resolves after
 numeric preparation over both current and still displayed groups, so an in-flight
 drawing uses the latest accepted palette across interiors, edges, legends and
@@ -2166,25 +2179,23 @@ Financial and work ledgers share their immutable native observations only when e
 reading agrees. Retention preserves that shared suffix, and the pool charges its storage
 once; differing observations and each ledger's spans retain their own charges.
 
-An Activity legend mask is local to that widget. It intersects the existing typed
-work predicate without changing board filters, session tables or source-wide supplier
-estimates. Live summaries prepare an independent selected interval index from the
-board's authorized work evidence and follow its exact clock boundaries. Fixed subsets
-use the existing period route with empty resource selectors: selected drawing cells and
-a compact exact work summary with boundary bars, without a historical work ledger.
-The reader shares the preparation scheduler, two transport slots and 15 MiB pool.
-Changing its mask, range or authority retires earlier generations; pending or failed
-results never borrow wider-cohort totals. All-visible and all-off choices need no
-additional reader request.
-For a warmed fixed subset, a relevant late-work event may add one bounded local request
-beyond the board's ordinary update. It retains clean cells and reads the potentially
-dirty tail on the full range's cell grid, together with a fresh compact exact summary
-for the whole selection. News accumulated before dispatch coalesces; news received
-during a response remains dirty until a current answer commits. There is at most one
-local subset flight. An event whose work starts at or after the fixed upper endpoint
-asks nothing. Live work retains its existing one-read / 4650-byte budget. The separate
-24h/30d fixed-subset benchmark covers dirty-cell reuse, exact overlap, outside events,
-coalescing, cancelled and late traffic, preparation and the shared resource ceilings.
+Activity has one numerical cohort, defined by shared work filters. Its baseline and
+bar metrics preserve interval union and distinct-session semantics; a legend preview
+reads one exact group, while click emphasis never creates a combined selected summary.
+Legend emphasis has no dedicated reader, data request or read allowance. Fixed-range
+late updates reuse clean native cells with the existing compact exact summary; news
+before dispatch coalesces and news during a response requires a current replacement.
+Work-filter replacement can refill Activity drawing cells through the existing reader
+and its bounded tile window. Cancelled and late responses remain counted. Work starting
+at or after the fixed upper endpoint does not reread the session ledger; the shared
+calendar and its drawing cells can still refresh. The 24h/30d benchmark covers this
+shared-filter path and checks that all five charts' emphasis causes zero reads,
+preparation or preference writes under the existing transport, preparation, two-slot
+and 15 MiB memory ceilings.
+A complete Activity frame waits for coherent native and selected-work evidence.
+Same-context replacement retains permitted complete metrics; a native-only placeholder
+cannot erase them. Hard work cutoffs retire evidence and retained previews synchronously,
+even with unchanged IDs/authority. Retry reaches the failed shared work owner.
 
 Selected activity cells have their own filter identity, coverage and prepared strip.
 Changing a project, device or client retires those cells and pending selected jobs,

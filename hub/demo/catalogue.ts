@@ -42,7 +42,7 @@ export {CURRENCY_SCENES} from './currencies.js';
 export {LINK_SCENES} from './links.js';
 
 /** Mixed analytics stays visible; loading and read failures are held by history tests.
- * Legend mutes, table-only views and explicit empty Add are exercised on this set in
+ * Legend emphasis, table-only views and explicit empty Add are exercised on this set in
  * both languages. The shared range and all five charts use the native-input bench.
  * Plan-event access and retention expiry are held in server/test/planHistory.test.ts
  * and ui/test/planHistory.test.ts; first-known and changed plans are durable below.
@@ -52,18 +52,18 @@ export const ANALYTICS_SCENES=[
   {id:'empty',expect:['pending-empty','explicit-empty','sticky-placement']},
 ] as const;
 
-/** In analytics, filter a project, then toggle a different legend entry. The selected
- * summary and its four quantities occupy the same area as pointer/keyboard previews.
- * Toggle every entry off, then restore one. Money provenance uses its heading area.
- * Pending/error/generation races are held by ui/test/activitySelection.test.ts;
- * the rendered numerical states and these codes by ui/test/activityNumbers.test.ts.
+/** Board filters choose the numerical cohort. Choose Atlas and Harbor in a legend,
+ * then preview Ledger and Atlas: choices accumulate, previews are stronger, and leaving
+ * restores the choices. Toggle both off: every series regains its normal paint.
+ * Controller/lifetime races are held by ui/test/seriesFocus.test.ts; numerical semantics
+ * by ui/test/activityNumbers.test.ts, including a retained legend identity with no
+ * work left in the interval. Shared filters remain a separate operation.
  */
 export const CHART_SERIES_SCENES=[
-  {id:'enabled-subset',expect:['selected-summary','exact-union','distinct-sessions']},
-  {id:'all-muted',expect:['no-selected-series']},
-  {id:'legend-context',expect:['one-group-preview','pending-without-wider-totals'],look:[
-    'On the analytics board, point to one visible project while keyboard focus remains on another. The four metrics directly below the heading and the highlight follow the pointer, without a separate project-name row; each button retains its own accessible description.',
-    'Check long names, narrow and manually sized widgets in English and Russian: previews preserve the plot and widget geometry. Monetary details appear above the plot; limit charts have no empty strip.',
+  {id:'board-cohort',expect:['board-summary','exact-union','distinct-sessions']},
+  {id:'legend-context',expect:['one-group-preview','restored-summary'],look:[
+    'In all five charts, choose two entries, preview a third, leave it, preview a chosen entry and toggle each choice off. The chart keeps every series, its geometry and numerical cohort.',
+    'Check English/Russian, narrow and manually sized widgets, mouse/keyboard/touch, and the 100/65/40 hierarchy. Monetary provenance appears beside its legend entry in a glass tooltip without an empty strip. Activity previews replace its useful summary in the same space.',
   ]},
 ] as const;
 
@@ -582,7 +582,7 @@ const all: DemoSet = {
         'Escape in the merge menu closes only the menu',
         'The merge menu with many selected, at the bottom of the dialog: its glass is whole',
         'Agent activity → Settings → Manage projects shows no agent time',
-        'Agent activity by project or machine: nine groups in Nord Warm order (red, orange, yellow, green, teal, frost, blue, deep blue, purple), the rest grey, each its own row in the legend and the tooltip, switched off and on alone',
+        'Agent activity by project or machine: nine groups in Nord Warm order (red, orange, yellow, green, teal, frost, blue, deep blue, purple), the rest grey, each its own row in the legend and the tooltip, independently emphasized without hiding their peers',
         'The long project name wraps inside its activity legend bubble, including on a phone; opening it never widens the page',
       ],
     },
@@ -607,12 +607,12 @@ const all: DemoSet = {
         {activityKnownFrom: -10 * DAY, range: '30d', from: 0, to: 0},
       ],
       look: [
-        'Agent sessions over 7 days: compare atlas and harbor, then open their retained sessions; its full active-time total is 21h, not the sum of the rows. Chart legend muting leaves the table whole.',
+        'Agent sessions over 7 days: compare atlas and harbor, then open their retained sessions; its full active-time total is 21h, not the sum of the rows. Chart legend emphasis leaves both the table and chart cohort whole.',
         'Agent activity over 7 days by project: atlas and harbor on days −5 and −4, harbor again on day −3',
         'Its hour bars stack agent-hours and can stand above an hour; over 30 days the bars are two hours',
         'The legend adds up to 44 agent-hours; atlas has 28 agent-hours and 16 active hours',
-        'The atlas legend bubble shows 28 agent-hours, 16 active hours, 1.8 average parallel sessions and two agents: hover, Tab or tap; Escape dismisses it even when focus is elsewhere, a tap also switches the group',
-        'Switch harbor off: stacks and scale shrink, 28h shown appears in the totals and Shown in the bar tooltip; active time, agents and at once keep their values',
+        'The atlas legend bubble shows 28 agent-hours, 16 active hours, 1.8 average parallel sessions and two agents: hover, Tab or tap; Escape dismisses it even when focus is elsewhere, a tap also toggles its emphasis',
+        'Toggle atlas and harbor emphasis: both choices accumulate, while stacks, scale, totals and bar values retain the full board-filtered cohort',
         'Over 30 days the first twenty are hatched: not known before',
         'The table, for the weekly window: active time, spent per active hour, the forecast by work and, turned on, the share of spending while active',
       ],

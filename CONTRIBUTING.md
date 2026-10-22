@@ -26,11 +26,12 @@ at p99; input to an actually updated chart frame must stay within 50 ms at p95. 
 callbacks and missing samples fail. Idle, measurement, work and native
 frequency-focus checks also apply. Mixed Codex subscriptions also exercise
 changed credit balances and unchanged-value heartbeats: each updates its own card and
-funds history without waking quota or wallet analytics. A separate fixed Activity subset
-phase at 24h and 30d checks exact selected totals and bar values, dirty-cell reuse,
-coalesced late work, cancelled responses, and all transport and preparation costs under
-the shared pool limits. An isolated relevant historical work update may add one bounded
-subset read; the live work budget stays unchanged. No browser means the check was not run. UTC calendar-only card events must match the stream's unchanged observation
+funds history without waking quota or wallet analytics. A separate fixed Activity phase at 24h and 30d checks paint-only emphasis,
+shared-filter totals and bar values, clean-cell reuse, coalesced late work, cancelled
+responses and all transport/preparation costs under the existing pool limits.
+Emphasis owns no reader and receives no extra-read allowance.
+No browser means the check was not run.
+UTC calendar-only card events must match the stream's unchanged observation
 baseline and the exact new period. Raw traffic remains reported; missing, repeated or
 unrelated updates fail. This exception permits no extra page rendering or requests and
 retains the 1 ms/s idle script budget.
@@ -39,7 +40,7 @@ and unrounded probe time used in its calculation, so the reported rate can be re
 CI runs the unchanged history traffic matrix and dashboard phases on separate runners,
 each with a 20-minute job limit. `--scope history` selects the matrix, including native
 traffic and cancellation checks; `--scope dashboard` selects idle, measurements, work,
-frequency, all ten native panning scenarios, subscription credits, currency checks and fixed Activity subsets.
+frequency, all ten native panning scenarios, subscription credits, currency checks and fixed Activity shared filters.
 The `bench` check passes only when both jobs succeed; a failed, skipped or cancelled job
 fails this check. The default `--scope all` keeps the full local run and its original
 order. Optional diagnostics require the full scope. Separate jobs retain normal warmup,
@@ -555,9 +556,9 @@ Then twenty measurements reach their card and chart,
 19 within a second, reading a small tail of history rather than the whole period.
 Finally the stand's laptop reports one working agent: each live credited report makes
 at most one small history read and renders only its card, agents and analytics.
-A historical Activity chart with a local legend subset may add one bounded exact read
-for relevant late work, preserving clean cells. Its separate fixed-range benchmark
-counts all C/S traffic, cancellations and preparation under the same pool limits. The report
+The fixed 24h/30d Activity benchmark covers shared filters, exact overlap, late
+updates, cancellation and all attempted traffic/preparation within the same limits.
+Legend emphasis adds no history reader and receives no extra-read allowance. The report
 prints latency, history bytes and reads as JSON and exits 1 over budget. After the
 readings, it also checks that consecutive frequency saves with native arrow keys keep
 focus in the card's menu and fails otherwise. It needs Chrome:

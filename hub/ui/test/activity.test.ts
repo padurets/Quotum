@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {activityEmpty, activityScale, atOnce, groupColors, mutedKey, OTHER_COLOR} from '../lib/activity';
+import {activityEmpty, activityScale, atOnce, groupColors, activitySeriesKey, OTHER_COLOR} from '../lib/activity';
 import {CATEGORY_COLORS, PROVIDERS} from '../lib/providers';
 import type {ActivityGroup, View} from '../lib/types';
 
@@ -101,6 +101,6 @@ test('the widget says why it has no stacks, and never calls a period idle before
 });
 
 test('a group switched off is kept apart for each way of splitting', () => {
-  assert.notEqual(mutedKey('project', '"atlas"'), mutedKey('device', '"atlas"'));
-  assert.equal(mutedKey('source', 'claude:1'), 'activity:source:claude:1');
+  assert.notEqual(activitySeriesKey('project', '"atlas"'), activitySeriesKey('device', '"atlas"'));
+  assert.equal(activitySeriesKey('source', 'claude:1'), 'activity:source:claude:1');
 });

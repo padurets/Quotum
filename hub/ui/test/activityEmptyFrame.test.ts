@@ -32,7 +32,7 @@ test('the actual empty activity result keeps its time axis and legend container 
   const x = (at: number) => 48 + (at - range.from) / DAY * 340;
   const authorities:number[]=[];
   const context = {paint:new Map(),AnalyticsPanel,quotaHistory:{retry:()=>{}},error:undefined as 'history_failed'|undefined,authority:3,
-    subset:{},scoped:false,allOff:false,focus:{},navigationKey, navigation: {context: 'test', range: 'range'}, React, ...React, CSS: {escape: (id: string) => id}, StackPaths, stacksHeight, activityScale, niceTicks, cellStart, activityEmpty, MINUTE: M, clipPlot, PlotLayer, PlotOverlay, usePreparationBasis: (basis: unknown,_inputs:unknown,_active:unknown,_ready:unknown,authority:number) => {authorities.push(authority);return basis;}, usePrepared: (work: () => Generator<void, unknown, void>) => ({value: drain(work()), ready: true}), EMPTY_ACTIVITY: history.activity,
+    focus:{},navigationKey, navigation: {context: 'test', range: 'range'}, React, ...React, CSS: {escape: (id: string) => id}, StackPaths, stacksHeight, activityScale, niceTicks, cellStart, activityEmpty, MINUTE: M, clipPlot, PlotLayer, PlotOverlay, usePreparationBasis: (basis: unknown,_inputs:unknown,_active:unknown,_ready:unknown,authority:number) => {authorities.push(authority);return basis;}, usePrepared: (work: () => Generator<void, unknown, void>) => ({value: drain(work()), ready: true}), EMPTY_ACTIVITY: history.activity,
     pan: new Pan({now: () => NOW, commit: () => {}, requestFrame: () => null, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}}),
     useLocale: () => 'en', useTimeAxis: () => ({box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {...range, end: range.to}, x, drawX: x, screenX: x, commitDrawing: () => {}}),
     clock: () => '', shortDay: () => '', workHours: () => '', stamp: () => '', t: (key: string) => key,
@@ -40,8 +40,8 @@ test('the actual empty activity result keeps its time axis and legend container 
     history: history as History | null, drawing: history, activity: history.activity, drawnActivity: history.activity, currentGroups: [], plot: undefined as number | undefined, onBase: () => {}, arrange: {},
     Totals: () => null, ActivitySettings: () => null, LegendItem: () => null,
     shownMs: 0, since: null, from: range.from, to: range.to, setTimeRange: () => {}, by: 'project', selected: range,
-    timeRangeKey: (value: typeof range) => `${value.from}-${value.to}`, prefs: {muted: {}, range: '24h'}, groups: [], titles: {}, shownSources: ['s'],
-    personal: false, groupName: (identity: {name: string}) => identity.name, mutedKey: (_by: string, key: string) => key,
+    timeRangeKey: (value: typeof range) => `${value.from}-${value.to}`, prefs: {range: '24h'}, groups: [], titles: {}, shownSources: ['s'],
+    personal: false, groupName: (identity: {name: string}) => identity.name, activitySeriesKey: (_by: string, key: string) => key,
     prepared: {ready: true}, presentation: {identities: [], shown: [], strip: null}, strip: null as object | null, panning: null as number | null,
     draw: null as unknown as () => React.ReactNode,
   };

@@ -70,12 +70,8 @@ export function activityEmpty(history: Pick<History, 'since' | 'activity'> | nul
   return activity.known.from > history.since ? {key: 'noneSince', at: activity.known.from} : {key: 'none'};
 }
 
-/**
- * Under which key a group switched off in the widget's legend is kept among the lines
- * switched off in the chart's (`Prefs.muted`): its own for each way of splitting, so
- * switching off a project leaves the machines as they are.
- */
-export const mutedKey = (by: ActivityDimension, key: string) => `activity:${by}:${key}`;
+/** A legend and every plot layer share an identity within their grouping dimension. */
+export const activitySeriesKey = (by: ActivityDimension, key: string) => `activity:${by}:${key}`;
 
 /** The mean number of agents working while any worked, rounded only for display. */
 export const atOnce = (agentMs: number, activeMs: number) => num(activeMs > 0 ? agentMs / activeMs : 0, 1);

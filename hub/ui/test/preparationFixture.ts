@@ -29,6 +29,7 @@ export function preparationFixture() {
   return {useRef, useState,useMemo, useLayoutEffect, usePrepared: context.exports.usePrepared, usePreparationBasis: context.exports.usePreparationBasis,
     begin: () => {index = 0; effects.length = 0;},
     commit: () => {effects.splice(0).forEach(effect => effect());},
+    unmount: () => {for(const slot of slots){const cleanup=(slot as {cleanup?:()=>void}|null)?.cleanup;cleanup?.();}slots.length=0;},
     tick: () => tasks.shift()?.(),
     finish: () => {for (let i = 0; tasks.length && i < 100_000; i++) tasks.shift()!(); if (tasks.length) throw new Error('preparation did not quiesce');},
     scheduler,
