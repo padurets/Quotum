@@ -9,7 +9,7 @@ export type PeriodIntent={board:string;generation:number;resourceGeneration?:num
 export type PeriodReservation=((bytes:number)=>boolean)&{retain?(release:()=>void):void};
 export type HistoryReadOwner={finished:Promise<void>;started?():void;role():'visible'|'ahead'|null;cancel():void};
 type Demand={scope:PeriodScope;query:HistoryQuery;signal?:AbortSignal;owner?:HistoryReadOwner;activityOnly:boolean;epoch:number;delivered?:boolean;resolve(value:HistoryReply):void;reject(error:unknown):void};
-type Flight={role:'visible'|'ahead';intent:PeriodIntent;controller:AbortController;demands:Demand[];extras:boolean;started?:boolean;preparing?:boolean;releases:Set<()=>void>};
+type Flight={role:'visible'|'ahead';admission?:object;intent:PeriodIntent;controller:AbortController;demands:Demand[];extras:boolean;facets:boolean;started?:boolean;preparing?:boolean;releases:Set<()=>void>};
 const aborted=()=>new DOMException('Aborted','AbortError');
 const roleOf=(demand:Demand)=>demand.signal?.aborted?null:demand.owner?demand.owner.role():'visible';
 const cursorKey=(board:string,scope:PeriodScope,query:HistoryQuery)=>JSON.stringify([board,scope,query.meters,query.unit,query.currency,query.sources]);
@@ -42,6 +42,7 @@ export class PeriodTransport implements HistoryMember {
   private requested=false;
   private delivered=0;
   private readonly flights=new Set<Flight>();
+  private readonly facetAdmission={};
   private completed='';
   private failed='';
   private baselineKey='';
@@ -103,14 +104,18 @@ export class PeriodTransport implements HistoryMember {
     const baseline=PERIOD_SCOPES.some(scope=>intent.request[scope]&&!this.cursors.has(cursorKey(intent.board,scope,intent.request[scope]!)));
     // First retain the bounded drawing cells, then its exact evidence. Their full
     // decoded bodies must not coexist while either is still waiting for preparation.
-    const extras=(this.requested||this.delivered>0||this.queue.length>0)&&(!baseline||!this.queue.length&&!this.flights.size)&&(!!intent.request.values||!!intent.request.sessions||!!intent.request.facets||!!intent.request.sourceWork||!!intent.request.calendar||!!intent.request.quota||!!intent.request.budget||!!intent.request.funds)&&key!==this.completed&&key!==this.failed&&![...this.flights].some(f=>f.extras&&(this.key(f.intent)===key||this.resourcesCurrent(f.intent)));
+    // An open filter needs choices even while the same cohort's work reply waits.
+    // A covering facet body or a different cohort still owns the ordinary barrier.
+    const missingFacets=!!intent.request.facets;
+    const facetBypass=missingFacets&&[...this.flights].some(f=>f.extras&&this.resourcesCurrent(f.intent)&&f.intent.generation===intent.generation&&!f.facets&&this.key(f.intent)!==key);
+    const extras=(this.requested||this.delivered>0||this.queue.length>0)&&(!baseline||!this.queue.length&&!this.flights.size)&&(!!intent.request.values||!!intent.request.sessions||!!intent.request.facets||!!intent.request.sourceWork||!!intent.request.calendar||!!intent.request.quota||!!intent.request.budget||!!intent.request.funds)&&key!==this.completed&&key!==this.failed&&![...this.flights].some(f=>f.extras&&(this.key(f.intent)===key||this.resourcesCurrent(f.intent)&&(!missingFacets||f.facets||f.intent.generation!==intent.generation)));
     if(!this.queue.length&&!extras)return;
     const demands:Demand[]=[];
     const foreground=this.queue.some(demand=>roleOf(demand)==='visible');
     if(foreground)for(const scope of PERIOD_SCOPES){const index=this.queue.findIndex(d=>d.scope===scope&&roleOf(d)==='visible');if(index!==-1)demands.push(this.queue.splice(index,1)[0]);}
     else {const index=this.queue.findIndex(d=>roleOf(d)==='ahead');if(index!==-1)demands.push(this.queue.splice(index,1)[0]);}
     if(!demands.length&&!extras)return;
-    const flight:Flight={get role(){return extras||demands.some(d=>roleOf(d)==='visible')?'visible':'ahead';},intent,controller:new AbortController(),demands,extras,releases:new Set()};
+    const flight:Flight={get role(){return extras||demands.some(d=>roleOf(d)==='visible')?'visible':'ahead';},intent,controller:new AbortController(),demands,extras,facets:false,releases:new Set()};
     this.flights.add(flight);
     const exactQueries:Partial<Record<PeriodScope,HistoryQuery>>={};
     if(extras)for(const scope of PERIOD_SCOPES){const query=intent.request[scope];if(query)exactQueries[scope]={...query,evidence:query.evidence??this.cursors.get(cursorKey(intent.board,scope,query))};}
@@ -141,6 +146,8 @@ export class PeriodTransport implements HistoryMember {
     }
     if(body.sourceWork&&!body.quota&&body.budget?.work!=='1')delete body.sourceWork;
     if(!body.quota&&!body.sessions&&!body.facets&&!body.calendar&&body.budget?.work!=='1')delete body.workFilter;
+    flight.facets=!!body.facets;
+    if(extras&&facetBypass&&flight.facets)flight.admission=this.facetAdmission;
     const resetEpoch=this.resetEpoch;
     const start=()=>{
       if(flight.controller.signal.aborted)return;

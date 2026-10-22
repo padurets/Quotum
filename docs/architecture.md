@@ -1709,7 +1709,9 @@ After preparation, the period coordinator commits resource tapes, values, facets
 work indexes and row snapshots together, including their resident storage charge,
 before notifying any subscriber. Synchronous navigation or new evidence from a
 subscriber therefore sees a complete snapshot and cannot revive the captured reply.
-Calendar publication keeps its independent authority outside that commit.
+Period changes, cached restoration and retirement also finish their storage and
+clock updates before publishing. Calendar notifications share that synchronous
+boundary; calendar replies retain their independent authority and adoption boundary.
 The private storage wrapper keeps boolean decisions that coincide with a changed
 rule's default; repeated include/exclude or wallet auto/only transitions cannot
 forget a dormant exclusion. Its filters and retained decisions together fit
@@ -2239,8 +2241,13 @@ Unvisited optional cells remain charged to that gesture after an
 abort or reversal; entering them restores the allowance. A disjoint jump inside a
 held tile also reads the minimum unknown or stale bridge to its retained interval,
 without rereading its fresh component. Empty tiles have no head to fill. At most
-one foreground read per resource family and one purely speculative flight overall share
-the two aggregate HTTP slots. The shared transport collects visible family reads before
+one foreground drawing read per resource family and one purely speculative flight overall share
+the two aggregate HTTP slots. Newly requested filter choices can use the second slot
+beside an older combined response for the same cohort that did not request those choices.
+Their separate admission identity keeps the original transport and storage owner;
+a body already covering the choices prevents duplicate admission. The same two-slot
+and retained-memory bounds apply, including while cancelled recipients finish.
+The shared transport collects visible family reads before
 requesting a slot, so all three families can share one response. A coalesced response
 retains its borrowed drawing slots until its HTTP read and recipient preparation settle,
 including after that drawing is cancelled. Foreground requests take priority. A waiting
