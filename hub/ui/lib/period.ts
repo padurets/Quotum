@@ -217,12 +217,13 @@ class BoardPeriod {
     const range=evaluatedRange(tape.selection,now);
     return range.from>=tape.tape.from?range:tape.basisRange??evaluatedRange(tape.selection,this.evaluatedAt);
   }
-  project(history:History,scope:PeriodScope,now=this.evaluatedAt) {
+  project(history:History,scope:PeriodScope,now=this.evaluatedAt,activityOnly=false) {
     const tape=this.tapes.get(scope);
-    let result=history;
-    if(tape?.rangeKey===history.range){const range=this.tapeRange(tape,now),values=new Map<string,PeriodValues>();if(tape.selection.mode==='range')for(const [id,reading] of this.values)if(reading.value&&reading.basis?.range.to===range.to)values.set(id,reading.value);result=tape.accounting.project(history,range,values,false,Math.min(range.to,now));}
+    // Activity shares the work frame, but never consumes native financial facts.
+    let result:History=activityOnly?{...history,series:[],events:[],meterSeries:undefined,moneyWork:undefined}:history;
+    if(!activityOnly&&tape?.rangeKey===history.range){const range=this.tapeRange(tape,now),values=new Map<string,PeriodValues>();if(tape.selection.mode==='range')for(const [id,reading] of this.values)if(reading.value&&reading.basis?.range.to===range.to)values.set(id,reading.value);result=tape.accounting.project(history,range,values,false,Math.min(range.to,now));}
     if(scope==='quota'&&this.activity&&this.workRangeKey===history.range&&this.work.basis){const range=this.workRange(now)!;result={...result,since:range.from,to:range.to,activity:this.activity.project(history.activity,range)};}
-    if(scope==='quota'&&this.selectedPending())result={...result,series:result.series.map(series=>({...series,selectedWork:{from:result.to,ms:null,agentMs:0}})),activity:{...result.activity,known:null,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
+    if(scope==='quota'&&this.selectedPending())result={...result,series:activityOnly?result.series:result.series.map(series=>({...series,selectedWork:{from:result.to,ms:null,agentMs:0}})),activity:{...result.activity,known:null,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
     if(scope==='quota'&&this.activity&&this.work.basis&&this.workSelection.mode==='live'&&this.workRangeKey===history.range&&!this.selectedPending()){
       this.activityFrames.set(result.activity,{projector:new WeakRef(this.activity),selection:{...this.workSelection},rangeKey:history.range,basis:{...this.work.basis.range},lifetime:this.activityLifetime,bytes:this.activityBytes(this.activity)});
     }

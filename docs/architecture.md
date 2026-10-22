@@ -2148,6 +2148,9 @@ are both ready. A quota answer arriving first cannot publish its pending-work
 placeholder as an empty Activity chart. The previous complete work frame and its
 numbers remain visible until replacement or error; hard work retirement clears
 them immediately, independently of native quota readiness.
+Activity's work projection does not rebuild native financial series or inspect plan
+events. Its rolling frame and numerical clocks remain independent of financial expiry;
+quota and monetary consumers retain their accounting projections and deadlines.
 A temporary shared registry keeps plot interiors, edge bars, legend markers and readouts
 consistent in colour and dash, adding new groups with a pending total. Surviving groups
 keep their colours through rank changes and reversal; new projects and machines take

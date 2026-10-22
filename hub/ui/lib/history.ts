@@ -1169,7 +1169,7 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false,acti
   const revision=useSyncExternalStore(listener=>boardPeriod.subscribeProjection(loader===fundsHistory?'funds':loader.scope??'quota',listener),()=>(financial?boardPeriod.getFinancialProjectionSnapshot:boardPeriod.getProjectionRevision)(loader===fundsHistory?'funds':loader.scope??'quota'));
   const retained=useRef<{board:string;history:History;deadline:number}|null>(null);
   const now=useClock(at=>{
-    const next=Math.min(rolling?frameChangesAt(timeRange(),shown.history?.cellMs??60_000,at)??Infinity:Infinity,boardPeriod.projectionChangesAt(loader===fundsHistory?'funds':loader.scope??'quota',at)??Infinity,retained.current?.deadline??Infinity);
+    const next=Math.min(rolling?frameChangesAt(timeRange(),shown.history?.cellMs??60_000,at)??Infinity:Infinity,activity?Infinity:boardPeriod.projectionChangesAt(loader===fundsHistory?'funds':loader.scope??'quota',at)??Infinity,activity?Infinity:retained.current?.deadline??Infinity);
     return Number.isFinite(next)?next:null;
   },[shown,revision,panning]);
   const gesture=useRef<{active:boolean;target:string|null}>({active:false,target:null});
@@ -1187,7 +1187,7 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false,acti
     const inputs=[shownNow,presentation,revisionNow,loader,panning,now,board,target,workState?.retired],previous=snapshot.current,validAt=hubNow();
     // A retained frame can outlive the raw tiles that scheduled its expiry.
     // Retire its plan facts before even the stable-snapshot fast path.
-    const held=retained.current,expired=!!held&&validAt>=held.deadline;
+    const held=retained.current,expired=!activity&&!!held&&validAt>=held.deadline;
     if(expired){const events=planEventsAt(held.history.events,validAt);retained.current={...held,history:{...held.history,events},deadline:planEventsDeadline(events)};}
     if(!expired&&previous&&inputs.every((value,i)=>Object.is(value,previous.inputs[i])))return previous.value;
     const at=gesture.current.active&&panning===null||shownNow!==shown||revisionNow!==revision?validAt:now;
@@ -1205,7 +1205,7 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false,acti
       if(!shownNow.history)return activity&&retained.current?{...shownNow,history:retained.current.history}:shownNow;
       const scope=loader===fundsHistory?'funds':loader.scope??'quota',state=workState??boardPeriod.projectionState(shownNow.history,scope);
       if(!state.ready)return {...shownNow,history:retained.current?.history??null,loading:!folding&&!state.error&&!shownNow.error,error:state.error??shownNow.error};
-      const projected=boardPeriod.project(shownNow.history,scope,at),deadline=held?.history.events===projected.events?held.deadline:planEventsDeadline(projected.events);
+      const projected=boardPeriod.project(shownNow.history,scope,at,activity),deadline=activity?Infinity:held?.history.events===projected.events?held.deadline:planEventsDeadline(projected.events);
       const events=validAt>=deadline?planEventsAt(projected.events,validAt):projected.events,history=events===projected.events?projected:{...projected,events};
       retained.current={board,history,deadline:events===projected.events?deadline:planEventsDeadline(events)};
       if(!shownNow.loading)gesture.current.target=null;return {...shownNow,history,loading:folding?false:shownNow.loading,error:state.error??shownNow.error};
@@ -1217,7 +1217,7 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false,acti
   const result=useSyncExternalStore(pan.onPhase,read,read);
   // Rolling totals change with the endpoints; their unchanged drawing evidence
   // must not restart line and stack preparation on the same clock wake.
-  const drawing=useMemo(()=>result.history,[shown,revision,loader,snapshot.current?.phaseRevision,result.history?.events]);
+  const drawing=useMemo(()=>result.history,[shown,revision,loader,snapshot.current?.phaseRevision,activity?undefined:result.history?.events]);
   return {...result,drawing};
 }
 export function useHistory(rolling=false) {return usePeriodHistory(quotaHistory,rolling);}
