@@ -29,6 +29,40 @@ function utc(t:TestContext){
   t.mock.method(Intl.DateTimeFormat.prototype,'resolvedOptions',function(this:Intl.DateTimeFormat){return {...resolved.call(this),timeZone:'UTC'};});
 }
 
+for(const envelope of ['complete','delta','error'] as const)test(`work news revokes a queued ${envelope} calendar envelope without retiring its view`,t=>{
+  utc(t);const calendar=new WorkCalendar();calendar.configure(true,'same-context',now,false,selection);
+  calendar.receive(section(),calendar.generation,()=>true);
+  const retained=calendar.get(),generation=calendar.generation,part=section('2');
+  const stale:CalendarSection=envelope==='complete'?part:envelope==='error'?{state:'error',error:'unavailable'}:
+    {state:'delta',basis:part.basis,value:{availableFrom:part.value.availableFrom,retainedFrom:part.value.retainedFrom,cursor:part.value.cursor,updates:[]}};
+  assert.equal(calendar.dirty(now-H/4),true);let reservations=0;
+  calendar.receive(stale,generation,()=>{reservations++;return true;});
+  assert.equal(calendar.get(),retained,'a pre-news envelope cannot replace or mark the retained view as failed');
+  assert.equal(calendar.needed,true,'a stale success or failure cannot discharge the current work demand');
+  assert.equal(reservations,0,'revoked evidence must not allocate a new proof');
+});
+
+for(const phase of ['reserve','handoff'] as const)test(`work news during calendar ${phase} preserves its new demand`,t=>{
+  utc(t);const calendar=new WorkCalendar(),fixed={mode:'range' as const,from:now-periodMs,to:now};calendar.configure(true,'same-context',now,false,fixed);
+  calendar.receive(section(),calendar.generation,()=>true);const generation=calendar.generation;let dirtied=false;
+  const dirty=()=>{if(!dirtied){dirtied=true;calendar.dirty(now-H/4);}return true;};
+  calendar.receive(section('2'),generation,{reserve:()=>phase==='reserve'?dirty():true,handoff:()=>phase==='handoff'?dirty():true});
+  assert.ok(dirtied);assert.equal(calendar.needed,true,'admission cannot clear work delivered during that admission');
+  assert.ok(calendar.get().value,'the permitted retained view remains available');
+  calendar.configure(true,'same-context',now,false,{mode:'range',from:now-2*H,to:now-H});
+  calendar.configure(true,'same-context',now,false,fixed);
+  assert.equal(calendar.needed,true,'a pre-news proof cannot become a complete healthy cache hit after Back');
+});
+
+for(const since of [now,now+1,Infinity])test(`outside fixed work does not revoke independent calendar evidence at ${since}`,t=>{
+  utc(t);const calendar=new WorkCalendar(),fixed={mode:'range' as const,from:now-periodMs,to:now};
+  calendar.configure(true,'same-context',now,false,fixed);calendar.receive(section(),calendar.generation,()=>true);
+  const generation=calendar.generation;
+  assert.equal(calendar.dirty(since),false);calendar.receive(section('2'),generation,()=>true);
+  assert.equal(calendar.get().basis?.revision,'2','an unrelated update cannot revoke an otherwise current reply');
+  assert.equal(calendar.needed,false);
+});
+
 test('cold calendar adoption transfers shared cells before another owner reserves at publication',t=>{
   utc(t);const part=section();
   // Keep all incoming non-numeric data, with an extra allowance independent of

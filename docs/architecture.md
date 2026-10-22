@@ -1712,6 +1712,10 @@ subscriber therefore sees a complete snapshot and cannot revive the captured rep
 Period changes, cached restoration and retirement also finish their storage and
 clock updates before publishing. Calendar notifications share that synchronous
 boundary; calendar replies retain their independent authority and adoption boundary.
+Relevant work news advances the calendar's evidence generation before a queued reply
+can adopt. A reply from before that news cannot publish, cache a fresh proof or clear
+the new demand. The permitted prior reading stays visible until a current answer
+arrives; a failed replacement cannot make its obsolete proof reusable after navigation.
 The private storage wrapper keeps boolean decisions that coincide with a changed
 rule's default; repeated include/exclude or wallet auto/only transitions cannot
 forget a dormant exclusion. Its filters and retained decisions together fit

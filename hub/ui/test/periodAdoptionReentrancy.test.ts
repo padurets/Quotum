@@ -207,3 +207,106 @@ test('a resource change from the first publication still notifies surviving valu
     assert.equal(h.period.getValue(h.source).basis.range.to,wanted.to);
   }finally{stopFacets();stopValue();releaseFacets();drawing.close();await h.close();}
 });
+
+for(const scenario of [
+  {envelope:'complete',replacement:'failure',newWork:true},
+  {envelope:'complete',replacement:'success',newWork:true},
+  {envelope:'complete',replacement:'none',newWork:false},
+  {envelope:'delta',replacement:'failure',newWork:true},
+  {envelope:'delta',replacement:'success',newWork:true},
+  {envelope:'error',replacement:'failure',newWork:true},
+  {envelope:'error',replacement:'success',newWork:true},
+  {envelope:'complete',replacement:'failure',newWork:true,returnLive:true},
+] as const)test(`queued ${scenario.envelope} calendar with ${scenario.newWork?'new work':'unchanged evidence'} and ${scenario.replacement} replacement stays truthful after returning to ${'returnLive' in scenario?'live':'its range'}`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const h=await fixture({personal:true,fixed:true,heatmap:true}),jobs:(()=>void)[]=[];
+  let time=0,releaseFacets=()=>{};
+  const scheduler=new Preparations({now:()=>time++,post:run=>jobs.push(run)});
+  let a:ReturnType<typeof h.hold>|undefined,b:ReturnType<typeof h.hold>|undefined,c:ReturnType<typeof h.hold>|undefined;
+  const calendarTotal=()=>h.period.calendar.get().value?.cells.reduce((sum:number,cell:{agentMs:number|null})=>sum+(cell.agentMs??0),0)??null;
+  const workTotal=()=>h.period.get().rows.reduce((sum:number,row:{workedMs:number})=>sum+row.workedMs,0);
+  const drain=async()=>{
+    for(let slices=0;slices<1000;slices++){
+      await flush();const run=jobs.shift();if(!run)return;run();
+    }
+    assert.fail('queued calendar adoption did not finish its bounded preparation');
+  };
+  try{
+    // No native baseline barrier: the existing second slot serves genuinely new facets.
+    const view=h.directory.view(h.board);
+    h.directory.saveView(h.board,{...view,shown:['agents','agent-hours-heatmap'],hidden:['activity','quota-history','quota-session-history','quota-table','quota-session-table','budget-history','budget-table','subscription-funds']},h.alice.id,NOW+1);
+    h.events.flush();await flush();h.requests.length=0;h.frames.length=0;
+    assert.equal(calendarTotal(),M);assert.equal(h.pool.activeFlights,0);
+    h.prepareWith(scheduler);
+    a=h.hold();
+    if(scenario.envelope==='delta'){h.credit(NOW-2*M,NOW-M);h.events.flush();}
+    else h.selectRange({from:NOW-2*H,to:NOW});
+    await flush();
+    const range=h.selectedRange();assert.ok(range);
+    const first=a.reply?.calendar;
+    assert.equal(first?.state,scenario.envelope==='delta'?'delta':'complete','A must contain the actual requested calendar representation');
+    assert.ok(a.signal&&!a.signal.aborted);
+    const calendarGeneration=h.period.calendar.generation,resourceGeneration=h.period.resourceGeneration;
+    b=h.hold();releaseFacets=h.period.demandFacets();await flush();
+    assert.equal(b.reply?.calendar?.state,scenario.envelope==='delta'?'delta':'complete','the real uncovered-facets request must also contain the calendar');
+    assert.equal(h.requests.length,2);assert.equal(h.pool.activeFlights,2);
+    assert.ok(h.requests[1].facets&&h.requests[1].calendar,'the second combined body actually covers facets and calendar');
+    assert.equal(h.period.calendar.generation,calendarGeneration,'facets preserve calendar evidence');
+    assert.equal(h.period.resourceGeneration,resourceGeneration,'opening choices does not change the resource cohort');
+    assert.ok(h.pool.estimatedBytes<=h.pool.budget);
+    a.release();await flush();
+    assert.equal(scheduler.size,1,'A reached real cooperative resource adoption before B can publish');
+    assert.ok(jobs.length);const beforeB=h.period.calendar.get();
+    if(scenario.envelope==='error')b.reject(new Error('older calendar delivery failed'));
+    else b.release();
+    await flush();
+    assert.equal(h.period.calendar.get(),beforeB,'B remains queued behind A rather than publishing at HTTP completion');
+    assert.equal(scheduler.size,1);
+    const requestsBeforeWork=h.requests.length,framesBeforeWork=h.frames.length,authority=h.page.get().board!.workAuthority;
+    if(scenario.newWork){
+      c=h.hold();const from=scenario.envelope==='delta'?NOW-M:NOW-2*M;
+      h.credit(from,from+M);h.events.flush();await flush();
+      assert.ok(h.frames.slice(framesBeforeWork).some(frame=>frame.type==='history'&&JSON.parse(frame.data).workSince===from),'the real accepted credit must reach the calendar owner');
+      assert.equal(h.page.get().board!.workAuthority,authority,'positive work is not a hard authority retirement');
+      assert.ok(h.period.resourceGeneration>resourceGeneration,'the producer invalidates the actual resource evidence');
+      assert.ok(h.period.intent()?.request.calendar,'new work still demands the current calendar while old adoption waits');
+    }
+    await drain();
+    if(scenario.newWork){
+      assert.ok(c?.reply?.calendar,'C must actually start with its already formed calendar body');
+      assert.equal(h.requests.length,requestsBeforeWork+1);
+      assert.ok(h.requests.at(-1)!.calendar,'the required refresh was formed before obsolete B finishes');
+      if(scenario.replacement==='failure')c.reject(new Error('current calendar delivery failed'));
+      else c.release();
+      await flush();await drain();
+      if(scenario.replacement==='failure')assert.equal(h.period.calendar.get().error,'unavailable','the current failure remains actionable');
+      else {assert.equal(calendarTotal(),scenario.envelope==='delta'?3*M:2*M);assert.equal(h.period.calendar.get().error,null);}
+    }else{
+      assert.equal(c,undefined,'the unchanged-evidence control owns no unused replacement hold');
+      assert.equal(h.requests.length,requestsBeforeWork,'settling compatible old evidence must not invent C');
+      assert.equal(calendarTotal(),M);assert.equal(h.period.calendar.get().error,null);
+    }
+    assert.equal(h.pool.activeFlights,0);assert.equal(h.period.calendar.retained.size,0);
+    assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes,'all decoded reply reservations have settled');
+    h.prepareWith(null);
+    h.selectRange({from:NOW-3*H,to:NOW-2*H});await flush();
+    h.requests.length=0;h.selectRange('returnLive' in scenario?null:range);await flush();
+    const expected=scenario.newWork?(scenario.envelope==='delta'?3*M:2*M):M;
+    assert.equal(workTotal(),expected,'the returned sessions use the current producer evidence');
+    assert.equal(calendarTotal(),expected,'a failed replacement cannot make the obsolete queued proof reusable');
+    if('returnLive' in scenario){
+      const cells=h.period.calendar.get().value!.cells.filter((cell:{from:number;to:number})=>cell.to>cell.from&&cell.from>=NOW-H&&cell.to<=NOW);
+      assert.equal(cells.length,60);assert.ok(cells.every((cell:{agentMs:number|null})=>cell.agentMs!==null),'the selected live hour is fully known');
+      assert.equal(cells.find((cell:{from:number;to:number})=>cell.from===NOW-2*M&&cell.to===NOW-M)?.agentMs,M,'the changed live minute cannot resurrect as a confirmed zero');
+    }
+    assert.equal(h.period.calendar.get().error,null);assert.equal(h.period.calendar.needed,false);
+    if(scenario.newWork&&scenario.replacement==='failure')assert.ok(h.requests.some(request=>request.calendar),'returning after a failed fresh read must replace the dirty calendar proof');
+    if(!scenario.newWork)assert.equal(h.requests.filter(request=>request.calendar).length,0,'unchanged complete evidence remains reusable');
+    assert.equal(h.pool.activeFlights,0);assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes);
+    assert.equal(h.period.calendar.retained.size,0);
+  }finally{
+    releaseFacets();a?.release();b?.release();c?.release();await flush();await drain();
+    h.prepareWith(null);h.page.dispatch({type:'board-close'});await h.close();scheduler.dispose();
+    assert.equal(h.pool.activeFlights,0);assert.equal(h.pool.estimatedBytes,0);
+  }
+});

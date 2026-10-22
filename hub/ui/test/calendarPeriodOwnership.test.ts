@@ -2,7 +2,7 @@ import {test,type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import type {PeriodReply,PeriodRequest} from '../../server/domain/periodRead';
 import {PeriodTransport,fetchPeriod,type PeriodIntent,type PeriodReservation} from '../lib/periodTransport';
-import {fixture,NOW,H,M} from './periodRuntimeFixture';
+import {fixture,flush,NOW,H,M} from './periodRuntimeFixture';
 
 const until=async(check:()=>unknown)=>{for(let i=0;i<300;i++){await new Promise<void>(setImmediate);if(check())return;}assert.fail('period transport did not settle');};
 const jsonBytes=(value:unknown)=>Buffer.byteLength(JSON.stringify(value));
@@ -21,6 +21,8 @@ async function prepared(t:TestContext){
     identity:{kind:'stable',sessionId:(i+1).toString(16).padStart(32,'0')},
   }]);
   h.events.history(h.source,NOW-H,undefined,true);
+  // Deliver setup work before capturing the independently current wire intent.
+  h.events.flush();await flush();
   const quota=h.initialRequests.find(request=>request.quota)!.quota;
   const request:PeriodRequest=JSON.parse(JSON.stringify({version:1,selection:h.period.selection,evaluatedAt:NOW,
     quota:{...quota,meta:''},sessions:{},values:[h.source],facets:true,sourceWork:{},calendar:{zone:'UTC'}}));
