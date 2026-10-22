@@ -146,9 +146,9 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
     const r=phase==='stable'?h.render():h.update(phase);
     if(['stable','clock','rename','mute'].includes(phase))assert.equal(r.calls,0,phase+' reuses identical formatted amounts');
     if(phase==='clock'){assert.equal(r.chart.props.prepared,true);assert.strictEqual(r.chart.props.lines,retained,'clock keeps the exact prepared drawing');}
-    if(['data','nonrollingAmount'].includes(phase)){assert.equal(r.calls,1,phase+' reformats only revised amount');assert.equal(r.chart.props.prepared,false,'pending numerical preparation remains pending');}
+    if(['data','nonrollingAmount'].includes(phase)){assert.equal(r.calls,2,phase+' reformats only the revised compact and precise amount');assert.equal(r.chart.props.prepared,false,'pending numerical preparation remains pending');}
     if(phase==='data')assert.strictEqual(r.chart.props.lines,retained,'pending new data retains the prior authorized drawing');
-    if(['currency','locale','restore','resetunit'].includes(phase))assert.equal(r.calls,N,phase+' invalidates formatting or remounts fresh leaves');
+    if(['currency','locale','restore','resetunit'].includes(phase))assert.equal(r.calls,2*N,phase+' invalidates compact and precise formatting or remounts fresh leaves');
     if(phase==='rename')assert.match(r.display,/Renamed/);
     if(phase==='currency')assert.match(r.display,/USDx/);
     if(phase==='locale')assert.match(r.display,/12,35 USDx/);

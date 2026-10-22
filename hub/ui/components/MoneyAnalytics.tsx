@@ -102,7 +102,18 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
   const selectionKey=JSON.stringify(selection?.ids??[]);
   const original=useMemo(()=>history?.meterSeries?.filter(s=>s.unit===unit&&moneyBalanceSeries(s)&&selection?.ids.some(([source,meter])=>source===s.sourceId&&meter===s.meterId))??[],[history?.meterSeries,unit,selectionKey]);
   const focus=useSeriesFocus(panel,JSON.stringify([authority,board,history?.range,unit,selection?.ids]));
-  const descriptions=useMemo(()=>original.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId),detail=moneySeriesDetail(s,context);return {key,name:nameOf(s,card?.title??s.sourceId,context,family),detail:detail?[money(s.end,s.unit,true,context),detail].join('\n'):'',muted:isMuted(s)};}),[original,sources,context,family,muted,settings,widget,locale]);
+  const amounts=useRef(new Map<string,{value:string|null;unit:string;context:typeof context;locale:typeof locale;text:string}>());
+  const descriptions=useMemo(()=>{
+    const next:typeof amounts.current=new Map();
+    const entries=original.map(s=>{
+      const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId),detail=moneySeriesDetail(s,context),old=amounts.current.get(key);
+      // Rolling history may replace series objects without changing their amount.
+      const amount=old&&old.value===s.end&&old.unit===s.unit&&old.context===context&&old.locale===locale?old:{value:s.end,unit:s.unit,context,locale,text:money(s.end,s.unit,true,context)};
+      next.set(key,amount);
+      return {key,name:nameOf(s,card?.title??s.sourceId,context,family),detail:[amount.text,detail].filter(Boolean).join('\n'),muted:isMuted(s)};
+    });
+    amounts.current=next;return entries;
+  },[original,sources,context,family,muted,settings,widget,locale]);
   const noSelection=!(selection?.ids.length);
   const noResources=!sources.some(source=>supportsBudget(providerOf(source.provider)));
   const modelContext=JSON.stringify([authority,family,board,history?.board,unit,selection?.ids]);
