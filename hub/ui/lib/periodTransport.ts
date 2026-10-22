@@ -8,7 +8,7 @@ import type {HistoryPool,HistoryMember} from './historyPool';
 export type PeriodIntent={board:string;generation:number;resourceGeneration?:number;facetGeneration?:number;calendarGeneration?:number;revision:number;proofEpoch?:number;request:PeriodRequest};
 export type PeriodReservation=((bytes:number)=>boolean)&{retain?(release:()=>void):void};
 export type HistoryReadOwner={finished:Promise<void>;started?():void;role():'visible'|'ahead'|null;cancel():void};
-type Demand={scope:PeriodScope;query:HistoryQuery;signal?:AbortSignal;owner?:HistoryReadOwner;activityOnly:boolean;resolve(value:HistoryReply):void;reject(error:unknown):void};
+type Demand={scope:PeriodScope;query:HistoryQuery;signal?:AbortSignal;owner?:HistoryReadOwner;activityOnly:boolean;epoch:number;delivered?:boolean;resolve(value:HistoryReply):void;reject(error:unknown):void};
 type Flight={role:'visible'|'ahead';intent:PeriodIntent;controller:AbortController;demands:Demand[];extras:boolean;started?:boolean;preparing?:boolean;releases:Set<()=>void>};
 const aborted=()=>new DOMException('Aborted','AbortError');
 const roleOf=(demand:Demand)=>demand.signal?.aborted?null:demand.owner?demand.owner.role():'visible';
@@ -37,6 +37,10 @@ export class PeriodTransport implements HistoryMember {
   private queue:Demand[]=[];
   private scheduled=false;
   private resetEpoch=0;
+  // Coordinator changes survive an individual reader's cancellation. Delivered
+  // readers authorize their baseline only until their own abort or the next reset.
+  private requested=false;
+  private delivered=0;
   private readonly flights=new Set<Flight>();
   private completed='';
   private failed='';
@@ -49,17 +53,17 @@ export class PeriodTransport implements HistoryMember {
   get estimatedBytes(){return 0;}
   evictionCandidates(){return [];}
   private key(intent:PeriodIntent){return `${intent.generation}:${intent.revision}`;}
-  change(){this.retire();this.schedule();}
+  change(){this.requested=true;this.retire();this.schedule();}
   forgetEvidence(scope?:PeriodScope){if(!scope){this.cursors.clear();this.metadata.clear();}else {for(const key of this.cursors.keys())if(JSON.parse(key)[1]===scope)this.cursors.delete(key);this.metadata.delete(scope);}}
   evidence(){return new Map(this.cursors);}
   restoreEvidence(cursors:ReadonlyMap<string,string>){this.cursors.clear();for(const [key,value] of cursors)this.cursors.set(key,value);}
-  reset(){this.resetEpoch++;this.completed=this.failed=this.baselineKey='';this.baselineParts.clear();this.cursors.clear();this.metadata.clear();for(const flight of this.flights)this.abort(flight);for(const demand of this.queue)demand.reject(aborted());this.queue=[];}
+  reset(){this.resetEpoch++;this.requested=false;this.delivered=0;this.completed=this.failed=this.baselineKey='';this.baselineParts.clear();this.cursors.clear();this.metadata.clear();for(const flight of this.flights)this.abort(flight);for(const demand of this.queue)demand.reject(aborted());this.queue=[];}
   retry(){this.completed=this.failed='';this.change();}
   read(scope:PeriodScope,query:HistoryQuery,signal?:AbortSignal,owner?:HistoryReadOwner,activityOnly=false):Promise<HistoryReply> {
     return new Promise((resolve,reject)=>{
       if(signal?.aborted){reject(aborted());return;}
-      const demand={scope,query,signal,owner,activityOnly,resolve,reject};this.queue.push(demand);
-      signal?.addEventListener('abort',()=>{reject(aborted());this.queue=this.queue.filter(d=>d!==demand);for(const flight of this.flights)if(flight.demands.includes(demand)&&flight.demands.every(d=>d.signal?.aborted)&&!flight.extras)this.abort(flight);this.schedule();},{once:true});
+      const demand:Demand={scope,query,signal,owner,activityOnly,epoch:this.resetEpoch,resolve,reject};this.queue.push(demand);
+      signal?.addEventListener('abort',()=>{if(demand.epoch===this.resetEpoch&&demand.delivered){demand.delivered=false;this.delivered--;}reject(aborted());this.queue=this.queue.filter(d=>d!==demand);for(const flight of this.flights)if(flight.demands.includes(demand)&&flight.demands.every(d=>d.signal?.aborted)&&!flight.extras)this.abort(flight);this.schedule();},{once:true});
       this.schedule();
     });
   }
@@ -99,7 +103,7 @@ export class PeriodTransport implements HistoryMember {
     const baseline=PERIOD_SCOPES.some(scope=>intent.request[scope]&&!this.cursors.has(cursorKey(intent.board,scope,intent.request[scope]!)));
     // First retain the bounded drawing cells, then its exact evidence. Their full
     // decoded bodies must not coexist while either is still waiting for preparation.
-    const extras=(!baseline||!this.queue.length&&!this.flights.size)&&(!!intent.request.values||!!intent.request.sessions||!!intent.request.facets||!!intent.request.sourceWork||!!intent.request.calendar||!!intent.request.quota||!!intent.request.budget||!!intent.request.funds)&&key!==this.completed&&key!==this.failed&&![...this.flights].some(f=>f.extras&&(this.key(f.intent)===key||this.resourcesCurrent(f.intent)));
+    const extras=(this.requested||this.delivered>0||this.queue.length>0)&&(!baseline||!this.queue.length&&!this.flights.size)&&(!!intent.request.values||!!intent.request.sessions||!!intent.request.facets||!!intent.request.sourceWork||!!intent.request.calendar||!!intent.request.quota||!!intent.request.budget||!!intent.request.funds)&&key!==this.completed&&key!==this.failed&&![...this.flights].some(f=>f.extras&&(this.key(f.intent)===key||this.resourcesCurrent(f.intent)));
     if(!this.queue.length&&!extras)return;
     const demands:Demand[]=[];
     const foreground=this.queue.some(demand=>roleOf(demand)==='visible');
@@ -185,7 +189,7 @@ export class PeriodTransport implements HistoryMember {
         }
         for(const demand of demands) {
           const part=activityOnly&&demand.scope!=='quota'?evidenceReply[demand.scope]:reply[demand.scope];
-          if(part?.state==='complete'){const {tape:_tape,...value}=part.value;demand.resolve(value);}
+          if(part?.state==='complete'){if(demand.epoch===this.resetEpoch&&!demand.delivered&&roleOf(demand)!==null){demand.delivered=true;this.delivered++;}const {tape:_tape,...value}=part.value;demand.resolve(value);}
           else demand.reject(new ApiError(part?.state==='error'&&part.error==='history_limit'?413:400,part?.state==='error'?part.error:'history_failed'));
         }
       }).catch(error=>{
@@ -199,9 +203,9 @@ export class PeriodTransport implements HistoryMember {
       })
         .finally(async()=>{try{if(flight.controller.signal.aborted)for(const demand of demands)demand.reject(aborted());if(demands.some(demand=>demand.owner))await Promise.allSettled(demands.map(demand=>demand.owner?.finished));}finally{
           for(const release of flight.releases)release();flight.releases.clear();this.pool.release(flight);this.flights.delete(flight);
-          // A new entry can await this reset flight's actual lifetime before its
-          // cold baseline fits. A same-intent reset must not restart that read.
-          const current=this.intent();if(resetEpoch===this.resetEpoch||current&&(current.board!==intent.board||this.key(current)!==key))this.schedule();
+          // Only demand admitted after the latest reset can wake its new baseline.
+          // A different target captured before reset grants no continuing interest.
+          if(resetEpoch===this.resetEpoch||this.requested||this.delivered>0||this.queue.some(demand=>roleOf(demand)!==null))this.schedule();
         }});
     };
     this.pool.request(this,flight,start,()=>this.abort(flight));
