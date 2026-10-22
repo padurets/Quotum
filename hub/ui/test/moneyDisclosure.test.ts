@@ -11,11 +11,13 @@ import {defaultFilters,walletRule,matchesWallet,fundsRule,matchesSelection} from
 import {MAX_METERS} from '../../server/domain/meterHistory';
 import {ApiError} from '../lib/http';
 import {t,setLocale} from '../i18n';
+import {focusReturnFixture} from './focusReturnFixture';
 
 type Node={type:unknown;props:Record<string,any>};
 const nodes=(value:any):Node[]=>Array.isArray(value)?value.flatMap(nodes):value&&typeof value==='object'?typeof value.type==='function'?nodes(value.type(value.props)):[value,...nodes(value.props.children),...nodes(value.props.trigger)]:[];
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 function fixture(compact=false){
+  const dom=focusReturnFixture(false,true);
   const filters=defaultFilters();filters.wallet={mode:'only',values:[{source:'s',kind:'balance'},{source:'s',kind:'keyCap',key:'extra'}]};
   const source={id:'s',provider:'openrouter',keys:[] as KeyPart[],meters:[{id:'balance',kind:'balance',unit:'USD',amount:'12345678',limit:null,at:1,staleAfterMs:1000,stale:false,resetAt:null,minutes:null,scope:null,label:null}] as Meter[]};
   let cursor=0;const slots:any[]=[],effects:(()=>void)[]=[],flights:{resolve:(reply:unknown)=>void;reject:(error:unknown)=>void}[]=[];
@@ -23,13 +25,13 @@ function fixture(compact=false){
   const modules:Record<string,unknown>={react:hooks,'./moneySelection':{selectedAllowanceIds},'./dataFilters':{useDataFilters:()=>({current:filters})},'./prefs':{usePref:()=>({unit:'USD'})},'../../server/domain/dataFilters':{walletRule},'./view':{keyShown:()=>true},'./http':{ApiError},'../../server/domain/meterHistory':{MAX_METERS},'./keyReads':{readKeyIds:()=>new Promise((resolve,reject)=>flights.push({resolve,reject}))}};
   const keys={exports:{} as typeof import('../lib/moneyKeys'),require:(name:string)=>modules[name],AbortController};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../lib/moneyKeys.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,keys);
-  const jsx=(type:unknown,props:Node['props'])=>({type,props}),context={exports:{} as {MoneyValues:(props:unknown)=>Node},require:()=>({jsx,jsxs:jsx}),...money,currencySymbol,t,useDataFilters:()=>({current:filters}),usePref:()=>({unit:'USD'}),walletRule,matchesWallet,fundsRule,matchesSelection,Popover:'popover',CreditBalanceValue:({children}:{children:unknown})=>children,ErrorLine:'error',CapMetrics:'unavailable-cap',BudgetKeyMetrics:'key',stamp:String,day:String,ApiError};
+  const jsx=(type:unknown,props:Node['props'])=>({type,props}),context={useRemovalFocus:dom.focus.useRemovalFocus,exports:{} as {MoneyValues:(props:unknown)=>Node},require:()=>({jsx,jsxs:jsx}),...money,currencySymbol,t,useDataFilters:()=>({current:filters}),usePref:()=>({unit:'USD'}),walletRule,matchesWallet,fundsRule,matchesSelection,Popover:'popover',CreditBalanceValue:({children}:{children:unknown})=>children,ErrorLine:'error',CapMetrics:'unavailable-cap',BudgetKeyMetrics:'key',stamp:String,day:String,ApiError};
   const src=readFileSync(new URL('../components/MoneyCard.tsx',import.meta.url),'utf8');
   runInNewContext(ts.transpileModule(src.slice(src.indexOf('export function MoneyValues('),src.indexOf('/** Subscription funds')),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   let latest:ReturnType<typeof keys.exports.useShownKeys>;
-  const render=()=>{cursor=0;latest=keys.exports.useShownKeys(source as any,undefined,'board');effects.splice(0).forEach(run=>run());return nodes(context.exports.MoneyValues({source,...latest,context:defaultCurrencyContext,compact}));};
+  const render=()=>{cursor=0;latest=keys.exports.useShownKeys(source as any,undefined,'board');effects.splice(0).forEach(run=>run());dom.hooks.begin();const tree=nodes(context.exports.MoneyValues({source,...latest,context:defaultCurrencyContext,compact}));dom.hooks.commit();return tree;};
   const key:KeyPart={id:'extra',name:'Laptop with the complete selected allowance name',disabled:false,presence:'observed',expiresAt:null,includeByok:false,at:1,staleAfterMs:1000,missCount:0,periods:{day:null,week:null,month:null}};
-  return {render,flights,key,source,filters,retry:()=>latest.retry(),cap:{...source.meters[0],id:'key:extra:cap',kind:'cap' as const,amount:'3000000',limit:'10000000'}};
+  return {render,flights,key,source,filters,dom,retry:()=>latest.retry(),cap:{...source.meters[0],id:'key:extra:cap',kind:'cap' as const,amount:'3000000',limit:'10000000'}};
 }
 
 for(const locale of ['en','ru'] as const)test(`${locale} selected allowance disclosure stays accessible while pending, missing, failed and ready`,async()=>{
@@ -48,6 +50,30 @@ for(const locale of ['en','ru'] as const)test(`${locale} selected allowance disc
 test('compact balance disclosure renders selected allowances in the full detail layout',async()=>{
   const f=fixture(true);f.render();f.flights[0].resolve({keys:[f.key],meters:[f.cap]});await flush();
   const metric=f.render().find(n=>n.type==='key');assert.ok(metric);assert.notEqual(metric.props.compact,true,'full disclosure names must wrap instead of using the compact row ellipsis');
+});
+
+for(const compact of [false,true])for(const locale of ['en','ru'] as const)test(`${locale} ${compact?'compact':'dashboard'} actual extra allowance Retry keeps focus in its surviving disclosure`,async()=>{
+  setLocale(locale);
+  const f=fixture(compact);
+  try{
+    f.render();f.flights[0].reject(new ApiError(503,'unavailable'));await flush();
+    const button=f.render().find(node=>node.type==='button'&&node.props.children===t('period.retry'))!;assert.ok(button);
+    const leave=f.dom.attach(button.props.ref,f.dom.retry);f.dom.document.activeElement=f.dom.retry;
+    button.props.onClick();f.render();const pending=f.render();assert.equal(pending.some(node=>node.type==='button'&&node.props.children===t('period.retry')),false);
+    leave();f.dom.retry.remove();assert.equal(f.dom.document.activeElement,f.dom.trigger);
+    f.flights[1].resolve({keys:[f.key],meters:[f.cap]});await flush();assert.ok(f.render().some(node=>node.type==='key'));assert.equal(f.dom.document.activeElement,f.dom.trigger);assert.equal(f.flights.length,2);
+  }finally{f.dom.hooks.dispose();setLocale('en');}
+});
+
+for(const moved of [false,true])test(`automatic allowance recovery respects the actual focus owner (moved=${moved})`,async()=>{
+  const f=fixture();
+  try{
+    f.render();f.flights[0].reject(new ApiError(503,'unavailable'));await flush();
+    const button=f.render().find(node=>node.type==='button'&&node.props.children===t('period.retry'))!;
+    const leave=f.dom.attach(button.props.ref,f.dom.retry);f.dom.document.activeElement=moved?f.dom.outside:f.dom.retry;
+    f.source.keys.push(f.key);f.source.meters.push(f.cap);const recovered=f.render();assert.equal(recovered.some(node=>node.type==='button'&&node.props.children===t('period.retry')),false);
+    leave();f.dom.retry.remove();assert.equal(f.dom.document.activeElement,moved?f.dom.outside:f.dom.trigger);assert.equal(f.flights.length,1,'new preview evidence needs no additional key read');
+  }finally{f.dom.hooks.dispose();}
 });
 
 for(const compact of [false,true])test(`${compact?'compact':'dashboard'} mixed selected scope names the unavailable allowance beside the known one`,async()=>{

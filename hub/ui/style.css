@@ -560,7 +560,7 @@ td.muted, small.muted { color: var(--text-3); }
 /* ---------- history ---------- */
 .history-error { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .panel { --panel-pad: 22px; padding: 20px var(--panel-pad) 22px; }
-.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 26px; }
 .panel-controls { display: flex; gap: 6px; margin-left: auto; }
 .panel-head h2 { margin: 0; font-size: 15px; font-weight: 560; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .panel-heading { flex: 1; min-width: 0; }

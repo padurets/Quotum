@@ -492,7 +492,7 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
       <div className="card-head">
         <CardMark source={source} />
         <div className="card-heading">
-          <div className="card-title"><h2 title={title}>{title}</h2>
+          <div className="card-title"><h2 title={title} tabIndex={-1}>{title}</h2>
             {source.plan&&<span className="plan">{source.plan.replace(/^Claude\s+/i,'')}</span>}
           </div>
           <small className="resource-type">{t(providerOf(source.provider)?.funding==='wallet'?'resource.budget':'resource.subscription')}</small>

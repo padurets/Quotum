@@ -1,4 +1,4 @@
-import {useCallback,useRef} from 'react';
+import {useCallback} from 'react';
 
 let restoring=0;
 export const isFocusReturn=()=>restoring>0;
@@ -14,18 +14,19 @@ export function returnFocus(element:HTMLElement|null|undefined){
 function targetOf(element:HTMLElement){
   const trigger=element.closest('.picker')?.querySelector<HTMLElement>(':scope > button');
   if(trigger&&!element.contains(trigger)&&available(trigger))return trigger;
-  const scope=element.closest<HTMLElement>('.panel,.analytics-head-inner');
-  const controls=scope?.querySelectorAll<HTMLElement>('.panel-head .panel-controls button,.data-filter-controls button')??[];
+  const scope=element.closest<HTMLElement>('.panel,.card,.analytics-head-inner');
+  const controls=scope?.querySelectorAll<HTMLElement>('.panel-head .panel-controls button,.card-head > .picker > button,.data-filter-controls button')??[];
   // Other transient reader marks and Save/Restore are not stable recovery targets.
   const control=[...controls].find(control=>!element.contains(control)&&!control.closest('.reader-state')&&available(control));
-  return control??scope?.querySelector<HTMLElement>('.panel-head h2');
+  return control??scope?.querySelector<HTMLElement>('.panel-head h2,.card-head h2');
 }
+
+/** The entire boundary, including its trigger, is retiring. */
+export function returnFocusOutside(element:HTMLElement){returnFocus(targetOf(element));}
 
 /** Ref detachment runs before removing the node that still owns keyboard focus. */
 export function useRemovalFocus<T extends HTMLElement>(){
-  const current=useRef<T|null>(null);
-  return useCallback((element:T|null)=>{
-    const previous=current.current;current.current=element;
-    if(!element&&previous?.contains(document.activeElement))returnFocus(targetOf(previous));
-  },[]);
+  return useCallback((element:T|null)=>element?()=>{
+    if(element.contains(document.activeElement))returnFocusOutside(element);
+  }:undefined,[]);
 }

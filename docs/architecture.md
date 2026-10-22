@@ -2053,8 +2053,15 @@ replaces it with the focused cohort in the same area.
 Recovery controls return keyboard focus before they disappear. A removed Retry
 returns to its surviving disclosure button; a retiring disclosure returns to an
 available control in the same widget, or its heading when no control remains.
+This covers source measurement details, session trays and wallet allowances as
+well as analytics. A disclosure owns its portaled panel, while its stable return
+target belongs to the widget that holds its trigger. Each attached recovery node
+keeps its own removal cleanup, including details reused by several disclosures.
 Filter-save recovery returns to the resource filter while Save is disabled. These
 returns preserve a newer focus elsewhere and do not count as new reader navigation.
+The existing widget heading keeps at least its control height for both owners and
+readers. A temporary reader control cannot move the plot or table when a reader
+has no permanent settings button.
 The common Resources filter selects accounts, key caps and subscription funds
 across cards, charts and tables. An account selects its total balance; a key selects
 its reported remaining cap within the shared 32-meter bound. Balance components

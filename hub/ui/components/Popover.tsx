@@ -5,7 +5,7 @@ import {barsOf, coverOf, crampedOf, roomOf, shiftOf, sideOf} from '../lib/place'
 import {settler} from '../lib/settle';
 import {X} from 'lucide-react';
 import {t} from '../i18n';
-import {returnFocus} from './focusReturn';
+import {returnFocus,returnFocusOutside} from './focusReturn';
 
 /** A button with an anchored panel; closes on outside click, Escape, focus moving out and its button going out of sight. */
 export function Popover({
@@ -52,6 +52,11 @@ export function Popover({
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const portalAnchor=useRef<HTMLDivElement>(null);
+  const boxRef=useCallback((element:HTMLDivElement|null)=>{
+    // A retiring trigger also owns its portaled panel; neither can receive the return.
+    if(!element&&box.current&&(box.current.contains(document.activeElement)||panel.current?.contains(document.activeElement)))returnFocusOutside(box.current);
+    box.current=element;
+  },[]);
   const panelRef = useCallback((element: HTMLDivElement | null) => {
     // A form can close its panel directly. Return focus before its focused control is removed.
     if (!element && panel.current?.contains(document.activeElement)) returnFocus(button.current);
@@ -317,7 +322,7 @@ export function Popover({
         </div>);
 
   return (
-    <div className="picker" ref={box} onBlur={leave}>
+    <div className="picker" ref={boxRef} onBlur={leave}>
       <button
         type="button"
         className={trigger ? `text-button ${triggerClass ?? ''}` : 'icon-button'}

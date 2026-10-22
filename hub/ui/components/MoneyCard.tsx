@@ -33,6 +33,7 @@ import {t} from '../i18n';
 import {ApiError, messageOf} from '../lib/http';
 import {ErrorLine} from './Kit';
 import {Popover} from './Popover';
+import {useRemovalFocus} from './focusReturn';
 import {KeyIcon, StatusMark, WarningIcon} from './StatusMark';
 import {MeterBar, PercentLimit, ResetText} from './Meter';
 import {level, resetLineChangesAt} from '../lib/quota';
@@ -348,6 +349,7 @@ export function MoneyCard({
 
 type MoneySource=Pick<Card,'id'|'provider'|'meters'|'currencyUnavailable'|'creditBalance'>;
 export function MoneyValues({source,keys,names=keys,meters,allowances=keys.filter(key=>meters.some(m=>m.id===`key:${key.id}:cap`&&m.kind==='cap')).map(key=>key.id),noEvidence=false,error=null,loading=false,retry,compact=false,tray=false,context}:{source:MoneySource;keys:KeyPart[];names?:readonly Pick<KeyPart,'id'|'name'>[];meters:Meter[];allowances?:readonly string[];noEvidence?:boolean;error?:unknown;loading?:boolean;retry?:()=>void;compact?:boolean;tray?:boolean;context:CurrencyContext}) {
+  const action=useRemovalFocus<HTMLButtonElement>();
   const filters=useDataFilters().current,moneyPrefs=usePref('money'),fundsPrefs=usePref('funds');
   const showBalance=!filters||matchesWallet(walletRule(filters,moneyPrefs.unit??undefined),{source:source.id,kind:'balance'},true);
   const {remaining, limits} = budgetView(source, keys.filter(key=>allowances.includes(key.id)), meters, context),
@@ -432,7 +434,7 @@ export function MoneyValues({source,keys,names=keys,meters,allowances=keys.filte
       {unavailable.length>0&&<section className="measurement-details">{unavailable.map(id=><div key={id}><span>{keyName(keys.find(key=>key.id===id)??names.find(key=>key.id===id)??{id,name:null})}</span><small className="measurement-proof">{t('quota.unavailable')}</small></div>)}</section>}
       <ErrorLine error={error}/>
       {loading&&<p>{t('period.loading')}</p>}
-      {!!error&&retry&&!(error instanceof ApiError&&error.code==='filters_limit')&&<button type="button" className="button" onClick={retry}>{t('period.retry')}</button>}
+      {!!error&&retry&&!(error instanceof ApiError&&error.code==='filters_limit')&&<button ref={action} type="button" className="button" onClick={retry}>{t('period.retry')}</button>}
     </div>
   );
   if(tray)return filters&&!matchesSelection(fundsRule(filters,fundsPrefs.unit??undefined),source.id)?null:<FundsMark source={source} groups={groups} context={context} native={native} rateSources={rateSources} quoteDate={quoteDate} displayUnavailable={!!displayUnavailable}/>;
