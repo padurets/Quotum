@@ -178,7 +178,7 @@ jobs:
           git fetch --no-tags --depth=1 origin 9e4b1422961b8a3d5b9e2f9894d3db5584c65a43
           baseline="$RUNNER_TEMP/quotum-caption-baseline"
           mkdir "$baseline"
-          git archive 9e4b1422961b8a3d5b9e2f9894d3db5584c65a43 hub | tar -x -C "$baseline"
+          git -C "$GITHUB_WORKSPACE" archive 9e4b1422961b8a3d5b9e2f9894d3db5584c65a43 hub | tar -x -C "$baseline"
           ln -s "$GITHUB_WORKSPACE/hub/node_modules" "$baseline/hub/node_modules"
           npm run build --prefix "$baseline/hub"
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope dashboard
