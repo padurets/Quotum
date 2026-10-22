@@ -9,6 +9,8 @@ import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
 import {publishDataFilters} from '../../ui/lib/filterSelection';
 import {HistoryPool} from '../../ui/lib/historyPool';
 import {TILE_CELLS,MAX_READ_TILES} from '../../server/domain/history';
+import {Preparations} from '../../ui/lib/prepare';
+import {plotGroups} from '../../ui/lib/historyPlot';
 import vm from 'node:vm';
 
 for(const period of ['24h','30d'])test(`the complete fixed Activity script installs before the page loads: ${period}`,async()=>{
@@ -247,6 +249,163 @@ for(const period of ['24h','30d'] as const)test(`the shared ${period} reader reb
   else assert.ok(replacement.some(body=>!body.sessions&&body.quota),'the existing fine-grid reader refills its drawing cells');
   assertActivityCancellation(replacement,selection);
   assert.equal(members.size,2,'shared-filter replacement creates no legend-specific reader');
+});
+
+for(const periodName of ['24h','30d'])for(const offset of [0,1,30_124])test(`${periodName}: outside work preserves a nonaligned fixed drawing at +${offset}ms`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const to=NOW-30_123,from=to-(periodName==='24h'?24:30*24)*3_600_000+123;
+  const h=await fixture({personal:true,fixed:true,periodName,creditFrom:to-300_000,creditTo:to-100});
+  h.selectRange({from,to});await flush();
+  const d=await drawings(h,true),queue:(()=>void)[]=[];
+  const scheduler=new Preparations({now:()=>performance.now(),post:run=>queue.push(run)},1);
+  const replace=t.mock.method(scheduler,'replace');
+  h.prepareWith(scheduler);(d.loader as any).env.preparations=scheduler;
+  const settle=async()=>{
+    for(let n=0;n<5000;n++){
+      await flush();const run=queue.shift();if(run)run();
+      else if(!scheduler.size&&!h.pool.activeFlights){await flush();if(!queue.length&&!scheduler.size&&!h.pool.activeFlights)return;}
+    }
+    assert.fail('bounded outside-work preparation did not settle');
+  };
+  try{
+    const shown=d.loader.get(),financial=d.loader.getFinancial(),work=h.period.get();
+    assert.ok(shown.history);assert.equal(shown.history.range,`${from}-${to}`);
+    const total=()=>h.period.get().rows.reduce((sum:number,row:any)=>sum+row.workedMs,0);
+    assert.equal(total(),299_900);h.requests.length=0;h.frames.length=0;
+    h.credit(to+offset,to+offset+100);h.events.flush();await settle();
+    assert.ok(h.frames.some(frame=>frame.type==='history'&&JSON.parse(frame.data).workSince===to+offset),'the actual outside producer event reached follow');
+    assertActivityOutside(h.requests,{selection:{mode:'range',from,to}});
+    assert.equal(h.requests.length,0,'outside work cannot reread the partial last drawing cell');
+    assert.equal(replace.mock.callCount(),0,'outside work cannot prepare another drawing');
+    assert.equal(d.loader.get(),shown);assert.equal(d.loader.getFinancial(),financial);assert.equal(h.period.get(),work);
+    if(offset===0){
+      h.selectRange({from,to:to+100});d.loader.choose(periodName,h.selectedRange());d.runScheduled();await settle();
+      assert.ok(h.requests.some(body=>body.quota),'expanding the target must reread the dirty suffix');
+      assert.equal(total(),300_000,'navigation receives the newly credited outside work');
+    }
+  }finally{d.close();scheduler.dispose();h.prepareWith(null);await h.close();}
+});
+
+for(const outside of [false,true])test(`outside work cannot dirty the initial fixed drawing reply: ${outside}`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const to=NOW-30_123,from=to-24*3_600_000+123;
+  const h=await fixture({personal:true,fixed:true,periodName:'24h',creditFrom:to-300_000,creditTo:to-100});
+  h.selectRange({from,to});await flush();h.requests.length=0;
+  const held=h.hold(),d=await drawings(h,true);
+  try{
+    assert.ok(held.reply);assert.equal(d.loader.get().history,null);
+    if(outside){h.credit(to,to+100);h.events.flush();await flush();}
+    held.release();await flush();
+    assert.equal(h.requests.length,1,'outside work cannot invalidate an initial reply for this exact range');
+    assert.equal(d.loader.get().loading,false);assert.ok(d.loader.get().history);
+  }finally{held.release();d.close();await h.close();}
+});
+
+for(const outside of [false,true])test(`outside work cannot dirty a held fixed-range reply: ${outside}`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const to=NOW-30_123,from=to-24*3_600_000+123;
+  const h=await fixture({personal:true,fixed:true,periodName:'24h',creditFrom:to-300_000,creditTo:to-100});
+  h.selectRange({from,to});await flush();const d=await drawings(h,true),held=h.hold();
+  try{
+    h.requests.length=0;
+    h.credit(to-1,to);h.events.flush();await flush();
+    assert.equal(h.requests.length,1);assert.ok(held.reply,'the actual replacement response is held');
+    if(outside){h.credit(to,to+100);h.events.flush();await flush();}
+    held.release();await flush();
+    assert.equal(h.requests.length,1,'outside news must not turn an otherwise valid held reply into a second read');
+    assert.equal(h.period.get().rows.reduce((sum:number,row:any)=>sum+row.workedMs,0),299_901);
+    assert.equal(d.loader.get().loading,false);
+  }finally{held.release();d.close();await h.close();}
+});
+
+for(const periodName of ['24h','30d'])for(const change of ['inside work','native measurement','outside work with native measurement'] as const)test(`${periodName}: fixed drawing producer control preserves ${change}`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const to=NOW-30_123,from=to-(periodName==='24h'?24:30*24)*3_600_000+123;
+  const h=await fixture({personal:true,fixed:true,periodName,creditFrom:to-300_000,creditTo:to-100});
+  h.selectRange({from,to});await flush();const d=await drawings(h,true);
+  try{
+    const total=()=>h.period.get().rows.reduce((sum:number,row:any)=>sum+row.workedMs,0);
+    const native=()=>d.loader.getFinancial().history!.series.find(row=>row.sourceId===h.source&&row.windowId==='w')!;
+    assert.equal(total(),299_900);assert.equal(native().remainingAtEnd,83);
+    h.requests.length=0;h.frames.length=0;
+    if(change==='inside work')h.credit(to-1,to+100);
+    if(change==='outside work with native measurement')h.credit(to,to+100);
+    if(change!=='inside work')h.store.record(h.source,{observedAt:to-1,plan:'',resets:null,staleAfterMs:3_600_000,
+      windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:18,remaining:82,resetAt:NOW+3_600_000}]});
+    h.events.flush();await flush();
+    const notices=h.frames.filter(frame=>frame.type==='history').map(frame=>JSON.parse(frame.data));
+    assert.ok(notices.some(data=>data.changes?.some((row:any)=>row.source===h.source&&row.scope==='quota'&&row.since===to-1)), 'the real producer changed evidence inside the fixed interval');
+    if(change==='inside work')assert.ok(notices.some(data=>data.workSince===to-1));
+    else if(change==='native measurement')assert.ok(notices.every(data=>data.workSince===undefined),'the native control adds no credited work');
+    else assert.ok(notices.some(data=>data.workSince===to&&data.changes.some((row:any)=>row.since<row.workSince)), 'combined news preserves the earlier native measurement');
+    assert.ok(h.requests.some(body=>body.quota),'an inside update must still reach the existing drawing reader');
+    assert.equal(total(),change==='inside work'?299_901:299_900,'only the one millisecond before the exclusive endpoint changes selected work');
+    assert.equal(native().remainingAtEnd,change==='inside work'?83:82,'the native change must reach the published quota history');
+    assert.ok(d.loader.get().history);assert.equal(d.loader.get().loading,false);
+  }finally{d.close();await h.close();}
+});
+
+for(const periodName of ['24h','30d'])for(const navigation of ['fixed','live','pan'] as const)test(`${periodName}: deferred outside work reenters through ${navigation}`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const to=NOW-30_123,from=to-(periodName==='24h'?24:30*24)*3_600_000+123;
+  const h=await fixture({personal:true,fixed:true,periodName,creditFrom:to-300_000,creditTo:to-100});
+  h.selectRange({from,to});await flush();const d=await drawings(h,true);
+  try{
+    const total=()=>h.period.get().rows.reduce((sum:number,row:any)=>sum+row.workedMs,0);
+    h.requests.length=0;h.frames.length=0;h.credit(to,to+100);h.events.flush();await flush();
+    assert.ok(h.frames.some(frame=>frame.type==='history'&&JSON.parse(frame.data).workSince===to),'the actual outside credit reached the reader');
+    assert.equal(h.requests.length,0,'the original fixed drawing remains untouched');assert.equal(total(),299_900);
+    if(navigation==='pan'){
+      d.loader.pan({token:1,length:to-from,from:from+100,to:to+100,direction:0});await flush();
+      const plot=d.loader.getActivityPlot();assert.ok(plot);
+      const groups=plotGroups(plot,{k0:Math.floor((from+100)/plot.cell),k1:Math.ceil((to+100)/plot.cell)-1},'project');
+      assert.equal(groups.reduce((sum,group)=>sum+group.cells.reduce((n,[,ms])=>n+ms,0),0),300_000,'the actual pan strip includes the previously outside credit');
+      assert.equal(total(),299_900,'panning does not change the committed fixed work selection');
+    }else{
+      h.selectRange(navigation==='live'?null:{from,to:to+100});
+      d.loader.choose(periodName,h.selectedRange());d.runScheduled();await flush();
+      assert.equal(total(),300_000,'the new committed target includes the outside credit');
+      assert.equal(d.renderActivity().history!.activity.agentMs,300_000,'the published Activity projection includes the same work');
+    }
+    assert.ok(h.requests.some(body=>body.quota&&body.quota.cells!=='skip'),'navigation must refill the previously dirty drawing cells');
+  }finally{d.close();await h.close();}
+});
+
+test('deferred outside work yields to a zero-cutoff producer rebaseline',async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const to=NOW-30_123,from=to-24*3_600_000+123;
+  const h=await fixture({personal:true,fixed:true,periodName:'24h',creditFrom:to-300_000,creditTo:to-100});
+  h.selectRange({from,to});await flush();const d=await drawings(h,true);
+  try{
+    h.credit(to,to+100);h.events.flush();await flush();h.requests.length=0;h.frames.length=0;
+    const invalidation=t.mock.method(h.events,'clientHistory'),authority=h.page.get().board!.workAuthority;
+    h.store.observeWork(h.device,[{accountBy:'login',source:h.source,origin:'terminal',startedAt:h.period.get().rows[0].startedAt,project:'Work project',folder:'Private folder',client:'codex',
+      identity:{kind:'stable',sessionId:'c'.repeat(32)},route:{class:'api',by:'session',host:'api.example',provider:'openai'}}]);
+    h.events.flush();await flush();
+    assert.ok(invalidation.mock.calls.some(call=>call.arguments[0]===h.owner&&call.arguments[1]===0),'the actual producer enrichment retires previous evidence at cutoff zero');
+    assert.notEqual(h.page.get().board!.workAuthority,authority);
+    assert.ok(h.frames.some(frame=>frame.type==='snapshot'),'the changed work authority delivers a fresh baseline');
+    assert.ok(h.requests.some(body=>body.sessions),'the new baseline refreshes selected work evidence');
+    assert.equal(h.period.get().rows.length,1);assert.equal(h.period.get().rows[0].source,null,'the API-route evidence retires the previous subscription funding');
+    assert.equal(d.renderActivity().history!.activity.agentMs,299_900,'evidence enrichment preserves the exact selected interval');
+  }finally{d.close();await h.close();}
+});
+
+test('deferred outside work yields to actual shared-board authority revocation',async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const to=NOW-30_123,from=to-24*3_600_000+123;
+  const h=await fixture({fixed:true,periodName:'24h',creditFrom:to-300_000,creditTo:to-100});
+  h.selectRange({from,to});await flush();const d=await drawings(h,true);
+  try{
+    const authority=h.page.get().board!.workAuthority;assert.equal(h.period.get().rows.length,1);
+    h.credit(to,to+100);h.events.flush();await flush();h.frames.length=0;
+    h.remove();await flush();
+    assert.notEqual(h.page.get().board!.workAuthority,authority,'removing the actual supplying member changes admitted work');
+    assert.equal(h.period.get().rows.length,0,'revoked work cannot survive the deferred outside update');
+    const activity=d.renderActivity().history!.activity;
+    assert.equal(activity.agentMs,0);assert.equal(activity.by.project.length,0);
+    assert.equal(d.loader.getFinancial().history!.series.find(row=>row.sourceId===h.source&&row.windowId==='w')!.remainingAtEnd,83,'the still-provided native quota remains available');
+  }finally{d.close();await h.close();}
 });
 
 test('work at the fixed exclusive endpoint leaves calendar and Activity evidence without another read',async t=>{

@@ -2294,8 +2294,13 @@ late updates reuse clean native cells with the existing compact exact summary; n
 before dispatch coalesces and news during a response requires a current replacement.
 Work-filter replacement can refill Activity drawing cells through the existing reader
 and its bounded tile window. Cancelled and late responses remain counted. Work starting
-at or after the fixed upper endpoint does not reread the session ledger; the shared
-calendar and its drawing cells can still refresh. The 24h/30d benchmark covers this
+at or after the fixed upper endpoint does not reread the session ledger or start an
+independent drawing read, including while the first answer is pending. The reader
+keeps the exact outside cutoff until navigation needs that suffix or a necessary
+read covers its boundary. Earlier missing tiles can fill without invalidating the
+cached tail. Navigation applies the cutoff to cached cells and older flights before
+using the new target; a read covering it replaces the dirty cells normally. The shared
+calendar may still refresh within the combined transport. The 24h/30d benchmark covers this
 shared-filter path and checks that all five charts' emphasis causes zero reads,
 preparation or preference writes under the existing transport, preparation, two-slot
 and 15 MiB memory ceilings.

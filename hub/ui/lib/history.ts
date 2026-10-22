@@ -66,6 +66,7 @@ export class HistoryStore {
   private seq = 0;
   private metaSeq = 0;
   private newsSeq = 0;
+  private deferredNews: {target:string;epoch:number;since:number} | null = null;
   private lineupKey = '';
   private workAuthority: string | undefined;
   private workKey: string | undefined;
@@ -177,6 +178,7 @@ export class HistoryStore {
   }
 
   close() {
+    this.deferredNews=null;
     this.cancelProjection();
     this.presentation++;
     this.nativePresentation++;
@@ -276,6 +278,7 @@ export class HistoryStore {
   /** Selected activity has a lifetime of its own; native observations keep theirs. */
   setWorkFilter(key:string,filter?:WorkFilter) {
     if(this.scope==='budget'||key===this.workKey)return false;
+    this.flushNews();
     const available=!filter||executableWorkFilters(filter);
     const initialized=this.workKey!==undefined;this.workKey=key;this.workAvailable=available;
     if(!initialized&&!this.grids.size&&!this.flights.size)return false;
@@ -289,6 +292,7 @@ export class HistoryStore {
   }
 
   news(since: number, workAuthority?: string) {
+    const authorityChanged=this.workAuthority!==undefined&&workAuthority!==undefined&&workAuthority!==this.workAuthority;
     if (workAuthority || since === 0) this.workAuthority = workAuthority;
     this.newsSeq++;
     this.cutTo = null;
@@ -299,18 +303,40 @@ export class HistoryStore {
       this.publish();
     }
     else {
-      for (const [cell, tiles] of this.grids) for (const tile of tiles.values()) {
-        if (tile.to > since) tile.validTo = Math.min(tile.validTo, Math.max(tile.readFrom, cellStart(since, cell)));
-        if (tile.to > since) tile.nativeValidTo = Math.min(tile.nativeValidTo, Math.max(tile.nativeFrom, cellStart(since, cell)));
+      const target=this.selected&&!this.interest?timeRangeKey(this.selected):null;
+      if(!authorityChanged&&target&&since>=this.selected!.to){
+        // A later observation cannot change this exact fixed interval. Keep its
+        // boundary until another target or read needs the surrounding cells.
+        const previous=this.deferredNews;
+        if(previous&&(previous.target!==target||previous.epoch!==this.epoch))this.flushNews();
+        this.deferredNews={target,epoch:this.epoch,since:Math.min(since,this.deferredNews?.since??Infinity)};
+        return;
       }
-      for (const flight of this.flights) if (flight.epoch === this.epoch && flight.to > since) flight.touched = Math.min(flight.touched, cellStart(since, flight.cell));
+      this.flushNews();
+      this.invalidateSince(since);
     }
     this.schedule();
+  }
+
+  private invalidateSince(since:number) {
+    for(const [cell,tiles]of this.grids)for(const tile of tiles.values()){
+      if(tile.to>since)tile.validTo=Math.min(tile.validTo,Math.max(tile.readFrom,cellStart(since,cell)));
+      if(tile.to>since)tile.nativeValidTo=Math.min(tile.nativeValidTo,Math.max(tile.nativeFrom,cellStart(since,cell)));
+    }
+    for(const flight of this.flights)if(flight.epoch===this.epoch&&flight.to>since)flight.touched=Math.min(flight.touched,cellStart(since,flight.cell));
+  }
+
+  private flushNews() {
+    const pending=this.deferredNews;
+    this.deferredNews=null;
+    if(!pending||pending.epoch!==this.epoch)return;
+    this.invalidateSince(pending.since);
   }
 
   choose(period: string, selected: TimeRange | null) {
     const key = selected ? timeRangeKey(selected) : period;
     if (key === (this.selected ? timeRangeKey(this.selected) : this.period)) return;
+    this.flushNews();
     this.preparations?.cancel(this.composeOwner);
     this.composeIdentity = '';
     this.composeCurrent = null;
@@ -342,6 +368,7 @@ export class HistoryStore {
 
   /** Geometry changes do not choose a committed target or compose its totals. */
   pan(interest: PlotInterest) {
+    this.flushNews();
     const previous = this.interest;
     if (!previous) {
       // Active input invalidates composition; its identity must leave with the job.
@@ -410,6 +437,7 @@ export class HistoryStore {
   }
 
   private invalidate() {
+    this.deferredNews=null;
     this.cancelProjection();
     this.activityError=null;this.clear('activityRetry');
     this.epoch++;
@@ -808,6 +836,10 @@ export class HistoryStore {
   }
 
   private read(target: Target, from: number, to: number, role: Flight['role']) {
+    const boundary=this.deferredNews?cellStart(this.deferredNews.since,target.cell):null;
+    // Earlier necessary reads do not touch the deferred suffix. A read covering
+    // its boundary can replace it without adding another read of the fixed tail.
+    if(boundary!==null&&from<=boundary&&to>boundary)this.flushNews();
     if(this.pool)for(const waiting of [...this.flights])if(!waiting.started&&waiting.role===role)this.abort(waiting);
     const activityOnly=this.scope==='quota'&&this.wantsActivity&&this.workKey!==undefined&&this.nativeFull(target.cell,from,to);
     const flight: Flight = {submitted:false,started:false,seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity, startedAt: this.elapsedNow(), controller: new AbortController(), role,activityOnly};

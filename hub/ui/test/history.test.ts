@@ -86,6 +86,79 @@ function harness(budget?: number, preparations?: Preparations, scope?: 'quota'|'
   return {store, reads, advance, start, now: () => now, dropped: () => dropped, timers, correctClock: (ms: number) => {now += ms;}};
 }
 
+test('outside news leaves a cached tail untouched while necessary older tiles arrive',async()=>{
+  const run=async(outside:boolean)=>{
+    const h=harness(undefined,undefined,'quota',new HistoryPool()),to=NOW-30_123;
+    const settle=async()=>{for(let n=0;n<30;n++){await flush();const read=pending(h)[0];if(!read)return;await read.answer();}assert.fail('history did not settle');};
+    try{
+      h.store.choose('30d',{from:to-24*24*H,to});await h.start();await settle();
+      assert.ok(h.store.get().history);
+      const start=h.reads.length;
+      h.store.choose('30d',{from:to-30*24*H,to});await flush();
+      const first=pending(h)[0];assert.ok(first);assert.ok(first.to<to-24*H,'the held necessary read is in the uncached head');
+      if(outside)h.store.news(to);
+      await first.answer();await settle();
+      assert.equal(h.store.get().history?.range,`${to-30*24*H}-${to}`);
+      return h.reads.slice(start).map(({cell,from,to})=>({cell,from,to}));
+    }finally{h.store.close();}
+  };
+  const control=await run(false),outside=await run(true);
+  assert.ok(control.length>=2,'multiple necessary head reads must exercise admission after the outside event');
+  assert.deepEqual(outside,control,'outside news cannot add a terminal read of the already cached tail');
+});
+
+for(const change of ['range','live','pan','filter','inactive','fresh-read'])test(`deferred outside news remains truthful after ${change}`,async()=>{
+  const h=harness(undefined,undefined,'quota',new HistoryPool()),range={from:NOW-H,to:NOW-30_123};
+  try{
+    if(change==='fresh-read')h.store.setActivityActive(false);
+    h.store.choose('1h',range);await h.start();await h.reads[0].answer();
+    const shown=h.store.get();
+    h.store.news(range.to+100);h.store.news(range.to);h.store.news(range.to+200);await flush();
+    assert.equal(h.reads.length,1);assert.equal(h.store.get(),shown);
+    if(change==='inactive'){h.store.setActive(false);h.store.setActive(true);await flush();assert.equal(h.reads.length,1);}
+    if(change==='range'||change==='inactive')h.store.choose('1h',{...range,to:range.to+200});
+    else if(change==='live')h.store.choose('1h',null);
+    else if(change==='pan')h.store.pan({token:1,length:H,from:range.from,to:range.to+200,direction:1});
+    else if(change==='filter')h.store.setWorkFilter('different');
+    else h.store.setActivityActive(true);
+    await flush();const read=pending(h)[0];assert.ok(read,'the changed target or numerical plane must not reuse stale suffix evidence');
+    assert.ok(read.from<=cellStart(range.to,read.cell),'the actual new flight includes the earliest deferred boundary');
+    await read.answer();await flush();
+    if(change==='fresh-read'){
+      const count=h.reads.length;
+      h.store.choose('1h',{...range,to:range.to+200});await flush();
+      assert.equal(h.reads.length,count,'the old deferred marker cannot invalidate the newly received suffix');
+    }
+    assert.ok(h.store.get().history);
+  }finally{h.store.close();}
+});
+
+test('a deferred outside boundary never delays hard retirement or a different work authority',async()=>{
+  for(const hard of [false,true]){
+    const h=harness(undefined,undefined,'quota'),range={from:NOW-H,to:NOW-30_123};
+    try{
+      h.store.choose('1h',range);await h.start();await h.reads[0].answer();
+      h.store.news(range.to,'first');await flush();assert.equal(h.reads.length,1);
+      h.store.news(hard?0:range.to+1,'second');
+      if(hard)assert.equal(h.store.get().history,null,'a hard cutoff retires the retained frame immediately');
+      await flush();assert.equal(h.reads.length,2,'changed authority cannot defer its replacement behind an outside timestamp');
+      await h.reads[1].answer();assert.ok(h.store.get().history);
+    }finally{h.store.close();}
+  }
+});
+
+test('closing a fixed target discards its deferred boundary with the old cache',async()=>{
+  const h=harness(undefined,undefined,'quota'),range={from:NOW-H,to:NOW-30_123};
+  try{
+    h.store.choose('1h',range);await h.start();await h.reads[0].answer();
+    h.store.news(range.to);await flush();assert.equal(h.reads.length,1);
+    h.store.close();h.store.open('new');h.store.hello('new-run');h.store.snapshot(['s'],['s w']);await flush();
+    await h.reads[1].answer({run:'new-run'});assert.ok(h.store.get().history);
+    h.store.choose('1h',{...range,to:range.to+200});await flush();
+    assert.equal(h.reads.length,2,'the new context must not inherit a retired outside cutoff');
+  }finally{h.store.close();}
+});
+
 test('metadata tokens belong to the retained board, run and meter selection', async () => {
   const h=harness();
   try {
