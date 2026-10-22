@@ -52,6 +52,7 @@ class BoardPeriod {
   private active=false;
   private readonly preparationOwner={};
   private receiving=Promise.resolve();
+  private notifications:Set<Set<()=>void>>|null=null;
   private retirementAt=Infinity;
   private retiring=false;
   private retirementPreparing=false;
@@ -219,7 +220,12 @@ class BoardPeriod {
   getProjectionRevision=(scope:PeriodScope)=>this.projectionRevision[scope];
   projectionChangesAt=(scope:PeriodScope,now:number)=>this.selection.mode==='range'?this.tapes.get(scope)?.accounting.changesAt(now,0)??null:null;
   subscribeProjection=(scope:PeriodScope,listener:()=>void)=>{this.projectionListeners[scope].add(listener);return()=>{this.projectionListeners[scope].delete(listener);};};
-  private publishProjection(scopes:readonly PeriodScope[]=PERIOD_SCOPES){for(const scope of scopes){this.projectionRevision[scope]++;for(const listener of this.projectionListeners[scope])listener();}}
+  private notify(listeners:Set<()=>void>|undefined){
+    if(!listeners)return;
+    if(this.notifications)this.notifications.add(listeners);
+    else for(const listener of [...listeners])if(listeners.has(listener))listener();
+  }
+  private publishProjection(scopes:readonly PeriodScope[]=PERIOD_SCOPES){for(const scope of scopes){this.projectionRevision[scope]++;this.notify(this.projectionListeners[scope]);}}
   /** A discarded prefix cannot supply a new analytical range while replacement waits. */
   private workRange(now:number):PeriodBasis['range']|null {
     if(!this.work.basis)return null;
@@ -409,8 +415,8 @@ class BoardPeriod {
       ...(filters&&this.selection.mode==='live'&&(queries.quota||queries.budget?.work==='1')?{sourceWork:{...(this.sourceCursor?{cursor:this.sourceCursor}:{})}}:{})};
     return {board:board.id,generation:this.generation,resourceGeneration:this.resourceGeneration,facetGeneration:this.facetGeneration,calendarGeneration:this.calendar.generation,revision:this.revision,proofEpoch:this.proofEpoch,request};
   }
-  private setValue(id:string,value:Reading<PeriodValues>){if(value.value&&value.basis&&value.basis.range.to>value.basis.evaluatedAt)value={...value,value:periodValueNow(value.value,Math.min(value.basis.range.to,hubNow()))};this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
-  private publishWork() {this.workState={...this.work,rows:this.workRows,evidence:this.workEvidence,...(this.workLimit?{loading:false,error:'filters_limit'}:{})};for(const listener of this.listeners)listener();}
+  private setValue(id:string,value:Reading<PeriodValues>){if(value.value&&value.basis&&value.basis.range.to>value.basis.evaluatedAt)value={...value,value:periodValueNow(value.value,Math.min(value.basis.range.to,hubNow()))};this.values.set(id,value);this.notify(this.valueListeners.get(id));}
+  private publishWork() {this.workState={...this.work,rows:this.workRows,evidence:this.workEvidence,...(this.workLimit?{loading:false,error:'filters_limit'}:{})};this.notify(this.listeners);}
   private retireWork() {
     this.activityLifetime={};
     this.calendar.clear(true);this.calendar.dirty();
@@ -761,41 +767,51 @@ class BoardPeriod {
     }
     const valid=()=>intent.generation===this.generation&&intent.revision===this.revision;
     const prepared=await prepareAsync(this.preparationOwner,build(),valid).catch(error=>{release();throw error;});
+    // Calendar publication is independent and may synchronously replace this intent.
+    if(prepared&&valid())this.tickCalendar(hubNow());
     if(!prepared||!valid()){release();return;}
-    for(const scope of PERIOD_SCOPES){const part=reply[scope];if(part){if(part.state==='error'){this.projectionErrors[scope]=part.error==='history_limit'?'history_limit':'history_failed';this.dirtyScopes.delete(scope);}else delete this.projectionErrors[scope];changed.add(scope);}}
-    this.sourceTape=nextSourceTape;this.sourceCurves=nextSourceCurves;this.sourceCursor=nextSourceCursor;
-    this.evaluatedAt=hubNow();this.tapes.clear();for(const [scope,tape] of prepared.tapes)this.tapes.set(scope,tape);
     const selectedFixedPending=PERIOD_SCOPES.filter(scope=>reply[scope]?.state==='complete'&&intent.request.selection.mode==='range'&&(scope==='quota'||scope==='budget'&&intent.request.budget?.work==='1')&&(JSON.stringify(intent.request.workFilter)??'')!==this.filterKey);
-    for(const scope of PERIOD_SCOPES){const section=reply[scope];if(section?.state==='complete'&&section.value.tape){if(selectedFixedPending.includes(scope))this.dirtyScopes.add(scope);else this.dirtyScopes.delete(scope);}}
     const staleFacets=!!reply.facets&&intent.facetGeneration!==this.facetGeneration;
-    if(reply.facets&&!staleFacets){const part=reply.facets;this.facetsNeeded=false;this.facetAt=intent.request.evaluatedAt;this.facetState=part.state==='complete'?{value:part.value,loading:false,error:null}:{value:null,loading:false,error:part.error};for(const listener of this.facetListeners)listener();}
-    if(reply.values) {
-      if(reply.values.state==='complete'){
-        changed.add('quota');this.valuesNeeded=false;this.valuesProofEpoch=proofEpoch;for(const value of reply.values.value)this.setValue(value.id,{value,basis:reply.values.basis,loading:false,error:null});
+    // Subscribers may close the board, navigate or admit new evidence. Finish the
+    // whole snapshot and its storage handoff before crossing that boundary.
+    const notifications=new Set<Set<()=>void>>();this.notifications=notifications;
+    try{
+      for(const scope of PERIOD_SCOPES){const part=reply[scope];if(part){if(part.state==='error'){this.projectionErrors[scope]=part.error==='history_limit'?'history_limit':'history_failed';this.dirtyScopes.delete(scope);}else delete this.projectionErrors[scope];changed.add(scope);}}
+      this.sourceTape=nextSourceTape;this.sourceCurves=nextSourceCurves;this.sourceCursor=nextSourceCursor;
+      this.evaluatedAt=hubNow();this.tapes.clear();for(const [scope,tape] of prepared.tapes)this.tapes.set(scope,tape);
+      for(const scope of PERIOD_SCOPES){const section=reply[scope];if(section?.state==='complete'&&section.value.tape){if(selectedFixedPending.includes(scope))this.dirtyScopes.add(scope);else this.dirtyScopes.delete(scope);}}
+      if(reply.facets&&!staleFacets){const part=reply.facets;this.facetsNeeded=false;this.facetAt=intent.request.evaluatedAt;this.facetState=part.state==='complete'?{value:part.value,loading:false,error:null}:{value:null,loading:false,error:part.error};this.notify(this.facetListeners);}
+      if(reply.values) {
+        if(reply.values.state==='complete'){
+          changed.add('quota');this.valuesNeeded=false;this.valuesProofEpoch=proofEpoch;for(const value of reply.values.value)this.setValue(value.id,{value,basis:reply.values.basis,loading:false,error:null});
+        }
+        else {this.valuesNeeded=false;for(const id of this.sourceIds)this.setValue(id,{...this.getValue(id),loading:false,error:reply.values.error});}
       }
-      else {this.valuesNeeded=false;for(const id of this.sourceIds)this.setValue(id,{...this.getValue(id),loading:false,error:reply.values.error});}
-    }
-    if(reply.sessions) {
-      const section=reply.sessions;
-      if(section.state==='error'){changed.add('quota');this.workNeeded=false;this.work={...this.work,loading:false,error:section.error};this.publishWork();}
-      else {
-        const value=prepared.work!;
-        this.workEvidence++;
-        this.cursor=section.value.cursor;this.workNeeded=false;this.liveEvidence ||= intent.request.selection.mode==='live';
-        this.workProofEpoch=proofEpoch;
-        this.workSelection=intent.request.selection;this.workRangeKey=this.workSelection.mode==='range'?periodKey(this.workSelection):prefs().range;
-        this.work={value,basis:section.basis,loading:false,error:null};this.index=prepared.index;this.activity=prepared.activity;this.activityRetained=null;
-        this.tick(false);
+      if(reply.sessions) {
+        const section=reply.sessions;
+        if(section.state==='error'){changed.add('quota');this.workNeeded=false;this.work={...this.work,loading:false,error:section.error};this.publishWork();}
+        else {
+          const value=prepared.work!;
+          this.workEvidence++;
+          this.cursor=section.value.cursor;this.workNeeded=false;this.liveEvidence ||= intent.request.selection.mode==='live';
+          this.workProofEpoch=proofEpoch;
+          this.workSelection=intent.request.selection;this.workRangeKey=this.workSelection.mode==='range'?periodKey(this.workSelection):prefs().range;
+          this.work={value,basis:section.basis,loading:false,error:null};this.index=prepared.index;this.activity=prepared.activity;this.activityRetained=null;
+          this.updateWork(hubNow(),false);
+        }
       }
-    }
-    this.measureBytes();
-    release();
-    this.publishProjection([...changed]);
-    this.retirementAt=intent.request.selection.mode==='live'?prepared.edge+intent.request.selection.periodMs:Infinity;
+      this.measureBytes();
+      release();
+      this.publishProjection([...changed]);
+      this.retirementAt=intent.request.selection.mode==='live'?prepared.edge+intent.request.selection.periodMs:Infinity;
+    }finally{this.notifications=null;}
+    // Only notification groups are queued, never captured snapshots. A surviving
+    // subscriber still reads the latest state after another group reenters.
+    for(const listeners of notifications)this.notify(listeners);
     this.scheduleClock();
     // Source-wide summaries remain usable while direct hours or facet choices need
     // a newer reply. Reconsider even an already completed transport intent.
-    if(selectedFixedPending.length||staleFacets&&this.facetsDemand>0)this.transport.retry();
+    if(valid()&&(selectedFixedPending.length||staleFacets&&this.facetsDemand>0))this.transport.retry();
   }
   private async planRetirement(){
     if(this.selection.mode!=='live'){this.retirementAt=Infinity;return;}
@@ -905,10 +921,15 @@ class BoardPeriod {
       // Keep the previous honest basis until its bounded replacement arrives.
       if(workGap)clock.due(this.watch,null,now);
     }
+    if(!this.updateWork(now,fromClock))return;
+    this.retireExpired(now);
+    this.scheduleClock();
+  }
+  private updateWork(now:number,fromClock:boolean){
     this.evaluatedAt=now;
     for(const tape of this.tapes.values()){const range=evaluatedRange(tape.selection,now);if(range.from>=tape.tape.from)tape.basisRange=range;}
     const projected=this.index&&this.work.basis?this.index.advance(this.workRange(now)!,now):{rows:this.workRows,changed:false,limited:false};
-    if(projected.limited){this.work={...this.work,error:'history_range_invalid'};this.publishWork();clock.due(this.watch,null,now);return;}
+    if(projected.limited){this.work={...this.work,error:'history_range_invalid'};this.publishWork();clock.due(this.watch,null,now);return false;}
     const rows=this.present(projected.rows);
     const changed=projected.changed||this.workState.value!==this.work.value||rows.length!==this.workRows.length||rows.some((row,i)=>row.ref!==this.workRows[i]?.ref||row.working!==this.workRows[i]?.working||!sameJson(row.currentPresence,this.workRows[i]?.currentPresence));
     if(changed) {
@@ -919,14 +940,13 @@ class BoardPeriod {
       const old=this.rowsBySource;this.rowsBySource=next;
       for(const id of new Set([...old.keys(),...next.keys()])) {
         if(sameJson(old.get(id)??[],next.get(id)??[])){if(old.has(id))next.set(id,old.get(id)!);continue;}
-        for(const listener of this.sourceListeners.get(id)??[])listener();
+        this.notify(this.sourceListeners.get(id));
       }
     }
     if(this.work.basis&&this.index&&this.workAdvances(now))this.work={...this.work,basis:{...this.work.basis,evaluatedAt:now,range:evaluatedRange(this.workSelection,now)}};
     if(changed||this.workState.loading!==this.work.loading||this.workState.error!==this.work.error||this.workSelection.mode==='range'&&!sameJson(this.workState.basis?.range,this.work.basis?.range))this.publishWork();
     if(!fromClock)this.publishProjection(['quota']);
-    this.retireExpired(now);
-    this.scheduleClock();
+    return true;
   }
   private scheduleClock(){
     const now=hubNow();

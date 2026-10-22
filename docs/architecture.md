@@ -1696,6 +1696,11 @@ while source evidence retains its own cursor, cache identity and generation.
 Late source-only adoption shares native arrays and copies only changed fixed
 summaries after reserving their metadata. The captured response remains charged
 beside recipient staging until adoption and its chart consumers finish.
+After preparation, the period coordinator commits resource tapes, values, facets,
+work indexes and row snapshots together, including their resident storage charge,
+before notifying any subscriber. Synchronous navigation or new evidence from a
+subscriber therefore sees a complete snapshot and cannot revive the captured reply.
+Calendar publication keeps its independent authority outside that commit.
 The private storage wrapper keeps boolean decisions that coincide with a changed
 rule's default; repeated include/exclude or wallet auto/only transitions cannot
 forget a dormant exclusion. Its filters and retained decisions together fit
