@@ -37,7 +37,7 @@ on:
         type: boolean
         default: false
       caption_control:
-        description: Run the caption publication A1/B/A2 control after the original warm-up
+        description: Compare the previous and current live captions with an A1/B/A2 control
         required: false
         type: boolean
         default: false
@@ -172,11 +172,21 @@ jobs:
           NATIVE_TRACE: ${{ inputs.native_trace }}
           NATIVE_PROFILE: ${{ inputs.native_profile }}
           CAPTION_CONTROL: ${{ inputs.caption_control }}
+      - name: Build the unchanged caption baseline
+        if: ${{ inputs.caption_control }}
+        run: |
+          git fetch --no-tags --depth=1 origin 9e4b1422961b8a3d5b9e2f9894d3db5584c65a43
+          baseline="$RUNNER_TEMP/quotum-caption-baseline"
+          mkdir "$baseline"
+          git archive 9e4b1422961b8a3d5b9e2f9894d3db5584c65a43 hub | tar -x -C "$baseline"
+          ln -s "$GITHUB_WORKSPACE/hub/node_modules" "$baseline/hub/node_modules"
+          npm run build --prefix "$baseline/hub"
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope dashboard
         env:
           QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.native_profile && 'native-profile' || inputs.native_trace && 'native-trace' || '' }}
           QUOTUM_BENCH_SOURCE_SHA: ${{ (inputs.native_trace || inputs.native_profile || inputs.caption_control) && inputs.diagnostic_ref || '' }}
           QUOTUM_BENCH_CAPTION_CONTROL: ${{ inputs.caption_control && '1' || '' }}
+          QUOTUM_BENCH_CAPTION_BASELINE_DIR: ${{ runner.temp }}/quotum-caption-baseline/hub/dist/client/assets
           QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ inputs.caption_control && inputs.expected_client_sha256 || '' }}
           QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-bench-dashboard
       - name: Benchmark evidence

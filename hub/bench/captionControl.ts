@@ -1,24 +1,36 @@
 import {createHash} from 'node:crypto';
+import {readFileSync,statSync} from 'node:fs';
+import path from 'node:path';
 import type {Cdp} from './cdp.js';
 import {deadline} from './deadline.js';
 import {percentile} from './budget.js';
 import {panning} from './panning.js';
 
-const client={name:'index-Dh2ec57X.js',bytes:1_172_081,hash:'0c166f884d27deac577f54b7a4ec32e2eb8c13ddb87968f6f486c0cdef715e63'};
-const changed={bytes:1_172_503,hash:'ef1c0d99a3b7b98a42b3fb6531169c716278c9f99602d7086ac4e3830026d976'};
-const style={name:'index-DUY6ug3k.css',bytes:84_236,hash:'b82047b3d8e9db91286a6cdf7b9556d3ac02b83c8761fa4ab1483255c17e0f7e'};
-const before='i??(e?al(e):fl(dl(t)))',start=1_105_185,end=1_105_207;
-const after="(()=>{const computed=(i??(e?al(e):fl(dl(t)))),frame=r.current?.frame;if(frame?.input!=='wheel'||globalThis.__quotumPan?.segment!=='wheel')return computed;const state=globalThis.__q113CaptionAblation??=( {token:null,caption:null,renders:0,suppressed:0,tokens:0} );state.renders++;if(state.token!==frame.token){state.token=frame.token;state.caption=computed;state.tokens++;}if(computed!==state.caption)state.suppressed++;return state.caption;})()";
-const hash=(body:string)=>createHash('sha256').update(body).digest('hex');
+const client={name:'index-B3XdTJFg.js',bytes:1_172_211,hash:'16ead23988b0712c6b064794792a708637c10d2d1008c7ebcf6bf6a2a46c6dd4'};
+const style={name:'index-CK3ANXlu.css',bytes:84_396,hash:'f0e79efbf9db07e2aae62685a6cc9ef98ef688d45382219650dc730bea57f6c7'};
+const oldClient={name:'index-Dh2ec57X.js',bytes:1_172_081,hash:'0c166f884d27deac577f54b7a4ec32e2eb8c13ddb87968f6f486c0cdef715e63'};
+const oldStyle={name:'index-DUY6ug3k.css',bytes:84_236,hash:'b82047b3d8e9db91286a6cdf7b9556d3ac02b83c8761fa4ab1483255c17e0f7e'};
+const hash=(body:string|Buffer)=>createHash('sha256').update(body).digest('hex');
 const numeric=(value:unknown):value is number=>typeof value==='number'&&Number.isFinite(value)&&value>=0;
 type Target=Pick<Cdp,'send'|'evaluate'|'on'|'off'>;
 type Paused={requestId:string;request:{url:string};responseStatusCode?:number;responseHeaders?:{name:string;value:string}[]};
 type Parsed={url:string;scriptId:string;executionContextId:number};
 
-/** Only the caption's published children change; its original computation still runs. */
-export function patchCaption(body:string) {
-  if(body.slice(start,end)!==before)throw new Error('Caption expression mismatch');
-  return body.slice(0,start)+after+body.slice(end);
+type Baseline={client:string;style:string};
+
+/** A rollback serves only the separately built, byte-pinned production assets. */
+export function loadCaptionBaseline(directory:string|undefined):Baseline {
+  if(!directory||!path.isAbsolute(directory))throw new Error('Caption baseline assets directory required');
+  const read=(asset:typeof oldClient)=>{
+    try {
+      const file=path.join(directory,asset.name),stat=statSync(file);
+      if(!stat.isFile()||stat.size!==asset.bytes)throw new Error('size');
+      const body=readFileSync(file);
+      if(body.length!==asset.bytes||hash(body)!==asset.hash)throw new Error('hash');
+      return body.toString('utf8');
+    }catch{throw new Error('Caption baseline '+(asset===oldClient?'client':'style')+' identity mismatch');}
+  };
+  return {client:read(oldClient),style:read(oldStyle)};
 }
 
 /** Response interception belongs to this target and is removed even after a rejected body. */
@@ -31,7 +43,7 @@ export class CaptionAssets {
   private installed=false;
   private readonly clientURL:string;
   private readonly styleURL:string;
-  constructor(private readonly cdp:Target,base:string,private readonly enabled:boolean,private readonly signal:AbortSignal) {
+  constructor(private readonly cdp:Target,base:string,private readonly candidate:boolean,private readonly signal:AbortSignal,private readonly baseline:Baseline) {
     this.clientURL=new URL('/assets/'+client.name,base).href;
     this.styleURL=new URL('/assets/'+style.name,base).href;
   }
@@ -49,8 +61,8 @@ export class CaptionAssets {
       let body=payload.base64Encoded?Buffer.from(payload.body,'base64').toString('utf8'):payload.body;
       const receivedHash=hash(body);
       if(Buffer.byteLength(body)!==expected.bytes||receivedHash!==expected.hash)throw new Error('Caption upstream identity mismatch');
-      if(expected===client&&this.enabled)body=patchCaption(body);
-      const fulfilled=expected===client&&this.enabled?changed:expected,fulfilledHash=hash(body);
+      if(!this.candidate)body=expected===client?this.baseline.client:this.baseline.style;
+      const fulfilled=this.candidate?expected:expected===client?oldClient:oldStyle,fulfilledHash=hash(body);
       if(Buffer.byteLength(body)!==fulfilled.bytes||fulfilledHash!==fulfilled.hash)throw new Error('Caption fulfilled identity mismatch');
       const headers=(event.responseHeaders??[]).filter(header=>!['content-length','content-encoding','transfer-encoding','connection','etag'].includes(header.name.toLowerCase()));
       await this.cdp.send('Fetch.fulfillRequest',{requestId:event.requestId,responseCode:200,responseHeaders:headers,body:Buffer.from(body).toString('base64')},this.signal);
@@ -74,10 +86,10 @@ export class CaptionAssets {
     if(!parsed||!/^[1-9]\d*$/.test(parsed.scriptId)||!Number.isSafeInteger(parsed.executionContextId)||parsed.executionContextId<=0)throw new Error('Caption parsed owner missing');
     const actual=await this.cdp.evaluate<{client:string;styles:{href:string;disabled:boolean}[]}>(`({client:[...document.scripts].find(s=>s.src===${JSON.stringify(this.clientURL)})?.src,styles:[...document.styleSheets].filter(s=>s.href===${JSON.stringify(this.styleURL)}).map(s=>({href:s.href,disabled:s.disabled}))})`,this.signal);
     if(actual.client!==this.clientURL||actual.styles.length!==1||actual.styles[0].disabled||!this.received.some(row=>row.name==='client')||!this.received.some(row=>row.name==='style'))throw new Error('Caption loaded assets missing');
-    const source=await this.cdp.send<{scriptSource:string}>('Debugger.getScriptSource',{scriptId:parsed.scriptId},this.signal),expected=this.enabled?changed:client;
+    const source=await this.cdp.send<{scriptSource:string}>('Debugger.getScriptSource',{scriptId:parsed.scriptId},this.signal),expected=this.candidate?client:oldClient;
     if(typeof source.scriptSource!=='string'||Buffer.byteLength(source.scriptSource)!==expected.bytes||hash(source.scriptSource)!==expected.hash)throw new Error('Caption parsed identity mismatch');
     await this.cdp.send('Debugger.disable',{},this.signal);this.ready=true;
-    return {scriptId:Number(parsed.scriptId),receivedHash:client.hash,fulfilledHash:expected.hash,styleHash:style.hash,bytes:expected.bytes};
+    return {scriptId:Number(parsed.scriptId),name:client.name,receivedHash:client.hash,fulfilledHash:expected.hash,receivedStyleHash:style.hash,styleHash:this.candidate?style.hash:oldStyle.hash,bytes:expected.bytes};
   }
   check() {if(this.failure)throw this.failure;}
   async close(signal:AbortSignal) {
@@ -92,11 +104,12 @@ type Counters=Record<typeof metricNames[number],number>;
 type WheelResponse={ms:number;queued:number;processed:number;segment:string;requests:number;at:number;delivered:number;reached:number;id:number};
 type Wheel={samples:{at:number;stamp:number;ms:number;inputSegment:string;segment:string}[];responses:WheelResponse[];inputs:number;latency:number[]};
 type Reading=Awaited<ReturnType<typeof panning>>;
-type Arm={documentBefore?:{id:string;loaderId:string};documentAfter?:{id:string;loaderId:string};name:string;status:'complete'|'insufficient-evidence';assets:CaptionAssets['received'];binding?:Awaited<ReturnType<CaptionAssets['bind']>>;reading?:Reading;budgetFailures:{reason:string}[];exceptionCount:number;omittedExceptions:number;exceptions:{time:number|null;line:number|null;column:number|null;executionContextId:number|null}[];wheel?:Wheel;counterBefore?:Counters;counterAfter?:Counters;counterDelta?:Counters;caption?:{renders:number;suppressed:number;tokens:number}|null;metrics?:{frames:number;inputs:number;p95:number;p99:number;input95:number;wheelInput95:number};cleanup:string[];reason?:string};
+type Arm={documentBefore?:{id:string;loaderId:string};documentAfter?:{id:string;loaderId:string};name:string;status:'complete'|'insufficient-evidence';assets:CaptionAssets['received'];binding?:Awaited<ReturnType<CaptionAssets['bind']>>;reading?:Reading;budgetFailures:{reason:string}[];exceptionCount:number;omittedExceptions:number;exceptions:{time:number|null;line:number|null;column:number|null;executionContextId:number|null}[];wheel?:Wheel;counterBefore?:Counters;counterAfter?:Counters;counterDelta?:Counters;metrics?:{frames:number;inputs:number;p95:number;p99:number;input95:number;wheelInput95:number};cleanup:string[];reason?:string};
 
 /** A diagnostic A/B/rollback, never an accepted implementation or a canonical pass. */
 export async function captionControl(cdp:Cdp,base:string,evidence:{save(name:string,value:unknown):void},expectedClientSHA:string) {
-  if(expectedClientSHA!==client.hash)throw new Error('Caption control requires the exact original client');
+  if(expectedClientSHA!==client.hash)throw new Error('Caption control requires the exact candidate client');
+  const production=loadCaptionBaseline(process.env.QUOTUM_BENCH_CAPTION_BASELINE_DIR);
   const arms:Arm[]=[],failures:{name:string;reason:string}[]=[];
   const browser=await cdp.send<{product:string;revision:string;jsVersion:string}>('Browser.getVersion');
   const saved=await cdp.evaluate<{prefs:string|null;locale:string|null;url:string}>('({prefs:localStorage.getItem("quotum.prefs"),locale:localStorage.getItem("quotum.locale"),url:location.href})');
@@ -110,7 +123,7 @@ export async function captionControl(cdp:Cdp,base:string,evidence:{save(name:str
     return values;
   };
   for(const name of ['A1','B','A2']) {
-    const abort=new AbortController(),expires=performance.now()+90_000,assets=new CaptionAssets(cdp,base,name==='B',abort.signal);
+    const abort=new AbortController(),expires=performance.now()+90_000,assets=new CaptionAssets(cdp,base,name==='B',abort.signal,production);
     const arm:Arm={name,status:'insufficient-evidence',assets:assets.received,budgetFailures:[],exceptionCount:0,omittedExceptions:0,exceptions:[],cleanup:[]};arms.push(arm);
     const onException=(event:{timestamp?:number;exceptionDetails?:{lineNumber?:number;columnNumber?:number;executionContextId?:number}})=>{
       arm.exceptionCount++;
@@ -164,8 +177,6 @@ export async function captionControl(cdp:Cdp,base:string,evidence:{save(name:str
         if(arm.reading.reports.length!==1||arm.reading.reports[0].initiator!=='quota'||arm.reading.reports[0].period!=='24h'||arm.reading.problems.some(problem=>!allowed.has(problem)))throw new Error('Caption original structural checks failed');
         const report=arm.reading.reports[0],currentCohort=[report.series,report.sessionSeries,report.budgetSeries,report.fundsSeries,report.charts];
         if(currentCohort.some((value,index)=>value!==[48,15,12,12,5][index]))throw new Error('Caption initial measured cohort changed');
-        arm.caption=await cdp.evaluate<Arm['caption']>('(()=>{const s=globalThis.__q113CaptionAblation;return s?{renders:s.renders,suppressed:s.suppressed,tokens:s.tokens}:null;})()',signal);
-        if(name==='B'?!(arm.caption&&arm.caption.renders>0&&arm.caption.suppressed>0&&arm.caption.tokens>0):arm.caption!==null)throw new Error('Caption intervention activation mismatch');
         const wheel=arm.wheel;
         if(!began||!ended||!wheel||!wheel.samples.length||wheel.inputs!==wheel.responses.length||wheel.inputs!==wheel.latency.length||new Set(wheel.responses.map(row=>row.id)).size!==wheel.inputs||wheel.samples.some(row=>![row.at,row.stamp,row.ms].every(numeric)||row.ms<=0||row.inputSegment!=='wheel')||wheel.responses.some((row,index)=>!Number.isSafeInteger(row.id)||row.id<=0||row.segment!=='wheel'||![row.at,row.delivered,row.reached,row.ms,row.queued,row.processed].every(numeric)||row.reached<row.delivered||row.delivered<row.at||row.ms!==row.reached-row.at||row.queued!==row.delivered-row.at||row.processed!==row.reached-row.delivered||row.ms!==wheel.latency[index]))throw new Error('Caption complete wheel receipts missing');
         const first=arm.counterBefore,last=arm.counterAfter;

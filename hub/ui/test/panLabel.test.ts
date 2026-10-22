@@ -13,7 +13,7 @@ test('the actual period label subscribes to displayed words rather than every pa
   let preview: TimeRange | null = null, snapshot = () => null as string | null, localeReads = 0;
   const subscribe = (_listener: () => void) => () => {};
   const cache = {current: null as unknown};
-  const context = {React: {createElement: (_type: string, props: unknown, children: string) => ({props, children})},
+  const context = {React: {createElement: (_type: string, props: {'aria-hidden'?: string} | null, ...children: (string | {children: string})[]) => ({props, children: props?.['aria-hidden'] ? '' : children.map(child => typeof child === 'string' ? child : child.children).join('')})},
     useLocale: () => {localeReads++; return 'en';},
     useRef: () => cache,
     useSyncExternalStore: (listen: typeof subscribe, read: typeof snapshot, server: typeof snapshot) => {
@@ -55,7 +55,7 @@ test('actual period snapshots format each immutable frame and locale once while 
   const start = source.indexOf('function PeriodName('), body = source.slice(start, source.indexOf('\n/**', start));
   let frame: TimeRange | null = null, locale: Locale = 'en', formatted = 0, read = () => null as string | null;
   const cache = {current: null as unknown};
-  const context = {React: {createElement: (_tag: string, _props: unknown, children: string) => children},
+  const context = {React: {createElement: (_tag: string, props: {'aria-hidden'?: string} | null, ...children: string[]) => props?.['aria-hidden'] ? '' : children.join('')},
     useLocale: () => locale, useRef: () => cache, pan: {get: () => frame, subscribe: () => () => {}},
     useSyncExternalStore: (_listen: unknown, snapshot: typeof read, server: typeof read) => {assert.equal(server(), null); read = snapshot; return snapshot();},
     timeRangeLabel: (value: TimeRange) => {formatted++; return timeRangeLabel(value);},

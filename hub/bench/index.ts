@@ -40,6 +40,8 @@ import {idleRetentionScript,idleRetentionProblems,type IdleRetention} from './id
 import {ObservedWork} from './observed.js';
 import {fixedActivity} from './fixedActivity.js';
 import {captionControl} from './captionControl.js';
+import {captionGeometry} from './captionGeometry.js';
+import {deadline} from './deadline.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -272,6 +274,9 @@ async function main() {
 
     if (captionMode) {
       evidence.save('caption-control-warm', {opened, warm, timing, counts: heard.counts()});
+      const geometry=await deadline(30_000,signal=>captionGeometry(cdp,signal));
+      evidence.save('caption-control-geometry',geometry);
+      if(geometry.failures.length)throw new Stop('Caption rectangles or wrapped lines changed');
       const result = await captionControl(cdp, address.base, evidence, process.env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256 ?? '');
       evidence.save('caption-control-result', result);
       console.log(JSON.stringify(result, null, 2));

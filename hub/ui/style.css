@@ -560,6 +560,9 @@ td.muted, small.muted { color: var(--text-3); }
 .period .text-button { max-width: 100%; height: auto; min-height: 28px; padding: 4px 10px; white-space: normal; text-align: center; }
 .period .period-name { min-width: 0; }
 .period-name > span { min-width: 0; overflow-wrap: anywhere; }
+.period-caption { position: relative; }
+.period-caption > [aria-hidden] { visibility: hidden; }
+.period-caption > span:last-child { position: absolute; inset: 0; contain: size layout; }
 .period .icon-button { width: 28px; height: 28px; flex: 0 0 28px; }
 .period .icon-button svg { stroke-width: 1.6; stroke-linejoin: round; }
 .period .icon-button:disabled { opacity: .35; pointer-events: none; }
