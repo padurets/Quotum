@@ -87,7 +87,8 @@ export function harness(activity = false) {
     async pan() {panning = 1; loader.pan({token: 1, length: H, from: NOW - H, to: NOW, direction: 0}); await flush();},
     endPan() {panning = null; loader.endPan(false);},
     async fail(error: unknown) {await flush(); const read = pending()[0]; assert.ok(read, 'a real read must fail'); read.settled = true; read.reject(error); await flush();},
-    reconnect() {run = 'restarted'; event({type: 'hello', data: {epoch: run}}); event({type: 'snapshot', data: snapshot()});},
+    reconnect() {event({type: 'hello', data: {epoch: run}}); event({type: 'snapshot', data: snapshot()});},
+    restart() {run += '-restarted'; event({type: 'hello', data: {epoch: run}}); event({type: 'snapshot', data: snapshot()});},
     close() {stop(); loader.close();},
   };
 }
