@@ -30,6 +30,9 @@ funds history without waking quota or wallet analytics. A separate fixed Activit
 shared-filter totals and bar values, clean-cell reuse, coalesced late work, cancelled
 responses and all transport/preparation costs under the existing pool limits.
 Emphasis owns no reader and receives no extra-read allowance.
+Each fixed Activity period saves its bounded pool journal before checking completeness.
+Its larger diagnostic capacity retains the monthly ownership snapshots; omitted entries
+still fail the check, and the product's memory and transport limits stay the same.
 No browser means the check was not run.
 UTC calendar-only card events must match the stream's unchanged observation
 baseline and the exact new period. Raw traffic remains reported; missing, repeated or

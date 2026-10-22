@@ -1,9 +1,10 @@
 import {calendarReceiptScript} from './calendarReceipt';
 
 /** One opt-in page observes existing pool operations; it never supplies scheduling or retention decisions. */
-export function historyPoolReceiptScript() {
+export function historyPoolReceiptScript(byteLimit=256*1024) {
+  if(byteLimit!==256*1024&&byteLimit!==512*1024)throw new Error('Unsupported history receipt byte limit');
   return `(() => {
-    const limit=4096,tileLimit=1024,byteLimit=262144,summaryLimit=512,ownershipLimit=128,ownershipByteLimit=262144,entries=[],nearRows=[],ownershipRows=[],ownershipGraphs=[],members=[],ids=new WeakMap(),targets=new WeakMap(),summaries=new Map(),demandBindings=new WeakMap(),readOwners=new WeakMap(),retainedOwnership=new WeakMap(),graphKeys=new Map(),aborting=new WeakSet();let nextId=0,count=0,bytes=0,nearBytes=0,nearOmitted=0,omitted=0,errors=0,snapshotOmitted=0,summaryOmitted=0,ownershipBytes=0,ownershipOmitted=0,ownershipMissing=0,bindingMissing=0,reserveSerial=0,reserve=null,attached=false,lastMark=null,chargeCalls=0,peakCharge=null,reading=null,readSerial=0,admitting=null,sendingUnknown=0,sending=null,sharedPreparations=null,sharedPool=null;
+    const limit=4096,tileLimit=1024,byteLimit=${byteLimit},summaryLimit=512,ownershipLimit=128,ownershipByteLimit=262144,entries=[],nearRows=[],ownershipRows=[],ownershipGraphs=[],members=[],ids=new WeakMap(),targets=new WeakMap(),summaries=new Map(),demandBindings=new WeakMap(),readOwners=new WeakMap(),retainedOwnership=new WeakMap(),graphKeys=new Map(),aborting=new WeakSet();let nextId=0,count=0,bytes=0,nearBytes=0,nearOmitted=0,omitted=0,errors=0,snapshotOmitted=0,summaryOmitted=0,ownershipBytes=0,ownershipOmitted=0,ownershipMissing=0,bindingMissing=0,reserveSerial=0,reserve=null,attached=false,lastMark=null,chargeCalls=0,peakCharge=null,reading=null,readSerial=0,admitting=null,sendingUnknown=0,sending=null,sharedPreparations=null,sharedPool=null;
     const id=value=>value&&typeof value==='object'?(ids.has(value)?ids.get(value):(ids.set(value,++nextId),nextId)):null;
     const n=value=>typeof value==='number'&&Number.isFinite(value)?value:null;
     const interest=member=>{const p=member.interest;return p?[n(p.token),n(p.length),n(p.from),n(p.to),n(p.direction)]:null;};

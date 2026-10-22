@@ -6,15 +6,17 @@ import {PeriodTransport} from '../../ui/lib/periodTransport';
 import {safeEvidence} from '../evidence';
 import {historyPoolReceiptScript} from '../historyPoolReceipt';
 import {historyIdentityScript} from '../historyTrafficBrowser';
+import {fixedActivityScript} from '../fixedActivity';
 
-function fixture(realTransport:boolean|((pool:HistoryPool)=>PeriodTransport)=false) {
+function fixture(realTransport:boolean|((pool:HistoryPool)=>PeriodTransport)=false,script=historyPoolReceiptScript()) {
+  class Storage {values=new Map<string,string>();setItem(key:string,value:string){this.values.set(key,value);}getItem(key:string){return this.values.get(key)??null;}}
   const reply=Promise.resolve('stand-in'),pool=new HistoryPool();let now=0;
   const actualTransport=typeof realTransport==='function'?realTransport(pool):realTransport?new PeriodTransport(pool,()=>null,()=>{},async()=>{throw Error('no HTTP expected');}):null;
-  const context=vm.createContext({actualTransport,AbortController,Map,Set,WeakMap,WeakRef,Headers,Request,URL,pool,
+  const context=vm.createContext({actualTransport,AbortController,Map,Set,WeakMap,WeakRef,Headers,Request,URL,pool,Storage,localStorage:new Storage(),document:{querySelector:()=>null},
     location:{href:'http://fixture.invalid/'},performance:{now:()=>++now},reply,fetch:()=>reply});
   const run=(source:string)=>vm.runInContext(source,context,{timeout:3000});
   run('window=globalThis;getterCalls=0;');
-  run(historyPoolReceiptScript());
+  run(script);
   context.__quotumInspectHistoryPool(pool);
   run(`
     transport={calls:[],read(scope,query,signal){if(this!==transport)throw transport.error;this.calls.push([scope,query,signal]);if(this.failure)throw this.failure;return reply;}};
@@ -39,6 +41,47 @@ function fixture(realTransport:boolean|((pool:HistoryPool)=>PeriodTransport)=fal
   `);
   return {context,pool,run,read:()=>context.__quotumHistoryPoolReceipt.read()};
 }
+
+test('the fixed Activity wrapper retains dense complete evidence while both journal capacities stay bounded',()=>{
+  const ordinary=fixture(),fixed=fixture(false,fixedActivityScript('30d'));
+  const seed=`
+    for(const value of [quota,budget,funds]){
+      value.grids.set(60,new Map(Array.from({length:64},(_,index)=>[index,{
+        from:index*60,to:(index+1)*60,readFrom:index*60,readTo:(index+1)*60,
+        validTo:(index+1)*60,nativeFrom:index*60,nativeTo:(index+1)*60,
+        nativeValidTo:(index+1)*60,writeSeq:index+1,nativeSeq:index+1,bytes:100,shownAt:index
+      }])));
+      value.env.read('synthetic',60,0,60);
+    }
+  `;
+  for(const h of [ordinary,fixed])h.run(seed);
+  let phase=0;
+  // Both use the shipped observer callback and identical member snapshots. No
+  // copied serializer, private emit access or fabricated missing events is used.
+  do{
+    phase++;
+    for(const h of [ordinary,fixed])h.run(`__quotumHistoryPoolReceipt.mark(${phase},0);__quotumHistoryPoolReceipt.mark(2,3);`);
+    assert.ok(phase<1500,'byte exhaustion must be exercised before the count limit');
+  }while(!ordinary.read().omitted);
+  const small=ordinary.read(),complete=fixed.read();
+  assert.equal(small.byteLimit,256*1024);assert.equal(small.status,'insufficient-evidence');
+  assert.ok(small.omitted>0);assert.ok(small.count<small.limit);assert.ok(small.bytes<=small.byteLimit);
+  assert.equal(complete.status,'complete');assert.equal(complete.omitted,0);
+  assert.equal(complete.byteLimit,512*1024,'the actual fixed Activity wrapper owns the explicit diagnostic capacity');
+  assert.ok(complete.bytes>small.byteLimit&&complete.bytes<=complete.byteLimit);
+  assert.equal(complete.entries.length,complete.count);assert.equal(complete.count,small.count);
+  const savedIds=new Set(small.entries.map((entry:{id:number})=>entry.id));
+  assert.deepEqual(JSON.parse(JSON.stringify(complete.entries.filter((entry:{id:number})=>savedIds.has(entry.id)))),JSON.parse(JSON.stringify(small.entries)));
+  assert.deepEqual(JSON.parse(JSON.stringify((safeEvidence(complete) as typeof complete).entries)),JSON.parse(JSON.stringify(complete.entries)));
+  assert.ok(Buffer.byteLength(JSON.stringify(safeEvidence(complete)))<900000);
+  do{
+    phase++;fixed.run(`__quotumHistoryPoolReceipt.mark(${phase},0);__quotumHistoryPoolReceipt.mark(2,3);`);
+    assert.ok(phase<1500,'the larger byte cap must still fail before the count limit');
+  }while(!fixed.read().omitted);
+  for(const invalid of [0,262145,Infinity])assert.throws(()=>historyPoolReceiptScript(invalid),/Unsupported history receipt byte limit/);
+  const overflow=fixed.read();assert.equal(overflow.status,'insufficient-evidence');
+  assert.ok(overflow.omitted>0);assert.ok(overflow.bytes<=overflow.byteLimit);assert.ok(overflow.count<overflow.limit);
+});
 
 test('late cache failures survive a full seed without changing pool or read results', async()=>{
   const h=fixture();

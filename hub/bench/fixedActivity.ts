@@ -83,7 +83,8 @@ export function activityOracle(trace:WorkTrace,from:number,to:number):Numbers {
   return {agentMs,activeMs,agents:identities.size};
 }
 
-export function fixedActivityScript(period:string){return historyPoolReceiptScript()+';'+historyIdentityScript()+`;(() => {
+// Monthly shared-filter updates retain more ownership snapshots in the bounded journal.
+export function fixedActivityScript(period:string){return historyPoolReceiptScript(512*1024)+';'+historyIdentityScript()+`;(() => {
   localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d',activityBy:'project',filtersVisible:true}));
   const original=window.__quotumInspectHistoryPool,ids=new WeakMap(),news=new Set();let serial=0,pool,scheduler,stats;
   const reset=()=>stats={bytes:0,flights:0,advances:0,jobsStarted:0,fetches:0,preparationMs:0,failedReservations:0,preferenceWrites:0};reset();
