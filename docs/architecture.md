@@ -1602,6 +1602,9 @@ Cache projections borrow the existing anonymous curves and count that storage on
 Removed entries stay charged until their synchronous reads finish, and authority
 changes retire those reads immediately. Accepted numeric cells take over their
 projection reservation before subscribers are notified.
+Wire decoding releases its temporary anonymous sweep after projecting numeric cells,
+before expanding other reply sections. Restored cells and the original packed proof
+keep their own charge in the shared history budget.
 Named local dates, repeated hours and partial bounds preserve actual elapsed time.
 Shared filter choices cover the common selected work range; closed controls request
 nothing. Shared-clock expiry retires stale contributions in individual buckets
