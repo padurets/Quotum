@@ -2190,7 +2190,9 @@ commit with the prepared stacks. Neither an early local reply nor an early share
 reply can replace only part of that frame.
 Saved exclusions define that cohort even when an excluded group has no current work.
 All-visible live frames retain their own authorized interval projector, charged once
-while displayed or preparing. Its shared-clock deadlines still expire rolling work
+across current, cached, displayed and preparing owners. Dropping a cache owner
+rechecks the actual remaining charge when another frame still owns that storage.
+Its shared-clock deadlines still expire rolling work
 and knowledge during replacement; a gesture freezes it at the gesture's evaluation
 time. Retired access, filters or ranges cannot revive its old scalar amounts.
 Legend controls also follow the authorized group catalogue while a changed selection

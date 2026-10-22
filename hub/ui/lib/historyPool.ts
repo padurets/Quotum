@@ -78,7 +78,9 @@ export class HistoryPool {
     if (bytes <= this.budget) return true;
     const candidates = [...this.members].flatMap(member => member.evictionCandidates()).sort((a,b) => a.shownAt - b.shownAt);
     for (const candidate of candidates) {
-      candidate.drop(); bytes -= candidate.bytes;
+      candidate.drop();
+      // A dropped cache entry can share storage with a frame that still owns it.
+      bytes = this.estimatedBytes;
       if (bytes <= this.budget) return true;
     }
     return false;

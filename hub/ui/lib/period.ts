@@ -125,7 +125,7 @@ class BoardPeriod {
   private readonly watch=clock.watch();
   private bytes=0;
   private cacheKey='';
-  private readonly retained=new Map<string,{bytes:number;copyBytes:number;at:number;invalidate:(data:Extract<import('./board').HubEvent,{type:'history'}>['data'])=>boolean;valid:(selection:PeriodSelection)=>boolean;fits:(selection:PeriodSelection)=>boolean;restore:(selection:PeriodSelection)=>void}>();
+  private readonly retained=new Map<string,{bytes:number;activity:PeriodActivity|null;activityBytes:number;copyBytes:number;at:number;invalidate:(data:Extract<import('./board').HubEvent,{type:'history'}>['data'])=>boolean;valid:(selection:PeriodSelection)=>boolean;fits:(selection:PeriodSelection)=>boolean;restore:(selection:PeriodSelection)=>void}>();
   readonly transport=new PeriodTransport(historyPool,()=>this.intent(),(reply,intent,reserve)=>this.receive(reply,intent,reserve),fetchPeriod,()=>{page.dispatch({type:'board-close'});if(typeof window!=='undefined')window.dispatchEvent(new Event(UNAUTHORIZED));});
   constructor(){historyPool.register(this);clock.subscribe(this.watch,()=>this.tick());}
   private configureCalendar(visible:boolean,context:string,now:number,limited:boolean,selection:PeriodSelection){
@@ -133,7 +133,18 @@ class BoardPeriod {
     try{return this.calendar.configure(visible,context,now,limited,selection,bytes=>historyPool.reserve(staging,bytes));}
     finally{historyPool.release(staging);}
   }
-  get estimatedBytes(){return this.bytes+this.calendar.bytes+[...this.valueCache.values(),...this.retained.values()].reduce((sum,c)=>sum+c.bytes,0)+[...this.activityLeases].reduce((sum,[projector,lease])=>sum+(projector===this.activity?0:lease.bytes),0);}
+  get estimatedBytes(){
+    let bytes=this.bytes+this.calendar.bytes+[...this.valueCache.values()].reduce((sum,c)=>sum+c.bytes,0);
+    const projectors=new Map<PeriodActivity,number>();
+    if(this.activity){const storage=this.activityBytes(this.activity);projectors.set(this.activity,storage);if(this.activity.trace===this.work.value)bytes-=storage;}
+    // Current, cached and preparing frames may share the same numerical storage.
+    for(const entry of this.retained.values()){
+      bytes+=entry.bytes-entry.activityBytes;
+      if(entry.activity)projectors.set(entry.activity,this.activityBytes(entry.activity));
+    }
+    for(const [projector,lease] of this.activityLeases)projectors.set(projector,Math.max(projectors.get(projector)??0,lease.bytes));
+    return bytes+[...projectors.values()].reduce((sum,storage)=>sum+storage,0);
+  }
   evictionCandidates(){return [...this.valueCache].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.valueCache.delete(key);}})).concat([...this.retained].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.retained.delete(key);}})),this.calendar.evictionCandidates());}
   private retainCurrent(){
     if(!this.cacheKey)return;
@@ -154,7 +165,7 @@ class BoardPeriod {
       +JSON.stringify([...values.values()]).length*3;
     this.valueCache.delete(periodKey(this.selection));
     const valid=(target:PeriodSelection)=>target.mode==='range'?target.to<=validBefore:validBefore===Infinity;
-    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,copyBytes,at:hubNow(),valid,invalidate:data=>{
+    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,activity,activityBytes:activity&&activity.trace===work.value?this.activityBytes(activity):0,copyBytes,at:hubNow(),valid,invalidate:data=>{
       const since=Math.min(data.sources.some(id=>sources.includes(id))?data.since:Infinity,workChange(data,sources).since);
       if(since===Infinity)return true;
       validBefore=Math.min(validBefore,since);return selection.mode==='range'&&selection.to<=validBefore;
