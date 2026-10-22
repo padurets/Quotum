@@ -100,6 +100,51 @@ function observationScript(period:string){return historyPoolReceiptScript()+`;((
   },ready:()=>{const s=status();return s.ready&&!s.calendarPending&&!s.transportPending&&s.flights===0&&s.preparing===0&&!document.querySelector('.chart>svg[data-draw-ready="false"],.activity.is-loading,.history.is-loading,.budget-history.is-loading,.subscription-funds.is-loading');}};
 })();`;}
 
+/** Gesture diagnostics precede measured phases. Only time coordinates and DOM ownership
+ * are retained; account labels, full URLs and event targets never leave the page. */
+export function fixedActivityGestureScript(){return `(() => {
+  const chart=document.querySelector('.activity .chart'),svg=chart?.querySelector(':scope > svg');
+  const events=[],types=['pointerdown','pointermove','pointerup','pointercancel','lostpointercapture'];
+  let omitted=0,errors=0,stopped=false,setup='pending',point=null;
+  const number=value=>value!==undefined&&value!==null&&value!==''&&Number.isFinite(Number(value))?Number(value):null;
+  const owner=element=>{
+    const plot=element?.closest?.('.chart');if(!plot)return null;if(plot===chart)return 'activity';
+    const panel=plot.closest('.panel');return ['history','budget-history','subscription-funds'].find(name=>panel?.classList.contains(name))??'other';
+  };
+  const pan=element=>({panning:element.classList.contains('is-panning'),token:number(element.dataset.panToken),end:number(element.dataset.panEnd),origin:number(element.dataset.panOrigin),scale:number(element.dataset.panScale),base:number(element.dataset.panBase),from:number(element.dataset.drawFrom),to:number(element.dataset.drawTo),ready:element.dataset.drawReady==='true'});
+  const snapshot=()=>{
+    const params=new URLSearchParams(location.search),plots=[...document.querySelectorAll('.panel[data-time="chart"] .chart>svg')];
+    if(plots.length>5)omitted+=plots.length-5;
+    return {url:{historical:params.has('from')&&params.has('to'),from:number(params.get('from')),to:number(params.get('to'))},plots:plots.slice(0,5).map(element=>({owner:owner(element),width:number(element.getBoundingClientRect().width),viewWidth:number(element.viewBox.baseVal.width),...pan(element)}))};
+  };
+  let before=null;
+  const record=event=>{
+    if(events.length===32){omitted++;return;}
+    try{
+      const row={type:event.type,trusted:event.isTrusted===true,x:number(event.clientX),y:number(event.clientY),shift:event.shiftKey===true,button:number(event.button),buttons:number(event.buttons),pointer:number(event.pointerId),pointerType:['mouse','touch','pen'].includes(event.pointerType)?event.pointerType:'other',target:owner(event.target),hit:owner(document.elementFromPoint(event.clientX,event.clientY)),capturedBefore:chart.hasPointerCapture(event.pointerId),panBefore:pan(svg)};
+      events.push(row);
+      queueMicrotask(()=>{try{row.prevented=event.defaultPrevented;row.capturedAfter=chart.hasPointerCapture(event.pointerId);row.panAfter=pan(svg);}catch{errors++;}});
+    }catch{errors++;}
+  };
+  window.__quotumFixedActivityGesture={finish:()=>{
+    if(!stopped){stopped=true;for(const type of types)document.removeEventListener(type,record,true);}
+    let after=null;try{after=snapshot();}catch{errors++;}
+    return {version:1,setup,complete:errors===0&&omitted===0&&before!==null&&after!==null,errors,omitted,point,before,after,events};
+  }};
+  before=snapshot();
+  if(!chart||!svg){setup='missing-plot';throw Error('fixed Activity gesture needs its mounted plot');}
+  for(const type of types)document.addEventListener(type,record,{capture:true,passive:true});
+  const box=svg.getBoundingClientRect(),view=svg.viewBox.baseVal,mask=svg.querySelector('clipPath rect');
+  if(!mask||!(box.width>0&&box.height>0&&view.width>0&&view.height>0)){setup='invalid-plot';throw Error('fixed Activity gesture needs a measurable inner plot');}
+  const sx=box.width/view.width,sy=box.height/view.height;
+  const left=Math.max(0,box.left+(mask.x.baseVal.value-view.x)*sx),right=Math.min(document.documentElement.clientWidth,box.left+(mask.x.baseVal.value+mask.width.baseVal.value-view.x)*sx);
+  const top=Math.max(0,box.top+(mask.y.baseVal.value-view.y)*sy),bottom=Math.min(document.documentElement.clientHeight,box.top+(mask.y.baseVal.value+mask.height.baseVal.value-view.y)*sy);
+  if(!(right-left>56&&bottom-top>8)){setup='invisible-plot';throw Error('fixed Activity gesture needs a visible 48px inner plot segment');}
+  point={x:(left+right-48)/2,y:(top+bottom)/2,width:box.width,visible:{left,right,top,bottom}};
+  if(owner(document.elementFromPoint(point.x,point.y))!=='activity'||owner(document.elementFromPoint(point.x+48,point.y))!=='activity'){setup='blocked-plot';throw Error('fixed Activity gesture must hit its actual plot owner');}
+  setup='ready';return point;
+})()`;}
+
 /** Physical requests are retained through cancellation and their final response-body accounting. */
 function traffic(cdp:Cdp){
   const bodies:Body[]=[],active=new Map<string,Body>(),pending=new Set<Promise<unknown>>(),errors:unknown[]=[];
@@ -148,20 +193,32 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         await cdp.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
         await waitFor(`window.__quotumFixedActivity?.ready()===true`,deadline);
       };
+      await cdp.evaluate(`document.querySelector('.activity .chart>svg').scrollIntoView({block:'center'})`);
       await settled();
       const poseStart=bodies.bodies.length;
       const shownRange=()=>cdp.evaluate<{from:number;to:number}>(`(()=>{const p=new URLSearchParams(location.search);if(!p.has('from')||!p.has('to'))throw Error('the gesture must remain historical');return {from:Number(p.get('from')),to:Number(p.get('to'))};})()`);
       // Establish the real release-owned value domains before exercising S/H.
-      const point=await cdp.evaluate<{x:number;y:number}>(`(()=>{const svg=document.querySelector('.activity .chart>svg');svg.scrollIntoView({block:'center'});const b=svg.getBoundingClientRect();return{x:b.left+b.width/2,y:b.top+b.height/2};})()`);
-      const mouse=(type:string,x:number)=>cdp.send('Input.dispatchMouseEvent',{type,x,y:point.y,modifiers:8,button:type==='mouseMoved'?'none':'left',buttons:type==='mouseReleased'?0:1});
-      await mouse('mousePressed',point.x);
-      for(const distance of [16,32,48]){
-        await mouse('mouseMoved',point.x+distance);
-        await cdp.evaluate('new Promise(resolve=>requestAnimationFrame(resolve))');
+      const gestureStart=await shownRange();assert.deepEqual(gestureStart,selection,'gesture setup must preserve its requested historical range');
+      type GestureReceipt={complete:boolean;events?:{type:string;trusted:boolean;shift:boolean;target:string|null}[]};
+      let gestureReceipt:GestureReceipt|null=null;
+      try{
+        const point=await cdp.evaluate<{x:number;y:number}>(fixedActivityGestureScript());
+        const mouse=(type:string,x:number)=>cdp.send('Input.dispatchMouseEvent',{type,x,y:point.y,modifiers:8,button:type==='mouseMoved'?'none':'left',buttons:type==='mouseReleased'?0:1});
+        await mouse('mousePressed',point.x);
+        for(const distance of [16,32,48]){
+          await mouse('mouseMoved',point.x+distance);
+          await cdp.evaluate('new Promise(resolve=>requestAnimationFrame(resolve))');
+        }
+        await mouse('mouseReleased',point.x+48);await settled();
+        await waitFor(`!document.querySelector('.chart>svg[data-pan-end],.chart>svg.is-panning')`);await settled();
+      }finally{
+        gestureReceipt=await cdp.evaluate<GestureReceipt>('window.__quotumFixedActivityGesture?.finish()??{complete:false,unavailable:true}').catch(()=>null);
+        console.error(`bench: fixed Activity ${days}d native gesture `+JSON.stringify(gestureReceipt));
       }
-      await mouse('mouseReleased',point.x+48);await settled();
-      await waitFor(`!document.querySelector('.chart>svg[data-pan-end],.chart>svg.is-panning')`);await settled();
-      assert.notEqual((await shownRange()).to,selection.to,'the native historical gesture must commit a changed range');
+      assert.ok(gestureReceipt?.complete,'the native historical gesture receipt must be complete');
+      assert.ok(gestureReceipt.events?.some(event=>event.type==='pointerdown'&&event.trusted&&event.shift&&event.target==='activity'),'the native historical gesture must reach its plot');
+      assert.ok(gestureReceipt.events?.some(event=>event.type==='pointerup'&&event.trusted),'the native historical gesture must release its pointer');
+      assert.notEqual((await shownRange()).to,gestureStart.to,'the native historical gesture must commit a changed range');
       console.error('bench: fixed Activity settled '+JSON.stringify(await cdp.evaluate('window.__quotumFixedActivity.status()')));
       const sample=()=>cdp.evaluate<Sample>('window.__quotumFixedActivity.sample()');
       let baseline=await sample();assert.ok(baseline.activity.known);assert.ok(baseline.tiles.length<=8);

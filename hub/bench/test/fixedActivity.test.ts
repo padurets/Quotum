@@ -1,11 +1,63 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {activityOracle,assertActivityOverlap,assertActivityOutside,assertActivityCancellation,FIXED_ACTIVITY_BUDGET} from '../fixedActivity';
+import {runInNewContext} from 'node:vm';
+import {activityOracle,assertActivityOverlap,assertActivityOutside,assertActivityCancellation,FIXED_ACTIVITY_BUDGET,fixedActivityGestureScript} from '../fixedActivity';
 import {packWork,type WorkTrace} from '../../server/domain/periodWork';
 import type {PeriodRequest} from '../../server/domain/periodRead';
 import {fixture,drawings,flush,NOW} from '../../ui/test/periodRuntimeFixture';
 import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
 import {publishDataFilters} from '../../ui/lib/filterSelection';
+
+// Execute the shipped diagnostic script. DOM stand-ins qualify its bounds and
+// rejection paths; they do not establish native input delivery or chart movement.
+function gestureFixture({blocked=false,width=600,top=-40}={}){
+  const listeners=new Map<string,(event:unknown)=>void>(),microtasks:(()=>void)[]=[];
+  const captured=new Set<number>(),dataset:Record<string,string>={drawFrom:'100',drawTo:'200',drawReady:'true'};
+  const rect=(value:number)=>({baseVal:{value}}),mask={x:rect(48),y:rect(12),width:rect(width-60),height:rect(110)};
+  const chart={closest:()=>chart,hasPointerCapture:(id:number)=>captured.has(id),querySelector:()=>svg};
+  const svg={closest:()=>chart,viewBox:{baseVal:{x:0,y:0,width,height:150}},dataset,classList:{contains:()=>false},getBoundingClientRect:()=>({left:20,top,width,height:150}),querySelector:()=>mask};
+  const context={window:{} as {__quotumFixedActivityGesture:{finish:()=>{complete:boolean;setup:string;point:{x:number;y:number;visible:{left:number;right:number;top:number;bottom:number}};events:Record<string,unknown>[];omitted:number;before:unknown;after:unknown}}},URLSearchParams,location:{search:'?from=100&to=200&token=private-token'},queueMicrotask:(fn:()=>void)=>microtasks.push(fn),document:{
+    documentElement:{clientWidth:800,clientHeight:600},querySelector:()=>chart,querySelectorAll:()=>[svg],
+    elementFromPoint:()=>blocked?null:chart,
+    addEventListener:(type:string,listener:(event:unknown)=>void)=>listeners.set(type,listener),
+    removeEventListener:(type:string,listener:(event:unknown)=>void)=>{assert.equal(listeners.get(type),listener);listeners.delete(type);},
+  }};
+  return {context,listeners,captured,dataset,chart,drain:()=>{for(const task of microtasks.splice(0))task();},finish:()=>context.window.__quotumFixedActivityGesture.finish(),begin:()=>runInNewContext(fixedActivityGestureScript(),context) as {x:number;y:number}};
+}
+
+test('native gesture setup uses the visible inner plot and rejects a blocked or too small owner',()=>{
+  const h=gestureFixture(),point=h.begin(),receipt=h.finish();
+  assert.ok(point.x>=receipt.point.visible.left&&point.x+48<=receipt.point.visible.right);
+  assert.ok(point.y>=0&&point.y<=receipt.point.visible.bottom);
+  assert.equal(point.y,41,'the clipped plot, rather than its offscreen SVG centre, owns the point');
+  assert.equal(h.listeners.size,0);
+  for(const [options,reason] of [[{blocked:true},'blocked-plot'],[{width:90},'invisible-plot']] as const){
+    const rejected=gestureFixture(options);assert.throws(()=>rejected.begin());
+    assert.equal(rejected.finish().setup,reason);assert.equal(rejected.listeners.size,0);
+  }
+});
+
+test('native gesture receipt preserves event trust, ownership and post-handler capture without private URL parameters',()=>{
+  const h=gestureFixture(),point=h.begin();
+  const event={type:'pointerdown',isTrusted:true,clientX:point.x,clientY:point.y,shiftKey:true,button:0,buttons:1,pointerId:7,pointerType:'mouse',target:h.chart,defaultPrevented:false};
+  h.listeners.get('pointerdown')!(event);
+  h.captured.add(7);h.dataset.panToken='3';event.defaultPrevented=true;h.drain();
+  h.listeners.get('pointercancel')!({...event,type:'pointercancel',isTrusted:false});h.drain();
+  const receipt=h.finish(),down=receipt.events[0];
+  assert.equal(receipt.complete,true);assert.equal(down.trusted,true);assert.equal(down.target,'activity');assert.equal(down.hit,'activity');
+  assert.equal(down.capturedBefore,false);assert.equal(down.capturedAfter,true);assert.equal(down.prevented,true);
+  assert.equal((down.panBefore as {token:number|null}).token,null);assert.equal((down.panAfter as {token:number|null}).token,3);
+  assert.equal(receipt.events[1].type,'pointercancel');assert.equal(receipt.events[1].trusted,false,'diagnostics cannot promote an untrusted event');
+  assert.deepEqual(JSON.parse(JSON.stringify(receipt.before)).url,{historical:true,from:100,to:200});
+  assert.ok(!JSON.stringify(receipt).includes('private-token'));
+});
+
+test('native gesture receipt fails completeness rather than silently truncating event evidence',()=>{
+  const h=gestureFixture(),point=h.begin();
+  for(let i=0;i<35;i++)h.listeners.get('pointermove')!({type:'pointermove',isTrusted:true,clientX:point.x+i,clientY:point.y,shiftKey:true,button:-1,buttons:1,pointerId:7,pointerType:'mouse',target:h.chart,defaultPrevented:false});
+  h.drain();const receipt=h.finish();
+  assert.equal(receipt.events.length,32);assert.equal(receipt.omitted,3);assert.equal(receipt.complete,false);
+});
 
 test('the shared-filter benchmark oracle clips intervals, unions overlap and deduplicates identities',()=>{
   const trace:WorkTrace={anchor:100,knownFrom:100,cut:200,refs:[0,1,2].map(i=>({ref:String(i),identityRef:i<2?'shared':'other',source:null,project:null,device:{id:'d',name:'D'},origin:'terminal',folder:null,startedAt:100})),spans:[[0,0,30],[1,10,40],[2,50,60]]};
