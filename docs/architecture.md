@@ -1580,7 +1580,9 @@ interval and wake separately when their displayed numbers change; a label past t
 chart's right edge counts down on its own, and
 a forecast's line goes at the moment the table says it runs out, or at the reset; in the
 table, the plan, where the pace leads and the active hours left each read otherwise at
-their own moment. History is read when the hub tells of measurements or credited agent
+their own moment. A timed compact cell marks its complete preview wrapper as showing
+time; ordinary data cells and static measurement remain outside that clock boundary.
+History is read when the hub tells of measurements or credited agent
 work. Quota/activity, wallet budgets and additional subscription funds use separate readers,
 caches and selections. The two monetary readers share the budget history protocol;
 selected source IDs isolate their invalidations.

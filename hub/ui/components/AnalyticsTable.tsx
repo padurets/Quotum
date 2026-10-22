@@ -42,10 +42,10 @@ export function AnalyticsTable<Id extends string>({columns, rows, name, lead, so
       {row.color && <span className="swatch" style={{background: row.color}}/>}
       <span className="analytics-compact-name" title={row.hint}>{rowName(row)}</span>
       {columns.filter(column => column.id === lead).map(column => shown(column.id, row.cells[column.id], (cell, time) =>
-        <TablePreview label={column.title} details={details(row,column,cell)} still={still}><span data-time={time} className={cell.className} title={cell.title}><span className="sr-only">{column.title}: </span>{cell.content}</span></TablePreview>,still))}
+        <TablePreview label={column.title} details={details(row,column,cell)} still={still} time={time}><span className={cell.className} title={cell.title}><span className="sr-only">{column.title}: </span>{cell.content}</span></TablePreview>,still))}
     </div>
     {columns.some(column => column.id !== lead) && <div className="analytics-compact-details">{columns.filter(column => column.id !== lead).map(column => shown(column.id, row.cells[column.id], (cell, time) =>
-      <TablePreview label={column.title} details={details(row,column,cell)} still={still}><span data-time={time} title={cell.title}>{column.title} <span className={['analytics-cell-value',cell.className].filter(Boolean).join(' ')}>{cell.content}</span></span></TablePreview>,still))}</div>}
+      <TablePreview label={column.title} details={details(row,column,cell)} still={still} time={time}><span title={cell.title}>{column.title} <span className={['analytics-cell-value',cell.className].filter(Boolean).join(' ')}>{cell.content}</span></span></TablePreview>,still))}</div>}
   </TablePreview></li>)}</ul>;
   return <div className="table-wrap"><table className="analytics-table">
     <colgroup><col/>{columns.map(column => <col key={column.id} style={{width: column.width}}/>)}</colgroup>
