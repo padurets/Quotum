@@ -207,7 +207,8 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       let gestureReceipt:GestureReceipt|null=null;
       try{
         const point=await cdp.evaluate<{x:number;y:number}>(fixedActivityGestureScript());
-        const mouse=(type:string,x:number)=>cdp.send('Input.dispatchMouseEvent',{type,x,y:point.y,modifiers:8,button:type==='mouseMoved'?'none':'left',buttons:type==='mouseReleased'?0:1});
+        // Held moves retain the left button so Chromium keeps pointer capture.
+        const mouse=(type:string,x:number)=>cdp.send('Input.dispatchMouseEvent',{type,x,y:point.y,modifiers:8,button:'left',buttons:type==='mouseReleased'?0:1});
         await mouse('mousePressed',point.x);
         for(const distance of [16,32,48]){
           await mouse('mouseMoved',point.x+distance);
