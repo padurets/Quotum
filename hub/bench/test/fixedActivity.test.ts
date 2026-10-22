@@ -7,6 +7,7 @@ import {fixture,drawings,flush,NOW} from '../../ui/test/periodRuntimeFixture';
 import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
 import {publishDataFilters} from '../../ui/lib/filterSelection';
 import {HistoryPool} from '../../ui/lib/historyPool';
+import {TILE_CELLS,MAX_READ_TILES} from '../../server/domain/history';
 import vm from 'node:vm';
 
 for(const period of ['24h','30d'])test(`the complete fixed Activity script installs before the page loads: ${period}`,async()=>{
@@ -59,24 +60,28 @@ test('overlapping work counts its recorded native follow-up without allowing ano
   assert.throws(()=>assertActivityOverlap([work,work,{...native,selection:{mode:'range',from:123,to:2000}}],2));
 });
 
-test('the shared monthly reader rebuilds native and Activity tiles without creating a legend reader',async t=>{
+for(const period of ['24h','30d'] as const)test(`the shared ${period} reader rebuilds native and Activity tiles without creating a legend reader`,async t=>{
   t.mock.method(Date,'now',()=>NOW);
-  const filters=defaultFilters(),h=await fixture({periodName:'30d',fixed:true,initialFilters:filters});let d:Awaited<ReturnType<typeof drawings>>|undefined;
+  const filters=defaultFilters(),h=await fixture({periodName:period,fixed:true,initialFilters:filters});let d:Awaited<ReturnType<typeof drawings>>|undefined;
   t.after(async()=>{try{d?.close();await h.close();}finally{publishDataFilters(null,false);}});
-  const selection={mode:'range' as const,from:NOW-30*86400000,to:NOW};
+  const selection={mode:'range' as const,from:NOW-(period==='24h'?1:30)*86400000,to:NOW};
   h.selectRange(selection);await flush();
   const work=JSON.parse(JSON.stringify(h.requests.find(body=>body.sessions))) as PeriodRequest;
   assert.ok(work);h.requests.length=0;
   d=await drawings(h,true);await flush();
   const native=JSON.parse(JSON.stringify(h.requests)) as PeriodRequest[];
-  assert.ok(native.length>3&&native.length<=8,'a real monthly strip needs several one-tile reads');
+  if(period==='30d')assert.ok(native.length>3&&native.length<=8,'a real monthly strip needs several one-tile reads');
+  else assert.ok(native.some(body=>{const query=body.quota!,span=Number(query.cell)*TILE_CELLS;return Math.floor(Number(query.from)/span)!==Math.floor((Number(query.to)-1)/span);}), 'the actual fine-grid fixed reader batches several tiles');
   assertActivityCancellation([work,work,...native],selection);
   assertActivityCancellation([work,work,work,...native],selection);
   assert.throws(()=>assertActivityCancellation([work,work,work,work,...native],selection),'retired work still counts');
   assert.throws(()=>assertActivityCancellation([work,work,...Array.from({length:9},()=>native[0])],selection));
   const first=native[0],query=first.quota!;
+  const span=Number(query.cell)*TILE_CELLS;
   for(const extra of [{...first,facets:true as const},{...first,quota:{...query,evidence:'another-ledger'}},
-    {...first,quota:{...query,to:String(Number(query.from)+2*60*Number(query.cell))}},
+    {...first,quota:{...query,to:String(Number(query.from)+(period==='30d'?2:MAX_READ_TILES+1)*span)}},
+    {...first,quota:{...query,from:String(Number(query.from)+1)}},
+    {...first,quota:{...query,to:String(Number(query.to)-1)}},
     {...first,selection:{...selection,to:selection.to+1}}]){
     assert.throws(()=>assertActivityCancellation([work,work,extra],selection));
   }
@@ -92,7 +97,8 @@ test('the shared monthly reader rebuilds native and Activity tiles without creat
   }finally{held.release();}
   await flush();
   const replacement=JSON.parse(JSON.stringify(h.requests)) as PeriodRequest[];
-  assert.ok(replacement.some(body=>!body.sessions&&body.quota?.sources==='[]'),'the existing reader fetches Activity cells without native source data');
+  if(period==='30d')assert.ok(replacement.some(body=>!body.sessions&&body.quota?.sources==='[]'),'the existing reader fetches Activity cells without native source data');
+  else assert.ok(replacement.some(body=>!body.sessions&&body.quota),'the existing fine-grid reader refills its drawing cells');
   assertActivityCancellation(replacement,selection);
   assert.equal(members.size,2,'shared-filter replacement creates no legend-specific reader');
 });

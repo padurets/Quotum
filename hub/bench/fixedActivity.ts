@@ -38,7 +38,7 @@ function assertDrawing(body:PeriodRequest,selection:PeriodRequest['selection']) 
   assert.deepEqual(body.selection,selection);
 }
 
-/** The shared reader rebuilds native or Activity drawing cells one tile per request. */
+/** Fixed fine grids batch missing tiles; coarse grids decode one tile at a time. */
 export function assertActivityCancellation(requests:readonly PeriodRequest[],selection:PeriodRequest['selection']) {
   const work=requests.filter(body=>body.sessions),drawing=requests.filter(body=>!body.sessions);
   assert.ok(work.length>=2&&work.length<=3,'cancelled shared-work attempts remain counted');
@@ -51,7 +51,9 @@ export function assertActivityCancellation(requests:readonly PeriodRequest[],sel
     assert.equal(Number(body.quota!.cell),cell);
     const from=Number(body.quota!.from),to=Number(body.quota!.to);
     assert.ok(Number.isSafeInteger(from)&&Number.isSafeInteger(to)&&to>from);
-    assert.equal(Math.floor(from/span),Math.floor((to-1)/span),'a pooled drawing read fits one tile');
+    assert.ok(from%cell===0&&to%cell===0,'drawing endpoints align with their cells');
+    const tiles=Math.floor((to-1)/span)-Math.floor(from/span)+1;
+    assert.ok(tiles<=(cell>=3_600_000?1:MAX_READ_TILES),'a drawing read stays within its fine or coarse tile batch');
     assert.ok(from>=Math.floor(selection.from/span)*span-span&&to<=Math.ceil(selection.to/span)*span+span,'only the selected strip and its buffer are read');
   }
 }
