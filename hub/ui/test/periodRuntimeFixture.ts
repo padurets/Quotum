@@ -157,7 +157,7 @@ export function consumer(h: any, options:{muted?:Record<string,boolean>;subset?:
   let panning:number|null=null;
   const prefs={range:'1h',activityBy:'project',muted:options.muted??{}};
   const idleSubset={get:()=>({model:null,loading:false,error:null}),subscribe:()=>()=>{},retain:()=>()=>{}};
-  const context={...projectColorBindings(h.page),chartSeriesMuted,ACTIVITY,
+  const context={...projectColorBindings(h.page),chartSeriesMuted,ACTIVITY,boardPeriod:h.period,
     exports:{} as any,React,...parent,memo:(f:any)=>f,useMemo:(f:any,deps:any[])=>{const slot=parent.useRef(null) as any;if(!slot.current||deps.some((v,i)=>!Object.is(v,slot.current.deps[i])))slot.current={deps,value:f()};return slot.current.value;},
     useActivitySubset:(...args:any[])=>options.hook?options.hook(...args):options.subset??idleSubset,useSyncExternalStore:(_subscribe:any,get:any)=>get(),useEffect:()=>{},useSeriesFocus:()=>({subscribe:()=>()=>{},get:()=>null}),seriesFocusStyle:()=>({}),useId:()=> 'c',useActivityHistory:()=>h.renderActivity(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
     useLineup:()=>h.page.get().board!.lineup,usePersonalBoard:()=>false,useTitles:()=>titles,

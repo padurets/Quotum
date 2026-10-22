@@ -1,3 +1,4 @@
+import {activityClockConsumer as consumer} from './activityClockFixture';
 import {projectColorBindings} from './projectColorBindings';
 import {chartSeriesMuted} from '../lib/prefs';
 import {ACTIVITY} from '../../server/domain/widgets';
@@ -8,17 +9,16 @@ import {runInNewContext} from 'node:vm';
 import {createRequire} from 'node:module';
 import ts from 'typescript';
 import {PageClock} from '../lib/clock';
-import {num,workHours,stamp} from '../lib/format';
-import {atOnce,mutedKey} from '../lib/activity';
+import {workHours,stamp} from '../lib/format';
+import {mutedKey} from '../lib/activity';
 import {t,setLocale} from '../i18n';
-import {cellLabel} from '../lib/periods';
 import {PeriodActivity} from '../lib/periodActivity';
 import {PeriodCurves,WorkTimeline} from '../../server/domain/periodCurves';
 import type {History} from '../../server/domain/history';
 import type {WorkTrace} from '../../server/domain/periodWork';
 import {fixture,drawings,NOW,H,M} from './periodRuntimeFixture';
 import {preparationFixture} from './preparationFixture';
-import {activityEmpty,groupColors,activityGroupName as groupName} from '../lib/activity';
+import {activityEmpty,groupColors} from '../lib/activity';
 import {ActivitySelection} from '../lib/activitySelection';
 import {HistoryPool} from '../lib/historyPool';
 import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
@@ -26,34 +26,9 @@ import {flush} from './periodRuntimeFixture';
 import {CHART_SERIES_SCENES} from '../../demo/catalogue';
 import {groupRegistry} from '../lib/plotRegistry';
 
-const require=createRequire(import.meta.url),React=require('react'),{renderToStaticMarkup}=require('react-dom/server');
+const require=createRequire(import.meta.url),React=require('react');
 const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
-const clockSource=readFileSync(new URL('../lib/clock.ts',import.meta.url),'utf8');
 const compile=(code:string)=>ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
-
-/** Persistent hook slots, real PageClock subscriptions and the production numerical renderer. */
-function consumer(name:string,clock:PageClock,period:any,initial:any,panning:()=>number|null=()=>null) {
-  let cursor=0,dirty=true,renders=0,props=initial,output='',node:any;
-  const blank={model:null,loading:false,error:null},subset={get:()=>blank,subscribe:()=>()=>{},numbers:()=>null,changesAt:()=>null,retry:()=>{}},focus={get:()=>null,subscribe:()=>()=>{}};
-  props={subset,scoped:false,allOff:false,focus,groups:[],titles:{},...props};
-  const slots:any[]=[],effects:(()=>void)[]=[],stops:(()=>void)[]=[];
-  const slot=(create:()=>any)=>{const at=cursor++;return slots[at]??(slots[at]=create());};
-  const useRef=(current:any)=>slot(()=>({current}));
-  const context:any={...projectColorBindings(),ReadState:()=>null,chartSeriesMuted,ACTIVITY,exports:{},require,memo:(value:any)=>value,useLocale:()=>{},usePanning:panning,boardPeriod:period,
-    useId:()=> 'legend-description',seriesFocusStyle:()=>({}),useRef,useState:(initial:any)=>{const box=slot(()=>({value:typeof initial==='function'?initial():initial}));return [box.value,(value:any)=>{box.value=value;dirty=true;}];},
-    useSyncExternalStore:(subscribe:any,read:any)=>{const box=slot(()=>{const value={current:read()};stops.push(subscribe(()=>{const next=read();if(!Object.is(next,value.current)){value.current=next;dirty=true;}}));return value;});return box.current=read();},
-    LABELS:{source:'activity.bySource',project:'activity.byProject',device:'activity.byDevice'},groupName,useLayoutEffect:(effect:any)=>effects.push(effect),clock,hubNow:clock.hubNow,num,workHours,stamp,atOnce,mutedKey,t,cellLabel,
-    Tooltip:({children}:any)=>React.createElement('div',{className:'tooltip'},children),
-  };
-  runInNewContext(compile(clockSource.slice(clockSource.indexOf('export function useClock'))),context);context.useClock=context.exports.useClock;
-  const numbers=source.slice(source.indexOf('function Metrics('),source.indexOf('/** Keyboard descriptions'));
-  const totals=source.slice(source.indexOf('const Totals=memo'),source.indexOf('/**\n * Agent-hours'));
-  const readout=source.slice(source.indexOf('function ActivityReadout('),source.indexOf('const Stacks ='));
-  const legend=source.slice(source.indexOf('const LegendItem = memo'),source.indexOf('/** Keep dormant'));
-  runInNewContext(compile(numbers+legend+source.slice(source.indexOf('function useSubsetNumbers('),source.indexOf('/** Only this small region'))+totals+readout+`\nexports.component=${name};`),context);
-  const render=()=>{if(dirty){dirty=false;cursor=0;node=context.exports.component(props);output=renderToStaticMarkup(node);renders++;while(effects.length)effects.shift()!();}return output;};
-  return {render,focus:(visible:boolean)=>node.props.children[0].props.onFocus({currentTarget:{matches:()=>visible}}),update:(next:any)=>{props={subset,scoped:false,allOff:false,focus,groups:[],titles:{},...next};dirty=true;return render();},get renders(){return renders;},close:()=>stops.forEach(stop=>stop())};
-}
 
 test('a mouse-focused legend keeps its own metric description when keyboard modality changes',async test=>{
   test.mock.method(Date,'now',()=>NOW);setLocale('en');const h=await fixture(),d=await drawings(h);
@@ -215,7 +190,7 @@ test('the Activity clock advances the plot without invalidating unchanged numeri
   test.mock.method(Date,'now',()=>NOW);const h=await fixture(),d=await drawings(h),hooks=preparationFixture();
   let now=NOW,shown={...d.render(),presentation:0};
   const prefs={range:'1h',activityBy:'project',muted:{}},titles={},view=h.page.get().board!.view;
-  const context:any={...projectColorBindings(h.page),activityMutedKeys:()=>[],chartSeriesMuted,ACTIVITY,exports:{},require,memo:(value:any)=>value,...hooks,
+  const context:any={...projectColorBindings(h.page),boardPeriod:h.period,activityMutedKeys:()=>[],chartSeriesMuted,ACTIVITY,exports:{},require,memo:(value:any)=>value,...hooks,
     useMemo:(read:any,deps:any[])=>{const box=hooks.useRef(null) as any;if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;},
     useSyncExternalStore:(_subscribe:any,get:any)=>get(),useActivitySubset:()=>({get:()=>({model:null,loading:false,error:null}),subscribe:()=>()=>{},retain:()=>()=>{}}),useActivityHistory:()=>shown,useHistoryPlot:()=>null,usePlot:()=>({}),useLineup:()=>[],usePersonalBoard:()=>false,useTitles:()=>titles,
     useChartMuted:()=>prefs.muted,usePref:(key:keyof typeof prefs)=>prefs[key],useSeriesFocus:()=>{},useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=>h.board,useClock:()=>now,usePanning:()=>null,useHistoryBegins:()=>0,
@@ -235,7 +210,7 @@ test('the Activity clock advances the plot without invalidating unchanged numeri
     assert.equal(moved.totals.history,before.totals.history,'exact totals keep their independent numerical deadline');
     shown={...shown,history:null,drawing:null,presentation:1};const retired=render();
     assert.equal(retired.legend.length,0);assert.equal(retired.totals.history,null,'a new authority cannot retain withdrawn numerical evidence');
-  }finally{d.close();await h.close();}
+  }finally{hooks.dispose();d.close();await h.close();}
 });
 
 test('frozen selected numbers retire during a gesture even when the same scope text is configured again',async test=>{

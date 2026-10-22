@@ -22,6 +22,7 @@ export type ActivitySelectionEnv={pool:HistoryPool;now():number;read():Reading;s
 /** One local numerical consumer. Board evidence and supplier accounting remain untouched. */
 export class ActivitySelection implements HistoryMember {
   private scope:ActivityScope|null=null;
+  private paused=false;
   private identity='';
   private lifetime={};
   private generation=0;
@@ -69,14 +70,14 @@ export class ActivitySelection implements HistoryMember {
   get=()=>this.state;
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
   private publish(state:ActivitySelectionState){this.state=state;for(const listener of this.listeners)listener();}
-  configure(scope:ActivityScope|null){
+  configure(scope:ActivityScope|null,paused=false){
     if(scope)try{
       if(!executableWorkFilters(activityScope(scope.filters,scope.by,scope.muted)))throw new Error('history_limit');
     }catch{this.reset();this.publish({model:null,loading:false,error:'history_limit'});return;}
     const identity=scope?JSON.stringify([scope.board,scope.authority,scope.workAuthority,scope.run,scope.by,[...scope.muted].sort(),scope.filters,scope.selection,scope.rangeKey,scope.barMs]):'';
-    if(identity===this.identity){this.refresh();return;}
-    this.reset();this.identity=identity;this.scope=scope;
-    if(scope){this.env.pool.register(this);this.dirty=-Infinity;this.publish({model:null,loading:true,error:null});this.schedule();}
+    if(identity===this.identity){this.paused=paused;if(!paused){this.refresh();if(this.dirty!==Infinity)this.schedule();}return;}
+    this.reset();this.identity=identity;this.scope=scope;this.paused=paused;
+    if(scope){this.env.pool.register(this);this.dirty=-Infinity;this.publish({model:null,loading:!paused,error:null});if(!paused)this.schedule();}
   }
   private scheduler(){return this.env.scheduler?this.env.scheduler():preparations();}
   reset(){
@@ -101,9 +102,9 @@ export class ActivitySelection implements HistoryMember {
     else this.refresh();
   }
   invalidate(){
-    const scope=this.scope;
+    const scope=this.scope,paused=this.paused;
     this.reset();
-    if(scope)this.configure(scope);
+    if(scope)this.configure(scope,paused);
   }
   changed(since:number,workAuthority?:string){
     if(!this.scope)return;
@@ -121,7 +122,7 @@ export class ActivitySelection implements HistoryMember {
   };
   private schedule(){if(this.scheduled)return;this.scheduled=true;queueMicrotask(()=>queueMicrotask(()=>{this.scheduled=false;this.flush();}));}
   private flush(){
-    const scope=this.scope;if(!scope||this.flight||this.dirty===Infinity)return;
+    const scope=this.scope;if(!scope||this.paused||this.flight||this.dirty===Infinity)return;
     if(scope.selection.mode==='live'&&this.awaiting&&this.env.read().trace===this.awaiting)return;
     try{if(!executableWorkFilters(activityScope(scope.filters,scope.by,scope.muted)))throw new Error('history_limit');}
     catch{this.dirty=Infinity;this.publish({model:null,loading:false,error:'history_limit'});return;}

@@ -62,7 +62,9 @@ export const ANALYTICS_SCENES=[
  * Toggle every entry off, then restore one. Money provenance opens beside its legend.
  * Pending/error/generation races are held by ui/test/activitySelection.test.ts;
  * the rendered numerical states and these codes by ui/test/activityNumbers.test.ts.
- * Whole-frame reply ordering and live expiry are held by activityFrame and
+ * Dormant exclusions and retained all-visible clock expiry are held by
+ * activityScopeTransitions and activityLiveFrame. Whole-frame reply ordering and
+ * live expiry are held by activityFrame and
  * activityRetainedClock; resource disclosure evidence by historicalPlanDisclosure
  * and unnamedMoneyDisclosure. Money strip-to-exact value poses are held by moneyPanDomain.
  * Legend controls across immediate mask changes are held by activityLegendControls;

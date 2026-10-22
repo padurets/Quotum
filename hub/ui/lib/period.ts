@@ -45,6 +45,7 @@ const empty=<T>():Reading<T>=>({value:null,basis:null,loading:false,error:null})
 const noValue=empty<PeriodValues>(),noSessions:WorkedSession[]=[];
 
 export type SessionOrder={key:unknown;worked?:readonly WorkOrder[];activity?:ActivityOrder};
+export type ActivityProjection={projector:PeriodActivity|null;selection:Extract<PeriodSelection,{mode:'live'}>;rangeKey:string;basis:PeriodBasis['range'];lifetime:object;bytes:number};
 class BoardPeriod {
   readonly calendar=new WorkCalendar();
   private readonly workOrders=new Set<(rows:WorkedSession[])=>SessionOrder|null>();
@@ -106,6 +107,10 @@ class BoardPeriod {
   private workSelection:PeriodSelection=this.selection;
   private workRangeKey='24h';
   private activity:PeriodActivity|null=null;
+  private activityLifetime={};
+  private readonly activityFrames=new WeakMap<History['activity'],Omit<ActivityProjection,'projector'>&{projector:WeakRef<PeriodActivity>}>();
+  private readonly activitySizes=new WeakMap<PeriodActivity,number>();
+  private readonly activityLeases=new Map<PeriodActivity,{count:number;bytes:number}>();
   private activityRetained:History['activity']|null=null;
   private readonly tapes=new Map<PeriodScope,{tape:PeriodTape;accounting:PeriodAccounting;generation:number;proofEpoch:number;sourceEpoch?:number;selection:PeriodSelection;rangeKey:string;queryKey:string;basisRange?:PeriodBasis['range']}>();
   private readonly projectionRevision={quota:0,budget:0,funds:0};
@@ -128,7 +133,7 @@ class BoardPeriod {
     try{return this.calendar.configure(visible,context,now,limited,selection,bytes=>historyPool.reserve(staging,bytes));}
     finally{historyPool.release(staging);}
   }
-  get estimatedBytes(){return this.bytes+this.calendar.bytes+[...this.valueCache.values(),...this.retained.values()].reduce((sum,c)=>sum+c.bytes,0);}
+  get estimatedBytes(){return this.bytes+this.calendar.bytes+[...this.valueCache.values(),...this.retained.values()].reduce((sum,c)=>sum+c.bytes,0)+[...this.activityLeases].reduce((sum,[projector,lease])=>sum+(projector===this.activity?0:lease.bytes),0);}
   evictionCandidates(){return [...this.valueCache].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.valueCache.delete(key);}})).concat([...this.retained].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.retained.delete(key);}})),this.calendar.evictionCandidates());}
   private retainCurrent(){
     if(!this.cacheKey)return;
@@ -207,7 +212,42 @@ class BoardPeriod {
     if(tape?.rangeKey===history.range){const range=this.tapeRange(tape,now),values=new Map<string,PeriodValues>();if(tape.selection.mode==='range')for(const [id,reading] of this.values)if(reading.value&&reading.basis?.range.to===range.to)values.set(id,reading.value);result=tape.accounting.project(history,range,values,false,Math.min(range.to,now));}
     if(scope==='quota'&&this.activity&&this.workRangeKey===history.range&&this.work.basis){const range=this.workRange(now)!;result={...result,since:range.from,to:range.to,activity:this.activity.project(history.activity,range)};}
     if(scope==='quota'&&this.selectedPending())result={...result,series:result.series.map(series=>({...series,selectedWork:{from:result.to,ms:null,agentMs:0}})),activity:{...result.activity,known:null,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
+    if(scope==='quota'&&this.activity&&this.work.basis&&this.workSelection.mode==='live'&&this.workRangeKey===history.range&&!this.selectedPending()){
+      this.activityFrames.set(result.activity,{projector:new WeakRef(this.activity),selection:{...this.workSelection},rangeKey:history.range,basis:{...this.work.basis.range},lifetime:this.activityLifetime,bytes:this.activityBytes(this.activity)});
+    }
     return result;
+  }
+  private activityBytes(projector:PeriodActivity){
+    let bytes=this.activitySizes.get(projector);
+    if(bytes===undefined){bytes=workBytes(projector.trace,projector===this.activity?this.index?.curves.bytes:undefined);this.activitySizes.set(projector,bytes);}
+    return bytes;
+  }
+  /** Only displayed or preparing frames retain a strong numerical projector. */
+  captureActivity(history:Pick<History,'activity'>):ActivityProjection|null {
+    const frame=this.activityFrames.get(history.activity);
+    // Preserve a retired lifetime rather than losing it to a scalar fallback.
+    return frame?{...frame,projector:frame.projector.deref()??null}:null;
+  }
+  retainActivity(frame:ActivityProjection|null|undefined){
+    const projector=frame?.projector;if(!projector)return()=>{};
+    const old=this.activityLeases.get(projector);this.activityLeases.set(projector,{count:(old?.count??0)+1,bytes:Math.max(old?.bytes??0,frame!.bytes)});
+    let released=false;
+    return()=>{if(released)return;released=true;const lease=this.activityLeases.get(projector);if(lease&&lease.count>1)lease.count--;else this.activityLeases.delete(projector);};
+  }
+  activityValid(frame:ActivityProjection):frame is ActivityProjection&{projector:PeriodActivity}{return !!frame.projector&&frame.lifetime===this.activityLifetime&&frame.rangeKey===this.workRangeKey&&periodKey(frame.selection)===periodKey(this.selection);}
+  activityFrameAt(frame:ActivityProjection,activity:History['activity'],by:import('./types').ActivityDimension,now:number,bar?:number,key?:string){
+    if(!this.activityValid(frame))return null;
+    const wanted=evaluatedRange(frame.selection,now),range=wanted.from>=frame.projector.trace.anchor?wanted:{...frame.basis};
+    if(bar!==undefined){range.from=Math.max(range.from,bar);range.to=Math.min(range.to,bar+activity.barMs);}
+    return frame.projector.numbers(activity,range,by,key);
+  }
+  activityFrameChangesAt(frame:ActivityProjection,by:import('./types').ActivityDimension,now:number,read:(at:number)=>string,key?:string){
+    if(!this.activityValid(frame))return null;
+    const period=frame.selection.periodMs,trace=frame.projector.trace;
+    return periodTextChangesAt(now,at=>{
+      const next=Math.min(frame.projector.changesAt(at,period,by,key)??Infinity,...[trace.knownFrom+period,(trace.cut??Infinity)+period].filter(value=>value>at));
+      return Number.isFinite(next)?next:null;
+    },read);
   }
   private selectedPending(){return !!effectiveFilters()&&(this.workLimit||this.work.loading||!!this.work.error||!this.work.value);}
   activityAt(history:Pick<History,'range'|'activity'>,by:import('./types').ActivityDimension,now:number,bar?:number,key?:string,retained=false) {
@@ -346,6 +386,7 @@ class BoardPeriod {
   private setValue(id:string,value:Reading<PeriodValues>){if(value.value&&value.basis&&value.basis.range.to>value.basis.evaluatedAt)value={...value,value:periodValueNow(value.value,Math.min(value.basis.range.to,hubNow()))};this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
   private publishWork() {this.workState={...this.work,rows:this.workRows,evidence:this.workEvidence,...(this.workLimit?{loading:false,error:'filters_limit'}:{})};for(const listener of this.listeners)listener();}
   private retireWork() {
+    this.activityLifetime={};
     this.calendar.clear(true);this.calendar.dirty();
     this.resetFacets();
     this.sourceEpoch++;
@@ -378,6 +419,7 @@ class BoardPeriod {
     this.measureBytes();this.publishProjection(['budget','funds']);
   }
   private clear() {
+    this.activityLifetime={};
     this.calendar.clear();
     this.sourceTape=null;this.sourceCurves=undefined;this.sourceCursor=undefined;this.resetFacets();
     this.workEvidence++;this.retirementAt=Infinity;
@@ -436,6 +478,7 @@ class BoardPeriod {
     }
     const cacheKey=JSON.stringify([identity,scopeKeys,nextFilter,financialIdentity]);
     if(cacheKey!==this.cacheKey){this.retainCurrent();this.cacheKey=cacheKey;}
+    if(selectedChanged||periodKey(this.selection)!==periodKey(selection))this.activityLifetime={};
     this.filterKey=nextFilter;
     this.selection=selection;this.sourceIds=sources;this.wantsWork=wantsWork;this.scopeKeys=scopeKeys;
     if(changedWork||changedRun)this.retireWork();
@@ -757,7 +800,7 @@ class BoardPeriod {
   private measureBytes(){
     // Decoding scratch has gone; retain the tape and the actual shared typed
     // buffers, as for the selected work index, rather than its construction maps.
-    this.bytes=this.facetBytes()+(this.sourceTape?JSON.stringify(this.sourceTape).length*3:0)+(this.sourceCurves?.bytes??0)+JSON.stringify([...this.values.values()]).length*3+workBytes(this.work.value,this.index?.curves.bytes)+(this.work.value?0:JSON.stringify(this.workRows).length*3)+(this.activityRetained?JSON.stringify(this.activityRetained).length*3:0)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape)+t.accounting.bytes,0);
+    this.bytes=this.facetBytes()+(this.sourceTape?JSON.stringify(this.sourceTape).length*3:0)+(this.sourceCurves?.bytes??0)+JSON.stringify([...this.values.values()]).length*3+(this.activity&&this.activity.trace===this.work.value?this.activityBytes(this.activity):workBytes(this.work.value,this.index?.curves.bytes))+(this.work.value?0:JSON.stringify(this.workRows).length*3)+(this.activityRetained?JSON.stringify(this.activityRetained).length*3:0)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape)+t.accounting.bytes,0);
   }
   /** The current stream is authoritative even while an older analytical reply is being prepared. */
   private present(rows:WorkedSession[]) {

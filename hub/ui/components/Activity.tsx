@@ -11,7 +11,7 @@ import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view'
 import {page, usePersonalBoard, useBoardId, useLineup, useTitles,useProjectColorPins,useProjectColorsReady} from '../lib/board';
 import {useClock,hubNow} from '../lib/clock';
 import {quotaHistory, useActivityHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
-import {boardPeriod} from '../lib/period';
+import {boardPeriod,type ActivityProjection} from '../lib/period';
 import {workChange} from '../lib/workChanges';
 import type {History} from '../../server/domain/history';
 import {plotBar, plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
@@ -40,7 +40,7 @@ import {fetchPeriod} from '../lib/periodTransport';
 import {historyPool} from '../lib/historyPool';
 import {UNAUTHORIZED} from '../lib/http';
 
-type ActivityHistory=Pick<History,'range'|'activity'>;
+type ActivityHistory=Pick<History,'range'|'activity'>&{projection?:ActivityProjection|null};
 type SubsetModel=ActivitySelectionState['model'];
 type DetailFrame={history:ActivityHistory|null;model:SubsetModel;scoped:boolean;allOff:boolean;since:number|null;identities:GroupIdentity[]};
 
@@ -95,21 +95,25 @@ const metricsText = (value: {agentMs:number;activeMs:number;agents:number}) => [
 /** Small numerical consumers follow formatted changes, independently of the drawing grid. */
 function useActivityNumbers(history:ActivityHistory|null,by:ActivityDimension,read:(activity:ActivityData)=>string,enabled=true,bar?:number,key?:string,retained=false) {
   const panning=usePanning();
-  const at=(now:number)=>history?boardPeriod.activityAt(history,by,now,bar,key,retained||!boardPeriod.activityProjectionState(history).ready):null;
-  const now=useClock(now=>history&&enabled&&!retained&&panning===null&&boardPeriod.activityProjectionState(history).ready?boardPeriod.activityChangesAt(history,by,now,time=>read(at(time)!),key):null);
+  const projection=history?.projection,valid=!projection||boardPeriod.activityValid(projection);
+  const at=(now:number)=>history?projection?boardPeriod.activityFrameAt(projection,history.activity,by,now,bar,key):boardPeriod.activityAt(history,by,now,bar,key,retained||!boardPeriod.activityProjectionState(history).ready):null;
+  const now=useClock(now=>history&&enabled&&panning===null?(projection?boardPeriod.activityFrameChangesAt(projection,by,now,time=>read(at(time)!),key):!retained&&boardPeriod.activityProjectionState(history).ready?boardPeriod.activityChangesAt(history,by,now,time=>read(at(time)!),key):null):null);
+  if(!valid)return null;
+  if(panning!==null&&projection&&enabled)return bar===undefined?at(pan.get()?.now??now):null;
   return panning===null&&enabled?at(now):bar===undefined?history?.activity??null:null;
 }
 
 function LegendAmount({history,by,groupKey,group,retained=false}:{retained?:boolean;history:ActivityHistory|null;by:ActivityDimension;groupKey:string;group:ActivityGroup|null}) {
   const text=(activity:ActivityData)=>workHours(activity.by[by].find(g=>g.key===groupKey)?.agentMs??0);
   const activity=useActivityNumbers(history,by,text,true,undefined,groupKey,retained);
-  return <b data-time="activity-work">{activity?text(activity):group?workHours(group.agentMs):'—'}</b>;
+  const valid=!history?.projection||boardPeriod.activityValid(history.projection);
+  return <b data-time="activity-work">{activity?text(activity):valid&&group?workHours(group.agentMs):'—'}</b>;
 }
 
 function LegendMetrics({history,by,groupKey,group,active,retained=false}:{retained?:boolean;history:ActivityHistory|null;by:ActivityDimension;groupKey:string;group:ActivityGroup|null;active:boolean}) {
   const part=(activity:ActivityData)=>activity.by[by].find(g=>g.key===groupKey)??{agentMs:0,activeMs:0,agents:0};
   const activity=useActivityNumbers(history,by,value=>JSON.stringify(metricsText(part(value))),active,undefined,groupKey,retained);
-  const value=activity?part(activity):group;
+  const value=activity?part(activity):!history?.projection||boardPeriod.activityValid(history.projection)?group:null;
   return <span data-time="activity-metrics">{value?<Metrics agentMs={value.agentMs} activeMs={value.activeMs} agents={value.agents}/>:<span>{t('activity.pendingRange')}</span>}</span>;
 }
 
@@ -144,7 +148,7 @@ export function activityMutedKeys(muted:Record<string,boolean>,by:ActivityDimens
   return [...keys].sort();
 }
 
-function useActivitySubset(history:History|null,by:ActivityDimension,muted:Record<string,boolean>,authority:number,allOff:boolean,scoped:boolean) {
+function useActivitySubset(history:History|null,by:ActivityDimension,muted:Record<string,boolean>,authority:number,allOff:boolean) {
   const [reader]=useState(()=>new ActivitySelection({pool:historyPool,now:hubNow,send:fetchPeriod,
     read:()=>{const value=boardPeriod.get();return {trace:value.value,ready:!value.loading&&!value.error&&!!value.value,error:value.error,evidence:value.evidence};},
     accessLost:()=>{page.dispatch({type:'board-close'});window.dispatchEvent(new Event(UNAUTHORIZED));},
@@ -154,8 +158,8 @@ function useActivitySubset(history:History|null,by:ActivityDimension,muted:Recor
   const configure=useRef(()=>{});
   configure.current=()=>{
     const off=activityMutedKeys(muted,by),board=page.get().board;
-    reader.configure(scoped&&!allOff&&off.length&&history&&board&&history.board===board.id?{board:board.id,authority:JSON.stringify([authority,board.workAuthority,page.get().hubEpoch]),workAuthority:board.workAuthority,run:page.get().hubEpoch,by,muted:off,filters:workFilter(effectiveFilters()??defaultFilters()),
-      selection:selected?{mode:'range',...selected}:{mode:'live',periodMs:periodOf(range).ms},rangeKey:selected?timeRangeKey(selected):range,barMs:history.activity.barMs}:null);
+    reader.configure(off.length&&history&&board&&history.board===board.id?{board:board.id,authority:JSON.stringify([authority,board.workAuthority,page.get().hubEpoch]),workAuthority:board.workAuthority,run:page.get().hubEpoch,by,muted:off,filters:workFilter(effectiveFilters()??defaultFilters()),
+      selection:selected?{mode:'range',...selected}:{mode:'live',periodMs:periodOf(range).ms},rangeKey:selected?timeRangeKey(selected):range,barMs:history.activity.barMs}:null,allOff);
   };
   useLayoutEffect(()=>configure.current());
   useEffect(()=>{
@@ -254,12 +258,14 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const activity = history?.activity ?? null,drawnActivity=drawing?.activity??null;
   const currentGroups=drawnActivity?.by[by]??[];
   const allOff=currentGroups.length>0&&currentGroups.every(group=>groupMuted(group.key));
-  const scoped=currentGroups.some(group=>groupMuted(group.key));
-  const subset=useActivitySubset(drawing,by,muted,authority,allOff,scoped);
+  // Saved exclusions define the cohort even while their groups have no work.
+  const scoped=activityMutedKeys(muted,by).length>0;
+  const subset=useActivitySubset(drawing,by,muted,authority,allOff);
   const local=useSyncExternalStore(subset.subscribe,subset.get);
-  const numeric=useMemo(()=>({history:drawing?{range:drawing.range,activity:drawing.activity}:null,model:local.model,scoped,allOff,since:history&&activity?.known&&activity.known.from>history.since?activity.known.from:null}),[drawing,local.model,scoped,allOff]);
+  const numeric=useMemo(()=>({history:drawing?{range:drawing.range,activity:drawing.activity,projection:boardPeriod.captureActivity(drawing)}:null,model:local.model,scoped,allOff,since:history&&activity?.known&&activity.known.from>history.since?activity.known.from:null}),[drawing,local.model,scoped,allOff]);
   // A queued preparation owns its input even before its output can be displayed.
   useLayoutEffect(()=>subset.retain(numeric.model),[subset,numeric.model]);
+  useLayoutEffect(()=>numeric.history?.projection?boardPeriod.retainActivity(numeric.history.projection):undefined,[numeric.history?.projection]);
   // What the groups look like changes with the answer, the board and the legend, not with time: the same objects as the clock moves the frame.
   const {groups, colors, shown} = useMemo(() => {
     const groups = drawnActivity?.by[by] ?? [];
@@ -288,6 +294,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted, locale,numeric], `${authority}:${history?.board}:${by}:${JSON.stringify(activityMutedKeys(muted,by))}`,(by!=='project'||colorsReady)&&(panning!==null||!scoped||allOff||!loading&&!error&&!!local.model&&!local.loading&&!local.error&&subset.compatible(local.model)));
   const geometry = prepared.value;
   useLayoutEffect(()=>subset.retain(geometry?.numeric.model??null),[subset,geometry?.numeric.model]);
+  useLayoutEffect(()=>geometry?.numeric.history?.projection?boardPeriod.retainActivity(geometry.numeric.history.projection):undefined,[geometry?.numeric.history?.projection]);
   const [displayed,setDisplayed]=useState<ActivityRegistry|null>(null);
   const paintRegistry=useRef<ActivityRegistry|null>(null);
   const retained=displayed?.authority===authority&&displayed.by===by?displayed:null;
@@ -334,8 +341,8 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
 
   const detailFrame=useMemo(()=>geometry?{...geometry.numeric,identities:geometry.identities}:null,[geometry]);
   const renderDetails=(frame:DetailFrame|null,retained:boolean)=>({
-    summary:<Totals history={frame?.history??null} model={frame?.model??null} retained={retained} by={by} subset={subset} scoped={scoped} allOff={allOff} since={frame?.since??null} focus={focus}/>,
-    legend:<div className="legend">{(emptyFrame?[]:frame?.identities??controls).map(identity=><LegendItem key={identity.key} subset={subset} model={frame?.model??null} scoped={scoped} retained={retained} history={frame?.history??null} groupKey={identity.key} by={by} group={frame?.history?.activity.by[by].find(group=>group.key===identity.key)??null} name={groupName(identity,by,titles)} color={resolved.get(identity.key)?.color??identity.color} muted={!!groupMuted(identity.key)}/>)}</div>,
+    summary:<Totals history={frame?.history??null} model={frame?.model??null} retained={retained} by={by} subset={subset} scoped={frame?.scoped??scoped} allOff={frame?.allOff??allOff} since={frame?.since??null} focus={focus}/>,
+    legend:<div className="legend">{(emptyFrame?[]:frame?.identities??controls).map(identity=><LegendItem key={identity.key} subset={subset} model={frame?.model??null} scoped={frame?.scoped??scoped} retained={retained} history={frame?.history??null} groupKey={identity.key} by={by} group={frame?.history?.activity.by[by].find(group=>group.key===identity.key)??null} name={groupName(identity,by,titles)} color={resolved.get(identity.key)?.color??identity.color} muted={!!groupMuted(identity.key)}/>)}</div>,
   });
   return (
     <AnalyticsPanel ref={panel} className="activity" title={t('activity.title')} chart history={history} loading={loading} error={error} retry={()=>{boardPeriod.retry();quotaHistory.retry();}}
@@ -517,6 +524,8 @@ const Stacks = memo(function Stacks({
   const coherent=incomingReady&&prepared.ready;
   useLayoutEffect(()=>subset.retain(detailFrame?.model??null),[subset,detailFrame?.model]);
   useLayoutEffect(()=>subset.retain(model?.detailFrame?.model??null),[subset,model?.detailFrame?.model]);
+  useLayoutEffect(()=>detailFrame?.history?.projection?boardPeriod.retainActivity(detailFrame.history.projection):undefined,[detailFrame?.history?.projection]);
+  useLayoutEffect(()=>model?.detailFrame?.history?.projection?boardPeriod.retainActivity(model.detailFrame.history.projection):undefined,[model?.detailFrame?.history?.projection]);
   const details=renderDetails(model?.detailFrame??null,!coherent);
   useLayoutEffect(()=>{onDrawing?.(model?.registry??null);},[model?.registry,onDrawing]);
   const basis = model?.basis ?? axis.basis;
@@ -722,7 +731,7 @@ const Stacks = memo(function Stacks({
       {empty && <div className="chart-empty">{empty}</div>}
       {allMuted && <div className="chart-empty">{t('activity.allOff')}</div>}
       {hover !== null && bar && parts.length > 0 && !drag && (
-        <ActivityReadout subset={subset} scoped={scoped} model={model?.detailFrame?.model??null} retained={!coherent} history={model?.detailFrame?.history??null} by={by} hover={hover} barMs={barMs} bar={bar} parts={parts} tipProps={{tip,className:narrow?'is-below':'',style:tipStyle}}/>
+        <ActivityReadout subset={subset} scoped={model?.detailFrame?.scoped??scoped} model={model?.detailFrame?.model??null} retained={!coherent} history={model?.detailFrame?.history??null} by={by} hover={hover} barMs={barMs} bar={bar} parts={parts} tipProps={{tip,className:narrow?'is-below':'',style:tipStyle}}/>
       )}
     </div>
     {details.legend}

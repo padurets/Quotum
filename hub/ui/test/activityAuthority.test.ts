@@ -30,7 +30,7 @@ function consumer(h: ReturnType<typeof harness>) {
   const titles={removed:{provider:'codex',title:'Removed'},kept:{provider:'codex',title:'Kept'}};
   let panning:number|null=null;
   const prefs={range:'1h',activityBy:'project',muted:{}};
-  const context={...projectColorBindings(h.page),chartSeriesMuted,ACTIVITY,
+  const context={...projectColorBindings(h.page),chartSeriesMuted,ACTIVITY,boardPeriod:{captureActivity:()=>null},
     exports:{} as any,React,...parent,memo:(f:any)=>f,useMemo:(f:any,deps:any[])=>{const slot=parent.useRef(null) as any;if(!slot.current||deps.some((v,i)=>!Object.is(v,slot.current.deps[i])))slot.current={deps,value:f()};return slot.current.value;},
     activityMutedKeys:()=>[],useSyncExternalStore:(_subscribe:any,get:any)=>get(),useActivitySubset:()=>({get:()=>({model:null,loading:false,error:null}),subscribe:()=>()=>{},retain:()=>()=>{}}),useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useActivityHistory:()=>h.render(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
     useLineup:()=>h.page.get().board!.lineup,usePersonalBoard:()=>false,useTitles:()=>titles,
