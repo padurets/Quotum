@@ -201,6 +201,17 @@ test('historical calendar evidence cannot impersonate a live tail after the live
   assert.deepEqual(h.period.calendar.state.value.cells,live,'the ready live calendar retains recent credited work');
 });
 
+test('overlapping calendar prefixes cover a range even when the newest original proof has a dirty tail',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({heatmap:true,periodName:'30d'});t.after(()=>h.close());
+  h.selectRange({from:NOW-45*DAY,to:NOW-15*DAY});await flush();
+  h.store.creditWork(h.device,NOW-20*DAY,NOW-20*DAY+H,[{source:h.source,accountBy:'login',client:'codex',origin:'terminal',startedAt:NOW-21*DAY,project:'Late project',folder:'Late folder',identity:{kind:'stable',sessionId:'d'.repeat(32)}}]);h.events.flush();await flush();
+  h.selectRange({from:NOW-35*DAY,to:NOW-5*DAY});await flush();h.requests.length=0;
+  const target={from:NOW-40*DAY,to:NOW-10*DAY};h.selectRange(target);await flush();
+  assert.equal(h.requests.filter(r=>r.calendar).length,0,'the actual union covers the target without any single enclosing proof');
+  const fresh=expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,{version:1,selection:{mode:'range',...target},evaluatedAt:NOW,calendar:{zone:h.period.calendar.state.window.zone}})));
+  if(fresh.calendar?.state!=='complete')throw new Error('oracle');assert.deepEqual(h.period.calendar.state.value.cells,fresh.calendar.value.cells);
+});
+
 test('a fresh baseline adopts UTC or local date rollover before the civil clock wakes',t=>{
   let zone='UTC';const resolved=Intl.DateTimeFormat.prototype.resolvedOptions;
   t.mock.method(Intl.DateTimeFormat.prototype,'resolvedOptions',function(this:Intl.DateTimeFormat){return {...resolved.call(this),timeZone:zone};});

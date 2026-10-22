@@ -42,7 +42,7 @@ export class CalendarCache {
     const liveCut=selection.mode==='live'?entries.reduce((cut,e)=>e.period===selection.periodMs?Math.max(cut,e.basis.evidenceCut):cut,-Infinity):-Infinity;
     const cut=Math.min(range.to,selection.mode==='live'?(Number.isFinite(liveCut)?liveCut:now):latest.basis.evidenceCut);
     const retained=Math.max(latest.retained,now-latest.retention);if(range.to<=retained||range.from>=now)return null;
-    if(selection.mode==='range'&&range.to>latest.cut&&!entries.some(e=>e.from<=range.from&&e.to>=range.to))return null;
+    if(selection.mode==='range'&&range.to>latest.basis.evidenceCut&&!entries.some(e=>e.from<=range.from&&e.to>=range.to))return null;
     let from=range.from;
     while(from<cut){
       const next=entries.filter(e=>e.from<=from&&e.cut>from).sort((a,b)=>b.cut-a.cut)[0];if(!next)return null;
