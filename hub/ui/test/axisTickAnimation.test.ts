@@ -9,16 +9,46 @@ import {navigationKey} from '../lib/axisNavigation';
 /** Execute the real animation owner and post-commit tick binding on one document clock. */
 function fixture(){
   const created:{node:object;frames:Keyframe[];options:KeyframeAnimationOptions;animation:Animation;finish:()=>void;ready:(start:number)=>void;canceled:boolean}[]=[];
-  const node=(x?:number,text='23 Oct')=>({x,textContent:text,style:{transform:'',visibility:''},getAttribute(){return String(this.x);},getComputedTextLength:()=>44,
+  class Host {
+    parentElement:Host|null=null;children:Host[]=[];style={transform:'',visibility:''};
+    constructor(readonly tag:string,readonly className:string,public x?:number,public textContent='23 Oct',readonly main=false){}
+    append(...children:Host[]){this.children.push(...children);for(const child of children)child.parentElement=this;return this;}
+    matches(selector:string){
+      if(selector==='[data-plot-main]')return this.main;
+      assert.match(selector,/^(?:\w+)?(?:\.[\w-]+)?$/,'the fixture must model each production selector');
+      const [tag,name]=selector.split('.');return (!tag||tag===this.tag)&&(!name||this.className.split(' ').includes(name));
+    }
+    closest(selector:string):Host|null{for(let node:Host|null=this;node;node=node.parentElement)if(node.matches(selector))return node;return null;}
+    querySelectorAll(selector:string):Host[]{
+      const parts=selector.split(' '),all:Host[]=[];
+      for(const child of this.children){child.parentElement=this;all.push(child,...child.querySelectorAll('*'));}
+      if(selector==='*')return all;
+      return all.filter(node=>{
+        if(!node.matches(parts.at(-1)!))return false;
+        let parent=node.parentElement;
+        for(let i=parts.length-2;i>=0;i--){while(parent&&!parent.matches(parts[i]))parent=parent.parentElement;if(!parent)return false;parent=parent.parentElement;}
+        return true;
+      });
+    }
+    querySelector(selector:string){return this.querySelectorAll(selector)[0]??null;}
+    getAttribute(name:string){assert.equal(name,'x');return String(this.x);}
+    getComputedTextLength(){return 44;}
     animate(frames:Keyframe[],options:KeyframeAnimationOptions){
       let finish!:()=>void,ready!:()=>void;
       const row={node:this,frames,options,animation:null as unknown as Animation,finish:()=>finish(),ready:(start:number)=>{row.animation.startTime=start;ready();},canceled:false};
       row.animation={startTime:null,ready:new Promise<void>(resolve=>{ready=resolve;}),finished:new Promise<void>(resolve=>{finish=resolve;}),cancel:()=>{row.canceled=true;finish();}} as unknown as Animation;
       created.push(row);return row.animation;
-    }});
+    }
+  }
+  const node=(x?:number,text='23 Oct')=>new Host(x===undefined?'g':'text',x===undefined?'slides':'tick',x,text);
   const slides=[node(),node()],ticks=[node(60),node(200),node(700)];
+  // PlotLayer keeps dates beside the main SVG data group. A separate data layer
+  // has no dates, so its fold belongs to the enclosing HTML movement owner.
+  const dates=new Host('g','time-ticks');dates.children=ticks;
+  const owners=[new Host('div','plot-move',undefined,'',true).append(new Host('svg','').append(slides[0],dates)),new Host('div','plot-move').append(new Host('svg','').append(slides[1]))];
+  const box=new Host('div','chart').append(...owners);
   const context={useRef:(current:unknown)=>({current}),useEffect:()=>{},useLayoutEffect:(run:()=>void)=>run(),
-    box:{current:{querySelector:()=>slides[0],querySelectorAll:(selector:string)=>selector==='.slides'?slides:selector==='.time-ticks text.tick'?ticks:[]}},
+    box:{current:box},
     tickElements:{current:[]},tickGlyphs:{current:new WeakMap()},tickWidths:{current:new Map()},paintTicks:{current:()=>{}},animateTicks:{current:()=>[]},
     pose:{current:{a:1,b:0,offset:0}},drawing:{current:{from:0,to:100_000,end:100_000}},panLayers:{current:[]},
     width:720,left:48,right:12,scale:.73,motion:{current:null as unknown},foldTicket:{current:0},wanted:{current:{navigation:{context:'test',range:'live'}}},
@@ -29,20 +59,26 @@ function fixture(){
     freeze:null as unknown as ()=>void,cancel:null as unknown as ()=>void,animations:null as unknown as {current:Map<object,Animation>},
   };
   const source=readFileSync(new URL('../components/timeAxis.ts',import.meta.url),'utf8');
-  const owner=source.slice(source.indexOf('  const animations = '),source.indexOf('  const source = '));
-  const freeze=source.slice(source.indexOf('  const freezeSlides = '),source.indexOf('  const geometry = '));
-  const projection=source.slice(source.indexOf('  const projectionOf = '),source.indexOf('  const publishWanted = '));
-  const begin=source.indexOf('  useLayoutEffect(() => {\n    // Measure only after DOM commit.');
-  const measure=source.slice(begin,source.indexOf('\n  return {box, svg',begin));
+  const section=(start:string,end:string)=>{
+    const from=source.indexOf(start),to=source.indexOf(end,from+start.length);
+    assert.ok(from>=0&&to>from,`required production section: ${start} → ${end}`);
+    return source.slice(from,to);
+  };
+  const owner=section('  const animations = ','  const source = ');
+  const freeze=section('  const paintPan = ','  useLayoutEffect(() => pan.register');
+  const projection=section('  const projectionOf = ','  const publishWanted = ');
+  const measure=section('  useLayoutEffect(() => {\n    // Measure only after DOM commit.','\n  return {box, svg');
   runInNewContext(ts.transpileModule(owner+'\n'+freeze+'\n'+projection+'\nglobalThis.measure=()=>{'+measure+'};globalThis.animate=animateProjection;globalThis.freeze=freezeSlides;globalThis.cancel=cancelSlides;globalThis.animations=animations;',
     {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
   context.measure();
-  return {context,slides,ticks,created,node,move:()=>context.animate({from:-20_000,to:60_000,end:60_000},{from:0,to:100_000,end:100_000},160,true)};
+  return {context,slides,ticks,owners,created,node,move:()=>context.animate({from:-20_000,to:60_000,end:60_000},{from:0,to:100_000,end:100_000},160,true)};
 }
 
 test('the actual data and unscaled date effects share one start, easing and lifetime',async()=>{
   const h=fixture();h.move();
   assert.equal(h.created.length,5,'two data layers and every actual committed tick animate');
+  assert.equal(h.created[0].node,h.slides[0],'the SVG group beside dates owns its unscaled-date transition');
+  assert.equal(h.created[1].node,h.owners[1],'the other data layer folds through its actual HTML movement owner');
   for(const row of h.created){assert.equal(row.animation.startTime,1200);assert.equal(row.options.duration,160);assert.equal(row.options.easing,'ease-out');}
   for(const row of h.created.filter(row=>h.ticks.includes(row.node as typeof h.ticks[0])))assert.ok(row.frames.every(frame=>!String(frame.transform).includes('scale')));
   const count=h.created.length;h.context.measure();assert.equal(h.created.length,count,'ordinary commits preserve the running label effects');

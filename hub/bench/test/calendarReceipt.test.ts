@@ -75,8 +75,9 @@ test('observer faults and bounded journal overflow cannot become complete eviden
   const h=fixture(),c=h.calendar;c.configure(true,'context',NOW,false,live,h.reserve);
   for(let i=0;i<2200;i++)c.dirty(Infinity);
   h.mark();const full=h.read();assert.equal(full.status,'insufficient-evidence');assert.ok(full.omitted>0);assert.ok(Buffer.byteLength(JSON.stringify(full))<=2*1024*1024);
+  const expected=WorkCalendar.prototype.demand.call(c);
   const cache=(c as any).cache,entries=cache.entries;Object.defineProperty(cache,'entries',{configurable:true,get(){throw Error('observer-only read');}});
-  try{assert.deepEqual(c.demand(),{zone:c.state.window.zone});assert.equal(h.read().status,'insufficient-evidence');assert.ok(h.read().errors>0);}
+  try{assert.deepEqual(c.demand(),expected);assert.equal(h.read().status,'insufficient-evidence');assert.ok(h.read().errors>0);}
   finally{Object.defineProperty(cache,'entries',{configurable:true,writable:true,value:entries});}
 });
 

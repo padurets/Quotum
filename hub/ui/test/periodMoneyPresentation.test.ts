@@ -9,7 +9,7 @@ import {moneyTotal} from '../lib/moneyView';
 import {defaultCurrencyContext} from '../../server/domain/currency';
 import {t,setLocale} from '../i18n';
 import type {Meter} from '../../server/domain/meters';
-import {fixture,flush,NOW,H,M} from './periodRuntimeFixture';
+import {abortable,fixture,flush,NOW,H,M} from './periodRuntimeFixture';
 import {budgetView,historicalCurrencyContext} from '../lib/money';
 import {Store} from '../../server/store/store';
 import {Directory} from '../../server/store/directory';
@@ -76,9 +76,11 @@ test('target generations reject delayed values and keep redaction through error,
   const h=await historicalFunds(t),first=h.selectedRange()!;
   const personal=h.store.currencies.create(h.alice.id,{name:'Points',symbol:'PT',fractionDigits:2},'USD','2000000',NOW);
   const old=h.hold();h.selectRange({from:first.from-M,to:first.to-1});await flush();
+  const oldIntent=h.period.intent();assert.ok(old.reply,'the held boundary has decoded the actual old target');
   h.store.currencies.select(h.alice.id,personal.id);h.currency();await flush();
+  assert.equal(old.signal?.aborted,true,'a superseded HTTP boundary settles through cancellation');
   assert.equal(h.shown()?.amount,'4000000000');
-  old.release();await flush();assert.equal(h.shown()?.unit,personal.id,'an old delivered USD reply cannot regain the new label');
+  old.release();await h.period.receive(old.reply,oldIntent);await flush();assert.equal(h.shown()?.unit,personal.id,'a late decoded USD reply cannot regain the new label');
   const failed=h.hold();h.store.currencies.select(h.alice.id,'EUR');h.currency();await flush();
   failed.reject(new Error('fixture transport failure'));await flush();
   assert.equal(h.period.getValue(h.source).error,'unavailable');assert.equal(h.shown(),undefined);
@@ -86,8 +88,10 @@ test('target generations reject delayed values and keep redaction through error,
   h.store.currencies.select(h.alice.id,'USD');h.currency();await flush();assert.equal(h.shown()?.amount,'2000000000');
   h.selectRange(first);await flush();assert.equal(h.shown()?.unit,'USD');
   const late=h.hold();h.store.currencies.select(h.alice.id,personal.id);h.currency();await flush();
+  const lateIntent=h.period.intent();assert.ok(late.reply);
   h.store.currencies.select(h.alice.id,'USD');h.currency();await flush();assert.equal(h.shown()?.unit,'USD');
-  late.release();await flush();assert.equal(h.shown()?.unit,'USD','A → B → A does not admit the earlier generation');
+  assert.equal(late.signal?.aborted,true);
+  late.release();await h.period.receive(late.reply,lateIntent);await flush();assert.equal(h.shown()?.unit,'USD','A → B → A does not admit the earlier decoded generation');
 });
 
 test('a revoked grant cannot return from a delayed response or an error before a new admission',async t=>{
@@ -129,7 +133,8 @@ test('archiving a display currency before its event arrives cannot close an auth
   // mapped exactly as fetchPeriod maps the HTTP status and JSON error code.
   transport.send=async(board:string,body:unknown,signal:AbortSignal,reserve:unknown)=>{
     const attempt={signal,error:undefined as string|undefined,currentOnError:false};
-    if(paused&&(body as {budget?:{currency?:string}}).budget?.currency){attempts.push(attempt);await gate;}
+    if(paused&&(body as {budget?:{currency?:string}}).budget?.currency){attempts.push(attempt);await abortable(gate,signal);}
+    signal.throwIfAborted();
     try{return await send(board,body,signal,reserve);}catch(error){if(error instanceof ReadError){attempt.error=error.code;attempt.currentOnError=!signal.aborted;throw new ApiError(error.statusCode,error.code);}throw error;}
   };
   const quote=c.rates(h.alice.id,target.id).find(row=>row.base==='USD')!;

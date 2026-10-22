@@ -56,6 +56,16 @@ import type {Hub} from '../../server/api';
 export const NOW=1_800_000_000_000,H=3_600_000,M=60_000;
 export const flush=async()=>{for(let i=0;i<300;i++)await Promise.resolve();};
 
+/** A held HTTP boundary settles on cancellation, even before its producer releases it. */
+export function abortable<T>(pending:Promise<T>,signal:AbortSignal):Promise<T> {
+  return new Promise<T>((resolve,reject)=>{
+    const abort=()=>{signal.removeEventListener('abort',abort);reject(signal.reason??new DOMException('Aborted','AbortError'));};
+    signal.addEventListener('abort',abort,{once:true});
+    pending.then(value=>{signal.removeEventListener('abort',abort);resolve(value);},error=>{signal.removeEventListener('abort',abort);reject(error);});
+    if(signal.aborted)abort();
+  });
+}
+
 /** Actual producer, wire JSON boundary, page reducer, transport and bounded server reader. */
 export async function fixture({heatmap=false,activityOnly=false,personal=false,ownerDevice=false,transportLive=false,privateWork=false,unknown=false,current=false,stable=true,fixed=false,tableOnly=false,periodName="1h",creditFrom=NOW-3*M,creditTo=NOW-2*M,clocked=false,sessionMs=24*H,initialFilters=null as filterModelBindings.DataFilters|null,initialFailure=false,periodSource=undefined as string|undefined}={}) {
   let selectedRange=fixed?{from:NOW-H,to:NOW}:null;
@@ -100,11 +110,16 @@ export async function fixture({heatmap=false,activityOnly=false,personal=false,o
   if(connection)await flush();
   const settings={range:periodName,kind:'session',money:DEFAULT_MONEY,funds:DEFAULT_MONEY};
   const code=periodSource??readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
-  let wait:Promise<void>|null=null,preparer:Preparations|null=null,failInitial=initialFailure;
+  let wait:{promise:Promise<void>;signal?:AbortSignal;reply?:PeriodReply}|null=null,preparer:Preparations|null=null,failInitial=initialFailure;
   const pageClock=new PageClock({now:()=>now,visible:()=>true,setTimeout:(run,ms)=>{const token={};timers.set(token,{at:now+ms,run});return token;},clearTimeout:token=>{timers.delete(token as object);}});
   const pan=new Pan({now:()=>now,commit:()=>{},requestFrame:run=>{run();return null;},cancelFrame:()=>{},setTimeout:()=>null,clearTimeout:()=>{}});
   const context={workChange,exports:{} as any,hubNow:clocked?pageClock.hubNow:()=>now,retention,historyPool:pool,clock:clocked?pageClock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,
-    fetchPeriod:async(_board:string,body:PeriodRequest)=>{requests.push(body);if(failInitial){failInitial=false;throw new Error('initial transport unavailable');}const reply=expandPeriod(JSON.parse(reader.read(board,alice.id,JSON.parse(JSON.stringify(body)))));const pending=wait;wait=null;await pending;return reply;},
+    fetchPeriod:async(_board:string,body:PeriodRequest,signal:AbortSignal)=>{
+      signal.throwIfAborted();requests.push(body);if(failInitial){failInitial=false;throw new Error('initial transport unavailable');}
+      const reply=expandPeriod(JSON.parse(reader.read(board,alice.id,JSON.parse(JSON.stringify(body))))),pending=wait;wait=null;
+      if(pending){pending.signal=signal;pending.reply=reply;await abortable(pending.promise,signal);}
+      signal.throwIfAborted();return reply;
+    },
     periodTextChangesAt,page,pan,preparations:()=>preparer,prepareAsync:(owner:object,work:Parameters<typeof drain>[0],valid:()=>boolean)=>prepareAsync(owner,work,valid,preparer),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,
     packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,
     WorkCalendar,AGENT_HOURS_HEATMAP,timeRange:()=>selectedRange,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
@@ -120,7 +135,7 @@ export async function fixture({heatmap=false,activityOnly=false,personal=false,o
     report:(working=false,at=NOW)=>{now=at;hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(at).toISOString(),sessions:[{provider:'codex',...(funding?{account:(privateWork?'b':'a').repeat(24)}:{}),sessionId:stable?'c'.repeat(32):null,origin:'terminal',project:'Work project',folder:'Private folder',startedAt:new Date(start).toISOString(),lastWorkedAt:new Date(NOW-2*M).toISOString(),working}]},at);events.flush();},
     endIdle:()=>{hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(NOW).toISOString(),sessions:[]},NOW);events.flush();},
     event:(event:HubEvent)=>page.dispatch({type:'hub',event}),
-    hold:()=>{let release!:()=>void,reject!:(error:Error)=>void;wait=new Promise<void>((yes,no)=>{release=yes;reject=no;});return {release,reject};},
+    hold:()=>{let release!:()=>void,reject!:(error:Error)=>void;const held:{promise:Promise<void>;signal?:AbortSignal;reply?:PeriodReply}={promise:new Promise<void>((yes,no)=>{release=yes;reject=no;})};wait=held;return {release,reject,get signal(){return held.signal;},get reply(){return held.reply;}};},
     disconnect:()=>{opened.close();page.dispatch({type:'connection',status:'retrying',lostAt:now});}, reconnect:()=>{page.dispatch({type:'connection',status:'connecting',lostAt:now});opened=events.open({user:alice.id,secret,board,kind:'stream',send:feed,end:()=>{}}) as any;feed(opened.frames);}, remove:()=>{directory.removeMember(board,bob.id);store.unshareOrphans(board);events.flush();},
     restart:()=>{
       opened.close();events.close();now++;

@@ -7,14 +7,14 @@ import * as filterRuntimeBindings from '../lib/filterSelection';
 import * as filterCurveBindings from '../../server/domain/periodCurves';
 import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
 import {publishDataFilters} from '../lib/filterSelection';
-import {fixture as runtimeFixture,flush as runtimeFlush,NOW as runtimeNow} from './periodRuntimeFixture';
+import {abortable,fixture as runtimeFixture,flush as runtimeFlush,NOW as runtimeNow} from './periodRuntimeFixture';
 import * as retention from '../../server/domain/periodRetention';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
-import {PeriodTransport,type PeriodIntent} from '../lib/periodTransport';
+import {PeriodTransport,fetchPeriod,type PeriodIntent} from '../lib/periodTransport';
 import {HistoryPool} from '../lib/historyPool';
 import {HistoryStore} from '../lib/history';
 import {drain,Preparations} from '../lib/prepare';
@@ -204,20 +204,49 @@ test('period-only navigation replaces active and queued targets before obsolete 
   const pool=new HistoryPool(),sent:{generation:number;signal:AbortSignal}[]=[],pending:((reply:PeriodReply)=>void)[]=[];
   let generation=1;
   const intent=():PeriodIntent=>({board:'b',generation,revision:generation,request:{version:1,selection:{mode:'range',from:generation*1_000_000,to:generation*1_000_000+900_000},evaluatedAt:9_000_000,values:['s']}});
-  const transport=new PeriodTransport(pool,intent,()=>{},(_board,_body,signal)=>{sent.push({generation,signal});return new Promise(resolve=>pending.push(resolve));});
-  transport.change();await flush();generation=2;transport.change();await flush();
-  assert.equal(sent[0].signal.aborted,true);assert.deepEqual(sent.map(s=>s.generation),[1,2]);
-  transport.reset();
+  const published:number[]=[];
+  const transport=new PeriodTransport(pool,intent,(_reply,captured)=>{published.push(captured.generation);},(_board,_body,signal)=>{sent.push({generation,signal});return abortable(new Promise<PeriodReply>(resolve=>pending.push(resolve)),signal);});
   const blockers=[{role:'visible' as const},{role:'visible' as const}];
-  for(const flight of blockers)pool.request({estimatedBytes:0,evictionCandidates:()=>[]},flight,()=>{},()=>{});
-  await flush();
-  for(generation=3;generation<=7;generation++){transport.change();await flush();}
-  generation=7;assert.equal(sent.length,2);
-  pool.release(blockers[0]);await flush();
-  assert.deepEqual(sent.map(s=>s.generation),[1,2,7],'only the latest queued target starts');
-  assert.equal(pool.activeFlights,2);transport.reset();pool.release(blockers[1]);
-  const basis={run:'run',revision:'1',evaluatedAt:9_000_000,evidenceCut:9_000_000,range:{from:0,to:1}};
-  for(const resolve of pending)resolve({basis});await flush();assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);
+  try{
+    transport.change();await flush();generation=2;transport.change();await flush();
+    assert.equal(sent[0].signal.aborted,true);assert.deepEqual(sent.map(s=>s.generation),[1,2]);
+    assert.equal(pool.activeFlights,1,'only the current network request retains a slot after abort settlement');
+    transport.reset();await flush();assert.equal(pool.activeFlights,0);
+    for(const flight of blockers)pool.request({estimatedBytes:0,evictionCandidates:()=>[]},flight,()=>{},()=>{});
+    await flush();
+    for(generation=3;generation<=7;generation++){transport.change();await flush();}
+    generation=7;assert.equal(sent.length,2);
+    pool.release(blockers[0]);await flush();
+    assert.deepEqual(sent.map(s=>s.generation),[1,2,7],'only the latest queued target starts');
+    assert.equal(pool.activeFlights,2);transport.reset();pool.release(blockers[1]);
+    const basis={run:'run',revision:'1',evaluatedAt:9_000_000,evidenceCut:9_000_000,range:{from:0,to:1}};
+    for(const resolve of pending)resolve({basis});await flush();assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);
+    assert.deepEqual(published,[],'late releases cannot publish any cancelled generation');
+  }finally{transport.reset();for(const flight of blockers)pool.release(flight);await flush();}
+});
+
+for(const phase of ['before headers','while draining the body'] as const)test(`fetchPeriod cancellation ${phase} settles before the replacement acquires its slot`,async t=>{
+  const pool=new HistoryPool(),sent:number[]=[],published:number[]=[];
+  let generation=1,oldSignal:AbortSignal|undefined;
+  const basis={run:'run',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range:{from:0,to:NOW}};
+  t.mock.method(globalThis,'fetch',async(_url:unknown,init?:RequestInit)=>{
+    const signal=init!.signal!;sent.push(generation);
+    if(generation===1){
+      oldSignal=signal;
+      if(phase==='before headers')await abortable(new Promise<never>(()=>{}),signal);
+      else return new Response(new ReadableStream<Uint8Array>({start(controller){signal.addEventListener('abort',()=>controller.error(signal.reason),{once:true});}}));
+    }
+    return new Response(JSON.stringify({basis}),{headers:{'content-type':'application/json'}});
+  });
+  const intent=():PeriodIntent=>({board:'b',generation,revision:generation,request:{version:1,selection:{mode:'range',from:generation,to:generation+900_000},evaluatedAt:NOW,values:['s']}});
+  const transport=new PeriodTransport(pool,intent,(_reply,captured)=>{published.push(captured.generation);},fetchPeriod);
+  const until=async(check:()=>boolean)=>{for(let i=0;i<100;i++){await new Promise<void>(setImmediate);if(check())return;}assert.fail('the actual response consumer did not settle');};
+  try{
+    transport.change();await until(()=>sent.length===1);
+    generation=2;transport.change();await until(()=>published.length===1&&pool.activeFlights===0);
+    assert.equal(oldSignal?.aborted,true);assert.deepEqual(sent,[1,2]);assert.deepEqual(published,[2]);
+    assert.equal(pool.estimatedBytes,0,'aborted body staging and replacement staging both release');
+  }finally{transport.reset();await until(()=>pool.activeFlights===0);}
 });
 
 test('retiring an answer during preparation retains its slot and bytes until preparation settles',async()=>{
@@ -240,15 +269,17 @@ test('a chart sharing retired period extras immediately reads its current cells 
   const pool=new HistoryPool(),sent:{generation:number;body:PeriodRequest;signal:AbortSignal}[]=[],timers:number[]=[];
   let generation=1;
   const intent=():PeriodIntent=>({board:'b',generation,revision:generation,request:{version:1,selection:{mode:'live',periodMs:86_400_000},evaluatedAt:NOW,sessions:{}}});
-  const transport=new PeriodTransport(pool,intent,()=>{},async(_board,body,signal)=>{sent.push({generation,body,signal});return new Promise(()=>{});});
+  const transport=new PeriodTransport(pool,intent,()=>{},async(_board,body,signal)=>{sent.push({generation,body,signal});return abortable(new Promise<PeriodReply>(()=>{}),signal);});
   const reader=new HistoryStore({sharedTransport:true,now:()=>NOW,preparations:null,read:(_board,cell,from,to,signal,_meters,_meta,owner)=>transport.read('quota',{cell:String(cell),from:String(from),to:String(to)},signal,owner).then(reply=>expandHistory(reply)),
     setTimeout:(_run,ms)=>{timers.push(ms);return {};},clearTimeout:()=>{},dropTimeRange:()=>{}},pool.budget,'quota',pool);
-  reader.open('b');reader.hello('run');reader.snapshot(['s'],['s w']);await flush();
-  assert.equal(sent.length,1);assert.ok(sent[0].body.quota);assert.ok(sent[0].body.sessions);
-  generation=2;transport.change();await flush();
-  assert.equal(sent[0].signal.aborted,true);assert.ok(sent.some(a=>a.generation===2&&a.body.quota));
-  assert.equal(reader.get().error,undefined);assert.deepEqual(timers,[]);
-  reader.close();transport.reset();assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);
+  try{
+    reader.open('b');reader.hello('run');reader.snapshot(['s'],['s w']);await flush();
+    assert.equal(sent.length,1);assert.ok(sent[0].body.quota);assert.ok(sent[0].body.sessions);
+    generation=2;transport.change();await flush();
+    assert.equal(sent[0].signal.aborted,true);assert.ok(sent.some(a=>a.generation===2&&a.body.quota));
+    assert.equal(reader.get().error,undefined);assert.deepEqual(timers,[]);
+  }finally{reader.close();transport.reset();await flush();}
+  assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);
 });
 
 /** Exercise the real reader factory, including its retry callback, with an isolated pool. */

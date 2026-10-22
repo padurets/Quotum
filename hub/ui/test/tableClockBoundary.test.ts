@@ -7,6 +7,7 @@ import {nodeOf,rendered,NODES} from '../../bench/probe';
 
 const Fragment=Symbol('Fragment'),jsx=(type:any,props:any)=>({type,props:props??{}});
 let now=1000,clockReads=0;
+const clockEnabled:boolean[]=[];
 const hooks={Fragment,useMemo:(read:()=>unknown)=>read(),useRef:(current:unknown)=>({current}),useState:(initial:any)=>[typeof initial==='function'?initial():initial,()=>{}],useLayoutEffect:()=>{}};
 function load(file:string,modules:Record<string,unknown>){
   const context={exports:{} as any,require:(name:string)=>{assert.ok(name in modules,name);return modules[name];}};
@@ -14,7 +15,9 @@ function load(file:string,modules:Record<string,unknown>){
   return context.exports;
 }
 const runtime={react:hooks,'react/jsx-runtime':{jsx,jsxs:jsx,Fragment}},popover={Popover:()=>null,HideRow:()=>null,SlidersIcon:()=>null,SwitchRow:()=>null};
-const cells=load('../components/TableCell.tsx',{...runtime,'../lib/clock':{hubNow:()=>now,useClock:()=>{clockReads++;return now;}}});
+const cells=load('../components/TableCell.tsx',{...runtime,'../lib/clock':{hubNow:()=>now,useClock:(changesAt:(at:number)=>number|null,_context:unknown,enabled=true)=>{
+  clockEnabled.push(enabled);if(enabled)clockReads++;else assert.equal(changesAt(now),null,'a static cell has no clock deadline');return now;
+}}});
 const previews=load('../components/TablePreview.tsx',{...runtime,'./Popover':popover,'../i18n':{t:(key:string)=>key}});
 const tables=load('../components/AnalyticsTable.tsx',{...runtime,'../lib/view':{},'../i18n':{t:(key:string)=>key},'./Popover':popover,'./TableWidget':{TableHeading:()=>null},'./TableCell':cells,'./TablePreview':previews});
 
@@ -33,7 +36,7 @@ class Host {
 // Execute actual cells and wrappers, then use the benchmark's own host attribution.
 // Marking the whole row or table would incorrectly admit the static-cell control.
 for(const layout of ['list','table'] as const)for(const still of [false,true])for(const at of [1000,2000])test(`${layout} ${still?'measurement':'visible'} cell clock boundary at ${at}`,()=>{
-  now=at;clockReads=0;
+  now=at;clockReads=0;clockEnabled.length=0;
   const all:any[]=[],hostRoot=new Host('section',{className:'panel forecast'},null),root:any={tag:5,flags:0,stateNode:hostRoot,child:null,sibling:null,return:null,alternate:null};
   const build=(element:any,parent:any,hostParent:Host):any=>{
     if(element==null||typeof element==='boolean')return null;
@@ -45,8 +48,12 @@ for(const layout of ['list','table'] as const)for(const still of [false,true])fo
   };
   const timed=(time:string)=>({time,changesAt:(at:number)=>at+1000,at:(at:number)=>({content:at<2000?'2m':'1m'})});
   root.child=build(jsx(tables.AnalyticsTable,{columns:[{id:'now',title:'Now',width:100},{id:'forecast',title:'Forecast',width:100},{id:'static',title:'Static',width:100}],rows:[{key:'fixture',name:'Fixture',cells:{now:timed('lead-clock'),forecast:timed('detail-clock'),static:{content:'Unchanged'}}}],name:'Limit',lead:'now',layout,still}),root,hostRoot);
-  const clocks=all.filter(fiber=>fiber.type?.name==='Timed');
+  const wrappers=all.filter(fiber=>fiber.type?.name==='Timed');
+  const clocks=wrappers.filter(fiber=>'at' in fiber.props.cell),staticCells=wrappers.filter(fiber=>!('at' in fiber.props.cell));
+  assert.equal(wrappers.length,still?0:3,'visible cells preserve their hook boundary across changing evidence');
   assert.equal(clocks.length,still?0:2);assert.equal(clockReads,still?0:2);
+  assert.deepEqual(clockEnabled,still?[]:[true,true,false],'only the two timed cells enable clock subscriptions');
+  for(const fiber of staticCells)assert.equal(nodeOf(fiber,NODES),hostRoot,'a disabled clock wrapper remains ordinary table data');
   for(const fiber of clocks){
     const time=fiber.props.cell.time;
     assert.ok(rendered(root).includes(fiber));

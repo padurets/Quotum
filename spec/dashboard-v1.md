@@ -561,11 +561,15 @@ The board's `view` includes `layout: {columns: 6, places: {<widget id>: {x, y, w
 `x` is a column starting at zero, `y` a row starting at zero used for reading order.
 Widths are 2, 3, 4 or 6 columns and starts are 0, 2, 3 or 4, with `x + w <= 6`. `h`, when
 present, is the height in rows the owner chose for the widget, a whole number from 1 to
-200 (`MAX_ROWS`); without it the widget is as tall as its content. The page measures the
-content: a widget never takes fewer rows than the least its content can show (all of a card
-or the table, a chart as tall as it draws by itself, the first agent of the list and how
-many more), so `h` is what the owner asked for, not what shows, and the hub does not check
-it against the content. A place has exactly `x`, `y`, `w` and, optionally, `h`; anything
+200 (`MAX_ROWS`); without it the widget uses its structural natural height. The page
+measures that shell for the viewport and display configuration, rounding its height to
+whole rows and clamping an owner's `h` to the structural minimum. Data, filters, period
+navigation, loading, errors and empty results change neither those dimensions nor the
+plot or table viewport and neighbouring placement. Tables page whole rows within their
+allocated area; oversized rows expose complete details through bounded previews. Only
+layout edits, display configuration and viewport reflow establish new geometry. `h`
+therefore records the owner's requested height, which the hub does not check against
+the shell. A place has exactly `x`, `y`, `w` and, optionally, `h`; anything
 else is refused. The hub migrates stored pre-grid views and split analytics IDs before
 serving the view with its revision. Saves require the compact version 5 codec and
 its writer header, with an 80 KiB UTF-8 body limit. The page uses keepalive only within its

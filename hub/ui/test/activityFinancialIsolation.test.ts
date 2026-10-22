@@ -43,9 +43,9 @@ function forbidPlanInspection(history:History) {
   return ()=>Object.defineProperty(history,'events',descriptor);
 }
 
-for(const fixed of [false,true])test(`${fixed?'fixed':'live'} Activity reads work without native quota points`,async t=>{
+for(const fixed of [false,true])test(`${fixed?'fixed Activity alone':'live Activity with a quota widget'} reads work without native quota points`,async t=>{
   t.mock.method(Date,'now',()=>NOW);
-  const h=await fixture({fixed}),d=await drawings(h);
+  const h=await fixture({fixed,activityOnly:fixed}),d=await drawings(h);
   let restore=()=>{};
   try{
     const raw=d.loader.get().history;
@@ -77,6 +77,30 @@ for(const fixed of [false,true])test(`${fixed?'fixed':'live'} Activity reads wor
     assert.equal(next.history.activity.agentMs,M);
     assert.equal(next.history.activity.agents,1);
     assert.throws(()=>d.render(),isFinancialPointRead,'quota readers retain their plan event deadline');
+  }finally{restore();d.close();await h.close();}
+});
+
+test('co-visible fixed Activity prepares one shared native frame and both consumers reuse it',async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const h=await fixture({fixed:true}),d=await drawings(h);
+  let restore=()=>{};
+  try{
+    const raw=d.loader.get().history;assert.ok(raw&&raw.series.some(series=>series.points.length));
+    const accounting=h.period.tapes.get('quota').accounting,project=accounting.project.bind(accounting);
+    let calls=0;
+    t.mock.method(accounting,'project',(...args:Parameters<typeof project>)=>{calls++;return project(...args);});
+    const reads=h.requests.length,activity=d.renderActivity();
+    assert.ok(activity.history);assert.equal(activity.loading,false);assert.equal(activity.error,undefined);
+    assert.equal(calls,1,'the first consumer builds the native frame demanded by the visible quota widget');
+    assert.equal(activity.history.activity.agentMs,M);assert.equal(activity.history.activity.agents,1);
+    assert.deepEqual(activity.history.activity.by.project.map((group:{name:string|null})=>group.name),['Work project']);
+    assert.ok(activity.history.series.some((series:{remainingAtEnd:number|null})=>series.remainingAtEnd===83),'the shared frame also contains the actual native quota endpoint');
+    restore=forbidQuotaPoints(raw);
+    for(let i=0;i<3;i++){
+      assert.equal(d.renderActivity().history,activity.history,'Activity reuses the complete shared projection');
+      assert.equal(d.render().history,activity.history,'the quota consumer reuses the same projection without rereading native points');
+    }
+    assert.equal(calls,1);assert.equal(h.requests.length,reads,'sharing a fixed frame adds no request');
   }finally{restore();d.close();await h.close();}
 });
 

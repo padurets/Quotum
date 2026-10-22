@@ -14,6 +14,11 @@ import {tickKeyframes,tickVisible,tickPresentation} from '../lib/axisTicks';
 import {niceTicks} from '../lib/periods';
 const M=60000,H=3600000;
 const source=(file:string)=>readFileSync(new URL('../../'+file,import.meta.url),'utf8');
+function section(text:string,start:string,end?:string){
+ const from=text.indexOf(start),to=end===undefined?text.length:text.indexOf(end,from+start.length);
+ assert.ok(from>=0&&to>from,`required production section: ${start} → ${end??'EOF'}`);
+ return text.slice(from,to);
+}
 /** Mount the actual chart hooks and DOM painters; keep RAF and React commits independent. */
 export function activityAxisFixture(live:boolean){
  let selected:any=live?null:{from:9*M,to:11*M},dirty=true,index=0,renderCount=0,now=100*M,nextFrame=0,tree:any=null,flushCause='initial';
@@ -59,14 +64,26 @@ export function activityAxisFixture(live:boolean){
  const compile=(code:string)=>ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React,module:ts.ModuleKind.CommonJS}}).outputText;
  context.exports={};context.require=(name:string)=>name==='react'?hooks:{prepare:(owner:any,work:any,valid:any,ready:any)=>prepare(owner,work,valid,ready,scheduler),preparations:()=>scheduler};
  runInNewContext(compile(source('ui/components/prepared.ts')),context);Object.assign(context,context.exports);
- const axis=source('ui/components/timeAxis.ts');runInNewContext(compile(axis.slice(axis.indexOf('const HOLD_MS'),axis.indexOf('export type DrawingGeometry'))+axis.slice(axis.indexOf('export function slideOf')).replace('export function slideOf','function slideOf').replace('export function useTimeAxis','function useTimeAxis')+'\nglobalThis.useTimeAxis=useTimeAxis;'),context);
- const layers=source('ui/components/PlotLayer.tsx');runInNewContext(compile(layers.slice(layers.indexOf('export function PlotLayer')).replaceAll('export function','function')+'\nglobalThis.PlotLayer=PlotLayer;globalThis.PlotOverlay=PlotOverlay;globalThis.clipPlot=clipPlot;'),context);
- let activity=source('ui/components/Activity.tsx').slice(source('ui/components/Activity.tsx').indexOf('const Stacks = memo(function Stacks('));
+ const axis=source('ui/components/timeAxis.ts');runInNewContext(compile(section(axis,'const HOLD_MS','export type DrawingGeometry')+section(axis,'export function slideOf').replace('export function slideOf','function slideOf').replace('export function useTimeAxis','function useTimeAxis')+'\nglobalThis.useTimeAxis=useTimeAxis;'),context);
+ const layers=source('ui/components/PlotLayer.tsx');runInNewContext(compile(section(layers,'export function PlotLayer').replaceAll('export function','function')+'\nglobalThis.PlotLayer=PlotLayer;globalThis.PlotOverlay=PlotOverlay;globalThis.clipPlot=clipPlot;'),context);
+ const activity=section(source('ui/components/Activity.tsx'),'const StackArtwork = memo(function StackArtwork(');
+ assert.ok(activity.includes('const Stacks = memo(function Stacks('),'the artwork and its actual chart consumer are loaded together');
  runInNewContext(compile(activity+'\nglobalThis.Stacks=Stacks;'),context);
  function flush(){let count=0;while(dirty){if(count++>50)throw Error('render loop');dirty=false;index=0;effects.length=0;const vnode=context.Stacks(props);tree=commitHost(vnode,'root',null)[0];effects.splice(0).forEach(run=>run());renderCount++;}}
  function settle(){for(let count=0;count<1000&&(dirty||tasks.length);count++){flush();while(tasks.length)tasks.shift()!();}assert.ok(!dirty&&!tasks.length);}
- const band=()=>{const paths=tree.querySelectorAll('path.activity-stack');return paths[0]?.parent?.parent;};
- function snapshot(label:string){const transform=band()?.getAttribute('transform')??null;const ratio=Number(transform?.match(/scale\(1 ([^)]+)\)/)?.[1]??1);const path=tree.querySelector('path.activity-stack')?.getAttribute('d');const ys=tree.querySelector('.activity-value-axis')?.children.map((row:Host)=>row.querySelector('text')?.textContent);const axis=tree.querySelector('svg');const main=tree.querySelector('[data-plot-main]'),slides=main?.querySelector('.slides'),matrix=slides?.style.transform??'',a=Number(matrix.match(/scaleX\(([-.\d]+)\)/)?.[1]??1),b=Number(matrix.match(/translateX\(([-.\d]+)px\)/)?.[1]??0),offset=Number(main?.style.transform?.match(/translateX\(([-.\d]+)px\)/)?.[1]??0),drawFrom=Number(axis?.dataset.drawFrom),drawTo=Number(axis?.dataset.drawTo),landmarks=[live?98*M:10*M,live?99*M:11*M].map(at=>a*(48+(at-drawFrom)/Math.max(M,drawTo-drawFrom)*340)+b+offset),lowTop=Number([...(path??'').matchAll(/M[^,]*,([-.\d]+)/g)][live?1:0]?.[1]??NaN),lowBarY=272+(lowTop-272)*ratio;return {label,transform,ratio,labels:ys,landmarks,lowBarY,path,preparing:scheduler.size,tasks:tasks.length,panEnd:axis?.dataset.panEnd,drawReady:axis?.dataset.drawReady,renderCount,pendingRender:dirty,rafs:rafs.size,selected};}
+ const required=<T,>(value:T|null|undefined,label:string):T=>{assert.ok(value!==null&&value!==undefined,`required production node: ${label}`);return value;};
+ const band=()=>required<Host>(tree.querySelector('path.activity-stack')?.parent?.parent,'activity value band');
+ function snapshot(label:string){
+  const transform=band().getAttribute('transform'),ratio=Number(transform?.match(/scale\(1 ([^)]+)\)/)?.[1]??1);
+  const path=required<string>(tree.querySelector('path.activity-stack')?.getAttribute('d'),'prepared stack path');
+  const ys=required<Host>(tree.querySelector('.activity-value-axis'),'activity value axis').children.map(row=>required(row.querySelector('text'),'value label').textContent);
+  const axis=required<Host>(tree.querySelector('svg'),'chart SVG'),main=required<Host>(tree.querySelector('[data-plot-main]'),'main movement owner'),slides=required(main.querySelector('.slides'),'main slides');
+  const matrix=slides.style.transform??'',a=Number(matrix.match(/scaleX\(([-.\d]+)\)/)?.[1]??1),b=Number(matrix.match(/translateX\(([-.\d]+)px\)/)?.[1]??0),offset=Number(main.style.transform?.match(/translateX\(([-.\d]+)px\)/)?.[1]??0);
+  const drawFrom=Number(axis.dataset.drawFrom),drawTo=Number(axis.dataset.drawTo);assert.ok(Number.isFinite(drawFrom)&&Number.isFinite(drawTo),'the actual axis committed its drawing bounds');
+  const landmarks=[live?98*M:10*M,live?99*M:11*M].map(at=>a*(48+(at-drawFrom)/Math.max(M,drawTo-drawFrom)*340)+b+offset);
+  const lowTop=Number([...path.matchAll(/M[^,]*,([-.\d]+)/g)][live?1:0]?.[1]??NaN);assert.ok(Number.isFinite(lowTop),'the measured stack has a real path landmark');
+  const lowBarY=272+(lowTop-272)*ratio;return {label,transform,ratio,labels:ys,landmarks,lowBarY,path,preparing:scheduler.size,tasks:tasks.length,panEnd:axis.dataset.panEnd,drawReady:axis.dataset.drawReady,renderCount,pendingRender:dirty,rafs:rafs.size,selected};
+ }
  function runFrame(){flushCause='RAF';const callbacks=[...rafs.values()];rafs.clear();callbacks.forEach(run=>run());return snapshot('after-native-RAF-before-React');}
  function begin(){flushCause='begin';return pan.begin({source:Symbol('input'),input:'pointer',selected,length:2*M,now,historyStart:0,span:2*M,width:340})!;}
  settle();
