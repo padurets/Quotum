@@ -39,6 +39,7 @@ import {IdleCpuDiagnostic,sourceIdentity} from './idleCpuDiagnostic.js';
 import {idleRetentionScript,idleRetentionProblems,type IdleRetention} from './idleRetention.js';
 import {ObservedWork} from './observed.js';
 import {fixedActivity} from './fixedActivity.js';
+import {captionControl} from './captionControl.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -110,6 +111,7 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const evidence = new Evidence();
   const idleCpuMode = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_CPU;
+  const captionMode = process.env.QUOTUM_BENCH_CAPTION_CONTROL;
   const nativeFrameMode=idleCpuMode==='native-trace'||idleCpuMode==='native-profile';
   const poolDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL;
   evidence.save('scope', {mode: options.scope});
@@ -125,6 +127,7 @@ async function main() {
   let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
   try {
     if (['PANNING', 'IDLE', 'IDLE_TIMING', 'STARTUP_WAITS'].some(mode => process.env['QUOTUM_BENCH_DIAGNOSE_' + mode])) throw new Stop('Removed benchmark diagnostic mode');
+    if (captionMode && (captionMode !== '1' || !options.ci || options.scope !== 'dashboard' || options.cdp || idleCpuMode || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting caption control mode');
     const diagnostics = [idleCpuMode&&options.scope==='dashboard'?undefined:idleCpuMode, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE];
     if (options.scope !== 'all' && diagnostics.some(Boolean)) throw new Stop('Partial benchmark scopes cannot be combined with diagnostics');
     address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
@@ -154,7 +157,7 @@ async function main() {
     }
     try {await owner.close();} catch (error) {code = 1; say(String(error));}
     try {await demo.stop();} catch {code = 1; say('demo cleanup failed');}
-    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || idleCpuMode || poolDiagnostic) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
+    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || idleCpuMode || poolDiagnostic || captionMode) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
     process.exit(code);
   })();
   const set = panningSet(SETS[0]);
@@ -266,6 +269,14 @@ async function main() {
     say(`the board is open; it settles for ${Math.round((warm - Date.now()) / 1000)} s`);
     await sleep(warm - Date.now());
     if (heard.counts().history) throw new Stop('The stand credited agent work during warmup; its agents must be idle.');
+
+    if (captionMode) {
+      evidence.save('caption-control-warm', {opened, warm, timing, counts: heard.counts()});
+      const result = await captionControl(cdp, address.base, evidence, process.env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256 ?? '');
+      evidence.save('caption-control-result', result);
+      console.log(JSON.stringify(result, null, 2));
+      await finish(result.status !== 'complete' || result.problems.length ? 1 : 0); return;
+    }
 
     const cellMs = cellOf(86_400_000);
     const planned = idleWindow(Date.now(), seconds, cellMs);

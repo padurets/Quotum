@@ -7,7 +7,7 @@ import {panningReload,type ReloadDiagnostic} from './panningReload.js';
 import {panningSettlement} from './panningFailure.js';
 
 /** Native input against the real charts; the temporary layout brings all five into view. */
-export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp, 'at'|'off'|'snapshot'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), options?: {save(name: string, value: unknown): void}|ReloadDiagnostic, diagnoseReload?:ReloadDiagnostic, nativeTrace?:()=>IdleCpuDiagnostic) {
+export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp, 'at'|'off'|'snapshot'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), options?: {save(name: string, value: unknown): void; selection?: 'quota24'}|ReloadDiagnostic, diagnoseReload?:ReloadDiagnostic, nativeTrace?:()=>IdleCpuDiagnostic) {
   const evidence=typeof options==='function'?undefined:options;
   diagnoseReload??=typeof options==='function'?options:undefined;
   cdp.at?.('panning/setup');
@@ -48,7 +48,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
   const at = (stage: string) => cdp.at?.(['panning', scenario?.initiator, scenario?.period, stage].filter(Boolean).join('/'));
   await cdp.send('Emulation.setDeviceMetricsOverride', {width: 1280, height: 2400, deviceScaleFactor: 1, mobile: false});
   try {
-    for (const initiator of ['quota', 'session', 'activity', 'budget', 'funds'] as const) {
+    for (const initiator of evidence?.selection === 'quota24' ? ['quota'] as const : ['quota', 'session', 'activity', 'budget', 'funds'] as const) {
       scenario = {initiator};
       at('load');
       // A newly opened board gives each input owner an independently unread edge.
@@ -71,7 +71,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
     await click('.filter-control[data-filter="history.horizon"] .picker > button');
     await click('.filter-control[data-filter="history.horizon"] .popover .popover-row', 1);
     await key(true, 'Escape', 27); await key(false, 'Escape', 27);
-    for (const [period, index] of [['24h', 4], ['30d', 8]] as const) {
+    for (const [period, index] of evidence?.selection === 'quota24' ? [['24h', 4]] as const : [['24h', 4], ['30d', 8]] as const) {
       scenario = {initiator, period};
       at('setup');
       progress(`${initiator}/${period}/select`);
@@ -185,7 +185,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         const schedule=callback=>originalRAF.call(window,callback);
         let previous=charts.map(()=>'0:1'),phase='idle',lastFrame=null,paintedToken=null;
         let sampleEntry=0,callbacksSinceMovingFrame=0,maxCallbackGapMs=0,samplerMs=0;
-        const consume=(count,now,stamp,reachedGesture)=>{const reached=probe.pending.slice(0,count).filter(input=>input.gesture===reachedGesture);probe.pending=probe.pending.filter((input,i)=>i>=count||input.gesture!==reachedGesture);for(const input of reached){const ms=now-input.at;probe.latency.push(ms);probe.responses.push({ms,queued:input.delivered-input.at,processed:now-input.delivered,segment:input.segment,requests:probe.flights.size});}};
+        const consume=(count,now,stamp,reachedGesture)=>{const reached=probe.pending.slice(0,count).filter(input=>input.gesture===reachedGesture);probe.pending=probe.pending.filter((input,i)=>i>=count||input.gesture!==reachedGesture);for(const input of reached){const ms=now-input.at;probe.latency.push(ms);probe.responses.push({ms,queued:input.delivered-input.at,processed:now-input.delivered,segment:input.segment,requests:probe.flights.size${evidence?.selection === 'quota24' ? ',at:input.at,delivered:input.delivered,reached:now,id:input.id' : ''}});}};
         const sample=(stamp,afterCallback=false)=>{
           if(!probe.running)return;
           const now=performance.now();

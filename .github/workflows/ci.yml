@@ -36,6 +36,11 @@ on:
         required: false
         type: boolean
         default: false
+      caption_control:
+        description: Run the caption publication A1/B/A2 control after the original warm-up
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -129,7 +134,7 @@ jobs:
           if-no-files-found: warn
 
   bench-dashboard:
-    if: ${{ !startsWith(github.ref, 'refs/tags/') && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile))) }}
+    if: ${{ !startsWith(github.ref, 'refs/tags/') && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
     runs-on: ubuntu-latest
     # Independent traffic checks run on another runner; every dashboard phase stays here.
     timeout-minutes: 20
@@ -147,13 +152,13 @@ jobs:
           cache-dependency-path: hub/package-lock.json
       - run: npm ci
       - run: npm run build
-      - name: Verify the native trace source and received-client identity
-        if: ${{ inputs.native_trace || inputs.native_profile }}
+      - name: Verify the requested source and received-client identity
+        if: ${{ inputs.native_trace || inputs.native_profile || inputs.caption_control }}
         run: |
           node --import tsx --input-type=module <<'JS'
           import {execFileSync} from 'node:child_process';
           import {clientIdentity} from './bench/idleCpuDiagnostic.ts';
-          if([process.env.TRACE_ONLY,process.env.ORIGINAL_TIMING,process.env.NATIVE_TRACE,process.env.NATIVE_PROFILE].filter(value=>value==='true').length!==1)throw Error('Choose one diagnostic mode');
+          if([process.env.TRACE_ONLY,process.env.ORIGINAL_TIMING,process.env.NATIVE_TRACE,process.env.NATIVE_PROFILE,process.env.CAPTION_CONTROL].filter(value=>value==='true').length!==1)throw Error('Choose one diagnostic mode');
           const requested=process.env.QUOTUM_BENCH_SOURCE_SHA,expected=process.env.EXPECTED_CLIENT_SHA256;
           const actual=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),client=clientIdentity();
           if(!/^[a-f0-9]{40}$/.test(requested??'')||actual!==requested||!/^[a-f0-9]{64}$/.test(expected??'')||client.status!=='available'||client.sha256!==expected)throw Error('Diagnostic control source or client mismatch');
@@ -166,10 +171,13 @@ jobs:
           ORIGINAL_TIMING: ${{ inputs.original_timing }}
           NATIVE_TRACE: ${{ inputs.native_trace }}
           NATIVE_PROFILE: ${{ inputs.native_profile }}
+          CAPTION_CONTROL: ${{ inputs.caption_control }}
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope dashboard
         env:
           QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.native_profile && 'native-profile' || inputs.native_trace && 'native-trace' || '' }}
-          QUOTUM_BENCH_SOURCE_SHA: ${{ (inputs.native_trace || inputs.native_profile) && inputs.diagnostic_ref || '' }}
+          QUOTUM_BENCH_SOURCE_SHA: ${{ (inputs.native_trace || inputs.native_profile || inputs.caption_control) && inputs.diagnostic_ref || '' }}
+          QUOTUM_BENCH_CAPTION_CONTROL: ${{ inputs.caption_control && '1' || '' }}
+          QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ inputs.caption_control && inputs.expected_client_sha256 || '' }}
           QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-bench-dashboard
       - name: Benchmark evidence
         if: always()
@@ -180,7 +188,7 @@ jobs:
           if-no-files-found: warn
 
   idle-cpu-control:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:

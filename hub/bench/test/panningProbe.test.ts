@@ -14,7 +14,7 @@ const edgeSeries=():PanReading['edgeSeries']=>['wheel','drag'].map(stage=>({stag
 const source = readFileSync(new URL('../panning.ts', import.meta.url), 'utf8');
 const probe = source.match(/const samplerSource=`(\(\(\) => \{\n\s*const initiator=[\s\S]+?\}\)\(\))`;/)![1];
 
-function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quota', typed = false) {
+function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quota', typed = false, diagnostic = false) {
   let time = 0;
   let observe:(records:unknown[])=>void=()=>{};
   const callbacks: ((stamp: number) => void)[] = [], listeners = new Map<string, (event: object) => void>(), bubble = new Map<string, (event: object) => void>();
@@ -63,7 +63,8 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quo
     Object.assign(owner,{computedStyleMap:()=>new Map([['transform',computed.get(owner)==='none'?{value:'none'}:{toMatrix:()=>new context.DOMMatrix(computed.get(owner))}]])});
   }
   const paintFold = (owner:{style:{transform:string}},transform:string) => {if (typed) computed.set(owner,transform);else owner.style.transform=transform;};
-  runInNewContext(probe.replace('${JSON.stringify(initiator)}', JSON.stringify(initiator)).replace('${JSON.stringify(period)}', JSON.stringify('24h')).replace('${panTransactionsScript()}', panTransactionsScript()), context);
+  const script = runInNewContext('`' + probe + '`', {initiator, period: '24h', panTransactionsScript, evidence: diagnostic ? {selection: 'quota24'} : undefined});
+  runInNewContext(script, context);
   const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {running:boolean; feeding: boolean; cleanup(): void; readTransactions(): PanTransactions; pending: object[]; samples: NonNullable<PanReading['outliers']>}}).__quotumPan;
   for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg, sessionSvg]) Object.assign(svg.dataset, {panMinEnd: '-1000000000', panMaxEnd: '1000000000'});
   const limits = (min: number, max: number) => {for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg, sessionSvg]) Object.assign(svg.dataset, {panMinEnd: String(min), panMaxEnd: String(max)});};
@@ -88,6 +89,21 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quo
   const runFrame = (at: number) => frame(at).forEach(callback => callback(at));
   return {reading, wheel, limits, listeners, bubble, update, frame, runFrame,paintFold,observe:(records:unknown[])=>observe(records), requestFrame: context.window.requestAnimationFrame, context,sessionSvg,sessionLayer,historySvg, activitySvg, budgetSvg, fundsSvg, fundsLayer, budgetLayer, historyLayer, activityLayer, activityClip};
 }
+
+test('caption diagnostics retain exact input clocks without adding fields to the canonical probe', () => {
+  for (const diagnostic of [false, true]) {
+    const f = fixture('quota', false, diagnostic); f.reading.feeding = true;
+    f.runFrame(80); f.wheel(100, 110); f.requestFrame(() => f.update(1, 125)); f.runFrame(125);
+    const responses = f.reading.responses; assert.ok(responses); assert.equal(responses.length, 1);
+    const response = responses[0] as typeof responses[number] & {at?: number; delivered?: number; reached?: number; id?: number};
+    if (diagnostic) {
+      assert.equal(response.id, 1); assert.equal(response.at, 100); assert.equal(response.delivered, 110);
+      assert.equal(response.ms, response.reached! - response.at!);
+      assert.equal(response.queued, response.delivered! - response.at!);
+      assert.equal(response.processed, response.reached! - response.delivered!);
+    } else assert.deepEqual(Object.keys(response).sort(), ['ms', 'processed', 'queued', 'requests', 'segment']);
+  }
+});
 
 test('the original probe records a native generation pause before a handler writes the address', () => {
   const f=fixture();f.reading.feeding=true;
