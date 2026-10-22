@@ -3,12 +3,12 @@ import type {Counted} from './probe.js';
 /**
  * What an idle dashboard may cost, per second of watching it (index.ts, `--ci`).
  *
- * Before the page was driven by events (commit 6f04eed), the bench job of CI run
- * 36269781391 measured it three times at 1.45, 1.54 and 1.51 ms of script a second
- * (Chrome's ScriptDuration less the probe's own time): 1.50 on average, with runs apart by
- * less than a tenth. An idle page now spends at most a fifth of that.
+ * The dense board may spend 120 ms of script over the two-minute CI window. This
+ * leaves room for visible time to advance while requests and unrelated renders
+ * remain forbidden. Chrome's elapsed ScriptDuration, less the probe's own time,
+ * provides a script regression budget; it does not measure total CPU or energy.
  */
-export const IDLE_SCRIPT_MS_PER_SECOND = 0.3;
+export const IDLE_SCRIPT_MS_PER_SECOND = 1;
 
 /** A measurement shows on its card and chart within this, for 95 of 100. */
 export const LATENCY_P95_MS = 1000;

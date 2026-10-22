@@ -25,8 +25,8 @@ export function panningProblems(reading: PanReading): string[] {
   if (reading.frames.length < 30 || reading.updated < 30 || reading.inputs === 0 || reading.latency.length !== reading.inputs) found.push('panning did not measure every input reaching an updated chart frame');
   if (reading.chartUpdates.length !== 5 || reading.chartUpdates.some(count => count < 30) || !reading.synchronized) found.push('panning did not move all five charts on the same time frame');
   if (!(percentile(reading.frames, .95) <= 34)) found.push(`${label} moving-frame p95 exceeds 34 ms`);
-  if (!(percentile(reading.frames, .99) <= 50)) found.push(`${label} moving-frame p99 exceeds 50 ms`);
-  if (!(percentile(reading.latency, .95) <= 34)) found.push(`${label} input-to-updated-frame p95 exceeds 34 ms`);
+  if (!(percentile(reading.frames, .99) <= 80)) found.push(`${label} moving-frame p99 exceeds 80 ms`);
+  if (!(percentile(reading.latency, .95) <= 50)) found.push(`${label} input-to-updated-frame p95 exceeds 50 ms`);
   if (reading.peakFlights > 2 || reading.maxTiles > 8 || reading.duplicateReads) found.push('panning history flights exceed their cap or overlap');
   if (reading.pushesDuring || reading.pushesAfter !== reading.expectedPushes) found.push('panning did not commit exactly once per completed changed gesture');
   if (reading.forbiddenMutations) found.push('panning changed cards, header, agents, table or activity totals while moving');

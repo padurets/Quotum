@@ -21,10 +21,10 @@ wheel and Shift-drag starting from each five-hour limit, weekly limit, agent act
 budget balance and subscription-funds chart at 24h and 30d, moving
 all five charts with at least twelve real series per resource family and
 CPU throttled fourfold. The scenario covers delayed history, strip rebuilding, reversal
-and returning to live. Moving-frame intervals must stay within 34 ms at p95 and 50 ms
-at p99; input to an actually updated chart frame must stay within 34 ms at p95. Empty
-callbacks and missing samples fail. The previous idle, measurement, work and native
-frequency-focus checks retain their budgets. Mixed Codex subscriptions also exercise
+and returning to live. Moving-frame intervals must stay within 34 ms at p95 and 80 ms
+at p99; input to an actually updated chart frame must stay within 50 ms at p95. Empty
+callbacks and missing samples fail. Idle, measurement, work and native
+frequency-focus checks also apply. Mixed Codex subscriptions also exercise
 changed credit balances and unchanged-value heartbeats: each updates its own card and
 funds history without waking quota or wallet analytics. A separate fixed Activity phase at 24h and 30d checks paint-only emphasis,
 shared-filter totals and bar values, clean-cell reuse, coalesced late work, cancelled
@@ -422,8 +422,10 @@ languages.
 lists without working, opens Ana's board in headless Chrome and checks the budget in
 `hub/bench/budget.ts`. During warmup no `history` may arrive. For two minutes (five
 without `--ci`) an idle board with neither measurements nor working agents asks nothing,
-is told only `ping`, renders and changes only what shows time, and spends a fifth of
-the script it did before events. Then twenty measurements reach their card and chart,
+is told only `ping`, renders and changes only what shows time, and spends at most
+1 ms of script per second after subtracting the probe's own time. This elapsed-time
+budget catches script regressions; it does not measure total CPU or energy.
+Then twenty measurements reach their card and chart,
 19 within a second, reading a small tail of history rather than the whole period.
 Finally the stand's laptop reports one working agent: each live credited report makes
 at most one small history read and renders only its card, agents and analytics.

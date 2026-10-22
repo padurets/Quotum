@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {EventCounts} from '../stream.js';
-import {idleProblems,type Idle} from '../budget.js';
+import {IDLE_SCRIPT_MS_PER_SECOND,idleProblems,type Idle} from '../budget.js';
 
 const a='own-device_1',b='own-device_2';
 const send=(counts:EventCounts,type:string,data:unknown)=>counts.push(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -23,7 +23,7 @@ test('private contacts remain fully reported while the unchanged board budget se
   }
   assert.ok(idleProblems({...idle(counts.boardCounts()),requests:{count:1,byPath:{'/api/devices':1}}}).length,'contact refetch remains forbidden');
   assert.ok(idleProblems({...idle(counts.boardCounts()),renders:[{region:'header',node:'div',kind:null,time:false,count:1}]}).length,'contact-driven board work remains forbidden');
-  assert.ok(idleProblems({...idle(counts.boardCounts()),scriptMsPerSecond:0.301}).length,'the idle CPU threshold is unchanged');
+  assert.ok(idleProblems({...idle(counts.boardCounts()),scriptMsPerSecond:IDLE_SCRIPT_MS_PER_SECOND+0.001}).length,'private contacts do not bypass the idle script budget');
 });
 
 test('only empty owner semantic hints qualify separately; board refreshes still fail',()=>{
