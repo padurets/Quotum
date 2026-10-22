@@ -1,170 +1,238 @@
-import {test,type TestContext} from 'node:test';
+import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {bounded,observeReversal} from '../reversalDiagnostic.js';
-import {Cdp,attachedChrome} from '../cdp.js';
+import {bounded, observeReversal} from '../reversalDiagnostic.js';
+import {Cdp, attachedChrome} from '../cdp.js';
+import type {ProcessIdentity} from '../browserProcess.js';
 
-const flush=async()=>{for(let turn=0;turn<60;turn++)await Promise.resolve();};
-function diagnosticFixture(t:TestContext,stalled:string|string[]=''){
-  const commands:string[]=[],logs:string[]=[];
-  let controlClosed=false,independentClosed=false,pageClosed=false,release!:(value:unknown)=>void,paused:((event:{callFrames:[]})=>void)|undefined,reads=0;
-  const pending=new Promise<unknown>(resolve=>{release=resolve;});
-  t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({webSocketDebuggerUrl:'ws://control.invalid'})));
-  t.mock.method(console,'error',(line:string)=>logs.push(line));
-  const control={send:async()=>{commands.push('SystemInfo.getProcessInfo');return {processInfo:[{type:'renderer',id:17,cpuTime:++reads}]};},close:()=>{controlClosed=true;}};
-  const independent={evaluate:async()=>{commands.push('independent state');return stalled==='independent state'?pending:{responsive:true};},close:()=>{independentClosed=true;}};
-  t.mock.method(Cdp,'connect',async(url:string)=>(url==='ws://page.invalid'?independent:control) as unknown as Cdp);
-  const page={endpoint:'ws://page.invalid',close:()=>{pageClosed=true;},on:(_method:string,listener:typeof paused)=>{paused=listener;},send:async(method:string)=>{
-    commands.push(method);if(Array.isArray(stalled)?stalled.includes(method):method===stalled)return pending;
-    if(method==='Runtime.evaluate')return {result:{value:{ready:'loading'}}};
-    if(method==='Debugger.pause')paused?.({callFrames:[]});
-    if(method==='Profiler.stop')return {profile:{nodes:[],samples:[],timeDeltas:[]}};
-    return {};
-  }} as unknown as Cdp;
-  const browser={...attachedChrome('http://fixture.invalid'),diagnostics:async(pids:number[],candidate?:number)=>{commands.push('native');return {pids,candidate};}};
-  return {page,browser,commands,logs,release,closed:()=>({control:controlClosed,independent:independentClosed,page:pageClosed})};
+const flush = async () => {await new Promise<void>(resolve => setImmediate(resolve));};
+function pageFixture(send: (method: string, signal?: AbortSignal) => Promise<unknown> = async () => ({})) {
+  const commands: string[] = [];
+  return {commands, page: {
+    snapshot: () => ({pending: [{id: 1, method: 'Input.dispatchMouseEvent', started: 1, deadline: 30001}]}),
+    send: async (method: string, _params: object, signal?: AbortSignal) => {commands.push(method); return send(method, signal);},
+    evaluate: async (_expression: string, signal?: AbortSignal) => send('Runtime.evaluate', signal),
+    on() {},close() {},
+  } as unknown as Cdp};
 }
+const processRow = (pid: number, ticks: number): ProcessIdentity => ({pid, parent: 1, group: 100, session: 100, birth: '42', state: 'S',
+  userTicks: ticks, systemTicks: 2, minorFaults: 3, majorFaults: 0, blockIoTicks: 0});
 
-test('diagnostic waiting is bounded independently of a silent page response',async t=>{
-  t.mock.timers.enable({apis:['setTimeout']});
-  const failed=assert.rejects(bounded('page pause',new Promise(()=>{})),/page pause: diagnostic deadline/);
-  t.mock.timers.tick(5000);await failed;
+test('a diagnostic deadline cancels its child operation and releases the timer', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  let aborted = false;
+  const failed = assert.rejects(bounded('page pause', signal => new Promise((_, reject) => {
+    signal.addEventListener('abort', () => {aborted = true; reject(signal.reason);}, {once: true});
+  })), /diagnostic deadline/);
+  t.mock.timers.tick(5000); await failed; assert.equal(aborted, true);
 });
 
-test('a responsive diagnostic preserves its result or error and releases its deadline',async t=>{
-  t.mock.timers.enable({apis:['setTimeout']});
-  assert.deepEqual(await bounded('browser',Promise.resolve({responded:true})),{responded:true});
-  const error=new Error('original failure');await assert.rejects(bounded('browser',Promise.reject(error)),candidate=>candidate===error);
-  t.mock.timers.tick(5000);
+test('canonical commands acknowledged after five seconds retain the thirty-second gate without intervention', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const {page, commands} = pageFixture();
+  t.mock.method(globalThis, 'fetch', async () => {throw new Error('no network diagnostics before command failure');});
+  const observer = await observeReversal(page, attachedChrome('http://fixture.invalid'));
+  let release!: () => void;
+  const result = observer.watch('slow acknowledgement', () => new Promise<void>(resolve => {release = resolve;}));
+  t.mock.timers.tick(6000); release(); await result; await observer.close();
+  assert.deepEqual(commands, []);
 });
 
-test('canceling a diagnostic step releases its deadline and preserves the cancellation reason',async t=>{
-  t.mock.timers.enable({apis:['setTimeout']});
-  const controller=new AbortController(),reason=new Error('whole observer deadline');
-  let release!:(value:string)=>void;
-  const pending=new Promise<string>(resolve=>{release=resolve;});
-  const failed=assert.rejects(bounded('page pause',pending,5000,controller.signal),error=>error===reason);
-  controller.abort(reason);await failed;release('late reply');t.mock.timers.tick(5000);
+test('a passive owned read cannot turn a successful slow command into an intervention failure', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const {page, commands} = pageFixture(), reads: AbortSignal[] = [];
+  t.mock.method(globalThis, 'fetch', async () => {throw new Error('no browser probe before failure');});
+  const observer = await observeReversal(page, {owned: true, endpoint: 'fixture', close: async () => {}, observeProcesses: async signal => {
+    reads.push(signal); return new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), {once: true}));
+  }});
+  let release!: () => void;
+  const result = observer.watch('slow success', () => new Promise<void>(resolve => {release = resolve;}));
+  t.mock.timers.tick(5000); await flush(); assert.equal(reads.length, 1);
+  t.mock.timers.tick(1000); await flush(); assert.equal(reads[0].aborted, true);
+  release(); await result; await observer.close(); assert.deepEqual(commands, []);
 });
 
-test('native evidence starts before a silent renderer and independent state does not wait for it',async t=>{
-  t.mock.timers.enable({apis:['setTimeout','Date']});
-  const f=diagnosticFixture(t,'Runtime.evaluate'),controller=new AbortController();
-  const observer=await observeReversal(f.page,f.browser,false,controller.signal);
-  assert.deepEqual(f.commands,['SystemInfo.getProcessInfo']);
-  const diagnosed=observer.diagnose('native/budget/reload');await flush();
-  assert.ok(f.commands.indexOf('native')<f.commands.indexOf('Runtime.evaluate'));
-  assert.ok(f.commands.includes('independent state'),'the second socket runs while the first remains silent');
-  t.mock.timers.tick(5000);await diagnosed;await observer.close();
-  const result=JSON.parse(f.logs[0].slice('reversal diagnostic '.length));
-  assert.equal(result.elapsedMs,5000);assert.equal(result.cpuElapsedMs,5000);assert.match(result.pageState,/diagnostic deadline/);
-  assert.deepEqual(result.native,{pids:[17],candidate:17});assert.deepEqual(result.independentState,{responsive:true});
-  assert.equal(result.browserCpu[0].cpuDeltaSeconds,1);
-  assert.equal(result.timing.nativeStarted.atMs,0);assert.equal(result.timing.nativeFinished.atMs,0);
-  assert.equal(result.timing.pageFinished.atMs,5000);assert.equal(result.timing.processBefore.atMs,0);assert.equal(result.timing.processAfter.atMs,5000);
-  assert.ok(f.commands.indexOf('native')<f.commands.indexOf('Debugger.enable'));
-  assert.ok(f.commands.lastIndexOf('SystemInfo.getProcessInfo')>f.commands.indexOf('independent state'),'CPU delta spans the bounded page probes');
-  assert.deepEqual(f.closed(),{control:true,independent:true,page:false});
-});
-
-test('all reported browser processes reach the ownership guard and late V8 capture has its own loader context',async t=>{
-  t.mock.timers.enable({apis:['setTimeout','Date']});
-  const f=diagnosticFixture(t,'Runtime.evaluate'),controller=new AbortController();
-  const processes=[{type:'renderer',id:17,cpuTime:1},{type:'browser',id:11,cpuTime:1},{type:'GPU',id:12,cpuTime:1},{type:'network',id:13,cpuTime:1}];
-  const connect=Cdp.connect;
-  t.mock.method(Cdp,'connect',async(url:string,signal?:AbortSignal)=>{
-    const connection=await connect(url,signal);
-    if(url!=='ws://page.invalid')t.mock.method(connection,'send',async()=>({processInfo:processes}));
-    return connection;
+test('original failure retains matching in-flight counters and bounded postfailure counters before debugger commands', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const logs: string[] = [], order: string[] = [];
+  t.mock.method(console, 'error', (line: string) => logs.push(line));
+  t.mock.method(globalThis, 'fetch', async () => new Response('{}'));
+  const {page} = pageFixture(async (method, signal) => {
+    order.push(method);
+    if (method === 'Runtime.evaluate') return new Promise((_, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), {once: true}));
+    return method === 'Profiler.stop' ? {profile: {}} : {};
   });
-  let committed:{atMs:number;frame:string;loader:string}|undefined;
-  const origin={startedAt:Date.now(),navigation:()=>({requested:{atMs:10,frame:'frame',loader:'new'},committed,loadAtMs:committed?8304:null})};
-  t.mock.timers.tick(5000);
-  const observer=await observeReversal(f.page,f.browser,false,controller.signal,origin);
-  const diagnosed=observer.diagnose('native/budget/reload');await flush();
-  committed={atMs:8263,frame:'frame',loader:'new'};t.mock.timers.tick(4000);
-  f.release({result:{value:{ready:'complete',timeOrigin:8000}}});await diagnosed;await observer.close();
-  const result=JSON.parse(f.logs[0].slice('reversal diagnostic '.length));
-  assert.deepEqual(result.native,{pids:[17,11,12,13],candidate:17});
-  assert.equal(result.timing.nativeStarted.atMs,5000);assert.equal(result.timing.nativeStarted.navigation.committed,undefined);
-  assert.equal(result.timing.profileStarted.atMs,9000);assert.deepEqual(result.timing.profileStarted.navigation.committed,committed);
-  assert.equal(result.timing.paused.atMs,9000);assert.equal(result.pageState.timeOrigin,8000);
+  let reads = 0, reject!: (error: Error) => void;
+  const observer = await observeReversal(page, {owned: true, endpoint: 'fixture', close: async () => {}, observeProcesses: async () => {
+    order.push('process read'); return Array.from({length: ++reads === 1 ? 1 : 35}, (_, i) => processRow(100 + i, reads === 1 ? 10 : 20));
+  }}, {postmortem: true});
+  const original = new Error('original gesture timeout');
+  const failed = assert.rejects(observer.watch('warm return', () => new Promise<never>((_, fail) => {reject = fail;})), error => error === original);
+  t.mock.timers.tick(5000); await flush(); assert.deepEqual(order, ['process read']);
+  t.mock.timers.tick(25000); page.snapshot = () => ({failure: {method: 'Input.synthesizeScrollGesture'}}) as ReturnType<Cdp['snapshot']>;
+  reject(original); await flush(); t.mock.timers.tick(2000); await failed; await observer.close();
+  assert.ok(order.lastIndexOf('process read') < order.indexOf('Debugger.enable'));
+  const report = JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));
+  assert.equal(report.waitingProcesses.scenario, 'warm return');
+  assert.equal(report.waitingProcesses.command.pending[0].id, 1);
+  assert.equal(report.waitingProcesses.sample.processes[0].userTicks, 10);
+  assert.equal(report.failedProcesses.processes[0].userTicks, 20);
+  assert.equal(report.failedProcesses.processes.length, 32); assert.equal(report.failedProcesses.omitted, 3);
+  for (const sample of [report.waitingProcesses.sample, report.failedProcesses]) {
+    assert.equal(sample.status, 'observed'); assert.ok(sample.toMs >= sample.fromMs);
+    assert.equal(sample.processes[0].birth, '42');
+  }
 });
 
-test('a slow native capture does not block either renderer probe and cancellation sends no late V8 commands',async t=>{
-  const f=diagnosticFixture(t),controller=new AbortController(),reason=new Error('whole observer deadline');
-  let release!:()=>void;
-  t.mock.method(f.browser,'diagnostics',async()=>{f.commands.push('native');return new Promise<void>(resolve=>{release=resolve;});});
-  const observer=await observeReversal(f.page,f.browser,false,controller.signal);
-  const failed=assert.rejects(observer.diagnose('native/budget/reload'),error=>error===reason);
-  await flush();assert.ok(f.commands.includes('Runtime.evaluate'));assert.ok(f.commands.includes('independent state'));
-  controller.abort(reason);await failed;await observer.close();
-  const sent=f.commands.slice();release();await flush();assert.deepEqual(f.commands,sent);
-  assert.equal(sent.some(command=>command.startsWith('Debugger.')||command.startsWith('Profiler.')),false);
+test('success cancels its unfinished process read and a later command cannot inherit that sample', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const logs: string[] = [], signals: AbortSignal[] = [];
+  t.mock.method(console, 'error', (line: string) => logs.push(line));
+  t.mock.method(globalThis, 'fetch', async () => new Response('{}'));
+  const {page, commands} = pageFixture();
+  let late!: (rows: ProcessIdentity[]) => void, release!: () => void;
+  const observer = await observeReversal(page, {owned: true, endpoint: 'fixture', close: async () => {}, observeProcesses: async signal => {
+    signals.push(signal); return signals.length === 1 ? new Promise(resolve => {late = resolve;}) : [processRow(100, 30)];
+  }});
+  const success = observer.watch('earlier command', () => new Promise<void>(resolve => {release = resolve;}));
+  t.mock.timers.tick(5000); await flush(); release(); await success;
+  assert.equal(signals[0].aborted, true);
+  late([processRow(100, 999)]); await flush();
+  const original = new Error('later command failed');
+  await assert.rejects(observer.watch('later command', async () => {throw original;}), error => error === original);
+  await observer.close();
+  const report = JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));
+  assert.equal(report.scenario, 'later command'); assert.equal(report.waiting, undefined); assert.equal(report.waitingProcesses, undefined);
+  assert.equal(report.failedProcesses.processes[0].userTicks, 30); assert.deepEqual(commands, []);
 });
 
-for(const stalled of ['Debugger.enable','Profiler.enable','Profiler.start','Debugger.pause'])test(`cancellation cleans up requested ${stalled} before its late acknowledgement`,async t=>{
+test('a missing postfailure process read is cancelled inside collection and preserves the command error', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const logs: string[] = [], signals: AbortSignal[] = [];
+  t.mock.method(console, 'error', (line: string) => logs.push(line));
+  t.mock.method(globalThis, 'fetch', async () => new Response('{}'));
+  const {page} = pageFixture();
+  const observer = await observeReversal(page, {owned: true, endpoint: 'fixture', close: async () => {}, observeProcesses: async signal => {
+    signals.push(signal); return new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('secret-canary')), {once: true}));
+  }});
+  const original = new Error('original error'); let finished = false;
+  const failed = assert.rejects(observer.watch('failed command', async () => {throw original;}), error => error === original).then(() => {finished = true;});
+  await flush(); assert.equal(finished, false);
+  t.mock.timers.tick(1000); await failed; await observer.close();
+  assert.equal(signals[0].aborted, true);
+  const report = JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));
+  assert.equal(report.failedProcesses.status, 'unavailable'); assert.doesNotMatch(logs.join(''), /secret-canary/);
+});
+
+test('an attached browser cannot grant process observation even if a reader is supplied', async t => {
+  t.mock.method(console, 'error', () => {});
+  t.mock.method(globalThis, 'fetch', async () => new Response('{}'));
+  let reads = 0;
+  const {page} = pageFixture();
+  const observer = await observeReversal(page, {...attachedChrome('fixture'), observeProcesses: async () => {reads++; return [processRow(100, 1)];}});
+  await assert.rejects(observer.watch('attached failure', async () => {throw new Error('original');}), /original/);
+  await observer.close(); assert.equal(reads, 0);
+});
+
+for(const method of ['Runtime.evaluate','Input.synthesizeScrollGesture'])test('an owned unresponsive page is inspected after '+method+' fails and always released',async t=>{
   t.mock.timers.enable({apis:['setTimeout']});
-  const f=diagnosticFixture(t,stalled),controller=new AbortController(),reason=new Error('whole observer deadline');
-  const observer=await observeReversal(f.page,f.browser,false,controller.signal);
-  const failed=assert.rejects(observer.diagnose('native/budget/reload'),error=>error===reason);
-  await flush();assert.ok(f.commands.includes(stalled));controller.abort(reason);await failed;await observer.close();
-  const sent=f.commands.slice();
-  const cleanup=stalled==='Debugger.enable'?['Debugger.resume','Debugger.disable']:stalled==='Profiler.enable'?['Debugger.resume','Profiler.disable','Debugger.disable']:['Debugger.resume','Profiler.stop','Profiler.disable','Debugger.disable'];
-  assert.deepEqual(sent.slice(-cleanup.length),cleanup,'cleanup accounts for requests whose replies never arrived');
-  f.release({});await flush();t.mock.timers.tick(30000);await flush();
-  assert.deepEqual(f.commands,sent,'no late continuation may enable or pause the page');
-  assert.deepEqual(f.closed(),{control:true,independent:true,page:false});
-  assert.ok(f.logs[0].includes('"aborted":true'));assert.ok(f.logs[0].includes('"native":{"pids":[17],"candidate":17}'));
+  const logs:string[]=[];t.mock.method(console,'error',(line:string)=>logs.push(line));
+  t.mock.method(globalThis,'fetch',async()=>new Response('{}'));
+  const listeners=new Map<string,(event:unknown)=>void>();let reject!:(error:Error)=>void;
+  const {page,commands}=pageFixture(async(method,signal)=>{
+    if(method==='Runtime.evaluate')return new Promise((_,reject)=>signal!.addEventListener('abort',()=>reject(signal!.reason),{once:true}));
+    if(method==='Debugger.enable')listeners.get('Debugger.scriptParsed')?.({scriptId:'7',url:'https://private-canary.invalid/assets/index-fixture.js',hash:'a'.repeat(64),length:1000});
+    if(method==='Debugger.pause')listeners.get('Debugger.paused')?.({reason:'debugCommand',callFrames:[{location:{scriptId:'7',lineNumber:12,columnNumber:34},url:'https://private-canary.invalid',functionName:'private-canary'}]});
+    return method==='Profiler.stop'?{profile:{samples:[1],timeDeltas:[1000]}}:{};
+  });
+  page.on=(method,listener)=>{listeners.set(method,listener as (event:unknown)=>void);};
+  const original=new Error('original command deadline');
+  const observer=await observeReversal(page,{owned:true,endpoint:'fixture',close:async()=>{}},{postmortem:true});
+  const pending=new Promise<never>((_,fail)=>{reject=fail;});
+  const failed=assert.rejects(observer.watch('first delivery',()=>pending),error=>error===original);
+  t.mock.timers.tick(5000);await flush();assert.deepEqual(commands,[]);
+  t.mock.timers.tick(25000);page.snapshot=()=>({failure:{method}}) as ReturnType<Cdp['snapshot']>;reject(original);
+  await flush();t.mock.timers.tick(2000);await failed;await observer.close();
+  assert.deepEqual(commands,['Debugger.enable','Profiler.enable','Profiler.start','Debugger.pause','Profiler.stop','Debugger.resume','Profiler.stop','Debugger.disable']);
+  const report=JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));
+  assert.equal(report.postmortem,true);assert.equal(report.resumed,true);
+  assert.deepEqual(report.pause,{reason:'debugCommand',frames:[{scriptId:'7',lineNumber:12,columnNumber:34}],omitted:0});
+  assert.deepEqual(report.sources,[{scriptId:'7',sourceHash:'a'.repeat(64),sourceLength:1000}]);
+  assert.doesNotMatch(logs.join(''),/private-canary/);
 });
 
-test('canceling a pending independent page probe closes only diagnostic connections and never starts V8',async t=>{
-  const f=diagnosticFixture(t,'independent state'),controller=new AbortController(),reason=new Error('whole observer deadline');
-  const observer=await observeReversal(f.page,f.browser,false,controller.signal);
-  const failed=assert.rejects(observer.diagnose('native/budget/reload'),error=>error===reason);
-  await flush();assert.ok(f.commands.includes('independent state'));controller.abort(reason);await failed;await observer.close();
-  const sent=f.commands.slice();f.release({responsive:true});await flush();assert.deepEqual(f.commands,sent);
-  assert.equal(f.commands.some(method=>method.startsWith('Debugger.')||method.startsWith('Profiler.')),false);
-  assert.deepEqual(f.closed(),{control:true,independent:true,page:false});
+test('failed canonical input retains its error and bounds probes without debugger or foreign process inspection', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const signals: AbortSignal[] = [], logs: string[] = [];
+  t.mock.method(console, 'error', (text: string) => logs.push(text));
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({Browser: 'Chrome/fixture', webSocketDebuggerUrl: 'ws://fixture.invalid'})));
+  t.mock.method(Cdp, 'connect', async () => {throw new Error('attached browser control is forbidden');});
+  const {page, commands} = pageFixture(async (_method, signal) => new Promise((_, reject) => {
+    signals.push(signal!); signal!.addEventListener('abort', () => reject(signal!.reason), {once: true});
+  }));
+  const observer = await observeReversal(page, attachedChrome('http://fixture.invalid'));
+  const original = new Error('original input timeout');
+  const failure = assert.rejects(observer.watch('reversal', async () => {throw original;}), error => error === original);
+  await flush(); t.mock.timers.tick(2000); await failure; await observer.close();
+  assert.ok(signals.every(signal => signal.aborted));
+  assert.deepEqual(commands, []);
+  assert.ok(logs.some(line => line.includes('"browserAlive":true')));
+  assert.ok(logs.some(line => line.includes('unavailable for attached browser')));
 });
 
-test('canceled V8 cleanup has a four-second bound even when none of its requests are acknowledged',async t=>{
-  t.mock.timers.enable({apis:['setTimeout']});
-  const cleanup=['Debugger.resume','Profiler.stop','Profiler.disable','Debugger.disable'];
-  const f=diagnosticFixture(t,['Profiler.start',...cleanup]),controller=new AbortController(),reason=new Error('whole observer deadline');
-  const observer=await observeReversal(f.page,f.browser,false,controller.signal);
-  const failed=assert.rejects(observer.diagnose('native/budget/reload'),error=>error===reason);
-  await flush();controller.abort(reason);await failed;
-  let closed=false;const closing=observer.close().then(()=>{closed=true;});await flush();
-  for(let second=0;second<4;second++){assert.equal(closed,false);t.mock.timers.tick(1000);await flush();}
-  await closing;assert.deepEqual(f.commands.slice(-4),cleanup);assert.equal(f.closed().page,false);
-  const sent=f.commands.slice();f.release({});await flush();assert.deepEqual(f.commands,sent);
-});
-
-test('the original stalled page is diagnosed without pre-enabling V8 and a recovered input cannot pass',async t=>{
-  t.mock.timers.enable({apis:['setTimeout']});
-  t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({webSocketDebuggerUrl:'ws://fixture.invalid'})));
-  let controlClosed=false,independentClosed=false;
-  const control={send:async()=>({processInfo:[{type:'renderer',id:1,cpuTime:1}]}),close:()=>{controlClosed=true;}};
-  const independent={evaluate:async()=>({responsive:true}),close:()=>{independentClosed=true;}};
-  t.mock.method(Cdp,'connect',async(url:string)=>(url==='ws://page.invalid'?independent:control) as unknown as Cdp);
-  const messages:unknown[]=[],commands:string[]=[];
-  t.mock.method(console,'error',(message:unknown)=>{messages.push(message);});
-  let paused:((event:{callFrames:[]})=>void)|undefined,releaseInput!:()=>void;
-  const input=new Promise<void>(resolve=>{releaseInput=resolve;});
-  const page={endpoint:'ws://page.invalid',on:(_method:string,listener:typeof paused)=>{paused=listener;},send:async(method:string)=>{
-    commands.push(method);
-    if(method==='Runtime.evaluate')throw new Error('stalled original session');
-    if(method==='Debugger.pause')paused?.({callFrames:[]});
-    if(method==='Profiler.stop'){releaseInput();return {profile:{nodes:[],samples:[],timeDeltas:[]}};}
+test('a diagnostic pause with a lost reply still resumes and uses one collection deadline', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  t.mock.method(console, 'error', () => {});
+  t.mock.method(globalThis, 'fetch', async () => new Response('{}'));
+  const {page, commands} = pageFixture(async (method, signal) => {
+    if (method === 'Debugger.pause') return new Promise((_, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), {once: true}));
     return {};
-  }};
-  const observer=await observeReversal(page as unknown as Cdp,attachedChrome('http://fixture.invalid'),false);
-  assert.equal(commands.length,0,'the canonical input must start before any V8 diagnostics');
-  const failed=assert.rejects(observer.watch('repeat wheel',()=>input),/response arrived after diagnostic intervention/);
-  t.mock.timers.tick(5000);await failed;await observer.close();
-  assert.ok(commands.includes('Debugger.pause'));
-  assert.ok(messages.some(message=>String(message).includes('"activation":"after stall"')));
-  assert.ok(messages.some(message=>String(message).includes('"independentState":{"responsive":true}')));
-  assert.equal(independentClosed,true);
-  assert.equal(controlClosed,true);
+  });
+  let closes = 0;
+  const observer = await observeReversal(page, attachedChrome('http://fixture.invalid'), {mode: 'diagnostic', closeTarget: async () => {closes++;}});
+  const original = new Error('input timeout');
+  const failed = assert.rejects(observer.watch('reversal', async () => {throw original;}), error => error === original);
+  await flush(); assert.ok(commands.includes('Debugger.pause'));
+  t.mock.timers.tick(5000); await failed; await observer.close();
+  assert.ok(commands.includes('Debugger.resume')); assert.equal(closes, 0);
+});
+
+test('unconfirmed resume closes only the owned diagnostic target', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  t.mock.method(console, 'error', () => {});
+  t.mock.method(globalThis, 'fetch', async () => new Response('{}'));
+  const {page} = pageFixture(async (method, signal) => {
+    if (method === 'Debugger.pause') throw new Error('lost pause acknowledgement');
+    if (method === 'Debugger.resume') return new Promise((_, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), {once: true}));
+    return {};
+  });
+  let closes = 0;
+  const observer = await observeReversal(page, attachedChrome('http://fixture.invalid'), {mode: 'diagnostic', closeTarget: async () => {closes++;}});
+  const failure = assert.rejects(observer.watch('reversal', async () => {throw new Error('original');}), /original/);
+  await flush(); t.mock.timers.tick(2000); await failure; await observer.close();
+  assert.equal(closes, 1);
+});
+
+test('a late connection after reload cancellation cannot inspect processes or remain open',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});t.mock.method(console,'error',()=>{});
+  t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({webSocketDebuggerUrl:'ws://fixture.invalid'})));
+  let connected=()=>{},release!:(value:Cdp)=>void,closed=0,inspected=0;
+  const waiting=new Promise<void>(resolve=>{connected=resolve;});
+  t.mock.method(Cdp,'connect',async()=>{connected();return new Promise<Cdp>(resolve=>{release=resolve;});});
+  const {page,commands}=pageFixture(),controller=new AbortController(),reason=new Error('reload observer canceled');
+  const observer=await observeReversal(page,{owned:true,endpoint:'fixture',close:async()=>{}},{signal:controller.signal});
+  const result=assert.rejects(observer.diagnose('native/quota/reload'),value=>value===reason);
+  await waiting;controller.abort(reason);await result;await observer.close();
+  release({send:async()=>{inspected++;return {};},close:()=>{closed++;}}as unknown as Cdp);await flush();
+  assert.equal(closed,1);assert.equal(inspected,0);assert.deepEqual(commands,[]);
+});
+
+test('canonical reload collection retains its original navigation without debugger or raw page fields',async t=>{
+  const logs:string[]=[],{page,commands}=pageFixture(async()=>({ready:'complete',url:'https://private-canary.invalid'}));
+  t.mock.method(console,'error',(line:string)=>logs.push(line));
+  t.mock.method(globalThis,'fetch',async()=>new Response('{}'));
+  const observer=await observeReversal(page,attachedChrome('http://fixture.invalid'),{origin:{startedAt:1000,navigation:()=>({requested:{atMs:1,frame:'frame-1',loader:'loader-1'},committed:{atMs:2,frame:'frame-1',loader:'loader-2'},loadAtMs:3})}});
+  await observer.diagnose('native/quota/reload');await observer.close();
+  const report=JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));
+  assert.equal(report.mode,'canonical');assert.equal(report.startedAt,1000);assert.equal(report.navigation.requested.loaderId,'loader-1');assert.equal(report.navigation.committed.loaderId,'loader-2');assert.equal(report.navigation.loadAtMs,3);
+  assert.deepEqual(commands,[]);assert.doesNotMatch(logs.join(''),/private-canary|Debugger|Profiler/);
 });

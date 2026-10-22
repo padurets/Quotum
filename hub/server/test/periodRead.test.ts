@@ -23,6 +23,8 @@ import {sharedWork} from '../periodWork.js';
 import {expandPeriod,type PeriodWireReply} from '../domain/periodWire.js';
 import {HISTORY_BYTES_PER_MEASUREMENT} from '../../bench/budget.js';
 import {PeriodAccounting} from '../domain/periodAccounting.js';
+import {shifted,canShift} from '../domain/periodShift.js';
+import {expandHistory,type HistoryBasis} from '../domain/history.js';
 import {transaction} from '../touches.js';
 import {defaultFilters,workFilter} from '../domain/dataFilters.js';
 import {PeriodCurves,sourceWorkCurves} from '../domain/periodCurves.js';
@@ -78,6 +80,42 @@ async function fixture(start=now-3*H) {
   const details=(body:unknown)=>app.inject({method:'POST',url:`/api/boards/${board}/period/sessions`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`},payload:body as object});
   return {store,directory,hub,app,user,board,source,device,read,credit,details};
 }
+
+test('period cells and baseline tapes borrow only matching captured metadata',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  h.store.record(h.source,{observedAt:now-3*M,plan:'pro',resets:null,staleAfterMs:H,windows:[{id:'weekly',kind:'weekly',label:null,minutes:10080,used:25,remaining:75,resetAt:now+H}]});
+  h.credit(now-2*M,now-M);
+  const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,quota:{cell:String(M),from:String(now-4*M),to:String(now),meta:'',evidence:'skip'}};
+  const seed=await h.read(body);assert.equal(seed.statusCode,200,seed.body);
+  const initial=expandPeriod(seed.json<PeriodWireReply>()).quota!;
+  if(initial.state!=='complete'||!('known' in initial.value))throw new Error('missing full metadata');
+  const prior:HistoryBasis={run:initial.value.run,now:initial.value.now,historyStart:initial.value.historyStart,known:initial.value.known,meta:initial.value.meta};
+  const retained=JSON.stringify(prior),request={...body,quota:{...body.quota!,meta:prior.meta}};
+  const response=await h.read(request);assert.equal(response.statusCode,200,response.body);
+  const restored=expandPeriod(response.json<PeriodWireReply>());
+  if(restored.quota?.state!=='complete')throw new Error('missing quota');
+  assert.deepEqual(expandHistory(restored.quota.value,prior).chunks,initial.value.chunks);
+  assert.equal(JSON.stringify(prior),retained,'decoding cannot mutate retained metadata');
+  assert.equal((await h.read(request)).body,response.body,'reading cannot change cached server cells');
+  const baseline:PeriodRequest={...body,selection:{mode:'range',from:now-H,to:now},quota:{...body.quota!,cells:'skip',evidence:undefined,meta:''}};
+  const full=(await h.read(baseline)).json<PeriodReply>(),compactResponse=await h.read({...baseline,quota:{...baseline.quota!,meta:prior.meta}});
+  assert.equal(compactResponse.statusCode,200,compactResponse.body);
+  const compact=compactResponse.json<PeriodReply>();
+  if(full.quota?.state!=='complete'||compact.quota?.state!=='complete')throw new Error('missing baseline');
+  assert.ok('known' in full.quota.value);assert.equal('known' in compact.quota.value,false);
+  assert.deepEqual(expandHistory(compact.quota.value,prior),expandHistory(full.quota.value),'baseline tapes and all native facts survive metadata borrowing');
+  assert.ok(compactResponse.body.length<JSON.stringify(full).length);
+  const source=h.store.source('codex','b'.repeat(24),now-H);h.store.hold(source,h.user.id,now-H);
+  const changed=(await h.read(request)).json();
+  assert.ok(changed.quota.value.known.sources[source]!==undefined,'a changed source set supplies fresh metadata');
+  const known=h.store.historyKnown.bind(h.store);
+  t.mock.method(h.store,'historyKnown',(...args:Parameters<Store['historyKnown']>)=>{const value=known(...args);return {...value,sources:Object.fromEntries(Object.entries(value.sources).reverse())};});
+  const reordered=(await h.read(body)).json().quota.value;
+  const reorderedRequest={...body,quota:{...body.quota!,meta:reordered.meta}};
+  const reorderedReply=(await h.read(reorderedRequest)).json().quota.value;
+  assert.equal('known' in reorderedReply,false,'the reversed metadata token really matched');
+  assert.equal(reorderedReply.chunks[0].series[0].source,h.source,'captured key order preserves literal source IDs');
+});
 
 test('independent source and session delta frontiers share their complete raw range',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
@@ -263,6 +301,45 @@ test('nearby card states cross exclusive observations and deadlines without inte
       assert.ok(hasPeriodValue(value,to),String(to));const {states:_states,...snapshot}=periodValueAt(value,to)!;assert.deepEqual(snapshot,fresh[i]);
     }
   }
+});
+
+test('neighboring endpoint cells retain exact quota, work and cards through a native repeat',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const wallet=h.store.source('deepseek','b'.repeat(24),now-H);h.store.hold(wallet,h.user.id,now-H);
+  for(let i=0;i<12;i++){
+    const at=now-(24-2*i)*M;
+    h.store.record(h.source,{observedAt:at,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:i+.125,remaining:100-i-.125,resetAt:now+H}]});
+    h.store.record(wallet,deepSeekMeasurement({is_available:true,balance_infos:[{currency:'USD',total_balance:`9007199254.7409${String(93-i).padStart(2,'0')}`,granted_balance:'0',topped_up_balance:`9007199254.7409${String(93-i).padStart(2,'0')}`}]},at));
+  }
+  h.credit(now-25*M,now-3*M);
+  const sources=[{id:h.source,provider:'codex'},{id:wallet,provider:'deepseek'}],edge=now-10*M;
+  const read=async(to:number)=>{
+    const response=await h.read({version:1,selection:{mode:'range',from:to-24*H,to},evaluatedAt:now,values:sources.map(s=>s.id),sessions:{},quota:{cell:String(5*M),from:String(now-H),to:String(now),cells:'skip'}});
+    assert.equal(response.statusCode,200,response.body);const reply=expandPeriod(response.json<PeriodWireReply>());
+    if(reply.values?.state!=='complete'||reply.quota?.state!=='complete'||reply.sessions?.state!=='complete')throw new Error('incomplete period');
+    return {values:reply.values.value,fixed:reply.quota.value.tape!.fixed!,work:reply.sessions.value.fixed!};
+  };
+  const retained=await read(edge),before=JSON.stringify(retained);
+  const plain=<T extends object>(value:T,key:string)=>{const {[key]:_,...rest}=value as Record<string,unknown>;return rest;};
+  // A real return/repeat moved 165,715 ms after the live plot lost its future area.
+  // This remains inside a five-minute cell, but exceeds a one-minute neighborhood.
+  for(const offset of [165715,-165715,-4*M,-M,-.25,0,.25,1,M,4*M]){
+    const to=edge+offset,fresh=await read(Math.floor(to));
+    assert.ok(canShift(retained.fixed,{from:to-24*H,to}),String(offset));
+    assert.deepEqual(plain(shifted(retained.fixed,{from:to-24*H,to})!,'shift'),plain(shifted(fresh.fixed,{from:to-24*H,to})!,'shift'));
+    assert.ok(canShift(retained.work,{from:to-24*H,to}),String(offset));
+    assert.deepEqual(plain(shifted(retained.work,{from:to-24*H,to})!,'shift'),plain(shifted(fresh.work,{from:to-24*H,to})!,'shift'));
+    // Protocol positions are integer milliseconds; fractional replay keeps that admission.
+    const actual=periodValues(h.store,sources,h.user.id,Math.floor(to),()=>{});
+    for(const [i,value]of retained.values.entries())assert.deepEqual(plain(periodValueAt(value,to)!,'states'),actual[i]);
+  }
+  const outside=edge+8*M;
+  assert.equal(canShift(retained.fixed,{from:outside-24*H,to:outside}),false);
+  assert.ok(retained.values.some(value=>!hasPeriodValue(value,outside)),'positions beyond retained evidence require another read');
+  const fresh=await read(outside),actual=periodValues(h.store,sources,h.user.id,outside,()=>{});
+  for(const [i,value]of fresh.values.entries())assert.deepEqual(plain(value,'states'),actual[i]);
+  assert.notDeepEqual(fresh.values.map(v=>v.windows),retained.values.map(v=>v.windows));
+  assert.equal(JSON.stringify(retained),before,'reads and replays preserve the original retained projection');
 });
 
 test('unchanged spending anchors preserve sparse financial card states and period replies',async t=>{
@@ -626,7 +703,10 @@ test('heatmap-only deltas replace fine intervals, bind selection, and read no fi
   const initial=expandPeriod((await h.read(body)).json<PeriodWireReply>());if(initial.calendar?.state!=='complete')throw new Error('baseline');
   h.credit(now-20*M,now-19*M);
   const result=await h.read({...body,calendar:{...body.calendar!,cursor:initial.calendar.value.cursor}});assert.equal(result.statusCode,200,result.body);
-  const delta=expandPeriod(result.json<PeriodWireReply>());if(delta.calendar?.state!=='delta')throw new Error('delta');
+  const legacyWire=result.json();assert.equal(legacyWire.calendar.value.relative,undefined,'requests without the capability retain absolute timestamps');
+  const delta=expandPeriod(legacyWire);if(delta.calendar?.state!=='delta')throw new Error('delta');
+  const opted=await h.read({...body,calendar:{...body.calendar!,cursor:initial.calendar.value.cursor,relative:true}});assert.equal(opted.statusCode,200,opted.body);
+  const relativeWire=opted.json();assert.equal(relativeWire.calendar.value.relative,true);assert.deepEqual(expandPeriod(relativeWire).calendar,delta.calendar);
   const cells=initial.calendar.value.cells.slice();for(const [i,c] of delta.calendar.value.updates)cells[i]=c;
   assert.equal(cells.reduce((n,c)=>n+(c.agentMs??0),0),11*M);assert.ok(!result.body.includes('edges'));assert.ok(!result.body.includes('producer'));
   const retry=expandPeriod((await h.read({...body,calendar:{...body.calendar!,cursor:initial.calendar.value.cursor}})).json<PeriodWireReply>());assert.deepEqual(retry.calendar,delta.calendar);
@@ -638,7 +718,7 @@ test('heatmap-only deltas replace fine intervals, bind selection, and read no fi
 test('heatmap request derives its bounded partition and rejects independent reader edges',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,calendar:{zone:'UTC'}};
-  for(const calendar of [{zone:'invalid/zone'},{zone:'UTC',edges:[now-H,now]},{zone:'UTC',cursor:'é'},{zone:'UTC',cursor:'x'.repeat(2049)}])assert.equal((await h.read({...body,calendar})).statusCode,400);
+  for(const calendar of [{zone:'invalid/zone'},{zone:'UTC',edges:[now-H,now]},{zone:'UTC',cursor:'é'},{zone:'UTC',cursor:'x'.repeat(2049)},{zone:'UTC',relative:false},{zone:'UTC',relative:'true'}])assert.equal((await h.read({...body,calendar:calendar as never})).statusCode,400);
   assert.equal((await h.read({...body,selection:{mode:'live',periodMs:32*24*H}})).statusCode,400);
   const first=expandPeriod((await h.read(body)).json<PeriodWireReply>());if(first.calendar?.state!=='complete')throw new Error('availability');
   assert.ok(first.calendar.value.cells.length<=2880);assert.ok(first.calendar.value.cells.some(c=>c.agentMs===0));assert.ok(first.calendar.value.cells.some(c=>c.agentMs===null));

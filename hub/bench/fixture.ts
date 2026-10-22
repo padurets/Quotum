@@ -1,5 +1,6 @@
 import {AGENT_HOURS_HEATMAP,showWidgets} from '../server/domain/widgets.js';
 import {DAY, type DemoSet} from '../demo/model.js';
+import {STILL_FOR} from '../demo/setup.js';
 
 /** Twelve real sources continue beyond the 30d strip's rebuild and read-ahead edges. */
 export function panningSet(set: DemoSet): DemoSet {
@@ -15,7 +16,14 @@ export function panningSet(set: DemoSet): DemoSet {
     return {...entry,history:Math.max(entry.history,75*DAY),agents:entry.agents?.map(agent=>({...agent,since:Math.min(agent.since,-75*DAY)}))};
   });
   if(counts.session<12||counts.weekly<12)throw new Error('Panning needs twelve visible subscriptions for each limit period');
-  return {...set,workHistoryMs:75*DAY,entries};
+  return {...set,workHistoryMs:75*DAY,entries:entries.map(entry=>{
+    if(entry.kind!=='card')return entry;
+    // A still benchmark must retain its quota series through warmup and alignment.
+    return {...entry,windows:entry.windows.map(at=>(t:number)=>{
+      const window=at(t);
+      return window.resetsAt!==null&&window.resetsAt>0&&window.resetsAt<STILL_FOR?{...window,resetsAt:STILL_FOR}:window;
+    })};
+  })};
 }
 
 import {Store} from '../server/store/store.js';

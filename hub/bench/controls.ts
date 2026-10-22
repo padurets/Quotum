@@ -1,4 +1,5 @@
 import type {Cdp} from './cdp.js';
+import {reload} from './reload.js';
 
 /** A saved radio remains focused, so the next native arrow can save another choice. */
 export async function frequencyKeys(cdp: Cdp) {
@@ -55,12 +56,7 @@ export async function selectMoney(cdp: Cdp, ids: [string, string][], family:'bud
   // The old tab can receive its saved defaults before reload; clear only this
   // benchmark tab's draft before the new document initializes its filter store.
   const clearing=await cdp.send<{identifier:string}>('Page.addScriptToEvaluateOnNewDocument',{source:`sessionStorage.removeItem(${JSON.stringify(draft)})`});
-  const loaded = new Promise<void>((resolve, reject) => {
-    const late = setTimeout(() => reject(new Error('money view reload did not finish')), 5000);
-    cdp.on('Page.loadEventFired', () => {clearTimeout(late); resolve();});
-  });
-  await cdp.send('Page.reload');
-  await loaded;
+  await reload(cdp);
   if(clearing?.identifier)await cdp.send('Page.removeScriptToEvaluateOnNewDocument',{identifier:clearing.identifier});
   await cdp.evaluate(`(async () => {
     const end = Date.now() + 5000;

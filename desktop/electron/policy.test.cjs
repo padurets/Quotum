@@ -57,9 +57,9 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
     isDestroyed() { return this.destroyed; }
     isMinimized() { return this.minimized === true; }
     restore() { this.minimized = false; this.restores = (this.restores ?? 0) + 1; }
-    show() { this.visible = true; this.shows = (this.shows ?? 0) + 1; }
-    showInactive() { this.show(); }
-    focus() { this.focuses = (this.focuses ?? 0) + 1; }
+    show() { this.showInactive(); this.focus(); this.afterShow?.(); }
+    showInactive() { this.visible = true; this.shows = (this.shows ?? 0) + 1; }
+    focus() { this.focuses = (this.focuses ?? 0) + 1; this.focused = true; }
     close() {
       if (this.destroyed || this.closing) return;
       this.closing = true; this.emit('close'); this.emit('blur');
@@ -70,7 +70,7 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
     setPosition(x, y) { this.position = [x, y]; }
     getContentSize() { return this.size; }
     setContentSize(w, h) { this.size = [w, h]; }
-    loadURL(url) { navigations.push(url); return new Promise((_, reject) => { this.failNavigation = (code, errno) => reject(Object.assign(new Error('PRIVATE_ENTRY_KEY in the error message'), {code, errno, url:'http://127.0.0.1/local?key=PRIVATE_ENTRY_KEY'})); }); }
+    loadURL(url) { navigations.push(url); return new Promise((_, reject) => { this.failNavigation = (code, errno) => reject(Object.assign(new Error('PRIVATE_ENTRY_KEY in the error message'), {code, errno, url: 'http://127.0.0.1/local?key=PRIVATE_ENTRY_KEY'})); this.failNavigationError = reject; }); }
   }
   const context = vm.createContext({
     require(name) {
@@ -337,7 +337,7 @@ test('closing a loading panel is not a navigation failure, but a live page faili
   assert.deepEqual(main.traffic.filter(m => m.type === 'fault'), []);
   main.windows[0].failNavigation('ERR_FAILED');
   await new Promise(setImmediate);
-  assert.deepEqual(main.traffic.filter(m => m.type === 'fault'), [{type: 'fault', process: 'navigation', reason: 'ERR_FAILED'}]);
+  assert.deepEqual(main.traffic.filter(m => m.type === 'fault').map(({type, process, reason}) => ({type, process, reason})), [{type: 'fault', process: 'navigation', reason: 'ERR_FAILED'}]);
 });
 
 
@@ -527,6 +527,29 @@ test('current main restores the same minimized window and focuses it once', asyn
   assert.equal(board.focuses, before + 1);
 });
 
+test('finishing a main show cannot reclaim focus taken by a newer native loader', async () => {
+  const main = await mainProcess({nativePanel: true, paintMain: false});
+  const board = main.windows[0];
+  // The native show has completed, but its caller has not resumed. The
+  // controller can present a loader while this browser process is stopped.
+  board.afterShow = () => { board.focused = false; };
+  board.emit('ready-to-show');
+  assert.equal(board.visible, true);
+  assert.equal(board.focuses, 1, 'show still focuses the requested main');
+  assert.equal(board.focused, false, 'no later focus steals the native loader');
+});
+
+test('revealing the current native panel focuses it only once', async () => {
+  const main = await mainProcess({nativePanel: true, role: 'compact'});
+  const panel = main.windows[0];
+  panel.emit('ready-to-show');
+  const ready = main.traffic.find(message => message.type === 'panel_ready');
+  main.deliver({type: 'panel_reveal', request: ready.request, instance: ready.instance});
+  assert.equal(panel.visible, true);
+  assert.equal(panel.focused, true);
+  assert.equal(panel.focuses, 1);
+});
+
 test('deferred native close cannot replay an obsolete reopen or ready callback', async () => {
   const main = await mainProcess({nativePanel: true, deferClose: true});
   main.deliver({type: 'foreground', head: {revision: 1, target: 'compact'}});
@@ -581,6 +604,85 @@ test('a coalesced new compact head retires the old presentation without relabell
   assert.deepEqual(main.traffic.filter(m => m.type === 'panel_closed').map(m => m.request), [1]);
 });
 
+
+for (const code of ['', undefined, 'ERR_ABORTED']) test(`a cancelled navigation with ${JSON.stringify(code)} code keeps the current window alive`, async () => {
+  const main = await mainProcess({paintMain: false});
+  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'foreground', head: {revision: 1, target: 'main'}});
+  const window = main.windows[0], attempts = main.navigations.length;
+  window.url = hub;
+  window.webContents.emit('did-finish-load');
+  window.failNavigationError(Object.assign(new Error('private-canary entry key'), {errno: -3, code}));
+  await new Promise(setImmediate);
+  assert.equal(main.traffic.filter(m => m.type === 'fault').length, 0);
+  assert.equal(main.navigations.length, attempts, 'cancellation does not retry navigation');
+  assert.equal(window.destroyed, false);
+  assert.equal(window.visible, undefined, 'cancellation does not reveal an unpainted window');
+  window.emit('ready-to-show');
+  assert.equal(window.visible, true);
+  assert.equal(main.traffic.filter(m => m.type === 'loaded').length, 1);
+});
+
+for (const errno of [-2, -7, '-3', undefined]) test(`a navigation error number ${JSON.stringify(errno)} remains fatal with an empty code`, async () => {
+  const main = await mainProcess();
+  main.windows[0].failNavigationError(Object.assign(new Error('private-canary'), {errno, code: ''}));
+  await new Promise(setImmediate);
+  const faults = main.traffic.filter(m => m.type === 'fault');
+  assert.equal(faults.length, 1);
+  assert.equal(faults[0].reason, 'load failed');
+  assert.equal(faults[0].navigation.errorNumber, typeof errno === 'number' ? errno : null);
+  assert.doesNotMatch(JSON.stringify(faults), /private-canary/);
+});
+
+test('a navigation without a string code retains numeric error and its original request', async () => {
+  const main = await mainProcess();
+  main.deliver({type: 'state', generation: 1, url: hub});
+  main.tick(23);
+  main.windows[0].failNavigationError(Object.assign(new Error('private-canary entry key'), {errno: -2, url: 'http://private-canary.invalid'}));
+  await new Promise(setImmediate);
+  const faults = main.traffic.filter(m => m.type === 'fault');
+  assert.equal(faults.length, 1); assert.equal(faults[0].reason, 'load failed');
+  assert.deepEqual(faults[0].navigation, {role: 'main', instance: 1, request: 0, currentRequest: 0, sequence: 2, currentSequence: 2,
+    requestedGeneration: 1, currentGeneration: 1, startedMs: 0, rejectedMs: 23, errorNumber: -2, codeType: 'undefined', loaded: false, painted: true, revealed: true});
+  assert.doesNotMatch(JSON.stringify(faults), /private-canary|entry key|http:/);
+});
+
+test('a late failed navigation preserves its generation instead of taking the newer request identity', async () => {
+  const main = await mainProcess();
+  main.deliver({type: 'state', generation: 1, url: hub});
+  const reject = main.windows[0].failNavigationError;
+  main.deliver({type: 'state', generation: 2, url: hub.replace('fixture', 'new-entry')});
+  main.tick(41); reject(Object.assign(new Error('private-canary'), {code: 'ERR_FAILED', errno: -2}));
+  await new Promise(setImmediate);
+  const faults = main.traffic.filter(m => m.type === 'fault');
+  assert.equal(faults.length, 1); assert.equal(faults[0].reason, 'ERR_FAILED');
+  assert.equal(faults[0].navigation.requestedGeneration, 1); assert.equal(faults[0].navigation.currentGeneration, 2);
+  assert.equal(faults[0].navigation.sequence, 2); assert.equal(faults[0].navigation.currentSequence, 3);
+  assert.equal(faults[0].navigation.errorNumber, -2); assert.equal(faults[0].navigation.codeType, 'string');
+});
+
+test('unknown navigation code payloads and invalid native numbers never enter the fault transport', async () => {
+  const main = await mainProcess();
+  main.windows[0].failNavigationError(Object.assign(new Error('private-canary'), {code: 'private-canary', errno: Infinity}));
+  await new Promise(setImmediate);
+  const faults = main.traffic.filter(m => m.type === 'fault');
+  assert.equal(faults.length, 1); assert.equal(faults[0].reason, 'load failed');
+  assert.equal(faults[0].navigation.codeType, 'string'); assert.equal(faults[0].navigation.errorNumber, null);
+  assert.doesNotMatch(JSON.stringify(faults), /private-canary/);
+});
+
+test('a reused main window keeps the failed navigation request before a newer activation', async () => {
+  const main = await mainProcess();
+  main.deliver({type: 'state', generation: 1, url: hub});
+  const reject = main.windows[0].failNavigationError;
+  main.deliver({type: 'foreground', head: {revision: 1, target: 'main'}});
+  reject(Object.assign(new Error('private-canary'), {code: 'ERR_FAILED', errno: -2}));
+  await new Promise(setImmediate);
+  const faults = main.traffic.filter(m => m.type === 'fault');
+  assert.equal(faults.length, 1);
+  assert.equal(faults[0].navigation.request, 0);
+  assert.equal(faults[0].navigation.currentRequest, 1);
+});
+
 test('the real navigation handler recognizes numeric cancellation with a blank Electron description', async () => {
   for (const [code, errno] of [['', -3], ['ERR_ABORTED', -3], ['ERR_ABORTED', -2]]) {
     const main = await mainProcess(); main.deliver({type:'state', generation:1, url:hub});
@@ -593,8 +695,9 @@ test('blank navigation failures remain fatal with only safe integer diagnostics 
   for (const errno of [-2, -102, undefined, '-3', NaN, Infinity, -2.5, Number.MAX_SAFE_INTEGER + 1, {toString() { throw new Error('PRIVATE_ENTRY_KEY'); }}]) {
     const main = await mainProcess(); main.deliver({type:'state', generation:1, url:hub});
     main.windows[0].failNavigation('', errno); await new Promise(setImmediate);
-    const faults = main.traffic.filter(m => m.type === 'fault'), reason = Number.isSafeInteger(errno) ? `load failed (errno ${errno})` : 'load failed';
-    assert.deepEqual(faults, [{type:'fault', process:'navigation', reason}]);
+    const faults = main.traffic.filter(m => m.type === 'fault');
+    assert.deepEqual(faults.map(({type, process, reason}) => ({type, process, reason})), [{type:'fault', process:'navigation', reason:'load failed'}]);
+    assert.equal(faults[0].navigation.errorNumber, Number.isSafeInteger(errno) ? errno : null);
     assert.ok(!JSON.stringify(main.traffic).includes('PRIVATE_ENTRY_KEY'), 'error.message and URL never enter diagnostics');
   }
 });

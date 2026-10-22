@@ -122,7 +122,7 @@ class Output {
  * first), else 1, its output already printed.
  */
 export class Demo {
-  readonly start = Math.floor(Date.now() / MIN) * MIN;
+  readonly start: number;
   readonly dir: string;
   private readonly output = new Output();
   private hub: ChildProcess | undefined;
@@ -160,8 +160,9 @@ export class Demo {
   }
 
   constructor(
-    private readonly options: {set: DemoSet; scene: string; still: boolean; idleAgents?: boolean;money?:boolean; address: ReturnType<typeof addressOf>; onExit: (code: number, cause?: 'port_in_use') => void; dataDir?: string; hubRoot?: string},
+    private readonly options: {set: DemoSet; scene: string; still: boolean; idleAgents?: boolean;money?:boolean; address: ReturnType<typeof addressOf>; onExit: (code: number, cause?: 'port_in_use') => void; dataDir?: string; hubRoot?: string; start?: number},
   ) {
+    this.start = options.start ?? Math.floor(Date.now() / MIN) * MIN;
     this.dir = options.dataDir ?? mkdtempSync(path.join(os.tmpdir(), 'quotum-demo-'));
   }
 

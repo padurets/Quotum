@@ -33,6 +33,9 @@ mod window;
 #[cfg(not(target_os = "linux"))]
 #[path = "host/windows_loading.rs"]
 mod windows_loading;
+#[cfg(any(windows, test))]
+#[path = "host/windows_request.rs"]
+mod windows_request;
 use std::ffi::OsString;
 
 /// What the app was started with. Looked for anywhere among the arguments: the command of

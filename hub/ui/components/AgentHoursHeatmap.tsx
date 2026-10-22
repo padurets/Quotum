@@ -1,5 +1,5 @@
 import {memo,useMemo,useLayoutEffect,useRef,useState,useSyncExternalStore,type CSSProperties,type KeyboardEvent,type RefObject} from 'react';
-import {createPortal} from 'react-dom';
+import {createPortal,flushSync} from 'react-dom';
 import {boardPeriod} from '../lib/period';
 import {CALENDAR_OPACITY,calendarLevel,exactAgentHours} from '../lib/workCalendar';
 import {heatmapLayoutPrepared,heatCellAt,heatCellChangesAt,heatDateLabel,heatIntervalLabel,HEATMAP_MIN,HEATMAP_NATURAL,type HeatCell,type HeatmapLayout} from '../lib/heatmap';
@@ -77,14 +77,14 @@ const Bucket=memo(function Bucket({item,span,zone,tab,selected,focus,openRange,p
 export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrange:Arrange}){
   const locale=useLocale(),view=usePref('heatmapView'),reading=useSyncExternalStore(boardPeriod.calendar.subscribe,boardPeriod.calendar.get),selection=useTimeRange();
   const {value,loading,error,window}=reading,root=useRef<HTMLElement>(null),matrix=useRef<HTMLDivElement>(null),sizing=useSizing();
-  const [focused,setFocused]=useState(''),[settings,setSettings]=useState(false),[width,setWidth]=useState(0),[height,setHeight]=useState(0);
+  const [focused,setFocused]=useState(''),[settings,setSettings]=useState(false),[width,setWidth]=useState(0),[height,setHeight]=useState(0),[visible,setVisible]=useState(false);
   const [preview]=useState(()=>new HeatmapPreview());
   const drill=useRef<{range:{from:number;to:number};context:string;focus:boolean}|null>(null);
   const presentation=boardPeriod.calendar.presentationKey();
   const context=JSON.stringify([presentation,!!value,window.zone,view,width,height,locale,selection]);
   const aligned=!selection||window.range.from===selection.from&&window.range.to===selection.to;
   useLayoutEffect(()=>boardPeriod.calendar.retain(reading),[reading]);
-  const prepared=usePrepared(function*(){return {reading,layout:yield*heatmapLayoutPrepared(reading,width,view,formatLocale(),height)};},[window,value,width,view,locale,height],context,aligned);
+  const prepared=usePrepared(function*(){return {reading,layout:yield*heatmapLayoutPrepared(reading,width,view,formatLocale(),height)};},[window,value,width,view,locale,height],context,aligned&&width>0&&visible);
   useLayoutEffect(()=>prepared.value?boardPeriod.calendar.retain(prepared.value.reading):undefined,[prepared.value?.reading]);
   const empty:HeatmapLayout={cells:[],labels:[],height:Math.max(HEATMAP_MIN,height||HEATMAP_NATURAL),naturalHeight:HEATMAP_NATURAL,span:3_600_000,kind:'strip'};
   const layout=prepared.value?.layout??empty;
@@ -99,13 +99,15 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
   },[]);
   const measure=useRef(()=>{});
   measure.current=()=>{
-    const node=root.current,plot=matrix.current;if(!node||!plot||!plot.clientWidth)return;setWidth(plot.clientWidth);
+    const node=root.current,plot=matrix.current;if(!node||!plot)return;const nextWidth=plot.clientWidth;setVisible(nextWidth>0);
+    // Hidden panels retain their last positive size without preparing invisible cells.
+    if(!nextWidth)return;setWidth(nextWidth);
     if(sizing){const shown=pixels(node.getBoundingClientRect().height-fillOf(node)),chrome=shown-plot.getBoundingClientRect().height,min=pixels(chrome+HEATMAP_MIN);
       sizing.report({min,natural:pixels(chrome+HEATMAP_NATURAL),shown,layout:JSON.stringify([width,locale,view])});const next=sizing.manual?pixels(Math.max(HEATMAP_MIN,sizing.allocated-chrome)):0;setHeight(was=>same(was,next)?was:next);
     }
   };
   useLayoutEffect(()=>measure.current(),[sizing?.manual,sizing?.allocated,sizing?.width,sizing?.report,loading,error,locale,layout.naturalHeight]);
-  useLayoutEffect(()=>{const node=root.current;if(!node)return;const observer=new ResizeObserver(()=>measure.current());observer.observe(node);return()=>observer.disconnect();},[]);
+  useLayoutEffect(()=>{const node=root.current;if(!node)return;const observer=new ResizeObserver(()=>flushSync(()=>measure.current()));observer.observe(node);return()=>observer.disconnect();},[]);
   useLayoutEffect(()=>()=>sizing?.report(null),[sizing?.report]);
   const tab=layout.cells.find(c=>c.key===focused)??layout.cells.reduce<HeatCell|undefined>((best,c)=>!best||Math.abs(c.from-Number(focused))<Math.abs(best.from-Number(focused))?c:best,undefined);
   const openRange=(range:{from:number;to:number})=>{

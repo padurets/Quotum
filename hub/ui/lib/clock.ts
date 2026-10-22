@@ -31,7 +31,8 @@ export class PageClock {
   private skew = 0;
   private readonly watches = new Set<Watch>();
   private timer: {handle: unknown; at: number} | null = null;
-  private nearest: number | null = null;
+  private nearest: Watch | null = null;
+  private staleNearest = false;
 
   constructor(private readonly env: ClockEnv) {}
 
@@ -57,21 +58,22 @@ export class PageClock {
   subscribe(watch: Watch, listener: () => void) {
     watch.listener = listener;
     this.watches.add(watch);
-    this.nearest = null;
+    this.reconsider(watch, null);
     this.arm();
     return () => {
       watch.listener = null;
       this.watches.delete(watch);
-      this.nearest = null;
+      if (this.nearest === watch) this.staleNearest = true;
       this.arm();
     };
   }
 
   /** What a part shows now changes at `at` (hub time), or never by itself (null). */
   due(watch: Watch, at: number | null, now: number) {
+    const previous = watch.due;
     // Repeating a pending deadline cannot cancel the wake already owed for it.
-    const next = at === null ? null : at > now || at === watch.due ? at : now + MISSED;
-    if (watch.due !== next) {watch.due = next; this.nearest = null;}
+    watch.due = at === null ? null : at > now || at === previous ? at : now + MISSED;
+    if (this.watches.has(watch)) this.reconsider(watch, previous);
     this.arm();
   }
 
@@ -84,26 +86,29 @@ export class PageClock {
   private wake(which: (watch: Watch) => boolean) {
     const woken = [...this.watches].filter(which);
     for (const watch of woken) {
+      if (this.nearest === watch) this.staleNearest = true;
       watch.due = null;
       watch.wakes++;
     }
-    if (woken.length) this.nearest = null;
     for (const watch of woken) watch.listener?.();
     this.arm();
   }
 
+  private reconsider(watch: Watch, previous: number | null) {
+    if (this.nearest === watch) {
+      if (watch.due === null || previous !== null && watch.due > previous) this.staleNearest = true;
+    } else if (watch.due !== null && (!this.nearest || this.nearest.due === null || watch.due < this.nearest.due)) this.nearest = watch;
+  }
+
   /** One timer, for the nearest moment any part changes; none on a hidden tab. */
   private arm() {
-    let nearest = Infinity;
-    if (this.env.visible()) {
-      // History may publish many times between deadlines. Only a changed watch
-      // invalidates the nearest moment; visibility and skew still retarget the timer.
-      if (this.nearest === null) {
-        this.nearest = Infinity;
-        for (const watch of this.watches) if (watch.due !== null && watch.due < this.nearest) this.nearest = watch.due;
-      }
-      nearest = this.nearest;
+    // Keep the nearest watcher through label commits; rescan when it moves later or leaves.
+    if (this.staleNearest) {
+      this.nearest = null;
+      for (const watch of this.watches) if (watch.due !== null && (!this.nearest || watch.due < this.nearest.due!)) this.nearest = watch;
+      this.staleNearest = false;
     }
+    const nearest = this.env.visible() ? this.nearest?.due ?? Infinity : Infinity;
     const now = this.env.now();
     const at = Number.isFinite(nearest) ? now + Math.min(Math.max(nearest - this.hubNow(now), NEAREST), FURTHEST) : null;
     // A commit updates many labels; their unchanged nearest deadline needs no new timer.
@@ -156,15 +161,20 @@ export const wakeDue = () => clock.wakeDue();
 export function useClock(changesAt: (now: number) => number | null, context?: readonly unknown[], enabled = true): number {
   const [watch] = useState(() => clock.watch());
   const [subscribe] = useState(() => (listener: () => void) => clock.subscribe(watch, listener));
-  const [ignore] = useState(() => (_listener: () => void) => () => {});
-  const wakes = useSyncExternalStore(enabled ? subscribe : ignore, () => watch.wakes);
+  const read = () => enabled ? watch.wakes : 0;
+  const wakes = useSyncExternalStore(enabled ? subscribe : noClock, read, read);
   // A preparation completion is a render, not new time or data. Keep its intent
   // clock until this watch wakes or its captured data/UI context changes.
   const snapshot = useRef<{wakes: number; context: readonly unknown[]; now: number} | null>(null);
-  if (context && (!snapshot.current || snapshot.current.wakes !== wakes || snapshot.current.context.length !== context.length || context.some((value, i) => !Object.is(value, snapshot.current!.context[i])))) snapshot.current = {wakes, context: [...context], now: hubNow()};
-  const now = context ? snapshot.current!.now : hubNow();
+  if (!enabled) snapshot.current = null;
+  if (enabled && context && (!snapshot.current || snapshot.current.wakes !== wakes || snapshot.current.context.length !== context.length || context.some((value, i) => !Object.is(value, snapshot.current!.context[i])))) snapshot.current = {wakes, context: [...context], now: hubNow()};
+  const now = enabled && context ? snapshot.current!.now : hubNow();
   const latest = useRef(changesAt);
   latest.current = changesAt;
-  useLayoutEffect(() => {if(enabled)clock.due(watch, latest.current(now), now);},[watch,changesAt,now,wakes,enabled]);
+  useLayoutEffect(() => {
+    if (enabled) clock.due(watch, latest.current(now), now);
+    else if (watch.due !== null) clock.due(watch, null, now);
+  },[watch,changesAt,now,wakes,enabled]);
   return now;
 }
+const noClock = () => () => {};

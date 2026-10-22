@@ -51,9 +51,15 @@ export function* linesPrepared<T extends PlotSeries>(history: {series: readonly 
   if (!history || !sources) return [];
   const perSource: Record<string, number> = {};
   const hidden = new Set(view.windows),filters=effectiveFilters();
+  const ranks = new Map<PlotSeries, number>();
   const rank = (entry: PlotSeries) => {
-    const source = sources.findIndex(s => s.id === entry.sourceId);
-    return source * 100 + (sources[source]?.windows.findIndex(w => w.id === entry.windowId) ?? 99);
+    let value = ranks.get(entry);
+    if (value === undefined) {
+      const source = sources.findIndex(s => s.id === entry.sourceId);
+      value = source * 100 + (sources[source]?.windows.findIndex(w => w.id === entry.windowId) ?? 99);
+      ranks.set(entry, value);
+    }
+    return value;
   };
   const result: (T & LineName)[] = [];
   for (const entry of yield* ordered(history.series, (a, b) => rank(a) - rank(b))) {

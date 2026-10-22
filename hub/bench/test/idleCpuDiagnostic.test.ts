@@ -1,16 +1,22 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {readFileSync} from 'node:fs';
+import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {EventCounts,type Heard} from '../stream.js';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import type {Cdp} from '../cdp.js';
 import type {Reading} from '../probe.js';
-import {IdleCpuDiagnostic,sourceIdentity,idleEdgeProblems,originalTraceProblems,ownedClockFires,planIdleEdge,type IdleGeometry} from '../idleCpuDiagnostic.js';
+import {IdleCpuDiagnostic,sourceIdentity,originalTraceProblems,ownedClockFires} from '../idleCpuDiagnostic.js';
 import {numericProfile,profileWindow} from '../cpuProfile.js';
+import {Evidence,safeEvidence} from '../evidence.js';
+import {RunOwner} from '../runOwner.js';
+import {idleWindow,idlePhaseScript,idlePhaseProblems} from '../still.js';
 
 type Saved={name:string;value:unknown;large?:boolean};
+
 test('manual control reports its checked out source separately from the workflow event',()=>{
   const source='1'.repeat(40),event='2'.repeat(40),receipt=sourceIdentity({QUOTUM_BENCH_SOURCE_SHA:source,GITHUB_SHA:event},()=>source);
   assert.equal(receipt.status,'complete');assert.equal(receipt.sourceHead,source);assert.equal(receipt.checkoutSha,source);assert.equal(receipt.eventSha,event);
@@ -39,13 +45,15 @@ class CurrentCdpFake {
   timestamp=1;
   stopCalls=0;
   traceStopCalls=0;
+  readonly responseBodies=new Map<string,string>();
+  readonly responseReads:string[]=[];
   constructor(readonly options:Options={}){}
   on<T>(name:string,listener:(value:T)=>void){const rows=this.listeners.get(name)??[];rows.push(listener as (value:unknown)=>void);this.listeners.set(name,rows);}
   off<T>(name:string,listener:(value:T)=>void){this.listeners.set(name,(this.listeners.get(name)??[]).filter(value=>value!==listener));}
   emit(name:string,value:unknown){for(const listener of this.listeners.get(name)??[])listener(value);}
   async evaluate<T>(expression:string):Promise<T>{assert.equal(arguments.length,1);this.commands.push('evaluate');assert.equal(expression,'performance.now()');return this.timestamp*1000 as T;}
-  async send<T=unknown>(method:string,params:object={}):Promise<T>{
-    assert.ok(arguments.length<=2,'the current transport has no signal third argument');this.commands.push(method);
+  async send<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>{
+    assert.ok(arguments.length<=3);if(signal)assert.equal(signal.aborted,false);this.commands.push(method);
     if(this.options.forbidProfiler)assert.ok(!method.startsWith('Profiler.'),'trace-only must never send a profiler command');
     let value:unknown={};
     if(method==='Performance.getMetrics')value={metrics:[{name:'Timestamp',value:this.timestamp},{name:'ScriptDuration',value:.08}]};
@@ -59,7 +67,7 @@ class CurrentCdpFake {
       if(this.options.failTraceStop&&this.traceStopCalls++===0)throw Error('synthetic trace stop failure');
       this.emit('Tracing.tracingComplete',{});
     }
-    if(method==='Network.getResponseBody')value={body,base64Encoded:false};
+    if(method==='Network.getResponseBody'){const id=(params as {requestId:string}).requestId;this.responseReads.push(id);value={body:this.responseBodies.get(id)??body,base64Encoded:false};}
     if(method==='Debugger.enable')this.emit('Debugger.scriptParsed',{url:asset,scriptId:'11',hash:this.options.wrongHash?'0'.repeat(64):hash});
     return value as T;
   }
@@ -169,45 +177,79 @@ test('original trace preserves a missed edge, missing chart and unavailable thre
 });
 
 /** Execute the actual index interval with the real collector and a passive transport. */
-async function originalIndex(collection:''|'1'|'trace') {
-  let wall=540_000,plans=0,geometry=0,metricCalls=0;
-  const ledger=new EventCounts();
-  const heard:Heard={reset:()=>{cdp.commands.push('ORIGINAL.heard-reset');ledger.reset();},counts:()=>ledger.counts(),boardCounts:()=>ledger.boardCounts(),contacts:()=>ledger.contacts(),hints:()=>ledger.hints(),close:()=>{}};
-  const saved:Saved[]=[],cdp=new class extends CurrentCdpFake {
+async function originalIndex(collection:''|'trace'|'profile',boundaryFailure?:'opening'|'closing',failTraceStop=false,failProfileStop=false) {
+  let wall=540_000,metricCalls=0,readingCalls=0,phaseFrom=0;
+  const ledger=new EventCounts(()=>wall);
+  const heard:Heard={reset:window=>{cdp.commands.push('ORIGINAL.heard-reset');ledger.reset(window);},counts:()=>ledger.counts(),boardCounts:()=>ledger.boardCounts(),calendar:()=>ledger.calendar(),contacts:()=>ledger.contacts(),hints:()=>ledger.hints(),close:()=>{}};
+  const saved:Saved[]=[],evidenceSaved:Saved[]=[],cdp=new class extends CurrentCdpFake {
     override async evaluate<T>(expression:string):Promise<T>{
       if(expression==='__quotumBench.reset()'){this.commands.push('ORIGINAL.reset');return undefined as T;}
-      if(expression==='__quotumBench.read()'){this.commands.push('ORIGINAL.readout');return traceReading as T;}
+      if(expression===idlePhaseScript(300_000)){phaseFrom=wall;this.commands.push('ORIGINAL.phase-start');return undefined as T;}
+      if(expression==='window.__quotumIdleRetention()'){this.commands.push('ORIGINAL.retention');return null as T;}
+      if(expression==='__quotumBench.read()'){
+        const stage=['opening','closing','final'][readingCalls++];this.commands.push('ORIGINAL.readout:'+stage);
+        const empty={...traceReading,commits:0,renders:[],mutations:[]};
+        return (stage==='opening'&&boundaryFailure!=='opening'?empty:stage==='final'&&boundaryFailure==='closing'?{...traceReading,commits:2}:traceReading) as T;
+      }
+      if(expression==='(()=>{const p=__quotumIdlePhase.read();__quotumIdlePhase.stop();return p;})()'){
+        this.commands.push('ORIGINAL.phase-stop');
+        return {from:phaseFrom,to:wall,monotonicFrom:phaseFrom,monotonicTo:wall,cellMs:300_000,starts:Array(5).fill(Math.floor(phaseFrom/300_000)),ends:Array(5).fill(Math.floor(wall/300_000)),transitions:[1,1,1,1,1]} as T;
+      }
       return super.evaluate<T>(expression);
     }
-  }({forbidProfiler:collection==='trace'});
+  }({forbidProfiler:collection==='trace',failTraceStop,failStop:failProfileStop});
   const idleCpu=collection?new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value)=>saved.push({name,value}),client,true,collection==='trace'?'trace':'profile'):undefined;
   cdp.emit('Network.responseReceived',{type:'Script',requestId:'asset-1',response:{url:asset}});
-  const source=readFileSync(new URL('../index.ts',import.meta.url),'utf8'),start=source.indexOf('    let edgePlan:'),end=source.indexOf('    const measured =',start);
+  const source=readFileSync(new URL('../index.ts',import.meta.url),'utf8'),start=source.indexOf('    const cellMs = cellOf('),end=source.indexOf('    const measured =',start);
   assert.ok(start>=0&&end>start);
-  const context={Date:class extends Date{static override now(){return wall;}},idleCpu,idleCpuMode:collection,seconds:120,cdp,reading:traceReading,
-    planIdleEdge:(...args:Parameters<typeof planIdleEdge>)=>{plans++;return planIdleEdge(...args);},idleGeometry:async()=>{geometry++;return edgeGeometry(geometry>1);},
-    cellOf:()=>300_000,sleep:async(ms:number)=>{cdp.commands.push('ORIGINAL.sleep:'+ms);wall+=Math.max(0,ms);cdp.timestamp=121;for(let i=0;i<5;i++)ledger.push('event: ping\ndata: {}\n\n');},
+  const context={Date:class extends Date{static override now(){return wall;}},idleCpu,idleCpuMode:collection,shortIdleProfile:false,seconds:120,cdp,reading:traceReading,
+    idleWindow,idlePhaseScript,idlePhaseProblems,idleRetentionProblems:()=>[],
+    cellOf:()=>300_000,sleep:async(ms:number)=>{cdp.commands.push('ORIGINAL.sleep:'+ms);wall+=Math.max(0,ms);if(ms===120_000){cdp.timestamp=121;for(let i=0;i<5;i++)ledger.push('event: ping\ndata: {}\n\n');}},
     overview:async()=>[],stillProblems:()=>[],Stop:Error,say:()=>{},heard,requests:{counting:false,count:0,byPath:{}},
     metrics:async()=>{cdp.commands.push(metricCalls++?'ORIGINAL.after-metrics':'ORIGINAL.before-metrics');return metricCalls===1?traceWindow.before:traceWindow.after;},
+    idleTimingDiagnostic:undefined,idleDiagnostic:undefined,traffic:undefined,
+    evidence:{begin:()=>{},save:(name:string,value:unknown)=>evidenceSaved.push({name,value})},
     round:(value:number)=>value,scriptPerSecond:()=>.1,idleProblems:()=>[],saveDiagnostic:(name:string,value:unknown)=>saved.push({name,value}),finish:async()=>{},run:undefined as unknown as()=>Promise<unknown>};
   runInNewContext(ts.transpileModule(`async function run(){${source.slice(start,end)}\nreturn {from,to};}globalThis.run=run;`,{compilerOptions:{target:ts.ScriptTarget.ES2023}}).outputText,context);
-  await context.run();await idleCpu?.close();return{cdp,plans,geometry,saved};
+  let failure:unknown;
+  try{await context.run();}catch(error){failure=error;}finally{await idleCpu?.close();}
+  return{cdp,saved,evidenceSaved,failure};
 }
+const canonicalCounterSequence=['ORIGINAL.reset','ORIGINAL.phase-start','ORIGINAL.heard-reset','ORIGINAL.before-metrics','ORIGINAL.retention','ORIGINAL.readout:opening','ORIGINAL.sleep:120000','ORIGINAL.readout:closing','ORIGINAL.retention','ORIGINAL.after-metrics','ORIGINAL.readout:final','ORIGINAL.phase-stop'];
 test('actual trace index skips alignment and all geometry while preserving the original counter sequence',async()=>{
-  const {cdp,plans,geometry,saved}=await originalIndex('trace');assert.equal(plans,0);assert.equal(geometry,0);
+  const {cdp,saved,failure}=await originalIndex('trace');assert.equal(failure,undefined);
   assert.ok(!cdp.commands.some(command=>command.startsWith('Profiler.')));
-  assert.deepEqual(cdp.commands.slice(cdp.commands.indexOf('ORIGINAL.reset'),cdp.commands.indexOf('ORIGINAL.readout')+1),['ORIGINAL.reset','ORIGINAL.heard-reset','ORIGINAL.before-metrics','ORIGINAL.sleep:120000','ORIGINAL.after-metrics','ORIGINAL.readout']);
+  assert.deepEqual(cdp.commands.slice(cdp.commands.indexOf('ORIGINAL.reset'),cdp.commands.indexOf('ORIGINAL.phase-stop')+1),canonicalCounterSequence);
   assert.equal(result(saved,'idle-cpu-window').seconds,120);assert.ok(saved.some(row=>row.name==='idle-cpu-original-trace'));
 });
-test('actual ordinary index installs no diagnostic and retains the original120s sequence',async()=>{
-  const {cdp,plans,geometry,saved}=await originalIndex('');assert.equal(plans,0);assert.equal(geometry,0);assert.equal(saved.length,0);
-  assert.ok(!cdp.commands.some(command=>/^(Profiler|Tracing|Debugger)\./.test(command)));
-  assert.deepEqual(cdp.commands,['ORIGINAL.reset','ORIGINAL.heard-reset','ORIGINAL.before-metrics','ORIGINAL.sleep:120000','ORIGINAL.after-metrics','ORIGINAL.readout']);
+test('actual original-profile index preserves the counter sequence and samples without alignment or geometry reads',async()=>{
+  const {cdp,saved,failure}=await originalIndex('profile');assert.equal(failure,undefined);
+  assert.deepEqual(cdp.commands.slice(cdp.commands.indexOf('ORIGINAL.reset'),cdp.commands.indexOf('ORIGINAL.phase-stop')+1),canonicalCounterSequence);
+  assert.ok(cdp.commands.indexOf('Profiler.start')<cdp.commands.indexOf('ORIGINAL.reset'));
+  assert.ok(cdp.commands.indexOf('Profiler.stop')>cdp.commands.indexOf('ORIGINAL.phase-stop'));
+  assert.ok(cdp.commands.indexOf('Debugger.enable')>cdp.commands.indexOf('Profiler.stop'));
+  assert.equal(result(saved,'idle-cpu-profile').samplingInterval,2000);
+  assert.equal(result(saved,'idle-cpu-original-trace').profileStatus,'complete');
 });
-test('actual mode1 index retains aligned geometry and the existing2ms profiler',async()=>{
-  const {cdp,plans,geometry,saved}=await originalIndex('1');assert.equal(plans,1);assert.equal(geometry,2);
-  assert.ok(cdp.commands.includes('Profiler.start'));assert.ok(cdp.commands.includes('Profiler.stop'));
-  assert.equal(result(saved,'idle-cpu-profile').samplingInterval,2000);assert.ok(saved.some(row=>row.name==='idle-cpu-edge'));
+test('actual ordinary index installs no diagnostic and retains the original120s sequence',async()=>{
+  const {cdp,saved,failure}=await originalIndex('');assert.equal(failure,undefined);assert.equal(saved.length,0);
+  assert.ok(!cdp.commands.some(command=>/^(Profiler|Tracing|Debugger)\./.test(command)));
+  assert.deepEqual(cdp.commands,['ORIGINAL.sleep:5000',...canonicalCounterSequence]);
+});
+for(const boundary of ['opening','closing'] as const)test(`actual index retains ${boundary} measurement-boundary failures before trace cleanup`,async()=>{
+  const {saved,evidenceSaved,failure}=await originalIndex('trace',boundary,true);assert.ok(failure);
+  assert.equal((failure as Error).message,'synthetic trace stop failure');
+  const original=record(result(saved,'idle-cpu-result').original);
+  assert.ok((original.problems as string[]).some(problem=>problem.includes(boundary+' measurement boundary')));
+  const idle=result(evidenceSaved,'idle');assert.equal(idle.actualSeconds,120);
+  assert.ok((idle.phaseProblems as string[]).some(problem=>problem.includes(boundary+' measurement boundary')));
+});
+for(const boundary of ['opening','closing'] as const)test(`original-profile index retains ${boundary} measurement-boundary failures when profiler stop fails`,async()=>{
+  const {saved,evidenceSaved,failure}=await originalIndex('profile',boundary,false,true);assert.ok(failure);
+  assert.equal((failure as Error).message,'synthetic stop failure');
+  assert.equal(result(saved,'idle-cpu-profile').status,'insufficient-evidence');
+  assert.ok((record(result(saved,'idle-cpu-result').original).problems as string[]).some(problem=>problem.includes(boundary+' measurement boundary')));
+  assert.ok((result(evidenceSaved,'idle').phaseProblems as string[]).some(problem=>problem.includes(boundary+' measurement boundary')));
 });
 
 const numericBase:RawProfile={...profile,startTime:2_000_000,endTime:2_006_000};
@@ -241,41 +283,6 @@ test('profile windows reject incompatible clock brackets',()=>{
   assert.equal(profileWindow(numericProfile(numericBase),incompatible,1000,1004).status,'insufficient-evidence');
 });
 
-const edgePlan=planIdleEdge(500_000,120,300_000);
-const edgeGeometry=(after=false):IdleGeometry=>({now:after?660_000:540_000,selected:false,charts:(['quota','session','activity','budget','funds'] as const).map(widget=>({widget,count:1,axisEnd:after?600_000:540_000,from:0,to:86_400_000,ready:true,panning:false,visibleFrom:after?60_000:0,visibleTo:after?86_460_000:86_400_000}))});
-const edgeProblems=(before=edgeGeometry(),after=edgeGeometry(true),counterFrom=540_010,counterTo=660_000)=>idleEdgeProblems(edgePlan,540_000,660_000,counterFrom,counterTo,before,after);
-test('aligned idle planning selects a future start and centres the existing120s window',()=>{
-  assert.deepEqual(edgePlan,{boundary:600_000,from:540_000,to:660_000,cellMs:300_000,seconds:120,marginMs:30_000});
-  for(const now of [0,1,239_999,240_000,299_999,500_000,539_999,540_000,599_999]){
-    const plan=planIdleEdge(now,120,300_000);assert.ok(plan.from>now);assert.ok(plan.from-now<=300_000);assert.equal(plan.to-plan.from,120_000);assert.equal(plan.boundary%300_000,0);
-  }
-  assert.throws(()=>planIdleEdge(1,300,300_000));assert.throws(()=>planIdleEdge(1,120,60_000));
-});
-test('natural idle edge needs actual movement with a stable drawing basis',()=>{assert.deepEqual(edgeProblems(),[]);});
-test('a late start or early finish cannot credit the planned edge',()=>{
-  assert.match(edgeProblems(undefined,undefined,570_001)[0],/margins/);
-  assert.match(edgeProblems(undefined,undefined,undefined,629_999)[0],/margins/);
-  assert.match(idleEdgeProblems(edgePlan,620_000,740_000,620_010,740_000,edgeGeometry(),edgeGeometry(true))[0],/margins/);
-});
-test('an absent or duplicate chart cannot credit four-chart movement',()=>{
-  const absent=edgeGeometry(true);absent.charts=absent.charts.filter(chart=>chart.widget!=='funds');assert.ok(edgeProblems(undefined,absent).some(problem=>problem.startsWith('funds')));
-  const duplicate=edgeGeometry(true);duplicate.charts.push({...duplicate.charts[0]});assert.ok(edgeProblems(undefined,duplicate).some(problem=>problem.startsWith('quota')));
-});
-test('wrong chart movement cannot replace the missing expected chart',()=>{
-  const wrong=edgeGeometry(true);const i=wrong.charts.findIndex(chart=>chart.widget==='funds');wrong.charts[i]={...wrong.charts[i],widget:'budget'};
-  assert.ok(edgeProblems(undefined,wrong).some(problem=>problem.startsWith('funds')));
-});
-test('render counts or shifted axis labels alone cannot prove plotted movement',()=>{
-  const unchanged=edgeGeometry(true);const chart=unchanged.charts.find(chart=>chart.widget==='activity')!;chart.visibleFrom=0;chart.visibleTo=86_400_000;
-  assert.ok(edgeProblems(undefined,unchanged).some(problem=>problem.startsWith('activity')));
-});
-test('panning, unready geometry and a non-crossed axis remain insufficient',()=>{
-  for(const patch of [{panning:true},{ready:false},{axisEnd:599_999},{visibleTo:null}]){
-    const after=edgeGeometry(true);Object.assign(after.charts.find(chart=>chart.widget==='budget')!,patch);assert.ok(edgeProblems(undefined,after).some(problem=>problem.startsWith('budget')));
-  }
-  const selected=edgeGeometry(true);selected.selected=true;assert.match(edgeProblems(undefined,selected)[0],/natural live/);
-});
-
 const clockSource={sha256:hash,lineNumber:9,columnNumber:250_437};
 const clockBinding={status:'complete',receivedHash:hash,clientHash:hash,debuggerDisabled:true,owners:[{scriptId:11,parsedHash:hash,receivedAssetHashMatches:true}]};
 const clockEvents=[
@@ -291,4 +298,267 @@ test('a generic, injected, foreign or asynchronous callback cannot prove a Clock
 test('missing or mismatched source binding cannot credit Clock ownership',()=>{
   assert.equal(ownedClockFires(clockEvents,clockBinding,null,1,3).length,0);
   for(const patch of [{status:'mismatch'},{receivedHash:'0'.repeat(64)},{debuggerDisabled:false},{owners:[]}])assert.equal(ownedClockFires(clockEvents,{...clockBinding,...patch},clockSource,1,3).length,0);
+});
+
+
+// Proposed trace-only controls; these execute no browser and infer no CPU category.
+const nativeMetadata=(pid=101)=>({name:'TracingStartedInBrowser',ph:'I',ts:1,pid:100,tid:100,args:{data:{frames:[{frame:'own-frame',processId:pid,isOutermostMainFrame:true,isInPrimaryMainFrame:true}]}}});
+class NativeCdpFake extends CurrentCdpFake {
+  skipMetadata=false;loss:boolean|undefined=false;loader='loader-1';origin=1000;page=10;
+  override async evaluate<T>(expression:string,signal?:AbortSignal):Promise<T>{
+    signal?.throwIfAborted();this.commands.push('evaluate');
+    const start=expression.includes('quotum-native-start');assert.ok(start||expression.includes('quotum-native-end'));
+    const lo=this.page;this.page+=100;
+    this.emit('Tracing.dataCollected',{value:[{name:'TimeStamp',ph:'I',ts:1_000_000+lo*1000,pid:101,tid:101,args:{data:{frame:'own-frame',message:start?'quotum-native-start':'quotum-native-end'}}}]});
+    return {lo,hi:lo+.05,timeOrigin:this.origin} as T;
+  }
+  override async send<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>{
+    signal?.throwIfAborted();
+    if(method==='Page.getFrameTree'){this.commands.push(method);return {frameTree:{frame:{id:'own-frame',loaderId:this.loader}}} as T;}
+    if(method==='Tracing.start'){
+      this.commands.push(method);assert.equal((params as {categories:string}).categories,'toplevel,cc,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.frame,disabled-by-default-cc.debug.scheduler');
+      if(!this.skipMetadata)this.emit('Tracing.dataCollected',{value:[nativeMetadata(),{name:'thread_name',ph:'M',pid:101,tid:101,args:{name:'CrRendererMain'}}]});
+      return {} as T;
+    }
+    if(method==='Tracing.end'){this.commands.push(method);this.emit('Tracing.tracingComplete',this.loss===undefined?{}:{dataLossOccurred:this.loss});return {} as T;}
+    return super.send<T>(method,params,signal);
+  }
+}
+const nativeEvents=[
+  {name:'RunTask',ph:'B',ts:1_020_000,tts:100,pid:101,tid:101},
+  {name:'FunctionCall',ph:'X',ts:1_021_000,dur:1000,tts:101,tdur:500,pid:101,tid:101,args:{data:{frame:'own-frame',scriptId:'11',lineNumber:1,columnNumber:2,url:'private-canary',functionName:'private-canary'}}},
+  {name:'MinorGC',ph:'X',ts:1_022_000,dur:800,tts:601,tdur:700,pid:101,tid:101,args:{private:'private-canary'}},
+  {name:'Layout',ph:'X',ts:1_023_000,dur:100,pid:101,tid:101,args:{data:{frame:'own-frame',nodes:'private-canary'}}},
+  {name:'FireAnimationFrame',ph:'X',ts:1_024_000,dur:200,pid:101,tid:101,args:{data:{frame:'own-frame',id:19}}},
+  {name:'private-canary',ph:'B',ts:1_025_000,pid:101,tid:101},
+  {ph:'E',ts:1_025_010,pid:101,tid:101},
+  {name:'RunTask',ph:'E',ts:1_026_000,tts:1400,pid:101,tid:101},
+  {name:'MajorGC',ph:'X',ts:1_027_000,dur:300,pid:102,tid:102},
+];
+async function captureNative(configure?:(cdp:NativeCdpFake)=>void,during?:(cdp:NativeCdpFake)=>void,collection:'native-trace'|'native-profile'='native-trace'){
+  const cdp=new NativeCdpFake({forbidProfiler:collection==='native-trace'}),saved:Saved[]=[];configure?.(cdp);
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value,large)=>saved.push({name,value,large}),client,true,collection);
+  cdp.emit('Network.responseReceived',{type:'Script',requestId:'asset-1',response:{url:asset}});
+  await diagnostic.start();cdp.emit('Tracing.dataCollected',{value:nativeEvents});during?.(cdp);
+  cdp.commands.push('ORIGINAL.report-frozen');await diagnostic.stop();await diagnostic.bindAndClose();await diagnostic.close();
+  const receipt=record([...saved].reverse().find(row=>row.name==='native-frame-trace')!.value);
+  return {cdp,saved,receipt};
+}
+test('native trace retains frameless work, B/E boundaries and distinct wall/thread clocks without an idle qualification',async()=>{
+  const {cdp,saved,receipt}=await captureNative();
+  assert.equal(receipt.status,'unqualified');assert.equal(record(receipt.capture).status,'complete');assert.equal(record(receipt.scope).status,'complete');
+  assert.equal(record(receipt.clocks).status,'recorded-unqualified');
+  const rows=receipt.events as any[],gc=rows.find(row=>row.name==='MinorGC');
+  assert.equal(gc.frame,null);assert.equal(gc.duration,800);assert.equal(gc.threadDuration,700);
+  assert.equal(rows.find(row=>row.name==='FireAnimationFrame').id,19);
+  assert.ok(rows.some(row=>row.name==='other'&&row.phase==='B'));assert.ok(rows.some(row=>row.name==='other'&&row.phase==='E'));
+  assert.ok(rows.some(row=>row.pid===102));assert.equal(record(receipt.scope).pid,101);
+  assert.ok(!cdp.commands.some(name=>name.startsWith('Profiler.')));assert.ok(!saved.some(row=>row.name==='idle-cpu-original-trace'));
+  assert.ok(cdp.commands.indexOf('Tracing.end')>cdp.commands.indexOf('ORIGINAL.report-frozen'));
+  assert.ok(cdp.commands.indexOf('Debugger.enable')>cdp.commands.indexOf('Tracing.end'));
+  assert.doesNotMatch(JSON.stringify(safeEvidence(receipt)),/private-canary/);
+  for(const rows of cdp.listeners.values())assert.equal(rows.length,0);
+});
+for(const loss of [true,undefined])test('native trace keeps '+String(loss)+' data-loss state insufficient',async()=>{
+  const {receipt}=await captureNative(cdp=>{cdp.loss=loss;});assert.equal(record(receipt.capture).status,'insufficient-evidence');assert.equal(receipt.status,'unqualified');
+});
+for(const event of ['Page.frameNavigated','Page.frameDetached','Runtime.executionContextsCleared'])test('native trace invalidates '+event+' through the drain',async()=>{
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit(event,{}));assert.equal(record(receipt.scope).status,'unknown');assert.ok((receipt.events as unknown[]).length>0);
+});
+test('missing metadata and changed loader keep sanitized candidates unknown',async()=>{
+  for(const result of [await captureNative(cdp=>{cdp.skipMetadata=true;}),await captureNative(undefined,cdp=>{cdp.loader='loader-2';})]){
+    assert.equal(record(result.receipt.scope).status,'unknown');assert.equal(record(result.receipt.clocks).status,'unknown');assert.ok((result.receipt.events as unknown[]).length>0);
+  }
+});
+test('conflicting process binding does not borrow the first renderer',async()=>{
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:[nativeMetadata(102)]}));assert.equal(record(receipt.scope).status,'unknown');
+});
+test('changed timeOrigin cannot qualify native page/trace alignment',async()=>{
+  const {receipt}=await captureNative(undefined,cdp=>{cdp.origin=2000;});assert.equal(record(receipt.clocks).status,'unknown');assert.equal(receipt.status,'unqualified');
+});
+test('already cancelled native trace starts no CDP operation',async()=>{
+  const cdp=new NativeCdpFake(),abort=new AbortController();abort.abort();
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,()=>{},client,true,'native-trace',abort.signal);
+  await assert.rejects(diagnostic.start());await diagnostic.close();assert.deepEqual(cdp.commands,[]);
+});
+
+
+test('actual native collector releases tracing and Runtime after RunOwner abort with one independent signal',async()=>{
+  const owner=new RunOwner(),saved:Saved[]=[],signals:AbortSignal[]=[];
+  const cdp=new class extends NativeCdpFake {
+    override async send<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>{
+      if(method==='Tracing.end'||method==='Runtime.disable'){
+        assert.equal(owner.signal.aborted,true);assert.ok(signal);assert.notEqual(signal,owner.signal);assert.equal(signal.aborted,false);signals.push(signal);
+      }
+      return super.send<T>(method,params,signal);
+    }
+  }({forbidProfiler:true});
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value)=>saved.push({name,value}),client,true,'native-trace',owner.signal);
+  owner.resource(()=>diagnostic.close());await diagnostic.start();await owner.close();
+  assert.equal(cdp.commands.filter(name=>name==='Tracing.end').length,1);assert.equal(cdp.commands.filter(name=>name==='Runtime.disable').length,1);
+  assert.equal(signals.length,2);assert.equal(signals[0],signals[1]);
+  const receipt=record([...saved].reverse().find(row=>row.name==='native-frame-trace')!.value);assert.equal(record(receipt.capture).cleanup,'incomplete');assert.equal(receipt.status,'unqualified');
+  for(const listeners of cdp.listeners.values())assert.equal(listeners.length,0);
+});
+test('actual native collector still disables Runtime when Tracing.end rejects during owner cleanup',async()=>{
+  const owner=new RunOwner(),traceError=Error('trace cleanup rejected');let closeError:unknown;
+  const cdp=new class extends NativeCdpFake {
+    override async send<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>{
+      if(method==='Tracing.end'){assert.equal(owner.signal.aborted,true);assert.equal(signal?.aborted,false);this.commands.push(method);throw traceError;}
+      return super.send<T>(method,params,signal);
+    }
+  }({forbidProfiler:true});
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,()=>{},client,true,'native-trace',owner.signal);
+  owner.resource(async()=>{try{await diagnostic.close();}catch(error){closeError=error;throw error;}});
+  await diagnostic.start();await assert.rejects(owner.close(),/resource cleanup failed/);
+  assert.equal(closeError,traceError);assert.equal(cdp.commands.filter(name=>name==='Runtime.disable').length,1);
+  for(const listeners of cdp.listeners.values())assert.equal(listeners.length,0);
+});
+test('native stop keeps its original error when both independent cleanup operations reject',async()=>{
+  const original=Error('original clock failure'),traceError=Error('trace cleanup failure'),runtimeError=Error('Runtime cleanup failure');
+  const cdp=new class extends NativeCdpFake {
+    override async evaluate<T>(expression:string,signal?:AbortSignal):Promise<T>{if(expression.includes('quotum-native-end'))throw original;return super.evaluate<T>(expression,signal);}
+    override async send<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>{
+      if(method==='Tracing.end'||method==='Runtime.disable'){assert.equal(signal?.aborted,false);this.commands.push(method);throw method==='Tracing.end'?traceError:runtimeError;}
+      return super.send<T>(method,params,signal);
+    }
+  }({forbidProfiler:true});
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,()=>{},client,true,'native-trace');await diagnostic.start();
+  await assert.rejects(diagnostic.stop(),error=>error===original);await assert.rejects(diagnostic.close(),error=>error===traceError);
+  assert.equal(cdp.commands.filter(name=>name==='Tracing.end').length,1);assert.equal(cdp.commands.filter(name=>name==='Runtime.disable').length,1);
+});
+
+test('native trace cap remains explicit through the actual artifact writer',async t=>{
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:Array.from({length:100_001},(_,i)=>({name:'RunTask',ph:'X',ts:2_000_000+i,dur:1,pid:101,tid:101}))}));
+  assert.equal((receipt.events as unknown[]).length,100_000);assert.ok(Number(record(receipt.capture).omitted)>0);
+  assert.equal(record(receipt.capture).status,'insufficient-evidence');
+  const directory=mkdtempSync(path.join(os.tmpdir(),'quotum-native-evidence-'));t.after(()=>rmSync(directory,{recursive:true,force:true}));
+  const evidence=new Evidence(directory);evidence.saveTrace('native-frame-trace',receipt);
+  const root=path.join(directory,evidence.id),saved=JSON.parse(readFileSync(path.join(root,'native-frame-trace.json'),'utf8'));
+  assert.equal(saved.events.length,100_000);assert.equal(saved.capture.omitted,record(receipt.capture).omitted);
+  assert.equal(saved.capture.status,'insufficient-evidence');assert.equal(saved.status,'unqualified');
+  const manifest=JSON.parse(readFileSync(path.join(root,'manifest.json'),'utf8'));
+  assert.deepEqual(manifest.errors,[]);assert.equal(manifest.files[0].truncated,false);
+});
+
+
+test('native profiling is explicit, keeps signed samples and never changes the trace-only default',async()=>{
+  const plain=await captureNative();assert.ok(!plain.cdp.commands.some(name=>name.startsWith('Profiler.')));assert.ok(!plain.saved.some(row=>row.name==='native-frame-profile'));
+  const measured=await captureNative(undefined,undefined,'native-profile');
+  for(const name of ['Profiler.enable','Profiler.setSamplingInterval','Profiler.start','Profiler.stop','Profiler.disable'])assert.equal(measured.cdp.commands.filter(value=>value===name).length,1);
+  const saved=result(measured.saved,'native-frame-profile'),numeric=record(saved.profile);
+  assert.equal(saved.status,'unqualified');assert.equal(saved.samplingInterval,2000);assert.equal(record(saved.capture).status,'complete');
+  assert.deepEqual(numeric.timeDeltas,[2000,-50,2050]);assert.equal(numeric.reversedDeltas,1);assert.equal(measured.receipt.status,'unqualified');
+});
+test('native rejections keep only the first eight numeric fixed classifications without waiving invalid',async()=>{
+  const bad=Array.from({length:12},(_,i)=>({name:'Layout',ph:'X',ts:2_000_000+i,pid:101,tid:101,args:{data:{frame:'own-frame',url:'private-rejected-canary',stackTrace:'private-rejected-canary'}}}));
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:bad}));
+  assert.equal(record(receipt.capture).invalid,12);assert.equal(record(receipt.capture).status,'insufficient-evidence');assert.equal(receipt.omittedRejections,4);
+  const rejected=receipt.rejected as Record<string,unknown>[];assert.equal(rejected.length,8);
+  assert.deepEqual(rejected[0],{name:'Layout',kind:'known',phase:'X',pid:101,tid:101,ts:2_000_000,frame:1,reason:'duration'});
+  assert.doesNotMatch(JSON.stringify(safeEvidence(receipt)),/private-rejected-canary/);
+});
+test('only fixed rendering, animation, lifecycle and commit-wait envelopes join the native whitelist',async()=>{
+  const names=['PrePaint','Paint','Layerize','CompositeLayers','PageAnimator::serviceScriptedAnimations',
+    'WebFrameWidgetImpl::UpdateLifecycle','LayerTreeHost::WaitForCommitCompletion'];
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:[...names,'private-extra-canary'].map(name=>({name,ph:'X',ts:2_000_000,dur:20,pid:101,tid:101}))}));
+  for(const name of names)assert.equal((receipt.events as any[]).filter(row=>row.name===name).length,1);
+  assert.doesNotMatch(JSON.stringify(receipt),/private-extra-canary/);assert.equal(receipt.status,'unqualified');
+});
+test('native raster observations preserve fixed envelopes and numeric preparation fields only',async()=>{
+  const names=['TileManager::PrepareTiles','TileManager::ScheduleTasks','RasterizerTaskImpl::RunOnWorkerThread',
+    'TileManager::DidFinishRunningTileTasksRequiredForActivation','TileManager::CheckPendingGpuWorkAndIssueSignals','LayerTreeHostImpl::ActivateSyncTree'];
+  const args={prepare_tiles_id:7,source_prepare_tiles_id:7,count:12,pending_gpu_work_tiles:0,private:'private-raster-canary'};
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:[...names,'private-raster-canary'].map(name=>({name,ph:'X',ts:2_000_000,dur:20,pid:101,tid:105,args}))}));
+  const rows=(record(safeEvidence(receipt)).events as any[]).filter(row=>names.includes(row.name));
+  assert.equal(rows.length,6);assert.ok(rows.every(row=>row.duration===20&&row.pid===101&&row.tid===105));
+  assert.deepEqual(rows.map(row=>[row.prepareId??null,row.rasterTasks??null,row.pendingGpuTasks??null]),
+    [[7,null,null],[null,12,null],[7,null,null],[null,null,null],[null,null,0],[null,null,null]]);
+  assert.doesNotMatch(JSON.stringify(receipt),/private-raster-canary/);assert.equal(receipt.status,'unqualified');
+  const invalid=[undefined,-1,.5,'7',Number.MAX_SAFE_INTEGER+1,Infinity];
+  const {receipt:missing}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:invalid.flatMap(value=>names.slice(0,3).map(name=>({name,ph:'X',ts:2_000_000,dur:20,pid:101,tid:105,args:{prepare_tiles_id:value,source_prepare_tiles_id:value,count:value}})))}));
+  const unknown=(missing.events as any[]).filter(row=>names.includes(row.name));
+  assert.equal(unknown.length,18);assert.ok(unknown.every(row=>row.prepareId===null||row.rasterTasks===null));
+});
+test('native commit observations keep exact exported edge IDs and host numbers without rounded uint64 IDs',async()=>{
+  const names=['ProxyMain::BeginMainFrame','ProxyMain::BeginMainFrame::commit','ProxyImpl::ReadyToCommit','ProxyImpl::Commit'];
+  const slices=names.map((name,i)=>({name,ph:'X',pid:101,tid:i<2?101:105,ts:2_000_000+i*100,dur:90,
+    args:{main_frame_pipeline:{main_frame_id:Number.MAX_SAFE_INTEGER+1},private:'private-commit-canary'}}));
+  const flows=names.slice(0,-1).flatMap((name,i)=>[
+    {name,ph:'s',id:i+7,pid:101,tid:slices[i].tid,ts:slices[i].ts},
+    {name,ph:'f',id:i+7,bp:'e',pid:101,tid:slices[i+1].tid,ts:slices[i+1].ts},
+  ]);
+  const host={name:'BeginMainThreadFrame',ph:'I',pid:101,tid:101,ts:2_000_010,args:{layerTreeId:19,data:{frameId:0,private:'private-commit-canary'}}};
+  const held=['HoldCommit','ReleaseCommitbyActivation'].map(name=>({name,ph:'I',pid:101,tid:105,ts:2_000_350}));
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:[...slices,...flows,host,...held]}));
+  const rows=receipt.events as any[];
+  const retained=record(safeEvidence(receipt)).events as any[];
+  assert.deepEqual(retained.filter(row=>row.flowId!==undefined).map(row=>[row.name,row.phase,row.flowId,row.flowEnd??false,row.ts,row.tid]),
+    flows.map(row=>[row.name,row.ph,row.id,row.ph==='f',row.ts,row.tid]));
+  for(const name of names)assert.equal(rows.filter(row=>row.name===name&&row.phase==='X').length,1);
+  const saved=rows.find(row=>row.name==='BeginMainThreadFrame');assert.equal(saved.hostId,19);assert.equal(saved.sourceFrame,0);
+  for(const {name} of held)assert.ok(rows.some(row=>row.name===name));
+  assert.equal(record(receipt.capture).invalid,0);assert.doesNotMatch(JSON.stringify(safeEvidence(receipt)),/private-commit-canary|main_frame_id|pipelineId/);
+});
+test('unsafe flow and host observations fail closed without borrowing nearby numeric IDs',async()=>{
+  const base={name:'ProxyMain::BeginMainFrame',ph:'s',pid:101,tid:101,ts:2_000_000};
+  const bad=[...['7',-1,1.5,Number.MAX_SAFE_INTEGER+1,undefined].map(id=>({...base,id})),
+    {...base,ph:'f',id:7},
+    ...[0,'19',Number.MAX_SAFE_INTEGER+1].map(layerTreeId=>({...base,name:'BeginMainThreadFrame',ph:'I',args:{layerTreeId,data:{frameId:0}}})),
+    {...base,name:'BeginMainThreadFrame',ph:'I',args:{layerTreeId:19,data:{frameId:'0'}}}];
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:bad}));
+  assert.equal(record(receipt.capture).invalid,bad.length);assert.equal(record(receipt.capture).status,'insufficient-evidence');
+  assert.ok(!(receipt.events as any[]).some(row=>row.flowId!==undefined||row.hostId!==undefined));
+  assert.ok((receipt.rejected as any[]).every(row=>row.reason==='commit-metadata'));
+});
+const schedulerFields=['has_pending_tree','pending_tree_is_ready_for_activation','active_tree_needs_first_draw','active_tree_is_ready_to_draw',
+  'processing_animation_worklets_for_pending_tree','processing_paint_worklets_for_pending_tree','current_pending_tree_is_impl_side','can_draw'];
+test('scheduler snapshots retain exact booleans through evidence and keep boundary scopes without invented states',async()=>{
+  const state=Object.fromEntries(schedulerFields.map((key,i)=>[key,i%2===0]));
+  const base={name:'SchedulerStateMachine',pid:101,tid:105,ts:2_000_000};
+  const snapshot={...base,ph:'X',dur:20,args:{cc_scheduler_state:{state_machine:{minor_state:{...state,private:'private-scheduler-canary'}}},private:'private-scheduler-canary'}};
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:[snapshot,{...base,ph:'B'},{...base,ph:'E',ts:2_000_100}]}));
+  const rows=record(safeEvidence(receipt)).events as any[],saved=rows.filter(row=>row.name==='SchedulerStateMachine');
+  assert.deepEqual(saved.map(row=>row.scheduler??null),[state,null,null]);assert.equal(record(receipt.capture).invalid,0);
+  assert.doesNotMatch(JSON.stringify(safeEvidence(receipt)),/private-scheduler-canary|cc_scheduler_state|minor_state/);
+});
+test('missing and nonboolean scheduler fields fail closed rather than becoming false',async()=>{
+  const state=Object.fromEntries(schedulerFields.map(key=>[key,false])),base={name:'SchedulerStateMachine',ph:'X',pid:101,tid:105,ts:2_000_000,dur:20};
+  const values=[...schedulerFields.map(key=>{const missing={...state};delete missing[key];return missing;}),
+    ...[null,0,'false',undefined].map(value=>({...state,has_pending_tree:value}))];
+  const bad=values.map(minor_state=>({...base,args:{cc_scheduler_state:{state_machine:{minor_state}}}}));
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:bad}));
+  assert.equal(record(receipt.capture).invalid,bad.length);assert.equal(record(receipt.capture).status,'insufficient-evidence');
+  assert.ok(!(receipt.events as any[]).some(row=>row.name==='SchedulerStateMachine'));assert.ok((receipt.rejected as any[]).every(row=>row.reason==='scheduler-metadata'));
+});
+test('native-profile stop failure retains its first error, signed cleanup profile and all owned releases',async()=>{
+  const owner=new RunOwner(),original=Error('original native profile stop'),saved:Saved[]=[];let attempts=0;
+  const cdp=new class extends NativeCdpFake {
+    override async send<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>{
+      if(method==='Profiler.stop'&&attempts++===0){this.commands.push(method);throw original;}
+      return super.send<T>(method,params,signal);
+    }
+  }();
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value)=>saved.push({name,value}),client,true,'native-profile',owner.signal);
+  owner.resource(()=>diagnostic.close());await diagnostic.start();await assert.rejects(diagnostic.stop(),error=>error===original);await owner.close();
+  for(const name of ['Tracing.end','Runtime.disable','Profiler.disable'])assert.equal(cdp.commands.filter(value=>value===name).length,1);
+  assert.equal(cdp.commands.filter(value=>value==='Profiler.stop').length,2);
+  const receipt=result(saved,'native-frame-profile');assert.equal(record(receipt.capture).status,'insufficient-evidence');assert.deepEqual(record(receipt.profile).timeDeltas,[2000,-50,2050]);
+  for(const listeners of cdp.listeners.values())assert.equal(listeners.length,0);
+});
+test('native-profile owner abort still attempts Profiler.disable when Profiler.stop rejects',async()=>{
+  const owner=new RunOwner(),stopped=Error('profile cleanup stop rejected'),signals:AbortSignal[]=[];
+  const cdp=new class extends NativeCdpFake {
+    override async send<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>{
+      if(['Tracing.end','Runtime.disable','Profiler.stop','Profiler.disable'].includes(method)){
+        assert.equal(owner.signal.aborted,true);assert.ok(signal);assert.equal(signal.aborted,false);assert.notEqual(signal,owner.signal);signals.push(signal);
+      }
+      if(method==='Profiler.stop'){this.commands.push(method);throw stopped;}return super.send<T>(method,params,signal);
+    }
+  }();
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,()=>{},client,true,'native-profile',owner.signal);owner.resource(()=>diagnostic.close());await diagnostic.start();
+  await assert.rejects(owner.close(),/resource cleanup failed/);
+  for(const name of ['Tracing.end','Runtime.disable','Profiler.stop','Profiler.disable'])assert.equal(cdp.commands.filter(value=>value===name).length,1);
+  assert.equal(signals.length,4);assert.ok(signals.every(signal=>signal===signals[0]));
+  for(const listeners of cdp.listeners.values())assert.equal(listeners.length,0);
 });

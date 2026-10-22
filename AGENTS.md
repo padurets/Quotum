@@ -45,7 +45,9 @@ one system, say so.
 
 `npm run bench` in `hub/` (after `npm run build`) measures the board in headless Chrome
 against its budget (`hub/bench/budget.ts`). An idle board has neither measurements nor
-working agents: it asks the hub nothing and renders only what shows time. Every
+working agents: it asks the hub nothing and renders only what shows time. Exact UTC
+calendar-only card events are checked against the stream baseline and retained in raw
+traffic; they permit no additional rendering, requests or script cost. Every
 measurement reaches its card and chart, 95 of 100 within a second, reading only new
 history cells and rendering no other card nor the header. A mixed Codex subscription's
 credit changes and unchanged-value heartbeats update its card and funds history while
@@ -67,6 +69,9 @@ Input is credited after the production RAF reaches its coalesced position on the
 data layers. Input-free pauses are excluded from moving intervals; pending input keeps
 delayed work measurable. The final geometry must commit before an unpainted last input
 can be credited. These are RAF proxies; physical presentation is checked separately.
+Captured transaction bounds clamp the expected input position at history and live edges;
+every event remains measured. A clamped event reaching an already displayed boundary
+adds no movement frame, and a later gesture cannot credit an earlier gesture's input.
 
 `npm start` in `hub/` serves the built dashboard on `127.0.0.1:8080` (a new hub prints
 the setup code of the first account to its log). `npm run demo` in `hub/` serves it on

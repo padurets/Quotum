@@ -2,13 +2,15 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {PeriodCurves,sourceWorkTape,sourceWorkCurves,mergeSourceWorkTape,sameSourceWork} from '../../server/domain/periodCurves';
 import {PeriodAccounting} from '../../server/domain/periodAccounting';
-import {packSamples} from '../../server/domain/periodTape';
+import {packSamples,retainSamplesPrepared,numberAt} from '../../server/domain/periodTape';
+import {retainTapeWithTails,type QuotaTail} from '../../server/domain/periodRetention';
 import {drain} from '../lib/prepare';
 import type {WorkTrace} from '../../server/domain/periodWork';
 import type {PeriodTape} from '../../server/domain/periodTape';
 import {moneyWorkValues} from '../lib/moneyTable';
 import type {MeterHistory} from '../lib/moneyView';
 import {lineWork} from '../lib/work';
+import {Preparations} from '../lib/prepare';
 const M=60_000,H=60*M;
 const trace=(spans:WorkTrace['spans']):WorkTrace=>({anchor:0,knownFrom:0,cut:2*H,refs:['A','B','C'].map(project=>({ref:project,source:'s',clientId:'codex',device:{id:'d',name:'Device'},origin:'terminal',project,folder:null,startedAt:0})),spans});
 
@@ -135,4 +137,48 @@ test('half an hour selected never halves the full-hour supplier rate or remainin
   assert.deepEqual(moneyWorkValues(series,empty.moneyWorkSummary('s',range)),{active:'0',rate:'1000000',remaining:'50400000'});
   const unavailable=drain(PeriodAccounting.prepare(tape,null,undefined,undefined,undefined,undefined,source));
   assert.deepEqual(moneyWorkValues(series,unavailable.moneyWorkSummary('s',range)),{active:null,rate:'1000000',remaining:'50400000'});
+});
+
+test('quota retirement keeps selected work separate from supplier curves through copied and rebuilt prefixes',t=>{
+  const count=64,cut=count*M,range={from:2*M,to:cut};
+  const full=trace([[0,2*M,32*M],[1,32*M,cut]]),selected=trace([[0,2*M,32*M]]),curves=new PeriodCurves(selected);
+  const source=sourceWorkCurves(sourceWorkTape(new PeriodCurves(full),0,cut,new Map([['s',0]]),()=>{}));
+  const quota=['copied','rebuilt'].map(window=>({source:'s',window,workFrom:0,samples:drain(retainSamplesPrepared(packSamples(Array.from({length:count},(_,i)=>({
+    at:i*M,used:window==='copied'?Math.max(0,i-1):i,resetAt:2*H,staleAfterMs:2*H,
+  })))))}));
+  const tape:PeriodTape={from:0,cut,replaceFrom:0,cursor:'c',money:[],quota};
+  const prior=drain(PeriodAccounting.prepare(tape,selected,curves,undefined,undefined,undefined,source));
+  const tails=new Map<PeriodTape['quota'][number],QuotaTail>();
+  const retained=drain(retainTapeWithTails(tape,M+1,()=>{},(before,after)=>{tails.set(after,{before,after,removed:1});}));
+  assert.equal(tails.size,2,'the real producer retires one observation from both windows');
+  const ordinary=PeriodAccounting.prepare(retained,selected,curves,undefined,undefined,undefined,source);
+  let next=ordinary.next();while(!next.done){assert.equal(next.value,undefined,'ordinary preparation retains plain units');next=ordinary.next();}
+  const fresh=next.value;
+  const prepare=PeriodAccounting.prepare.bind(PeriodAccounting),rebuilt:string[][]=[];
+  t.mock.method(PeriodAccounting,'prepare',(...args:Parameters<typeof prepare>)=>{
+    rebuilt.push(args[0].quota.map(row=>row.window));return prepare(...args);
+  });
+  const samples=retained.quota.find(row=>row.window==='rebuilt')!.samples;assert.ok('columns' in samples);
+  const used=samples.columns[1],descriptor=Object.getOwnPropertyDescriptor(samples.columns,'1')!;
+  const tasks:(()=>void)[]=[];let clock=0,reads=0,checked=0,maximum=0,retired!:PeriodAccounting;
+  const scheduler=new Preparations({now:()=>{maximum=Math.max(maximum,reads-checked);checked=reads;return clock;},post:run=>tasks.push(run)});
+  try{
+    Object.defineProperty(samples.columns,'1',{configurable:true,enumerable:true,get(){reads++;clock+=1/16;return used;}});
+    scheduler.replace({},PeriodAccounting.prepareRetirement(retained,selected,curves,prior,new Set<string>(),undefined,tails,source),()=>true,value=>{retired=value;});
+    for(let i=0;tasks.length;i++){assert.ok(i<10_000);tasks.shift()!();}
+    assert.ok(retired);assert.equal(reads,count-1,'the meter observes every retained quota sample');
+    assert.ok(maximum<=16,'retirement checks its deadline after at most 16 quota observations');
+    assert.equal(checked,reads,'the last partial block checks time before packing and completion');
+    assert.equal(scheduler.size,0);
+  }finally{scheduler.dispose();Object.defineProperty(samples.columns,'1',descriptor);}
+  for(const window of ['copied','rebuilt']){
+    const value=retired.quotaSummary('s',window,range)!;
+    assert.equal(value.selectedWork.ms,30*M);assert.equal(value.selectedWork.agentMs,30*M);
+    assert.equal(value.work!.ms,62*M);assert.equal(value.work!.agentMs,62*M,'supplier work includes the excluded second context');
+    for(const selectedRange of [range,{from:32*M+.5,to:63*M+.5}])assert.deepEqual(retired.quotaSummary('s',window,selectedRange),fresh.quotaSummary('s',window,selectedRange));
+    const actual=(retired as any).quota.get('s\n'+window),expected=(fresh as any).quota.get('s\n'+window);
+    for(const field of ['times','deadlines','spent','covered','worked','during'])assert.deepEqual(Array.from({length:actual[field].length},(_,i)=>numberAt(actual[field],i)),Array.from({length:expected[field].length},(_,i)=>numberAt(expected[field],i)),`${field} keeps exact values with independent source work`);
+  }
+  assert.deepEqual(rebuilt,[[]],'nonzero spending also keeps its independent prefixes out of generic quota preparation');
+  assert.deepEqual(retired.fixed(range,M),fresh.fixed(range,M));
 });

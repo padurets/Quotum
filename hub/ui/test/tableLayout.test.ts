@@ -9,9 +9,10 @@ import type {useTableLayout} from '../components/TableWidget';
 
 test('the shared table fit follows resize and hidden columns at the exact padded boundary',()=>{
   let model={layout:'table',width:0},deps:unknown[]=[],stop:(()=>void)|undefined,fit=()=>{},disconnects=0;
+  const space={current:null};
   const root={clientWidth:684,closest:()=>root},panel={current:root},columns=[140,140,140];
   const modules:Record<string,unknown>={
-    react:{memo:(fn:unknown)=>fn,useState:()=>[model,(next:(was:typeof model)=>typeof model)=>{model=next(model);}],useLayoutEffect:(run:()=>()=>void,next:unknown[])=>{
+    react:{memo:(fn:unknown)=>fn,useRef:()=>space,useState:()=>[model,(next:(was:typeof model)=>typeof model)=>{model=next(model);}],useLayoutEffect:(run:()=>()=>void,next:unknown[])=>{
       if(next.length!==deps.length||next.some((value,i)=>value!==deps[i])){stop?.();deps=next;stop=run();}
     }},'react/jsx-runtime':jsx,'../lib/table':{tableLayout},
   };

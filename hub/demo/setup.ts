@@ -302,6 +302,9 @@ export function seedWork(store: Store, stand: Stand) {
             return {agent, sessionId, key: {source: stand.sources.get(card.id)!, origin: told.origin, startedAt: told.startedAt, project: told.project ?? '', folder: told.folder ?? ''}};
           }),
       );
+      // Equal ordered packets keep the same work stretches and namespace priority.
+      let pending: {from: number; until: number; keys: WorkKey[]; identity: string} | null = null;
+      const flush = () => {if (pending) store.creditWork(device, pending.from, pending.until, pending.keys);};
       for (let t = since; t < 0; t += MIN) {
         // Legacy agents alike in all of it keep their ordinal among the working ones, as the hub tells them.
         const alike = new Map<string, number>();
@@ -316,8 +319,11 @@ export function seedWork(store: Store, stand: Stand) {
           working.push({...key, identity});
         }
         // Credit parallel namespaces together, before their high-water ends advance.
-        store.creditWork(device, start + t, start + t + MIN, working);
+        const identity = JSON.stringify(working);
+        if (pending && pending.until === start + t && pending.identity === identity) pending.until = start + t + MIN;
+        else {flush(); pending = {from: start + t, until: start + t + MIN, keys: working, identity};}
       }
+      flush();
     }
     db.exec('COMMIT');
   } catch (error) {

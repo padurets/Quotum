@@ -241,7 +241,7 @@ test('a chart sharing retired period extras immediately reads its current cells 
   let generation=1;
   const intent=():PeriodIntent=>({board:'b',generation,revision:generation,request:{version:1,selection:{mode:'live',periodMs:86_400_000},evaluatedAt:NOW,sessions:{}}});
   const transport=new PeriodTransport(pool,intent,()=>{},async(_board,body,signal)=>{sent.push({generation,body,signal});return new Promise(()=>{});});
-  const reader=new HistoryStore({now:()=>NOW,preparations:null,read:(_board,cell,from,to,signal)=>transport.read('quota',{cell:String(cell),from:String(from),to:String(to)},signal).then(reply=>expandHistory(reply)),
+  const reader=new HistoryStore({sharedTransport:true,now:()=>NOW,preparations:null,read:(_board,cell,from,to,signal,_meters,_meta,owner)=>transport.read('quota',{cell:String(cell),from:String(from),to:String(to)},signal,owner).then(reply=>expandHistory(reply)),
     setTimeout:(_run,ms)=>{timers.push(ms);return {};},clearTimeout:()=>{},dropTimeRange:()=>{}},pool.budget,'quota',pool);
   reader.open('b');reader.hello('run');reader.snapshot(['s'],['s w']);await flush();
   assert.equal(sent.length,1);assert.ok(sent[0].body.quota);assert.ok(sent[0].body.sessions);

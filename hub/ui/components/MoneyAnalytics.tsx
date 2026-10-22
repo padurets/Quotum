@@ -63,7 +63,7 @@ const SortedMoney=memo(function SortedMoney({rows,entries,columns,history,panel,
     if(ordered.length!==cached.current.length||ordered.some((row,i)=>row!==cached.current[i]))cached.current=ordered;
     return cached.current;
   },[watch]);
-  const subscribe=useCallback((listener:()=>void)=>clock.subscribe(watch,()=>{evaluate();listener();}),[watch,evaluate]);
+  const subscribe=useCallback((listener:()=>void)=>clock.subscribe(watch,listener),[watch]);
   const ordered=useSyncExternalStore(subscribe,evaluate,evaluate);
   useLayoutEffect(()=>{evaluate();});
   const onSort=useCallback((column:MoneyColumn|'name'|null,cycle?:boolean)=>setPrefs({moneySort:nextMoneySort(active,column,cycle)}),[active]);

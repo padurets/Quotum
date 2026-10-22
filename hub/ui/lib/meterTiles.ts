@@ -5,6 +5,7 @@ import {ordered} from '../../server/domain/prepare';
 import {MeterMetadata} from './meterMetadata';
 
 type StoredCell = {row: MeterCell; before: MeterSemantics | null; semantics: MeterSemantics | null};
+type UnpackedCell = {row: MeterCell; semanticsId: number | null};
 type PackedCell = {data: Uint8Array; references: number[]; bytes: number};
 type Packed = {series: Omit<MeterSeriesCells,'cells'|'semantics'>; cells: Map<number,PackedCell>; bytes: number};
 type EncodedExtra = Omit<NonNullable<MeterCell[5]>, 'semantics' | 'openSemantics' | 'observations'> & {openSemantics?: number};
@@ -36,7 +37,7 @@ const header=(bytes:Uint8Array):Header=>{
   const [before,semantics,row,steps,topupSteps,observations]=JSON.parse(decoder.decode(bytes.subarray(4,4+new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength).getUint32(0)))) as PackedHeader;
   return {before,semantics,row:[row[0],row[1],row[2],row[3],row[4],expand(row[5])],steps,topupSteps,...(observations===undefined?{}:{observations})};
 };
-function* unpack(bytes:Uint8Array,metadata:MeterMetadata):Preparation<StoredCell> {
+function* unpack(bytes:Uint8Array,metadata:MeterMetadata):Preparation<UnpackedCell> {
   const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength),head=header(bytes);
   let at=4+view.getUint32(0);yield;
   const {openSemantics,...rest}=head.row[5];
@@ -55,7 +56,7 @@ function* unpack(bytes:Uint8Array,metadata:MeterMetadata):Preparation<StoredCell
     }
     extra.observations=observations;
   }
-  return {row:[head.row[0],head.row[1],head.row[2],head.row[3],head.row[4],extra],before:metadata.semantics(head.before),semantics:metadata.semantics(head.semantics)};
+  return {row:[head.row[0],head.row[1],head.row[2],head.row[3],head.row[4],extra],semanticsId:head.semantics};
 }
 
 /** Exact strings and interval metadata use byte buffers, within the shared tile budget. */
@@ -63,7 +64,12 @@ export class MeterTile {
   private readonly series=new Map<string,Packed>();
   private metadata=new MeterMetadata();
   constructor(private readonly from:number,private readonly cell:number) {}
-  get bytes(){return this.metadata.bytes+[...this.series.values()].reduce((sum,s)=>sum+s.bytes+256,0);}
+  get bytes() {
+    const metadataBytes = this.metadata.bytes;
+    let seriesBytes = 0;
+    for (const series of this.series.values()) seriesBytes = seriesBytes + series.bytes + 256;
+    return metadataBytes + seriesBytes;
+  }
   *clonePrepared():Preparation<MeterTile> {
     const copy=new MeterTile(this.from,this.cell);
     copy.metadata=yield* this.metadata.clonePrepared();
@@ -105,14 +111,19 @@ export class MeterTile {
     for(const packed of this.series.values()) {
       const all=yield* ordered(packed.cells,(a,b)=>a[0]-b[0]);
       const cells:MeterCell[]=[];
-      let before:MeterSemantics|null=null;
-      for(const [i,cell] of all){const head=header(cell.data);if(i<first)before=this.metadata.semantics(head.semantics);else{before??=this.metadata.semantics(head.before);break;}yield;}
-      let semantics=before;
+      let beforeId:number|null=null;
+      for(const [i,cell] of all){const head=header(cell.data);if(i<first)beforeId=head.semantics;else{beforeId??=head.before;break;}yield;}
+      const before=this.metadata.semantics(beforeId);
+      let semantics=before,semanticsId=beforeId;
       for(const [i,cell] of all)if(i>=first && i<last) {
         const c=yield* unpack(cell.data,this.metadata);
         const extra={...c.row[5]};
-        if(c.semantics && JSON.stringify(c.semantics)!==JSON.stringify(semantics))extra.semantics=c.semantics;
-        semantics=c.semantics;
+        // Equal dictionary IDs need no new object or serialized comparison.
+        if(c.semanticsId!==semanticsId){
+          const next=this.metadata.semantics(c.semanticsId);
+          if(next && JSON.stringify(next)!==JSON.stringify(semantics))extra.semantics=next;
+          semantics=next;semanticsId=c.semanticsId;
+        }
         cells.push([i-first,c.row[1],c.row[2],c.row[3],c.row[4],extra]);
       }
       if(cells.length)result.push({...packed.series,semantics:before,cells});

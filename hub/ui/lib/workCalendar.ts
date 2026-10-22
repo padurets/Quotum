@@ -157,7 +157,7 @@ export class WorkCalendar {
     return advance;
   }
   dirty(since=-Infinity){this.cache.invalidate(since);if(since===Infinity||this.selection.mode==='range'&&since>=this.selection.to)return false;if(this.visible&&!this.limited){this.needed=true;return true;}return false;}
-  demand():CalendarDemand|undefined {return this.visible&&this.needed?{zone:this.state.window.zone,...(this.state.value?.cursor?{cursor:this.state.value.cursor}:{})}:undefined;}
+  demand():CalendarDemand|undefined {return this.visible&&this.needed?{zone:this.state.window.zone,relative:true,...(this.state.value?.cursor?{cursor:this.state.value.cursor}:{})}:undefined;}
   incomingBytes(part:CalendarSection){return part.state==='complete'?valueBytes(part.value)+JSON.stringify(part.basis).length*3:JSON.stringify(part).length*3;}
   receive(part:CalendarSection,generation:number,memory:CalendarAdmission|((bytes:number)=>boolean)){
     if(!this.visible||generation!==this.generation)return;

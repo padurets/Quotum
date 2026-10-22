@@ -10,13 +10,24 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {Pool, coderPool, externalUrl} from '../access.mjs';
 import {allocate, config, parseEnv, portFree, updateEnv} from '../config.mjs';
 import {command, dirtyGuard, info} from '../cli.mjs';
-import {build, fileHash, healthy, isolatedEnv, sourceBuild, start, stop} from '../runtime.mjs';
+import {build, fileHash, healthy, isolatedEnv, sourceBuild, start as startStand, stop} from '../runtime.mjs';
 import {context, git, hash, listenerOwned, ownedMembers, processOf, readJson, saveJson, sleep, waitOwnedMembers} from '../system.mjs';
 
+import {fixtureEvidence} from './evidence.mjs';
+
 const cli = fileURLToPath(new URL('../cli.mjs', import.meta.url));
+const fixtureEvidenceByRoot = new Map();
+function start(ctx, c, port, built, observe) {
+  return startStand(ctx, c, port, built, (error, journal) => {
+    fixtureEvidenceByRoot.get(ctx.root)?.record('start-failed-before-stop', journal, error.code);
+    observe?.(error, journal);
+  });
+}
 function fixture(t) {
+  const evidence = fixtureEvidence(t.name);
   const base = mkdtempSync(path.join(os.tmpdir(), 'quotum-dev-test-'));
   const root = path.join(base, 'primary');
+  fixtureEvidenceByRoot.set(root, evidence);
   mkdirSync(path.join(root, 'hub/demo'), {recursive: true});
   writeFileSync(path.join(root, '.gitignore'), '.env\n.quotum-dev/\nnode_modules/\n');
   writeFileSync(path.join(root, 'hub/demo/catalogue.ts'), "export const SETS = [{id: 'all'}, {id: 'showcase'}];\n");
@@ -29,12 +40,16 @@ function fixture(t) {
     for (const name of ['primary', 'A', 'B', 'other']) {
       const tree = path.join(base, name);
       if (existsSync(tree) && statSync(tree).isDirectory()) {
-        try { await stop(context(tree)); } catch {}
+        const ctx = context(tree);
+        evidence.record('before-cleanup', readJson(ctx.record));
+        try { await stop(ctx); } catch {evidence.record('cleanup-failed', readJson(ctx.record));}
+        evidence.record('after-cleanup', readJson(ctx.record));
       }
     }
+    fixtureEvidenceByRoot.delete(root);
     rmSync(base, {recursive: true, force: true});
   });
-  return {base, root, ctx: context(root)};
+  return {base, root, ctx: context(root), evidence};
 }
 async function freeBase() {
   // The ephemeral probe is test scaffolding; managed allocations themselves ascend.
@@ -396,7 +411,7 @@ test('a stolen initial probe retries ascending, but an established busy port sta
 });
 
 for (const denied of [false, true]) test('a bind race after the final probe keeps the foreign listener and reports PORT_BUSY' + (denied ? ' with denied proc reads' : ''), async t => {
-  const {ctx} = fixture(t);
+  const {ctx, evidence} = fixture(t);
   standIn(ctx);
   const c = {...config(ctx.root, {}), DEV_MODE: 'hub', DEV_PORT_START: String(await freeBase())};
   const port = await allocate(ctx, c, null);
@@ -436,7 +451,11 @@ syncBuiltinESMExports();
 await import(${JSON.stringify(new URL('../serve.mjs', import.meta.url).href)});
 `);
   }
-  const starting = start(ctx, c, port, {inputs: 'bind-race', output: 'fixture', controller});
+  let original;
+  const starting = start(ctx, c, port, {inputs: 'bind-race', output: 'fixture', controller}, (error, journal) => {
+    original = journal; evidence.record('observed-bind-race', journal, error.code);
+    throw new Error('controlled observer failure must not prevent cleanup');
+  });
   const outcome = assert.rejects(starting, error => {
     if (denied) {
       assert.equal(existsSync(path.join(ctx.local, 'hub-data/bind-reported')), true);
@@ -453,6 +472,8 @@ await import(${JSON.stringify(new URL('../serve.mjs', import.meta.url).href)});
   t.after(foreign.close);
   writeFileSync(path.join(ctx.local, 'hub-data/allow-bind'), 'bind');
   await outcome;
+  assert.equal(original.failureCode, 'PORT_BUSY');
+  assert.ok(original.supervisor);
   assert.equal(await portFree(port), false);
   assert.equal(readJson(path.join(ctx.local, 'lease.json')).initial, true);
 });
@@ -683,7 +704,7 @@ await locked(path.join(ctx.shared,ctx.id+'.lock'),async()=>{
   assert.equal(readJson(path.join(ctx.local, 'lease.json')).initial, true);
 });
 
-test('unreadable socket ownership never authorizes a listener', async t => {
+test('unreadable socket ownership never authorizes an owned or foreign listener', async t => {
   const {ctx, state} = await hubStand(t);
   const read = fs.readFileSync;
   fs.readFileSync = (file, ...args) => {

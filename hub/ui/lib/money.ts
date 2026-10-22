@@ -33,13 +33,22 @@ export function historicalCurrencyContext(context:CurrencyContext,source:string,
 export function activeHours(milliseconds:string|null):string {
   if(milliseconds===null)return '—';
   const tenths=BigInt(milliseconds)/360_000n,whole=tenths/10n,fraction=tenths%10n;
-  const separator=new Intl.NumberFormat(formatLocale()).formatToParts(1.1).find(part=>part.type==='decimal')?.value??'.';
-  return t('money.activeHoursValue',{hours:new Intl.NumberFormat(formatLocale()).format(whole)+(fraction?separator+fraction:'')});
+  const format=numberFormat(formatLocale());
+  return t('money.activeHoursValue',{hours:format.whole.format(whole)+(fraction?format.separator+fraction:'')});
 }
 export const capName=(meter:Pick<Meter,'id'|'scope'|'label'>)=>meter.id==='quota:credit:5h'?t('kind.title.session'):meter.id==='quota:credit:week'?t('kind.title.weekly'):meter.label??meter.id;
 export const amountText=(value:string|null|undefined,unit:string,exact=false)=>{const formatted=money(value,unit,exact);return value==null?formatted:formatted.slice(0,-amountUnitLabel(unit).length-1);};
 
 const numberFormats=new Map<string,{whole:Intl.NumberFormat;separator:string}>();
+
+function numberFormat(locale:string) {
+  let format=numberFormats.get(locale);
+  if(!format) {
+    format={whole:new Intl.NumberFormat(locale,{maximumFractionDigits:0}),separator:new Intl.NumberFormat(locale).formatToParts(1.1).find(p=>p.type==='decimal')?.value??'.'};
+    numberFormats.set(locale,format);
+  }
+  return format;
+}
 
 /** Display rounding never feeds the ledger, including values above Number precision. */
 export function money(value:string|null|undefined,unit=DEFAULT_CURRENCY,exact=false,context:CurrencyContext=defaultCurrencyContext,nativeScale=6):string {
@@ -48,12 +57,7 @@ export function money(value:string|null|undefined,unit=DEFAULT_CURRENCY,exact=fa
   const precision=context.definitions.find(d=>d.id===unit)?.fractionDigits??2;
   const digits=exact||unit.startsWith('credits:')||absolute>0n&&nativeScale>precision&&absolute<10n**BigInt(nativeScale-precision)?nativeScale:precision;
   const shift=nativeScale-digits,divisor=10n**BigInt(Math.max(0,shift)),rounded=shift>=0?(absolute+divisor/2n)/divisor:absolute*10n**BigInt(-shift),scale=10n**BigInt(digits);
-  const locale=formatLocale();
-  let format=numberFormats.get(locale);
-  if(!format) {
-    format={whole:new Intl.NumberFormat(locale,{maximumFractionDigits:0}),separator:new Intl.NumberFormat(locale).formatToParts(1.1).find(p=>p.type==='decimal')?.value??'.'};
-    numberFormats.set(locale,format);
-  }
+  const format=numberFormat(formatLocale());
   const whole=format.whole.format(rounded/scale),separator=format.separator;
   let fraction=digits?(rounded%scale).toString().padStart(digits,'0'):'';
   if(digits===nativeScale&&!exact)fraction=fraction.replace(/0+$/,'');

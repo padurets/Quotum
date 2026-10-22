@@ -86,6 +86,22 @@ function harness(budget?: number, preparations?: Preparations, scope?: 'quota'|'
   return {store, reads, advance, start, now: () => now, dropped: () => dropped, timers, correctClock: (ms: number) => {now += ms;}};
 }
 
+test('metadata tokens belong to the retained board, run and meter selection', async () => {
+  const h=harness();
+  try {
+    assert.equal(h.store.metadataToken('b'),undefined);
+    await h.start();await h.reads[0].answer({meta:'captured'});
+    assert.equal(h.store.metadataToken('b'),'captured');
+    assert.equal(h.store.metadataToken('other'),undefined);
+    h.store.setMeters({unit:'USD',ids:[['s','balance']]});
+    assert.equal(h.store.metadataToken('b'),undefined);await flush();
+    await h.reads.at(-1)!.answer({meta:'selected'});assert.equal(h.store.metadataToken('b'),'selected');
+    h.store.hello('next-run');assert.equal(h.store.metadataToken('b'),undefined);
+    h.store.open('other');assert.equal(h.store.metadataToken('b'),undefined);
+    h.store.close();assert.equal(h.store.metadataToken('b'),undefined);
+  }finally{h.store.close();}
+});
+
 for(const blocked of [false,true])test(`a delayed native-only strip fills without new input when activity is ${blocked?'blocked':'hidden'}`,async()=>{
   const h=harness(undefined,undefined,'quota');
   const answer=async(remaining:number)=>{
@@ -999,6 +1015,68 @@ function cooperativeHarness(pool?: HistoryPool, scope?: 'quota'|'budget') {
   return {...h, tasks, tick, finish, internals, preparations};
 }
 
+for (const scope of ['quota', 'budget'] as const) for (const started of [false, true]) {
+  test(`${scope}: returning a pan to its origin resumes ${started ? 'partly prepared' : 'queued'} live totals`, async () => {
+    const h = cooperativeHarness(undefined, scope);
+    let selected: {from: number; to: number} | null = null;
+    const frames: (() => void)[] = [];
+    const gesture = new Pan({now: h.now, commit: range => {selected = range; h.store.choose('24h', range);}, requestFrame: run => {frames.push(run); return run;}, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}});
+    const stop = followPan(h.store, gesture, () => selected);
+    try {
+      await h.start(); await h.reads[0].answer(); await h.finish();
+      const range = {from: NOW - 23 * H, to: NOW - H};
+      h.store.choose('24h', range); await flush(); await h.finish();
+      assert.equal(h.store.get().history?.range, `${range.from}-${range.to}`);
+      const reads = h.reads.length;
+      h.store.choose('24h', null); await flush();
+      assert.ok(h.tasks.length, 'the cached live answer is awaiting cooperative composition');
+      if (started) {h.tick(); assert.ok(h.tasks.length, 'composition has yielded before publication');}
+      const token = gesture.begin({source: Symbol('chart'), input: 'pointer', selected, length: 24 * H, now: NOW, historyStart: 0, span: 24 * H, width: 1000})!;
+      gesture.move(token, -1); frames.shift()!();
+      await flush(); h.tick();
+      assert.equal(h.store.get().history?.range, `${range.from}-${range.to}`, 'active input retains the prior complete totals');
+      gesture.move(token, 1); frames.shift()!();
+      assert.equal(gesture.finish(token), undefined, 'returning to the origin commits no new range');
+      await flush(); await h.finish();
+      assert.equal(h.store.get().history?.range, '24h', 'an interrupted identity must not suppress its replacement job');
+      assert.equal(h.store.get().loading, false);
+      assert.equal(h.store.getPlot(), null, 'returning to the gesture origin retires the temporary strip');
+      assert.equal(h.reads.length, reads, 'a cached return requires no replacement HTTP request');
+      assert.equal(h.preparations.size, 0);
+    } finally {stop();h.store.close();}
+  });
+}
+
+for (const scope of ['quota', 'budget'] as const) {
+  test(`${scope}: returning from an unread range resumes cancelled cached composition`, async () => {
+    const h = cooperativeHarness(undefined, scope);
+    try {
+      await h.start();
+      const read = h.reads[0], chunks: Chunk[] = [];
+      const end = Math.min(read.to, cellStart(h.now() + CLOCK_TOLERANCE_MS, read.cell) + read.cell);
+      for (let from = read.from; from < end;) {
+        const to = Math.min(end, tileEnd(tileOf(from, read.cell), read.cell));
+        const count = Math.ceil((to - from) / read.cell);
+        // Real rows keep cancellation inside preparation independently of sorting speed.
+        chunks.push({...empty(from, to), series: [{source: 's', window: 'w', hold: read.cell * 2, open: 80, cells: Array.from({length: count}, (_, i) => [i, 80, 0, read.cell])}],
+          meterSeries: [{source: 's', meter: 'balance', kind: 'balance', unit: 'USD', semantics: null, cells: Array.from({length: count}, (_, i) => [i, '1000000000', '0', '0', read.cell])}]});
+        from = to;
+      }
+      await read.answer({chunks}); await h.finish();
+      const cached = {from: NOW - 23 * H, to: NOW - H};
+      h.store.choose('24h', cached); await flush(); h.tick();
+      assert.ok(h.tasks.length, 'the cached composition has not published yet');
+      const reads = h.reads.length;
+      h.store.choose('24h', {from: NOW - 72 * H, to: NOW - 48 * H}); await flush(); h.tick(); await h.advance(400);
+      assert.equal(h.reads.length, reads + 1, 'only the unread range starts transport');
+      h.store.choose('24h', cached); await flush(); await h.finish();
+      assert.equal(h.store.get().history?.range, `${cached.from}-${cached.to}`);
+      assert.equal(h.store.get().loading, false);
+      assert.equal(h.reads.length, reads + 1, 'cached composition cannot depend on the unrelated reply');
+      assert.equal(h.preparations.size, 0);
+    } finally {h.store.close();}
+  });
+}
 test('changing selected work between a native commit and composition cannot credit the previous financial frame',async()=>{
   const h=cooperativeHarness(undefined,'quota');
   const answer=async(remaining:number)=>{
@@ -1750,6 +1828,54 @@ test('subscription funds read independently from wallet budgets and retire on fi
   }finally{stopB();stopF();b.store.close();f.store.close();setPrefs(before);}
 });
 
+test('device contacts retain all three history frames without rebuilding their selections',async t=>{
+  const before=prefs(),pool=new HistoryPool(),q=harness(undefined,undefined,'quota',pool),b=harness(undefined,undefined,'budget',pool),f=harness(undefined,undefined,'budget',pool),store=createStore(reduce,INITIAL);
+  const readers=[q,b,f],stops=[follow(q.store,store),follow(b.store,store),follow(f.store,store,'funds')];
+  setPrefs({money:DEFAULT_MONEY,funds:DEFAULT_MONEY});
+  const base={plan:'',resets:null,owners:[],windows:[],error:null,successAt:NOW,stale:false,staleAfterMs:10*M,measureIntervalMs:null};
+  const meter={kind:'balance' as const,amount:'10000000',at:NOW,staleAfterMs:10*M,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null};
+  const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:EMPTY_VIEW,historyStart:0,sources:[
+    {...base,id:'subscription',provider:'codex',windows:[{id:'w',kind:'weekly',label:null,used:20,remaining:80,resetAt:null,minutes:10080}],budget:{enabled:true,since:1,anchor:1,revision:'on'},meters:[{...meter,id:'balance:credits',unit:'credits:codex'}]},
+    {...base,id:'wallet',provider:'openrouter',meters:[{...meter,id:'balance',unit:'USD'}]},
+    {...base,id:'zai:fixture',provider:'zai'},
+  ],sessions:{},cadence:{},refresh:{},forecast:{},mine:[],boards:[],resets:{resets:{},trackers:[],past:{}}};
+  const known={work:0,sources:{subscription:0,wallet:0,'zai:fixture':0}};
+  try {
+    store.dispatch({type:'board-open',id:'b'});store.dispatch({type:'hub',event:{type:'hello',data:{epoch:'run'}}});store.dispatch({type:'hub',event:{type:'snapshot',data:snapshot}});await flush();
+    // Answer the first two shared slots; the queued third reader then starts normally.
+    for(const [index,h] of readers.entries()){
+      assert.equal(h.reads.length,1);await h.reads[0].answer({meta:'warm-'+index,known});
+    }
+    assert.deepEqual(q.reads[0].meters?.ids,QUOTA_IDS.map(id=>['zai:fixture',id]));
+    assert.deepEqual(b.reads[0].meters?.ids,[['wallet','balance']]);
+    assert.deepEqual(f.reads[0].meters?.ids,[['subscription','balance:credits']]);
+    const shown=readers.map(h=>h.store.get()),plots=readers.map(h=>h.store.getPlot()),metadata=readers.map(h=>h.store.metadataToken('b'));
+    for(const [index,value] of shown.entries()){assert.ok(value.history);assert.equal(metadata[index],'warm-'+index);}
+    const board=store.get().board,preferences=prefs(),bytes=pool.estimatedBytes,counts=readers.map(h=>h.reads.length);
+    assert.equal(pool.activeFlights,0);
+    const calls=readers.map(h=>t.mock.method(h.store,'setMeters'));
+    let published=0;const subscriptions=readers.flatMap(h=>[h.store.subscribe(()=>published++),h.store.subscribePlot(()=>published++)]);
+    try {
+      for(let i=1;i<=8;i++)store.dispatch({type:'hub',event:{type:'deviceContacts',data:{devices:[{deviceId:'own-device',lastSeenAt:NOW+i*1000}]}}});
+      await flush();const contactCalls=calls.map(call=>call.mock.callCount());
+      assert.equal(store.get().deviceContacts!['own-device'],NOW+8000);assert.equal(store.get().board,board);assert.equal(prefs(),preferences);
+      for(const [index,h] of readers.entries()){
+        assert.equal(h.store.get(),shown[index]);assert.equal(h.store.getPlot(),plots[index]);assert.equal(h.store.metadataToken('b'),metadata[index]);
+      }
+      assert.deepEqual(readers.map(h=>h.reads.length),counts);assert.equal(pool.estimatedBytes,bytes);assert.equal(pool.activeFlights,0);assert.equal(published,0);
+      for(const [index,source,scope] of [[0,'zai:fixture','quota'],[1,'wallet','budget'],[2,'subscription','budget']] as const){
+        store.dispatch({type:'hub',event:{type:'history',data:{sources:[source],since:NOW,changes:[{source,scope,since:NOW}]}}});await flush();
+        counts[index]++;assert.deepEqual(readers.map(h=>h.reads.length),counts,'real history still reads only its admitted family');
+        await readers[index].reads.at(-1)!.answer({meta:'updated-'+index,known});
+      }
+      assert.ok(calls.every(call=>call.mock.callCount()>0),'non-contact events still compute each reader selection');
+      assert.equal(prefs(),preferences,'admission does not rewrite saved preferences');
+      store.dispatch({type:'board-close'});assert.ok(readers.every(h=>h.store.get().history===null));
+      assert.deepEqual(contactCalls,[0,0,0],'contacts must not rebuild quota, budget or funds selections');
+    }finally{for(const stop of subscriptions)stop();}
+  }finally{for(const stop of stops)stop();for(const h of readers)h.store.close();setPrefs(before);}
+});
+
 test('source-free cutoffs reread admitted activity on personal and shared boards without financial reads',async()=>{
   const q=harness(undefined,undefined,'quota'),b=harness(undefined,undefined,'budget'),page=createStore(reduce,INITIAL);
   const stopQ=follow(q.store,page),stopB=follow(b.store,page);
@@ -1764,3 +1890,78 @@ test('source-free cutoffs reread admitted activity on personal and shared boards
     assert.equal(q.reads.length,before+1);
   }finally{stopQ();stopB();q.store.close();b.store.close();}
 });
+
+test('a replaced pinned entry cannot finish a pending final composition with matching stamps', async () => {
+  const h = cooperativeHarness(undefined, 'quota');
+  const range = {from: NOW - 3 * H, to: NOW - 2 * H};
+  try {
+    h.store.choose('1h', range); await h.start();
+    const read = h.reads[0], chunks: Chunk[] = [];
+    for (let from = read.from; from < read.to;) {
+      const to = Math.min(read.to, tileEnd(tileOf(from, read.cell), read.cell));
+      chunks.push({...empty(from, to), series: [{source: 's', window: 'w', hold: read.cell * 2, open: 80,
+        cells: Array.from({length: (to - from) / read.cell}, (_, i) => [i, 80 - i % 20, .25, read.cell])}]});
+      from = to;
+    }
+    await read.answer({chunks}); await h.finish();
+    const final = {from: range.from + 5 * M, to: range.to - 5 * M};
+    h.store.choose('1h', final); await h.advance(300); await flush(); h.tick();
+    assert.ok(h.tasks.length, 'the final projection has yielded before replacement');
+    for (const [cell, grid] of h.internals.grids) for (const [key, old] of grid) {
+      const next = new HistoryTile(tileStart(key, cell), cell);
+      next.readFrom = old.readFrom; next.readTo = old.readTo; next.writeSeq = old.writeSeq;
+      grid.set(key, next);
+    }
+    await h.finish();
+    assert.notEqual(h.store.get().history?.range, `${final.from}-${final.to}`, 'detached entries cannot publish a final frame');
+  } finally {h.store.close();}
+});
+
+for (const scope of ['quota', 'budget'] as const) for (const slices of [1, 8, 20]) {
+  test(`${scope}: eviction outside a final frame preserves preparation after ${slices} slices`, async () => {
+    const fixture = (read: {from: number; to: number; cell: number}): Chunk[] => {
+      const chunks: Chunk[] = [];
+      for (let from = read.from; from < read.to;) {
+        const to = Math.min(read.to, tileEnd(tileOf(from, read.cell), read.cell));
+        const count = (to - from) / read.cell;
+        const chunk = empty(from, to);
+        if (scope === 'quota') chunk.series = [{source: 's', window: 'w', hold: read.cell * 2, open: 80,
+          cells: Array.from({length: count}, (_, i) => [i, 80 - i % 20, .25, read.cell, {o: 80, h: read.cell, w: [.25, .4 * read.cell, .125]}])}];
+        else chunk.meterSeries = [{source: 's', meter: 'balance', kind: 'balance', unit: 'USD', semantics: null,
+          cells: Array.from({length: count}, (_, i) => [i, '1000000000', '0', '0', read.cell])}];
+        chunks.push(chunk); from = to;
+      }
+      return chunks;
+    };
+    const run = async (evict: boolean) => {
+      const pool = new HistoryPool(), h = cooperativeHarness(pool, scope);
+      const first = {from: NOW - 5 * H, to: NOW - 4 * H}, second = {from: NOW - 3 * H, to: NOW - 2 * H};
+      let incoming: {role: 'visible'} | undefined;
+      try {
+        h.store.choose('1h', first); await h.start(); await h.reads[0].answer({chunks: fixture(h.reads[0])}); await h.finish();
+        h.store.choose('1h', second); await h.advance(300); await flush();
+        const read = pending(h)[0]; await read.answer({chunks: fixture(read)}); await h.finish();
+        const victim = h.store.evictionCandidates()[0]; assert.ok(victim);
+        const final = {from: second.from + 5 * M, to: second.to - 5 * M};
+        h.store.choose('1h', final); await h.advance(300); await flush();
+        let posts = 0;
+        for (let i = 0; i < slices; i++) {assert.ok(h.tasks.length); h.tick(); posts++; await flush();}
+        assert.ok(h.tasks.length, 'the final projection still has prepared work to retain');
+        if (evict) {
+          incoming = {role: 'visible'};
+          assert.ok(pool.reserve(incoming, pool.budget - pool.estimatedBytes + victim.bytes));
+          await flush();
+        }
+        while (h.tasks.length) {h.tick(); posts++; await flush(); assert.ok(posts < 1000);}
+        const target = targetOf(final.to - final.from, h.now(), `${final.from}-${final.to}`, final);
+        const expected = {...compose(fixture(read), {now: NOW + 300, historyStart: 0, known: {work: 0, sources: {s: 0}}}, target, new Set(['s w'])), board: 'b'};
+        assert.deepEqual(h.store.get().history, expected);
+        assert.equal(h.reads.length, 2, 'retaining valid work adds no data read');
+        return {posts, history: h.store.get().history};
+      } finally {if (incoming) pool.release(incoming); h.store.close();}
+    };
+    const normal = await run(false), evicted = await run(true);
+    assert.deepEqual(evicted.history, normal.history);
+    assert.equal(evicted.posts, normal.posts, 'unrelated cache eviction cannot restart the final projection');
+  });
+}

@@ -20,7 +20,7 @@ test('actual Forecast order consumer crosses rolling union and agent hours witho
   const accounting=new PeriodAccounting({from:0,cut:2*H,replaceFrom:0,cursor:'c',money:[],quota:['A','B'].map(source=>({source,window:'w',samples:packSamples([{at:0,used:1,resetAt:4*H,staleAfterMs:4*H},{at:H,used:2,resetAt:4*H,staleAfterMs:4*H}])}))},{anchor:0,knownFrom:0,cut:2*H,refs:['a','parallel','b'].map((ref,i)=>({ref,source:i<2?'A':'B',device:{id:'d',name:'Device'},origin:'terminal',project:null,folder:null,startedAt:0})),spans:[[0,0,160_000],[1,0,100_000],[2,300_000,455_000]]});
   const models:SortRow[]=['A','B'].map(name=>({line:{key:name,sourceId:name,windowId:'w',provider:'codex',kind:'weekly',label:null,minutes:10080,name,color:'blue',dash:'',points:[],current:98,remainingAtStart:99,remainingAtEnd:98,consumed:1,coveredMs:H,staleAfterMs:4*H,work:null},live:{id:'w',kind:'weekly',label:null,minutes:10080,remaining:98,used:2,resetAt:4*H},measuredAt:H,ahead:null,context:{windows:[],freeResets:0,announced:null},plan:null}));
   const rows=models.map(model=>({key:model.line.key,name:model.line.name,cells:{work:{content:'kept'},agenthours:{content:'kept'}}}));
-  const props={rows,models,columns:[{id:'work',title:'Work'},{id:'agenthours',title:'Agent hours'}],fixed:false,rangeKey:'1h'};
+  const props={rows,models,columns:[{id:'work',title:'Work'},{id:'agenthours',title:'Agent hours'}],fixed:false,rangeKey:'1h',loading:false};
   const slot=(make:()=>any)=>{const at=index++;return slots[at]??(slots[at]=make());};
   const context={exports:{} as {SortedForecast:(props:unknown)=>{props:{children:any[]}}},require:()=>({jsxs:(_type:unknown,props:unknown)=>({props}),jsx:(_type:unknown,props:unknown)=>({props})}),memo:(fn:unknown)=>fn,
     usePref:()=>sort,useLocale:()=> 'en',useRef:(current:unknown)=>slot(()=>({current})),useState:(make:()=>unknown)=>[slot(make)],useMemo:(make:()=>unknown)=>make(),useCallback:(fn:unknown)=>fn,
@@ -33,11 +33,25 @@ test('actual Forecast order consumer crosses rolling union and agent hours witho
   runInNewContext(ts.transpileModule(`export ${source.slice(start,source.indexOf('/**',start))}`,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   const render=()=>{index=0;dirty=false;renders++;const value=context.exports.SortedForecast(props).props.children[0].props.children[1].props.rows as typeof rows;effects.splice(0).forEach(run=>run());return value;};
   let ordered=render();assert.deepEqual(Array.from(ordered,row=>row.key),['A','B']);
-  now=H+5000;clock.wakeDue();assert.equal(dirty,false,'equality keeps the existing default tie');
+  // A presentation-only prop changes the memoized consumer's props, not its models.
+  const initialTimer=[...timers][0];assert.ok(initialTimer);assert.equal(timers.size,1);assert.ok(initialTimer[1].at>now);
+  const retained=ordered,beforeCommit=quotaReads;props.loading=true;ordered=render();
+  assert.deepEqual(Array.from(ordered,row=>row.key),['A','B']);
+  ordered.forEach((row,i)=>{assert.equal(row,retained[i]);assert.equal(row.cells,retained[i].cells);});
+  assert.equal(timers.size,1);assert.equal(timers.get(initialTimer[0]),initialTimer[1],'the same order keeps its armed clock');
+  assert.equal(quotaReads-beforeCommit,models.length,'a mounted presentation commit evaluates quota models once through its snapshot, without a second layout pass');
+  const beforeWake=quotaReads;
+  now=H+5000;clock.wakeDue();const unchangedReads=quotaReads-beforeWake;assert.equal(dirty,false,'equality keeps the existing default tie');
   now++;clock.wakeDue();assert.equal(dirty,true);ordered=render();assert.deepEqual(Array.from(ordered,row=>row.key),['B','A']);assert.equal(ordered[0],rows[1]);assert.equal(ordered[1].cells,rows[0].cells);
   const commits=renders;now+=10_000;clock.wakeDue();assert.equal(dirty,false);assert.equal(renders,commits);
   sort={column:'agenthours',descending:true};ordered=render();assert.deepEqual(Array.from(ordered,row=>row.key),['A','B']);
   now=H+52_501;clock.wakeDue();ordered=render();assert.deepEqual(Array.from(ordered,row=>row.key),['B','A']);
+  const liveDeadline=[...timers.values()][0]?.at;assert.ok(liveDeadline!==undefined);
+  props.fixed=true;const fixed=render();assert.deepEqual(Array.from(fixed,row=>row.key),['A','B']);assert.equal(timers.size,0,'fixed summaries cancel the ordering wake');
+  props.fixed=false;ordered=render();assert.deepEqual(Array.from(ordered,row=>row.key),['B','A']);assert.equal(timers.size,1);assert.equal([...timers.values()][0].at,liveDeadline,'returning live restores its current ordering deadline');
+  ordered.forEach(row=>assert.equal(row,rows.find(original=>original.key===row.key)));
+  for(const state of slots)state.stop?.();assert.equal(timers.size,0);slots.length=0;
+  ordered=render();assert.deepEqual(Array.from(ordered,row=>row.key),['B','A']);assert.equal(timers.size,1);assert.equal([...timers.values()][0].at,liveDeadline,'a remounted watch subscribes with the deadline computed by its snapshot');
   for(const selected of [null,{column:'name' as const,descending:false},{column:'name' as const,descending:true}]){
     sort=selected;const beforeQuota=quotaReads,beforeOrder=orderReads,beforeKeys=requested.length;
     ordered=render();assert.deepEqual(Array.from(ordered,row=>row.key),selected?.descending?['B','A']:['A','B']);
@@ -71,4 +85,5 @@ test('actual Forecast order consumer crosses rolling union and agent hours witho
     ordered.forEach(row=>assert.equal(row.cells,edgeRows.find(original=>original.key===row.key)!.cells));
   }
   for(const state of slots)state.stop?.();assert.equal(timers.size,0);
+  assert.equal(unchangedReads,models.length,'an unchanged order wake evaluates each model once through the snapshot reader');
 });

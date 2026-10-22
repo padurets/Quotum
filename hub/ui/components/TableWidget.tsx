@@ -1,5 +1,6 @@
 /** @jsxRuntime automatic */
 import {useLayoutEffect,useMemo,useRef,useState,type RefObject,type ReactNode,type CSSProperties} from 'react';
+import {flushSync} from 'react-dom';
 import {tableLayout,tablePages,TABLE_PAGE_ROWS,TABLE_MEASURE_MIN_ROWS,type TableSort} from '../lib/table';
 import {t,useLocale} from '../i18n';
 import {Popover} from './Popover';
@@ -53,14 +54,18 @@ function TableFooter({table,count,metrics=[],columns,still=false,single=false,bo
 type Measurement={scope:string;heights:ReadonlyMap<string,number>;fallback:number;head:number;shell:number;footer:number;singleFooter:number;border:number};
 export function useTableLayout(box:RefObject<HTMLElement|null>,columns:readonly number[],nameWidth:number,edges?:number,widthKey?:string){
   const [model,setModel]=useState<{layout:'table'|'list';width:number}>({layout:'table',width:0}),key=columns.join(',');
+  const space=useRef<{element:HTMLElement;width:number;padding:number;widthKey?:string}|null>(null);
   useLayoutEffect(()=>{
     const root=box.current?.closest<HTMLElement>('.panel,.dialog');if(!root)return;
-    let measuredWidth:number|undefined;
-    const fit=()=>{const width=root.clientWidth;if(width===measuredWidth)return;measuredWidth=width;
-      const style=getComputedStyle(root),padding=edges??parseFloat(style.paddingLeft)+parseFloat(style.paddingRight)-20;
-      const layout=tableLayout(columns,width,nameWidth,padding);
+    const fit=()=>{const measured=space.current!,width=measured.width;
+      const layout=tableLayout(columns,width,nameWidth,edges??measured.padding);
       setModel(was=>was.width===width&&was.layout===layout?was:{width,layout});};
-    const observer=new ResizeObserver(fit);observer.observe(root);fit();return ()=>observer.disconnect();
+    const measure=()=>{const width=root.clientWidth;
+      const style=getComputedStyle(root),padding=edges??parseFloat(style.paddingLeft)+parseFloat(style.paddingRight)-20;
+      space.current={element:root,width,padding,widthKey};fit();};
+    const observer=new ResizeObserver(measure);observer.observe(root);
+    // Column changes fit the last observed box without forcing layout of the plots.
+    if(space.current?.element===root&&space.current.widthKey===widthKey)fit();else measure();return ()=>observer.disconnect();
   },[box,key,nameWidth,edges,widthKey]);
   return model;
 }
@@ -72,8 +77,11 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
   const scope=JSON.stringify([layout,width,structure,nameWidth,edges,locale,footerMetrics]);
   const [measurement,setMeasurement]=useState<Measurement|null>(null),[position,setPosition]=useState({key:resetKey,page:0});
   const seen=useRef<{key:string;outer:number;live:number;layer:number;footer:number;singleFooter:number}|null>(null);
+  const rowBoxes=useRef(new WeakMap<Element,{width:number;height:number}>());
+  const rowRun=useRef<{key:string;rows:Element[]}|null>(null);
   const suspended=useRef<HTMLElement|null>(null);
   const hidden=width===0||!!panel.current&&suspended.current===panel.current;
+  const measurable=!hidden;
   const sizes=measurement?.scope===scope||hidden?measurement:null;
   const rowBudget=hidden&&sizes?sizes.fallback:layout==='table'?60:Math.max(90,44+Math.ceil(Math.max(0,structure.length-1)/2)*36),head=hidden&&sizes?sizes.head:layout==='table'?56:18;
   const fallback=rowBudget,heights=sizes?.heights??new Map<string,number>();
@@ -83,17 +91,17 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     starts=tablePages(keys,heights,fallback,room-sizes.footer,sizes.border);
   }else starts=Array.from({length:Math.max(1,Math.ceil(keys.length/TABLE_PAGE_ROWS))},(_,i)=>i*TABLE_PAGE_ROWS);
   const page=Math.min(position.key===resetKey?position.page:0,starts.length-1),from=starts[page],to=starts[page+1]??keys.length;
-  useLayoutEffect(()=>{if(position.key!==resetKey||((sizes||!sizing?.manual)&&position.page!==page))setPosition({key:resetKey,page});},[resetKey,page,position,!!sizes,sizing?.manual]);
-  const update=useRef(()=>{});
-  update.current=()=>{
+  useLayoutEffect(()=>{if((position.key!==resetKey&&position.page!==0)||((sizes||!sizing?.manual||!keys.length)&&position.page!==page))setPosition({key:resetKey,page});},[resetKey,page,position,!!sizes,sizing?.manual,keys.length]);
+  const update=useRef<(reuseRows?:boolean)=>void>(()=>{});
+  update.current=(reuseRows=false)=>{
     const root=panel.current;if(!root||suspended.current===root)return;
-    if(width===0){seen.current=null;return;}
+    if(width===0){seen.current=null;rowRun.current=null;return;}
     const rect=root.getBoundingClientRect();
     // Hidden rows have no useful geometry. Recheck them even when the panel
     // returns to the same width, preserving its last complete page meanwhile.
-    if(rect.width===0){seen.current=null;return;}
+    if(rect.width===0){seen.current=null;rowRun.current=null;return;}
     const outer=pixels(rect.height-fillOf(root));
-    const signal={key:JSON.stringify([scope,keysKey,resetKey,from,to,sizing?.manual]),outer,live:pixels(live.current?.getBoundingClientRect().height??0),
+    const signal={key:JSON.stringify([scope,keysKey,from,to,sizing?.manual]),outer,live:pixels(live.current?.getBoundingClientRect().height??0),
       layer:pixels(measured.current?.getBoundingClientRect().height??0),footer:pixels(measuredFooter.current?.getBoundingClientRect().height??0),singleFooter:pixels(measuredSingleFooter.current?.getBoundingClientRect().height??0)};
     const last=seen.current;
     // The grid can change only a panel's fill. Its rows and chrome need no new reads.
@@ -106,9 +114,15 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     const shell=pixels(outer-surface.current.getBoundingClientRect().height-(footer.current?.getBoundingClientRect().height??0)+head);
     const {footer:multiFooter,singleFooter}=signal;
     const nextHeights=new Map(sizes?.heights??[]);
-    for(let i=0;i<layer.length;i++){
-      const rect=layer[i].getBoundingClientRect(),end=i+1<layer.length?layer[i+1].getBoundingClientRect().top:rect.bottom+border;
-      const key=keys[from+i];if(key!==undefined)nextHeights.set(key,pixels(Math.min(rowBudget,end-rect.top)));
+    const rowKey=JSON.stringify([scope,keysKey,from,sizing?.manual,border]),run=rowRun.current;
+    // Chrome can resize the page while its observed measurement rows stay the same.
+    if(!reuseRows||!sizes||run?.key!==rowKey||run.rows.length!==layer.length||run.rows.some((row,i)=>row!==layer[i])){
+      for(let i=0;i<layer.length;i++){
+        const rect=layer[i].getBoundingClientRect(),end=i+1<layer.length?layer[i+1].getBoundingClientRect().top:rect.bottom+border;
+        rowBoxes.current.set(layer[i],{width:rect.width,height:rect.height});
+        const key=keys[from+i];if(key!==undefined)nextHeights.set(key,pixels(Math.min(rowBudget,end-rect.top)));
+      }
+      rowRun.current={key:rowKey,rows:layer};
     }
     const retained=new Set(keys);for(const key of nextHeights.keys())if(!retained.has(key))nextHeights.delete(key);
     const base=rowBudget;
@@ -119,27 +133,40 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
       setMeasurement({scope,heights:nextHeights,fallback:base,head,shell,footer:multiFooter,singleFooter,border});
   };
   const keysKey=keys.join('\n'),columnsKey=columns.join(',');
-  useLayoutEffect(()=>update.current(),[layout,scope,keysKey,resetKey,page,from,to,sizing?.manual,sizing?.allocated,columnsKey]);
+  useLayoutEffect(()=>update.current(),[layout,scope,keysKey,sizing?.manual,sizing?.allocated,columnsKey]);
   useLayoutEffect(()=>{
+    const body=sizing?.manual?measured.current:live.current;
+    const rows=new Set([...(body?.children??[])].filter(row=>!row.hasAttribute('data-table-total')));
     const observer=new ResizeObserver(entries=>{
       const root=panel.current,entry=entries.find(entry=>entry.target===root),box=entry?.borderBoxSize;
       if(root&&box?.length===1&&box[0].inlineSize===0){suspended.current=root;return;}
-      if(root&&entry&&suspended.current===root){suspended.current=null;seen.current=null;}
-      update.current();
+      const resumed=!!root&&suspended.current===root&&!!entry;
+      if(resumed){suspended.current=null;seen.current=null;rowRun.current=null;}
+      if(suspended.current===root)return;
+      const resized=resumed||entries.some(entry=>{
+        if(!rows.has(entry.target))return false;
+        const previous=rowBoxes.current.get(entry.target),box=entry.borderBoxSize?.length===1?entry.borderBoxSize[0]:undefined;
+        return !previous||!box||!same(previous.width,box.inlineSize)||!same(previous.height,box.blockSize);
+      });
+      // Initial notifications repeat the rows already read by the layout effect.
+      if(resized){seen.current=null;rowRun.current=null;}
+      if(resized||entries.some(entry=>!rows.has(entry.target)))flushSync(()=>update.current(!resized));
     });
     for(const element of [panel.current,surface.current,live.current,measured.current,footer.current,measuredFooter.current,measuredSingleFooter.current])if(element)observer.observe(element);
+    for(const row of rows)observer.observe(row,{box:'border-box'});
     return ()=>observer.disconnect();
-  },[panel,layout,!!keys.length,sizing?.manual]);
+  },[panel,layout,measurable,!!keys.length,keysKey,from,to,sizing?.manual]);
   const report=sizing?.report;useLayoutEffect(()=>()=>report?.(null),[report]);
   const surfaceHeight=sizing?.manual&&sizes?Math.max(head+rowBudget,sizing.allocated-sizes.shell+head-sizes.footer):head+TABLE_PAGE_ROWS*rowBudget;
-  return useMemo(()=>({layout,columnWidths:columns,from,to,page,count:keys.length,pages:starts.length,onPage:(page:number)=>setPosition({key:resetKey,page}),live,measured,footer,measuredFooter,measuredSingleFooter,surface,surfaceHeight,rowBudget,footerMetrics,
-    measureFrom:from,measureTo:sizing?.manual?Math.min(keys.length,Math.max(from+TABLE_MEASURE_MIN_ROWS,to+1)):from}),[layout,columnsKey,from,to,page,starts.length,resetKey,sizing?.manual,keys.length,surfaceHeight,rowBudget,footerMetrics]);
+  return useMemo(()=>({layout,measurable,columnWidths:columns,from,to,page,count:keys.length,pages:starts.length,onPage:(page:number)=>setPosition({key:resetKey,page}),live,measured,footer,measuredFooter,measuredSingleFooter,surface,surfaceHeight,rowBudget,footerMetrics,
+    measureFrom:from,measureTo:sizing?.manual?Math.min(keys.length,Math.max(from+TABLE_MEASURE_MIN_ROWS,to+1)):from}),[layout,measurable,columnsKey,from,to,page,starts.length,resetKey,sizing?.manual,keys.length,surfaceHeight,rowBudget,footerMetrics]);
 }
 export type TableWidget=ReturnType<typeof useTableWidget>;
 export function TableSurface({table,children}:{table:TableWidget;children:ReactNode}){
   return <div ref={table.surface} className="table-surface" style={{height:table.surfaceHeight,'--row-budget':`${table.rowBudget}px`} as CSSProperties}>{children}</div>;
 }
 export function TableMeasure({table,children,metrics,columns}:{table:TableWidget;children:ReactNode;metrics?:readonly TableMetric[];columns?:readonly string[]}){
+  if(!table.measurable)return null;
   return <div className="table-measure" style={{'--row-budget':`${table.rowBudget}px`} as CSSProperties} aria-hidden="true" inert>{children}<TableFooter table={table} count={table.count} metrics={metrics} columns={columns} still body={table.measuredFooter}/><TableFooter table={table} count={table.count} metrics={metrics} columns={columns} still single body={table.measuredSingleFooter}/></div>;
 }
 export function WidgetPages({table,count,metrics,columns}:{table:TableWidget;count:number;metrics?:readonly TableMetric[];columns?:readonly string[]}){

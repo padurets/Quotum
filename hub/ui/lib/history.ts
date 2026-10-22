@@ -1,7 +1,8 @@
+import type {HistoryReadOwner} from './periodTransport';
 import {onDataFilters,filtersReady,effectiveFilters} from './filterSelection';
 import {executableWorkFilters,workFilter,type WorkFilter} from '../../server/domain/dataFilters';
 import {HistoryPool,historyPool} from './historyPool';
-import {boardPeriod,followPeriod} from './period';
+import {boardPeriod,followPeriod,type ActivityFrame} from './period';
 import {workChange} from './workChanges';
 import type {HistoryScope} from '../../server/domain/history';
 import {widgetVisible, QUOTA_WIDGETS, BUDGET_WIDGETS, SUBSCRIPTION_FUNDS, ACTIVITY} from '../../server/domain/widgets';
@@ -31,9 +32,11 @@ const STORED_BYTES = 15 * 1024 * 1024;
 
 export type HistoryEnv = {
   clock?:PageClock;
+  read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection, meta?: HistoryBasis, owner?: HistoryReadOwner, activityOnly?:boolean): Promise<HistoryAnswer>;
+  /** The shared transport owns HTTP admission until this reader settles its answer. */
+  sharedTransport?: boolean;
   /** Budget work may live outside this reader; quota history also owns activity. */
   workInPresentation?:boolean;
-  read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection, meta?: HistoryBasis, activityOnly?:boolean,retainSlot?:()=>()=>void): Promise<HistoryAnswer>;
   now(): number;
   /** Elapsed time stays independent of corrections to the estimated hub clock. */
   elapsedNow?(): number;
@@ -47,7 +50,7 @@ export type HistoryEnv = {
 };
 export type Shown = {history: History | null; loading: boolean;presentation:number;error?:'history_limit'|'history_failed'|'filters_limit'};
 type HistoryBoundary = {board: string; at: number; start: number};
-type Flight = {seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number; startedAt: number; controller: AbortController; role: 'visible' | 'ahead';activityOnly:boolean};
+type Flight = {submitted: boolean; started: boolean; start?: () => void; finish?: () => void; seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number; startedAt: number; controller: AbortController; role: 'visible' | 'ahead';activityOnly:boolean};
 type ResponseOwner = {answer: HistoryAnswer; keys: string[]; started: boolean; limited?: boolean};
 type TilePin = {tile: HistoryTile; seq: number; from: number; to: number};
 export type PlotInterest = {token: number; length: number; from: number; to: number; direction: -1 | 0 | 1};
@@ -128,6 +131,7 @@ export class HistoryStore {
   private readonly plotOwner = {};
   private readonly composeOwner = {};
   private composeIdentity = '';
+  private composeCurrent: ((target: Target) => boolean) | null = null;
   private readonly responses = new Map<Flight, ResponseOwner>();
   private readonly reservations = new Map<string, Flight>();
   private readonly plotChunks = new Map<string, {tile: HistoryTile|null; seq: number; from: number; to: number; chunk: Chunk;deadline?:number}>();
@@ -136,6 +140,8 @@ export class HistoryStore {
   private planDeadline=Infinity;
 
   constructor(private readonly env: HistoryEnv, private readonly budget = STORED_BYTES, readonly scope?: HistoryScope, private readonly pool?: HistoryPool) {this.planWatch=(env.clock??clock).watch();pool?.register(this);}
+
+  metadataToken(board:string) {return this.board===board&&this.meta?.run===this.run?this.meta?.meta:undefined;}
 
   /** Settings keep the board's live context without reading or preparing its charts. */
   setActive(active: boolean) {
@@ -167,6 +173,7 @@ export class HistoryStore {
     this.preparations?.cancel(this.plotOwner);
     this.preparations?.cancel(this.composeOwner);
     this.plotIdentity = this.composeIdentity = '';
+    this.composeCurrent = null;
   }
 
   close() {
@@ -304,6 +311,9 @@ export class HistoryStore {
   choose(period: string, selected: TimeRange | null) {
     const key = selected ? timeRangeKey(selected) : period;
     if (key === (this.selected ? timeRangeKey(this.selected) : this.period)) return;
+    this.preparations?.cancel(this.composeOwner);
+    this.composeIdentity = '';
+    this.composeCurrent = null;
     this.period = period;
     this.historyLimit=false;this.readError=false;this.activityError=null;this.clear('activityRetry');
     this.selected = selected;
@@ -333,6 +343,12 @@ export class HistoryStore {
   /** Geometry changes do not choose a committed target or compose its totals. */
   pan(interest: PlotInterest) {
     const previous = this.interest;
+    if (!previous) {
+      // Active input invalidates composition; its identity must leave with the job.
+      this.preparations?.cancel(this.composeOwner);
+      this.composeIdentity = '';
+      this.composeCurrent = null;
+    }
     this.interest = interest;
     this.panReads = true;
     this.plotPending = true;
@@ -383,7 +399,15 @@ export class HistoryStore {
     this.schedule();
   }
   subscribe = (listener: () => void) => {this.listeners.add(listener); return () => void this.listeners.delete(listener);};
-  get estimatedBytes() {return [...this.grids.values()].reduce((sum, tiles) => sum + [...tiles.values()].reduce((sum, tile) => sum + tile.bytes, 0), 0);}
+  get estimatedBytes() {
+    let bytes = 0;
+    for (const tiles of this.grids.values()) {
+      let gridBytes = 0;
+      for (const tile of tiles.values()) gridBytes += tile.bytes;
+      bytes += gridBytes;
+    }
+    return bytes;
+  }
 
   private invalidate() {
     this.cancelProjection();
@@ -523,6 +547,7 @@ export class HistoryStore {
 
   private pump() {
     if (!this.active) return;
+    this.startWaiting();
     this.startResponses();
     if (!this.board || !this.ready || !this.run || this.historyLimit) return;
     if(this.meters||this.pool){this.evict();if(this.historyLimit)return;}
@@ -647,14 +672,17 @@ export class HistoryStore {
   }
 
   private prepareCompose(target: Target) {
+    // Evicting other cached cells cannot invalidate work on this frame's pinned entries.
+    if (this.composeCurrent?.(target)) return;
     const meta = this.meta!, board = this.board!, epoch = this.epoch, version = this.version, windows = this.windows;
     const identity = `${epoch}:${version}:${target.key}:${target.k0}:${target.k1}`;
-    if (identity === this.composeIdentity) return;
+    if (identity === this.composeIdentity && !this.composeCurrent) return;
     this.composeIdentity = identity;
     const native=this.scope==='quota'&&!this.wantsActivity;
     const tiles = [...(this.grids.get(target.cell)?.values() ?? [])].filter(t => native?t.nativeTo>t.nativeFrom&&t.nativeTo>target.k0*target.cell&&t.nativeFrom<=target.k1*target.cell:t.readTo > t.readFrom && t.readTo > target.k0 * target.cell && t.readFrom <= target.k1 * target.cell).sort((a, b) => a.from - b.from);
     const pins = this.pins(tiles);
-    const valid = () => !this.interest && this.board === board && this.epoch === epoch && this.version === version && this.windows === windows && this.composeIdentity === identity && this.target().key === target.key && this.pinsValid(pins);
+    const valid = () => !this.interest && this.board === board && this.epoch === epoch && this.meta === meta && this.windows === windows && this.composeIdentity === identity && this.target().key === target.key && this.pinsValid(pins);
+    this.composeCurrent = next => next.key === target.key && next.cell === target.cell && next.k0 === target.k0 && next.k1 === target.k1 && valid();
     const owner=this;
     const work = function* (): Preparation<History> {
       const chunks: Chunk[] = [];
@@ -669,6 +697,7 @@ export class HistoryStore {
     };
     prepare(this.composeOwner, work(), valid, history => {
       for (const {tile} of pins) tile.shownAt = this.env.now();
+      this.composeCurrent = null;
       if(this.composedNativeVersion!==this.nativeVersion||this.shown?.range!==history.range||this.shown.cellMs!==history.cellMs||this.shown.historyStart!==history.historyStart)this.shownNativeVersion++;
       this.shown = history;
       this.composedNativeVersion=this.nativeVersion;
@@ -779,21 +808,30 @@ export class HistoryStore {
   }
 
   private read(target: Target, from: number, to: number, role: Flight['role']) {
-    if(this.pool)for(const waiting of [...this.flights])if(!this.pool.isActive(waiting)&&waiting.role===role)this.abort(waiting);
+    if(this.pool)for(const waiting of [...this.flights])if(!waiting.started&&waiting.role===role)this.abort(waiting);
     const activityOnly=this.scope==='quota'&&this.wantsActivity&&this.workKey!==undefined&&this.nativeFull(target.cell,from,to);
-    const flight: Flight = {seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity, startedAt: this.elapsedNow(), controller: new AbortController(), role,activityOnly};
+    const flight: Flight = {submitted:false,started:false,seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity, startedAt: this.elapsedNow(), controller: new AbortController(), role,activityOnly};
     this.flights.add(flight);
     const meta = this.meta?.run === this.run ? this.meta : undefined;
     const board=this.board!,meters=this.meters;
+    let finish:(()=>void)|undefined;
+    const finished=this.env.sharedTransport?new Promise<void>(resolve=>{finish=()=>resolve();}):undefined;
+    flight.finish=finish;
+    const owner:HistoryReadOwner|undefined=finished?{finished,started:()=>{flight.started=true;flight.startedAt=this.elapsedNow();},role:()=>this.flights.has(flight)?flight.role:null,cancel:()=>this.abort(flight)}:undefined;
     const start=()=>{
       if(flight.controller.signal.aborted||flight.epoch!==this.epoch){this.abort(flight);return;}
       if(flight.activityOnly&&!this.nativeFull(target.cell,from,to))flight.activityOnly=false;
-      flight.startedAt=this.elapsedNow();
-      this.env.read(board, target.cell, from, to, flight.controller.signal, meters, meta,flight.activityOnly,this.pool?()=>this.pool!.retain(flight):undefined).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
+      flight.submitted=true;if(!this.env.sharedTransport)flight.started=true;flight.startedAt=this.elapsedNow();
+      this.env.read(board, target.cell, from, to, flight.controller.signal, meters, meta, owner, flight.activityOnly).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
     };
-    if(this.pool)this.pool.request(this,flight,start,()=>this.abort(flight));else start();
+    flight.start=start;
+    if(this.env.sharedTransport)this.startWaiting();else if(this.pool)this.pool.request(this,flight,start,()=>this.abort(flight));else start();
   }
 
+  private startWaiting() {
+    if(!this.env.sharedTransport||!this.active)return;
+    for(const flight of this.flights)if(!flight.submitted&&flight.start&&![...this.flights].some(other=>other.submitted&&other.role===flight.role))flight.start();
+  }
   private abort(flight: Flight) {this.preparations?.cancel(flight); this.releaseResponse(flight); flight.controller.abort();}
   private abortFlights() {for (const flight of [...this.flights]) this.abort(flight);}
   private setActivityPlot(plot:PlotBuffer|null){if(this.activityPlot===plot)return;this.activityPlot=plot;for(const listener of this.activityPlotListeners)listener();}
@@ -935,7 +973,7 @@ export class HistoryStore {
   }
 
   private releaseResponse(flight: Flight) {
-    this.responses.delete(flight); this.flights.delete(flight); this.pool?.release(flight);
+    this.responses.delete(flight); this.flights.delete(flight); this.pool?.release(flight);flight.finish?.();if(this.env.sharedTransport)this.schedule();
     for (const [key, owner] of this.reservations) if (owner === flight) {
       this.reservations.delete(key);
       const [cell, n] = key.split(':').map(Number), tiles = this.grids.get(cell);
@@ -944,7 +982,7 @@ export class HistoryStore {
   }
 
   private failed(flight: Flight, error: unknown) {
-    this.flights.delete(flight);this.pool?.release(flight);
+    this.flights.delete(flight);this.pool?.release(flight);flight.finish?.();
     if (flight.controller.signal.aborted || flight.epoch !== this.epoch) return;
     if(error instanceof Error&&error.name==='AbortError'){this.schedule();return;}
     if(error instanceof ApiError&&(error.status===401||error.status===403||error.code==='board_not_found')) {
@@ -1061,8 +1099,8 @@ const keyOf = (lineup: string[]) => JSON.stringify([...lineup].sort());
 export {historyPool} from './historyPool';
 function reader(scope: HistoryScope, family: MoneyFamily = 'budget') {
   const value=new HistoryStore({
-    workInPresentation:scope!=='budget',
-    read: (_board, cell, from, to, signal, meters, meta,activityOnly,retainSlot) => boardPeriod.transport.read(family==='funds'?'funds':scope,{cell:String(cell),from:String(from),to:String(to),...(pan.get()?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{...(meters.sources?{sources:JSON.stringify(meters.sources)}:{}),unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})},signal,activityOnly,retainSlot).then(reply=>expandHistory(reply,meta)),
+    sharedTransport:true,workInPresentation:scope!=='budget',
+    read: (_board, cell, from, to, signal, meters, meta,owner,activityOnly) => boardPeriod.transport.read(family==='funds'?'funds':scope,{cell:String(cell),from:String(from),to:String(to),...(pan.get()?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{...(meters.sources?{sources:JSON.stringify(meters.sources)}:{}),unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})},signal,owner,activityOnly).then(reply=>expandHistory(reply,meta)),
     now: hubNow,
     setTimeout: (run, ms) => setTimeout(run, ms),
     clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
@@ -1073,6 +1111,7 @@ function reader(scope: HistoryScope, family: MoneyFamily = 'budget') {
   value.setActive(false);return value;
 }
 export const quotaHistory = reader('quota'), budgetHistory = reader('budget'), fundsHistory = reader('budget','funds');
+boardPeriod.transport.metadataToken=(board,scope)=>(scope==='quota'?quotaHistory:scope==='funds'?fundsHistory:budgetHistory).metadataToken(board);
 export const loader = quotaHistory;
 let shellActive = false;
 const selectedMeters = (state: PageState, scope: HistoryScope, family: MoneyFamily = 'budget') => {
@@ -1105,6 +1144,8 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>,
     else if (event.type === 'board-close') {pan.cancel(); loader.close();}
     else if (event.type === 'hub') {
       const hub = event.event;
+      // Contacts update device rows without changing any history selection.
+      if(hub.type==='deviceContacts')return;
       if (hub.type === 'hello') loader.hello(hub.data.epoch);
       else if(hub.type==='snapshot'){
         const board=state.board,ids=board?.lineup??[];
@@ -1163,13 +1204,13 @@ if (typeof window !== 'undefined') {
   };
   onPrefs(chosen);onTimeRange(chosen);chosen();
 }
-function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false,activity=false):Shown&{drawing:History|null} {
+function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false,activityOnly=false):Shown&{drawing:History|null} {
   const shown=useSyncExternalStore(financial?loader.subscribeFinancial:loader.subscribe,financial?loader.getFinancial:loader.get,financial?loader.getFinancial:loader.get);
   const panning=pan.active();
   const revision=useSyncExternalStore(listener=>boardPeriod.subscribeProjection(loader===fundsHistory?'funds':loader.scope??'quota',listener),()=>(financial?boardPeriod.getFinancialProjectionSnapshot:boardPeriod.getProjectionRevision)(loader===fundsHistory?'funds':loader.scope??'quota'));
   const retained=useRef<{board:string;history:History;deadline:number}|null>(null);
   const now=useClock(at=>{
-    const next=Math.min(rolling?frameChangesAt(timeRange(),shown.history?.cellMs??60_000,at)??Infinity:Infinity,activity?Infinity:boardPeriod.projectionChangesAt(loader===fundsHistory?'funds':loader.scope??'quota',at)??Infinity,activity?Infinity:retained.current?.deadline??Infinity);
+    const next=Math.min(rolling?frameChangesAt(timeRange(),shown.history?.cellMs??60_000,at)??Infinity:Infinity,activityOnly?Infinity:boardPeriod.projectionChangesAt(loader===fundsHistory?'funds':loader.scope??'quota',at)??Infinity,activityOnly?Infinity:retained.current?.deadline??Infinity);
     return Number.isFinite(next)?next:null;
   },[shown,revision,panning]);
   const gesture=useRef<{active:boolean;target:string|null}>({active:false,target:null});
@@ -1179,15 +1220,15 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false,acti
   // same. Only a changed snapshot should render a table or its static measure.
   const read=useMemo(()=>()=>{
     const shownNow=(financial?loader.getFinancial:loader.get)(),revisionNow=(financial?boardPeriod.getFinancialProjectionSnapshot:boardPeriod.getProjectionRevision)(loader===fundsHistory?'funds':loader.scope??'quota'),panning=pan.active();
-    const presentation=activity?loader.getActivityPresentation():shownNow.presentation;
+    const presentation=activityOnly?loader.getActivityPresentation():shownNow.presentation;
     const board=page.get().board?.id??'';
     const selected=timeRange(),target=board+':'+(selected?timeRangeKey(selected):prefs().range);
-    const workState=activity?boardPeriod.activityProjectionState(shownNow.history):null;
+    const workState=activityOnly?boardPeriod.activityProjectionState(shownNow.history):null;
     if(workState?.retired)retained.current=null;
     const inputs=[shownNow,presentation,revisionNow,loader,panning,now,board,target,workState?.retired],previous=snapshot.current,validAt=hubNow();
     // A retained frame can outlive the raw tiles that scheduled its expiry.
     // Retire its plan facts before even the stable-snapshot fast path.
-    const held=retained.current,expired=!activity&&!!held&&validAt>=held.deadline;
+    const held=retained.current,expired=!activityOnly&&!!held&&validAt>=held.deadline;
     if(expired){const events=planEventsAt(held.history.events,validAt);retained.current={...held,history:{...held.history,events},deadline:planEventsDeadline(events)};}
     if(!expired&&previous&&inputs.every((value,i)=>Object.is(value,previous.inputs[i])))return previous.value;
     const at=gesture.current.active&&panning===null||shownNow!==shown||revisionNow!==revision?validAt:now;
@@ -1202,26 +1243,26 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false,acti
       // The data layers move through their strips during a gesture. Keep the last
       // complete accounting frame until release, including its full opacity.
       if(panning!==null&&retained.current)return {...shownNow,history:retained.current.history,loading:false,error:shownNow.error};
-      if(!shownNow.history)return activity&&retained.current?{...shownNow,history:retained.current.history}:shownNow;
+      if(!shownNow.history)return activityOnly&&retained.current?{...shownNow,history:retained.current.history}:shownNow;
       const scope=loader===fundsHistory?'funds':loader.scope??'quota',state=workState??boardPeriod.projectionState(shownNow.history,scope);
       if(!state.ready)return {...shownNow,history:retained.current?.history??null,loading:!folding&&!state.error&&!shownNow.error,error:state.error??shownNow.error};
-      const projected=boardPeriod.project(shownNow.history,scope,at,activity),deadline=activity?Infinity:held?.history.events===projected.events?held.deadline:planEventsDeadline(projected.events);
+      const projected=boardPeriod.project(shownNow.history,scope,at,activityOnly),deadline=activityOnly?Infinity:held?.history.events===projected.events?held.deadline:planEventsDeadline(projected.events);
       const events=validAt>=deadline?planEventsAt(projected.events,validAt):projected.events,history=events===projected.events?projected:{...projected,events};
       retained.current={board,history,deadline:events===projected.events?deadline:planEventsDeadline(events)};
       if(!shownNow.loading)gesture.current.target=null;return {...shownNow,history,loading:folding?false:shownNow.loading,error:state.error??shownNow.error};
     })();
-    const value=activity?{...candidate,presentation}:candidate;
+    const value=activityOnly?{...candidate,presentation}:candidate;
     snapshot.current={inputs,phase:panning,phaseRevision:(previous?.phaseRevision??0)+(previous&&previous.phase!==panning?1:0),value:previous&&shallowEqual(previous.value,value)?previous.value:value};
     return snapshot.current.value;
-  },[shown,revision,loader,now,financial,activity]);
+  },[shown,revision,loader,now,financial,activityOnly]);
   const result=useSyncExternalStore(pan.onPhase,read,read);
   // Rolling totals change with the endpoints; their unchanged drawing evidence
   // must not restart line and stack preparation on the same clock wake.
-  const drawing=useMemo(()=>result.history,[shown,revision,loader,snapshot.current?.phaseRevision,activity?undefined:result.history?.events]);
+  const drawing=useMemo(()=>result.history,[shown,revision,loader,snapshot.current?.phaseRevision,activityOnly?undefined:result.history?.events]);
   return {...result,drawing};
 }
 export function useHistory(rolling=false) {return usePeriodHistory(quotaHistory,rolling);}
-export function useActivityHistory(){return usePeriodHistory(quotaHistory,true,false,true);}
+export function useActivityHistory():Omit<Shown,'history'>&{history:ActivityFrame|null;drawing:ActivityFrame|null}{return usePeriodHistory(quotaHistory,true,false,true);}
 export function useQuotaFinancialHistory(){return usePeriodHistory(quotaHistory,false,true);}
 export function useBudgetHistory(family:MoneyFamily='budget',rolling=false) {return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory,rolling);}
 export function useBudgetFinancialHistory(family:MoneyFamily='budget',rolling=false){return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory,rolling,true);}

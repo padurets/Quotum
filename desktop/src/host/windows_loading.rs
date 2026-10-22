@@ -19,12 +19,45 @@ pub struct Panel {
     font: Cell<HFONT>,
     text: RefCell<Vec<u16>>,
     started: Cell<Option<Instant>>,
+    probe: bool,
+    request_probe: std::rc::Rc<RequestOwner>,
+    request: Cell<u64>,
+}
+const PHASE_PROPERTY: *const u16 = windows_sys::w!("Quotum.LoadingPhase");
+// Each nibble names a nested operation; 1 is the idle surface. The smoke observer
+// can read it without sending a message to the possibly blocked tray thread.
+struct Phase {
+    hwnd: HWND,
+    previous: HANDLE,
+    published: bool,
+}
+impl Phase {
+    fn new(hwnd: HWND, stage: usize) -> Self {
+        unsafe {
+            let previous = GetPropW(hwnd, PHASE_PROPERTY);
+            if previous as usize > 0xfffff {
+                return Self { hwnd, previous, published: false };
+            }
+            let value = ((previous as usize) << 4) | stage;
+            let published = SetPropW(hwnd, PHASE_PROPERTY, value as HANDLE) != 0;
+            Self { hwnd, previous, published }
+        }
+    }
+}
+impl Drop for Phase {
+    fn drop(&mut self) {
+        if self.published {
+            unsafe {
+                SetPropW(self.hwnd, PHASE_PROPERTY, self.previous);
+            }
+        }
+    }
 }
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
 }
 impl Panel {
-    pub fn new(shell: Weak<Shell>) -> Self {
+    pub fn new(shell: Weak<Shell>, request_probe: std::rc::Rc<RequestOwner>) -> Self {
         Self {
             shell,
             hwnd: Cell::new(std::ptr::null_mut()),
@@ -32,15 +65,28 @@ impl Panel {
             font: Cell::new(std::ptr::null_mut()),
             text: RefCell::default(),
             started: Cell::new(None),
+            probe: std::env::var("QUOTUM_WINDOW_PROBE").ok().as_deref() == Some("1"),
+            request_probe,
+            request: Cell::new(0),
         }
     }
+    fn observed<R>(&self, hwnd: HWND, stage: usize, action: impl FnOnce() -> R) -> R {
+        let _phase = self.probe.then(|| Phase::new(hwnd, stage));
+        action()
+    }
     pub fn show(&self, anchor: Option<RECT>) {
+        let _phase = (self.probe && !self.hwnd.get().is_null()).then(|| Phase::new(self.hwnd.get(), 14));
         let Some(shell) = self.shell.upgrade().filter(|s| !s.exiting()) else {
             return;
         };
-        if !shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).wanted() {
+        let toggle = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner());
+        if !toggle.wanted() {
             return;
         }
+        let request = toggle.revision();
+        self.request.set(request);
+        drop(toggle);
+        self.request_probe.mark(6, request, 1, 0, 0, 0);
         unsafe {
             let mut hwnd = self.hwnd.get();
             if hwnd.is_null() {
@@ -73,6 +119,10 @@ impl Panel {
                 }
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, self as *const Self as isize);
                 self.hwnd.set(hwnd);
+                self.request_probe.bind_loader(hwnd);
+                if self.probe {
+                    SetPropW(hwnd, PHASE_PROPERTY, 1usize as HANDLE);
+                }
                 disable_transitions(hwnd);
             }
             let anchor = anchor.unwrap_or_else(|| {
@@ -129,14 +179,37 @@ impl Panel {
             }
             *self.text.borrow_mut() = wide(native_text::text(shell.locale(), "desktop.loading"));
             self.started.set(Some(Instant::now()));
-            self.visible.set(true);
-            SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
-            round(hwnd);
-            ShowWindow(hwnd, SW_SHOW);
-            SetForegroundWindow(hwnd);
-            SetFocus(hwnd);
-            SetTimer(hwnd, 1, 80, None);
-            UpdateWindow(hwnd);
+            self.observed(hwnd, 2, || SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE));
+            self.observed(hwnd, 3, || round(hwnd));
+            if !crate::window::activate_loading(
+                || {
+                    self.request.get() == request
+                        && !shell.exiting()
+                        && shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).requested(request)
+                },
+                |operation| match operation {
+                    crate::window::LoadingActivation::Show => {
+                        self.visible.set(true);
+                        self.request_probe.mark(6, request, 2, hwnd as u64, 0, 0);
+                        self.observed(hwnd, 4, || ShowWindow(hwnd, SW_SHOW));
+                        self.request_probe.mark(6, request, 3, hwnd as u64, 0, 0);
+                    }
+                    crate::window::LoadingActivation::Foreground => {
+                        self.request_probe.mark(6, request, 4, hwnd as u64, 0, 0);
+                        self.observed(hwnd, 5, || SetForegroundWindow(hwnd));
+                        self.request_probe.mark(6, request, 5, hwnd as u64, 0, 0);
+                    }
+                    crate::window::LoadingActivation::Focus => {
+                        self.request_probe.mark(6, request, 6, hwnd as u64, 0, 0);
+                        self.observed(hwnd, 6, || SetFocus(hwnd));
+                        self.request_probe.mark(6, request, 7, hwnd as u64, 0, 0);
+                    }
+                },
+            ) {
+                return;
+            }
+            self.observed(hwnd, 7, || SetTimer(hwnd, 1, 80, None));
+            self.observed(hwnd, 8, || UpdateWindow(hwnd));
         }
     }
     pub fn hide(&self) {
@@ -145,11 +218,14 @@ impl Panel {
         if !hwnd.is_null() {
             unsafe {
                 KillTimer(hwnd, 1);
-                ShowWindow(hwnd, SW_HIDE);
+                self.request_probe.mark(6, self.request.get(), 8, hwnd as u64, 0, 0);
+                self.observed(hwnd, 9, || ShowWindow(hwnd, SW_HIDE));
+                self.request_probe.mark(6, self.request.get(), 9, hwnd as u64, 0, 0);
             }
         }
     }
     pub fn complete(&self, handle: u64) {
+        let _phase = self.probe.then(|| Phase::new(self.hwnd.get(), 10));
         let Some(shell) = self.shell.upgrade().filter(|s| !s.exiting()) else {
             return;
         };
@@ -167,12 +243,19 @@ impl Panel {
         }
     }
     fn dismiss(&self, blur: bool) {
+        let request = self.request.get();
+        let _phase = self.probe.then(|| Phase::new(self.hwnd.get(), 11));
+        self.request_probe.mark(6, request, 10, self.hwnd.get() as u64, usize::from(blur), 0);
         if let Some(shell) = self.shell.upgrade() {
-            crate::tauri_window::dismiss_panel(&shell, blur);
+            crate::tauri_window::dismiss_panel(&shell, request, blur);
         }
-        self.hide();
+        self.request_probe.mark(6, request, 11, self.hwnd.get() as u64, usize::from(blur), 0);
+        if self.request.get() == request {
+            self.hide();
+        }
     }
     unsafe fn paint(&self, hwnd: HWND) {
+        let _phase = self.probe.then(|| Phase::new(hwnd, 12));
         unsafe {
             let mut paint: PAINTSTRUCT = std::mem::zeroed();
             let dc = BeginPaint(hwnd, &mut paint);
@@ -224,6 +307,10 @@ impl Drop for Panel {
             let hwnd = self.hwnd.get();
             if !hwnd.is_null() {
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                if self.probe {
+                    RemovePropW(hwnd, PHASE_PROPERTY);
+                }
+                self.request_probe.bind_loader(std::ptr::null_mut());
                 DestroyWindow(hwnd);
             }
             let font = self.font.get();
@@ -240,6 +327,12 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
     }
     let panel = unsafe { &*ptr };
     match message {
+        WM_NCDESTROY => {
+            if panel.probe {
+                unsafe { RemovePropW(hwnd, PHASE_PROPERTY) };
+            }
+            unsafe { DefWindowProcW(hwnd, message, w, l) }
+        }
         WM_PAINT => {
             unsafe { panel.paint(hwnd) };
             0
@@ -270,11 +363,22 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             0
         }
         WM_ACTIVATE if w & 0xffff == WA_INACTIVE as usize => {
-            if panel.visible.get() {
+            let _phase = panel.probe.then(|| Phase::new(hwnd, 13));
+            let visible = panel.visible.get();
+            let mut activation = panel.request_probe.activation(panel.request.get(), hwnd, w, l, visible);
+            if visible {
                 let handoff = panel.shell.upgrade().is_some_and(|s| {
                     let ready = s.host.panel_ready.load(std::sync::atomic::Ordering::SeqCst);
-                    ready != 0 && unsafe { GetForegroundWindow() as u64 == ready }
+                    activation.ready(ready);
+                    ready != 0
+                        && unsafe {
+                            let foreground = GetForegroundWindow() as u64;
+                            activation.foreground(foreground);
+                            foreground == ready
+                        }
                 });
+                activation.decision(handoff);
+                panel.request_probe.publish(hwnd, 5);
                 if handoff {
                     panel.hide();
                 } else {
@@ -326,5 +430,96 @@ pub fn round(hwnd: HWND) {
         if same || SetWindowRgn(hwnd, next, 1) == 0 {
             DeleteObject(next);
         }
+    }
+}
+
+pub fn request_thread(records: &crate::windows_request::Records) -> u32 {
+    if records.enabled { unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() } } else { 0 }
+}
+struct RequestProperties {
+    hwnd: HWND,
+}
+fn request_key(row: usize, field: usize) -> [u16; 24] {
+    let mut key = [0; 24];
+    for (to, from) in key.iter_mut().zip(b"Quotum.Request.") {
+        *to = u16::from(*from);
+    }
+    key[15] = u16::from(b'0') + (row / 10) as u16;
+    key[16] = u16::from(b'0') + (row % 10) as u16;
+    key[17] = u16::from(b'.');
+    key[18] = u16::from(b'0') + (field / 10) as u16;
+    key[19] = u16::from(b'0') + (field % 10) as u16;
+    key
+}
+impl crate::windows_request::Properties for RequestProperties {
+    fn set(&self, row: usize, field: usize, value: u64) -> bool {
+        let key = request_key(row, field);
+        unsafe { SetPropW(self.hwnd, key.as_ptr(), value as HANDLE) != 0 }
+    }
+    fn remove(&self, row: usize, field: usize) {
+        let key = request_key(row, field);
+        unsafe {
+            RemovePropW(self.hwnd, key.as_ptr());
+        }
+    }
+}
+// Rc and the publisher's owner capability stay in Context/Panel on the tray
+// thread. Arc<Shell> exposes only Records, so a worker cannot write HWND props.
+pub struct RequestOwner {
+    pub records: std::sync::Arc<crate::windows_request::Records>,
+    publisher: crate::windows_request::NativePublisher<RequestProperties>,
+    control: HWND,
+}
+impl RequestOwner {
+    pub fn new(control: HWND, records: std::sync::Arc<crate::windows_request::Records>) -> Self {
+        let thread = request_thread(&records);
+        Self {
+            publisher: crate::windows_request::NativePublisher::new(
+                RequestProperties { hwnd: control },
+                control as u64,
+                thread,
+                1,
+            ),
+            records,
+            control,
+        }
+    }
+    pub fn bind_loader(&self, hwnd: HWND) {
+        self.publisher.bind_loader(hwnd as u64);
+    }
+    pub fn close(&self) {
+        if self.records.enabled {
+            self.publisher.close();
+        }
+    }
+    pub fn publish(&self, source: HWND, event: u64) {
+        if !self.records.enabled {
+            return;
+        }
+        if let Some(owner) = self.publisher.owner(request_thread(&self.records), source as u64) {
+            owner.publish(&self.records, event);
+        }
+    }
+    pub fn mark(&self, lane: usize, request: u64, stage: u64, subject: u64, detail: usize, value: usize) {
+        self.records.mark(lane, request, request_thread(&self.records), stage, subject, [detail as u64, value as u64]);
+        // A natural owner snapshot precedes an existing native operation. Later
+        // worker updates stay in memory until another natural owner callback.
+        if matches!(stage, 1 | 2 | 4 | 6 | 8 | 10) {
+            let source = if subject == 0 { self.control } else { subject as HWND };
+            self.publish(source, 3);
+        }
+    }
+    pub fn activation(
+        &self,
+        request: u64,
+        hwnd: HWND,
+        w: WPARAM,
+        l: LPARAM,
+        visible: bool,
+    ) -> crate::windows_request::Activation<'_> {
+        let activation =
+            self.records.activation(request, request_thread(&self.records), hwnd as u64, w as u64, l as u64, visible);
+        self.publish(hwnd, 4);
+        activation
     }
 }

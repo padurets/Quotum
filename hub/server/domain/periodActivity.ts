@@ -13,6 +13,24 @@ const dimensions:ActivityDimension[]=['source','project','device'];
 const keys=(row:WorkTrace['refs'][number])=>({source:sourceKey(row),project:JSON.stringify(row.project),device:row.device.id});
 export type ActivityOrder={by:ActivityDimension;column:'active'|'concurrency';keys:readonly string[]};
 
+/** Keep ordered interior cells and merge only the exact boundary replacements. */
+function withEdges<T extends [number,...number[]]>(cells:T[],edges:T[],from:number,to:number):T[] {
+  const interior=(at:number)=>at>=from&&at<to;
+  const fallback=()=>[...cells.filter(([at])=>interior(at)),...edges].sort((a,b)=>a[0]-b[0]);
+  if(edges.some(([at])=>!Number.isFinite(at)))return fallback();
+  const boundary=edges.length>1?[...edges].sort((a,b)=>a[0]-b[0]):edges;
+  const result:T[]=[];let next=0,last=-Infinity;
+  for(const cell of cells){
+    const at=cell[0];if(!interior(at))continue;
+    // Unordered inputs retain the original stable ordering, including equal times.
+    if(at<last)return fallback();
+    while(next<boundary.length&&boundary[next][0]<at)result.push(boundary[next++]);
+    result.push(cell);last=at;
+  }
+  while(next<boundary.length)result.push(boundary[next++]);
+  return result;
+}
+
 export class PeriodActivity {
   private all!:WorkTimeline;
   private readonly groups:Record<ActivityDimension,Map<string,Group>>={source:new Map(),project:new Map(),device:new Map()};
@@ -90,12 +108,17 @@ export class PeriodActivity {
     if(fixed){
       if(range.from!==fixed.range.from||range.to!==fixed.range.to||activity.barMs!==fixed.activity.barMs)return activity;
       const {barMs}=activity,leftEnd=(Math.floor(range.from/barMs)+1)*barMs,rightStart=Math.floor((range.to-1)/barMs)*barMs;
-      const interior=(at:number)=>at>=leftEnd&&at<rightStart;
-      return {...fixed.activity,cells:[...activity.cells.filter(([at])=>interior(at)),...fixed.activity.cells].sort((a,b)=>a[0]-b[0]),by:Object.fromEntries(dimensions.map(by=>[by,fixed.activity.by[by].map(group=>({...group,cells:[...(activity.by[by].find(g=>g.key===group.key)?.cells??[]).filter(([at])=>interior(at)),...group.cells].sort((a,b)=>a[0]-b[0])}))])) as Activity['by']};
+      const by:Activity['by']={source:[],project:[],device:[]};
+      for(const dimension of dimensions){
+        const old=new Map<string,ActivityGroup>();
+        for(const group of activity.by[dimension])if(!old.has(group.key))old.set(group.key,group);
+        by[dimension]=fixed.activity.by[dimension].map(group=>({...group,cells:withEdges(old.get(group.key)?.cells??[],group.cells,leftEnd,rightStart)}));
+      }
+      return {...fixed.activity,cells:withEdges(activity.cells,fixed.activity.cells,leftEnd,rightStart),by};
     }
     const part=(at:number)=>({from:Math.max(range.from,at),to:Math.min(range.to,at+activity.barMs)});
-    const cells:Activity['cells']=activity.cells.filter(([at])=>at<range.to&&at+activity.barMs>range.from).map(([at,active,agent,count])=>{
-      const cut=part(at);if(cut.from===at&&cut.to===at+activity.barMs)return [at,active,agent,count];
+    const cells:Activity['cells']=activity.cells.filter(([at])=>at<range.to&&at+activity.barMs>range.from).map(cell=>{
+      const [at]=cell,cut=part(at);if(cut.from===at&&cut.to===at+activity.barMs)return cell;
       const identities=new Set<string>();for(const ref of this.trace.refs)if(this.contexts.get(ref.ref)!.read(cut)>0)identities.add(ref.identityRef??ref.ref);const agents=identities.size;
       return [at,this.all.read(cut,true),this.all.read(cut),agents];
     });
@@ -103,7 +126,7 @@ export class PeriodActivity {
     for(const dimension of dimensions) {
       const old=new Map(activity.by[dimension].map(g=>[g.key,g]));
       for(const [key,group] of this.groups[dimension])if(group.agents) {
-        const cells:ActivityGroup['cells']=(old.get(key)?.cells??[]).filter(([at])=>at<range.to&&at+activity.barMs>range.from).map(([at,ms])=>{const cut=part(at);return [at,cut.from===at&&cut.to===at+activity.barMs?ms:group.curve.read(cut)];});
+        const cells:ActivityGroup['cells']=(old.get(key)?.cells??[]).filter(([at])=>at<range.to&&at+activity.barMs>range.from).map(cell=>{const [at]=cell,cut=part(at);return cut.from===at&&cut.to===at+activity.barMs?cell:[at,group.curve.read(cut)];});
         by[dimension].push({key,name:group.name,agentMs:group.curve.read(range),activeMs:group.curve.read(range,true),agents:group.agents,cells});
       }
       by[dimension].sort((a,b)=>b.agentMs-a.agentMs||a.key.localeCompare(b.key));

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {PeriodAccounting} from '../lib/periodAccounting.js';
 import {PeriodActivity} from '../lib/periodActivity.js';
 import {PeriodIndex} from '../lib/periodIndex.js';
-import {packSamples,type PeriodTape} from '../../server/domain/periodTape.js';
+import {packSamples,sampleDeadlineAt,retainSamplesPrepared,type PeriodTape,type SampleRows} from '../../server/domain/periodTape.js';
+import {drain} from '../../server/domain/prepare.js';
 import type {History} from '../lib/types.js';
 import type {Reading} from '../../server/domain/meters.js';
 import {packWork,workedSessions,type WorkTrace} from '../../server/domain/periodWork.js';
@@ -11,12 +12,13 @@ import {union} from '../../server/domain/work.js';
 import {fixedTape,fixedWork} from '../../server/periodFixed.js';
 import {shifted} from '../../server/domain/periodShift.js';
 import {periodTextChangesAt} from '../lib/periodClock.js';
+import {lineWork,workText,workLeftChangesAt,WORK_COLUMNS} from '../lib/work.js';
+import {setLocale} from '../i18n/index.js';
 import {expandPeriod,periodDictionary} from '../../server/domain/periodWire.js';
 import {compactJSON} from '../../server/history.js';
 import {cellsOf} from '../../server/domain/cells.js';
 import {compose,type HistorySeries} from '../../server/domain/history.js';
 import {valueIn} from '../lib/lines.js';
-import {drain} from '../lib/prepare.js';
 import {observationRunsPrepared} from '../lib/plotPath.js';
 
 for(const cadence of [30_000,120_000])for(const kind of ['weekly','session'] as const)test(`fixed ${kind} retains producer cell support at ${cadence}ms cadence`,()=>{
@@ -78,6 +80,188 @@ test('shared work curves match exact session sums and concurrent unions across h
 
 const blank:History={range:'1h',live:true,since:0,to:60_000,cellMs:60_000,historyStart:0,events:[],series:[],activity:{since:0,known:{from:0,to:60_000},barMs:60_000,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
 const tape=():PeriodTape=>({from:0,cut:60_000,replaceFrom:0,cursor:'cursor',quota:[],money:[]});
+for(const compressed of [false,true])test(`ordered quota deadlines keep retirement preparation linear with ${compressed?'compressed':'flat'} samples`,()=>{
+  const count=2048,cycle=512,step=1000;
+  const samples=packSamples(Array.from({length:count},(_,i)=>({at:i*step,used:10+(i%cycle)*.125,resetAt:(Math.floor(i/cycle)+1)*cycle*step,staleAfterMs:count*step})));
+  const evidence={...tape(),cut:count*step,quota:[{source:'s',window:'w',samples:compressed?drain(retainSamplesPrepared(samples)):samples}]};
+  const before=JSON.stringify(evidence),prepared=PeriodAccounting.prepare(evidence,null);
+  let steps=0,result=prepared.next();while(!result.done){steps++;result=prepared.next();}
+  assert.ok(steps<count*1.25,`already ordered deadlines took ${steps} cooperative steps for ${count} samples`);
+  assert.deepEqual(result.value.quotaSummary('s','w',{from:0,to:(count-1)*step+1}),{
+    consumed:(count/cycle)*(cycle-1)*.125,coveredMs:(count/cycle)*(cycle-1)*step,
+    remainingAtStart:90,remainingAtEnd:100-10-(cycle-1)*.125,work:null,
+    selectedWork:{from:(count-1)*step+1,ms:null,agentMs:0},
+  });
+  assert.equal(JSON.stringify(evidence),before);
+});
+
+test('unavailable work does not read its captured curve while preparing quota accounting',t=>{
+  const count=512,evidence=tape();
+  evidence.cut=count*1000;
+  evidence.quota=[{source:'s',window:'w',samples:drain(retainSamplesPrepared(packSamples(Array.from({length:count},(_,i)=>({at:i*1000,used:10+(i%128)*.1,resetAt:(Math.floor(i/128)+1)*128000,staleAfterMs:count*1000})))))}];
+  const work:WorkTrace={anchor:0,cut:count*1000,knownFrom:0,available:false,
+    refs:[{ref:'r',source:'s',device:{id:'d',name:'Laptop'},origin:'terminal',project:null,folder:null,startedAt:0}],spans:[[0,0,count*1000]]};
+  const curves=new PeriodIndex(work).curves,activity=curves.groups.source.get('s');
+  assert.ok(activity);
+  t.mock.method(activity,'read',()=>{throw new Error('unavailable work was read');});
+  const before=JSON.stringify(evidence),accounting=drain(PeriodAccounting.prepare(evidence,work,curves)),reference=new PeriodAccounting(evidence,null);
+  for(const range of [{from:0,to:1001},{from:117.125,to:128001},{from:128001,to:evidence.cut}]){
+    assert.equal(accounting.quotaSummary('s','w',range)!.work,null);
+    assert.deepEqual(accounting.fixed(range,1000),reference.fixed(range,1000));
+  }
+  assert.equal(JSON.stringify(evidence),before);
+});
+
+test('quota deadlines keep exact stale, reset and exclusive supplier bounds in every sample representation',()=>{
+  const samples=packSamples([
+    {at:1000.125,used:17,resetAt:null,staleAfterMs:2000.25},
+    {at:2000.125,used:31,resetAt:4000.5,staleAfterMs:10_000,validUntil:3000.75},
+    {at:3000.125,used:49,resetAt:3500.5,staleAfterMs:10_000,validUntil:4000.75},
+    {at:4000.125,used:53,resetAt:0,staleAfterMs:10_000},
+    {at:5000.125,used:61,resetAt:null,staleAfterMs:10_000,validUntil:0},
+  ]);
+  const versions:SampleRows[]=[samples,new Float64Array(samples),drain(retainSamplesPrepared(samples))];
+  for(const rows of versions){
+    assert.deepEqual([0,1,2,3,4].map(i=>sampleDeadlineAt(rows,i)),[3001.375,3000.75,3500.5,0,0]);
+    assert.equal(sampleDeadlineAt(rows,-1),undefined);assert.equal(sampleDeadlineAt(rows,5),undefined);
+  }
+  for(const empty of [[],new Float64Array(0),drain(retainSamplesPrepared([]))])assert.equal(sampleDeadlineAt(empty,0),undefined);
+});
+
+for(const cadence of [0,1000])test(`quota deadlines read ${cadence?'run-compressed':'constant'} columns without decoding the quota value`,()=>{
+  const rows=drain(retainSamplesPrepared(packSamples(Array.from({length:128},(_,i)=>({at:1000+i*cadence,used:17,resetAt:null,staleAfterMs:1000})))));
+  if(!('columns' in rows))throw new Error('samples were not packed');
+  if(cadence)assert.ok(rows.columns[0].runs);else assert.equal(rows.columns[0].values,null);
+  let usedReads=0;const used=rows.columns[1];
+  Object.defineProperty(rows.columns,1,{get(){usedReads++;return used;}});
+  const expected=cadence?[2001,65001,129001]:[2001,2001,2001];
+  assert.deepEqual([0,63,127].map(i=>sampleDeadlineAt(rows,i)),expected);
+  assert.equal(usedReads,0,'a deadline needs observation and validity fields only');
+});
+
+test('out-of-order quota deadlines preserve the rolling wake and exclusive availability',()=>{
+  const samples=packSamples([
+    {at:0,used:10,resetAt:null,staleAfterMs:20_000},
+    {at:1000,used:20.125,resetAt:null,staleAfterMs:100},
+    {at:2000,used:30.25,resetAt:null,staleAfterMs:5000},
+  ]);
+  for(const rows of [samples,new Float64Array(samples),drain(retainSamplesPrepared(samples))]){
+    const evidence=tape();evidence.quota=[{source:'s',window:'w',samples:rows}];
+    const accounting=drain(PeriodAccounting.prepare(evidence,null));
+    assert.equal(accounting.changesAt(21_001,20_000,'s'),21_101);
+    assert.equal(accounting.quotaSummary('s','w',{from:0,to:1100})!.remainingAtEnd,79.875);
+    assert.equal(accounting.quotaSummary('s','w',{from:0,to:1101})!.remainingAtEnd,null);
+  }
+});
+
+test('a quota clock includes both knowledge boundaries without any working context',()=>{
+  const evidence=tape();evidence.quota=[{source:'s',window:'w',samples:[]}];
+  const work:WorkTrace={anchor:0,knownFrom:100,refs:[],spans:[]},accounting=new PeriodAccounting(evidence,work),period=1000;
+  const summary=(now:number)=>accounting.quotaSummary('s','w',{from:now-period,to:now})!.work!;
+  assert.equal(accounting.quotaChangesAt('s','w',99,period),101);
+  assert.equal(summary(100).ms,null);assert.equal(summary(101).ms,0);
+  assert.equal(accounting.quotaChangesAt('s','w',1099,period),1100);
+  for(const locale of ['en','ru'] as const){
+    setLocale(locale,false);
+    const read=(now:number)=>JSON.stringify(workText('work',{none:'none'},summary(now),now-period,null,null));
+    assert.equal(periodTextChangesAt(1099,at=>accounting.quotaChangesAt('s','w',at,period)!,read),1100);
+    assert.notEqual(read(1099),read(1100),'the since qualification ends at equality');
+  }
+  setLocale('en',false);
+  assert.equal(accounting.quotaChangesAt('s','w',1100,period),null);
+  assert.equal(accounting.quotaChangesAt('s','missing',1100,period),undefined);
+  assert.equal(accounting.quotaChangesAt('missing','w',1100,period),undefined);
+  assert.equal(new PeriodAccounting(evidence,null).quotaChangesAt('s','w',1100,period),null,'unknown work never invents a deadline');
+  evidence.fixed={range:{from:0,to:1000},cell:100,quota:[],money:[]};
+  const fixed=new PeriodAccounting(evidence,work);
+  assert.equal(fixed.changesAt(1100,period),null);assert.equal(fixed.quotaChangesAt('s','w',1100,period),undefined);
+});
+
+test('each quota work column keeps exact content and titles through source handoffs and gaps',()=>{
+  const period=3_600_000,refs=Array.from({length:8},(_,i)=>({ref:String(i),source:'s',device:{id:'d',name:'Device'},origin:'terminal' as const,project:null,folder:null,startedAt:0}));
+  const trace:WorkTrace={anchor:0,cut:period,knownFrom:17,refs,spans:refs.flatMap((_,i)=>[[i,i*120_000,(i+1)*120_000] as [number,number,number],[i,1_200_000+i*311,1_400_000+i*311] as [number,number,number]])};
+  const index=new PeriodIndex(trace),evidence=tape();
+  evidence.quota=[{source:'s',window:'w',samples:packSamples(Array.from({length:31},(_,i)=>({at:i*120_000,used:10+(i%10)*.25,resetAt:(Math.floor(i/10)+1)*1_200_000,staleAfterMs:i%3?240_000:13_111})))}];
+  const accounting=new PeriodAccounting(evidence,trace,index.curves),resetAt=period+2_000_000;
+  for(const locale of ['en','ru'] as const){
+    setLocale(locale,false);
+    for(const column of WORK_COLUMNS)for(const now of [period,period+1,period+17,period+120_000,period+1_200_000,period+1_399_999]){
+      const lineAt=(at:number)=>({...accounting.quotaSummary('s','w',{from:at-period,to:at})!,current:85,minutes:300});
+      const read=(at:number)=>{const line=lineAt(at),cells=lineWork(line,false,resetAt,at)!,perWork='value' in cells.perwork?cells.perwork.value:null;return JSON.stringify(workText(column,cells[column],line.work!,at-period,resetAt,perWork));};
+      const original=(at:number)=>{
+        let next=accounting.changesAt(at,period,'s')??Infinity;
+        for(const curve of index.curves.contexts)next=Math.min(next,curve.next(at-period)+period,curve.next(at));
+        if(column==='workleft')next=Math.min(next,workLeftChangesAt(lineAt(at),resetAt,at)??Infinity);
+        return Number.isFinite(next)?next:null;
+      };
+      const own=(at:number)=>{const next=Math.min(accounting.quotaChangesAt('s','w',at,period)??Infinity,column==='workleft'?workLeftChangesAt(lineAt(at),resetAt,at)??Infinity:Infinity);return Number.isFinite(next)?next:null;};
+      const due=periodTextChangesAt(now,own,read);
+      assert.equal(due,periodTextChangesAt(now,original,read),`${locale}/${column}/${now}`);
+      if(column==='work'||column==='agenthours'){
+        const selected=(at:number)=>accounting.quotaSelectedWorkChangesAt('s','w',at,period)??null;
+        assert.equal(periodTextChangesAt(now,selected,read),due,`${locale}/${column} keeps its first displayed transition without quota boundaries`);
+      }
+      if(due!==null){
+        assert.ok(due>now);const seen=read(now);
+        for(const at of [now+1,Math.floor((now+due)/2),due-1])if(at<due)assert.equal(read(at),seen);
+      }
+    }
+  }
+  setLocale('en',false);
+});
+
+test('selected work clocks preserve different supplier curves and knowledge without quota-only wakes',()=>{
+  const H=3_600_000,M=60_000,refs=[0,1].map(i=>({ref:String(i),source:'s',device:{id:'d',name:'D'},origin:'terminal' as const,project:String(i),folder:null,startedAt:0}));
+  const all:WorkTrace={anchor:0,cut:H,knownFrom:0,refs,spans:[[0,0,H/2],[1,H/3,H]]};
+  const supplier=new PeriodIndex(all).curves;
+  for(const knownFrom of [0,17*M])for(const workFrom of [0,23*M]){
+    const selected={...all,knownFrom,spans:all.spans.filter(([id])=>id===0)},curves=new PeriodIndex(selected).curves;
+    const evidence={...tape(),cut:H,quota:[{source:'s',window:'w',workFrom,samples:packSamples(Array.from({length:61},(_,i)=>({at:i*M,used:i/10,resetAt:3*H,staleAfterMs:2*H})))}]};
+    const accounting=drain(PeriodAccounting.prepare(evidence,selected,curves,undefined,undefined,undefined,{groups:{source:supplier.groups.source},knownFrom:0}));
+    for(const locale of ['en','ru'] as const){setLocale(locale,false);
+      for(const column of ['work','agenthours'] as const)for(const now of [knownFrom,workFrom,H,H+1,H+17*M,2*H]){
+        const read=(at:number)=>{const summary=accounting.quotaSummary('s','w',{from:at-H,to:at})!,line={...summary,current:83,minutes:300},cells=lineWork(line,false,3*H,at)!;return JSON.stringify(workText(column,cells[column],line.work,at-H,3*H,null,line.selectedWork));};
+        const legacy=periodTextChangesAt(now,at=>accounting.quotaChangesAt('s','w',at,H)??null,read);
+        const due=periodTextChangesAt(now,at=>accounting.quotaSelectedWorkChangesAt('s','w',at,H)??null,read);
+        if(due!==legacy){
+          assert.equal(due,null);assert.equal(legacy,now+H,'only an unchanged hourly fallback may disappear');
+          for(const offset of [1,M,17*M,30*M,H-1,H])assert.equal(read(now+offset),read(now));
+        }
+      }
+    }
+    assert.equal(accounting.quotaSelectedWorkChangesAt('missing','w',H,H),undefined);
+    assert.equal(accounting.quotaSelectedWorkChangesAt('s','missing',H,H),undefined);
+    for(const unavailable of [{...selected,available:false as const},selected]){
+      const rows={...evidence,quota:evidence.quota.map(row=>({...row,...(unavailable===selected?{workFrom:null}:{})}))};
+      const unknown=drain(PeriodAccounting.prepare(rows,unavailable,curves));
+      assert.equal(unknown.quotaSelectedWorkChangesAt('s','w',H,H),undefined,'unknown work retains the prior display clock');
+    }
+  }
+  setLocale('en',false);
+});
+
+test('a knowledge edge survives a zero-net handoff and literal unknown uses its captured aggregate',()=>{
+  const refs=[{ref:'a',source:'s',device:{id:'d',name:'D'},origin:'terminal' as const,project:null,folder:null,startedAt:0},{ref:'b',source:'s',device:{id:'d',name:'D'},origin:'terminal' as const,project:null,folder:null,startedAt:0}];
+  const trace:WorkTrace={anchor:0,knownFrom:0,refs,spans:[[0,0,100],[1,100,200]]},index=new PeriodIndex(trace),evidence=tape(),period=1000;
+  evidence.quota=[{source:'s',window:'w',workFrom:100,samples:[]}];
+  const accounting=new PeriodAccounting(evidence,trace,index.curves);
+  assert.equal(index.curves.groups.source.get('s')!.next(99),200,'the aggregate has no slope change at the handoff');
+  assert.equal(accounting.quotaChangesAt('s','w',1099,period),1100,'knowledge remains an independent boundary');
+  for(const locale of ['en','ru'] as const){
+    setLocale(locale,false);
+    const read=(now:number)=>{const work=accounting.quotaSummary('s','w',{from:now-period,to:now})!.work!;return JSON.stringify(workText('work',{value:work.ms!},work,now-period,null,null));};
+    assert.notEqual(read(1099),read(1100));
+    assert.equal(periodTextChangesAt(1099,at=>accounting.quotaChangesAt('s','w',at,period)!,read),1100);
+  }
+  setLocale('en',false);
+  const unknownTrace:WorkTrace={...trace,refs:refs.map((ref,i)=>({...ref,source:i?'unknown':null}))};
+  const unknownIndex=new PeriodIndex(unknownTrace);
+  evidence.quota=[{source:'unknown',window:'w',samples:[]}];
+  const unknown=new PeriodAccounting(evidence,unknownTrace,unknownIndex.curves);
+  assert.equal(unknown.quotaSummary('unknown','w',{from:0,to:200})!.work!.ms,200);
+  assert.equal(unknown.quotaChangesAt('unknown','w',1001,period),1200,'read and wake retain the same existing aggregate semantics');
+});
+
 for(const bound of ['ttl','reset','hold','interruption','paired'] as const)test(`fixed endpoint validity survives wire and cached shifts with ${bound} money bounds independently of card values`,()=>{
   const evidence=tape(),range={from:0,to:2000},at=100;
   evidence.cut=at;evidence.quota=[{source:'s',window:'w',samples:packSamples([{at:10,used:17,staleAfterMs:1000,resetAt:600,validUntil:500}])}];

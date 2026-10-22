@@ -32,7 +32,10 @@ function PeriodName({selected, range}: {selected: TimeRange | null; range: strin
     if (!caption.current || caption.current.frame !== frame || caption.current.locale !== locale) caption.current = {frame, locale, label: frame ? timeRangeLabel(frame) : null};
     return caption.current.label;
   }, () => null);
-  return <span>{preview ?? (selected ? timeRangeLabel(selected) : periodLabel(periodOf(range)))}</span>;
+  const label = preview ?? (selected ? timeRangeLabel(selected) : periodLabel(periodOf(range)));
+  // Tabular digits keep the same advances. Only a different date shape needs to
+  // resize the button; the current words lay out inside that unchanged space.
+  return <span className="period-caption"><span aria-hidden="true">{label.replace(/\d/g, '0')}</span><span>{label}</span></span>;
 }
 
 /**

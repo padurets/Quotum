@@ -10,7 +10,7 @@ import {seriesFocusStyle} from './seriesFocus';
 /** The same heading and reader state for every analytics widget. */
 export function AnalyticsPanel({ref, className, title, controls, settings, history, loading, error, retry, chart, children,details}: {
   ref?: Ref<HTMLElement>; className: string; title: string; controls?: ReactNode; settings?: ReactNode;
-  history: Shown['history']; loading: boolean; error: Shown['error']; retry: () => void; chart?: boolean; children: ReactNode;
+  history: Pick<NonNullable<Shown['history']>,'range'|'since'|'to'>|null; loading: boolean; error: Shown['error']; retry: () => void; chart?: boolean; children: ReactNode;
   details?:ReactNode;
 }) {
   const selected = useTimeRange(), period = usePref('range');

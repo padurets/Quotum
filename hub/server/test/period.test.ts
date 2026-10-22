@@ -82,6 +82,22 @@ test('piecewise integer columns retain every anchor across cadence changes and a
   }
 });
 
+test('a lower-bound search reuses the retained cadence through its probes',async()=>{
+  const {numberColumn,lowerNumber}=await import('../domain/periodTape.js');
+  const {drain}=await import('../domain/prepare.js');
+  const start=1_790_000_000_000,count=43200,minute=60000;
+  const column=drain(numberColumn(count,i=>start+i*minute));
+  assert.equal(column.runs?.ends.length,1);
+  const ends=column.runs!.ends;let reads=0,queries=0;
+  Object.defineProperty(column.runs,'ends',{get:()=>{reads++;return ends;}});
+  for(let i=0;i<count;i+=257)for(const delta of [-.5,0,.5]){
+    assert.equal(lowerNumber(column,start+i*minute+delta),delta>0?i+1:i);queries++;
+  }
+  assert.equal(lowerNumber(column,start-1),0);queries++;
+  assert.equal(lowerNumber(column,start+count*minute),count);queries++;
+  assert.ok(reads<=queries*2,'each search must retain its cadence metadata');
+});
+
 test('neighboring fixed summaries replay sparse boundary changes and exact slopes in both directions',async()=>{
   const {shiftBoundaries,withShiftWindow,shifted,canShift}=await import('../domain/periodShift.js');
   const range={from:100,to:200},read=(offset:number)=>({range:{from:100+offset,to:200+offset},bar:Math.floor((200+offset-1)/50),duration:Math.max(0,30-offset),amount:offset>=10?'9007199254740995':'9007199254740993',points:offset<20?[[100+offset,37.125]]:[],...(offset<30?{label:'Before'}:{other:'After'})});

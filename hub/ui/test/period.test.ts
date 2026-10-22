@@ -9,7 +9,7 @@ import * as retention from '../../server/domain/periodRetention';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {PeriodAccounting} from '../lib/periodAccounting.js';
-import {retainSamplesPrepared,sampleBytes,mergeTapePrepared} from '../../server/domain/periodTape.js';
+import {retainSamplesPrepared,sampleBytes,mergeTapePrepared,packSamples} from '../../server/domain/periodTape.js';
 import {drain} from '../lib/prepare.js';
 import {PeriodIndex} from '../lib/periodIndex.js';
 import {PeriodTransport,fetchPeriod,type PeriodIntent} from '../lib/periodTransport.js';
@@ -21,15 +21,70 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {evaluatedRange,periodKey} from '../../server/domain/period.js';
+import {cellOf,type HistoryBasis} from '../../server/domain/history.js';
 import {fixedTape,fixedWork} from '../../server/periodFixed.js';
 import {hasPeriodValue,periodValueAt,withValueStates} from '../../server/domain/periodValues.js';
 import {canShift,shifted} from '../../server/domain/periodShift.js';
 import {periodTextChangesAt} from '../lib/periodClock.js';
 import {selector,sameJson} from '../lib/store.js';
 import {activityEmpty} from '../lib/activity.js';
+import {workHours} from '../lib/format.js';
 
 const ref=(id:string)=>({ref:id,source:'s',device:{id:'d',name:'Laptop'},origin:'terminal' as const,project:id,folder:null,startedAt:0});
 const settle=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
+
+test('a refused quota replacement keeps its retained work clock independent of a newer empty index',async()=>{
+  const span=86_400_000,now=span+1,selection={mode:'live' as const,periodMs:span};
+  let refuse=false,accountingPreparing=false;
+  class Accounting extends PeriodAccounting {
+    static *prepare(...args:Parameters<typeof PeriodAccounting.prepare>):ReturnType<typeof PeriodAccounting.prepare>{
+      accountingPreparing=true;try{return yield*super.prepare(...args);}finally{accountingPreparing=false;}
+    }
+  }
+  type Coordinator={selection:PeriodRequest['selection'];receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;quotaAt(line:{sourceId:string;windowId:string},at:number,key:string):{work:{ms:number}};cellChangesAt(scope:string,at:number,read:(at:number)=>string,extra?:()=>number|null,source?:string,key?:string,window?:string):number|null;tapes:Map<string,{accounting:PeriodAccounting}>;index:PeriodIndex;workSelection:PeriodRequest['selection']};
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {BoardPeriod:new()=>Coordinator},
+    hubNow:()=>now,retention,historyPool:{register:()=>{},reserve:()=>!refuse||!accountingPreparing,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
+    PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},pan:{get:()=>null},preparations:()=>null,
+    prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
+    evaluatedRange,periodKey,PeriodAccounting:Accounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,periodTextChangesAt,empty:()=>({value:null,basis:null,loading:false,error:null}),
+    sameJson:(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b),prefs:()=>({range:'24h'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{},
+  };
+  const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8'),body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+  const period=new context.exports.BoardPeriod();period.selection=selection;
+  const basis={run:'r',revision:'1',evaluatedAt:now,evidenceCut:now,range:{from:1,to:now}};
+  const cell=cellOf(span),intent:PeriodIntent={board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:now,quota:{cell:String(cell),from:'0',to:String(Math.ceil(now/cell)*cell),cells:'skip'},sessions:{}}};
+  const work={anchor:0,cut:now,knownFrom:0,refs:[ref('a')],spans:[[0,10_000,1_000_000] as [number,number,number]],cursor:'work'};
+  await period.receive({basis,sessions:{state:'complete',basis,value:work},quota:{state:'complete',basis,value:{run:'r',now,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:{from:0,cut:now,replaceFrom:0,cursor:'c',quota:[{source:'s',window:'w',samples:packSamples([{at:0,used:17,resetAt:null,staleAfterMs:0}])}],money:[]}}}},intent);
+  const kept=period.tapes.get('quota')!.accounting;
+  refuse=true;
+  const replacement:PeriodReply={basis,sessions:{state:'complete',basis,value:{...work,refs:[],spans:[],cursor:'new'}}};
+  await period.receive(replacement,intent);
+  assert.equal(replacement.quota?.state,'error','only quota accounting is refused');
+  assert.equal(period.tapes.get('quota')!.accounting,kept);
+  assert.equal(period.index.trace.refs.length,0,'the new empty work index was adopted');
+  const read=(at:number)=>workHours(period.quotaAt({sourceId:'s',windowId:'w'},at,'24h').work.ms);
+  assert.equal(read(now),'17m');
+  const due=period.cellChangesAt('quota',now,read,undefined,'s','24h','w');
+  assert.equal(due,span+10_001);assert.equal(read(due!-1),'17m');assert.equal(read(due!),'16m');
+  assert.equal(period.cellChangesAt('quota',now,at=>at<now+3?'before':'after',()=>now+3,'s','24h','w'),now+3,'an exact window keeps its additional reset deadline');
+  assert.equal(period.cellChangesAt('quota',now,read,()=>now+3,undefined,'other','w'),now+3,'a mismatched range keeps the extra deadline');
+  const retained=period.tapes.get('quota')! as unknown as {selection:PeriodRequest['selection']};
+  retained.selection={mode:'range',from:1,to:now};
+  assert.equal(period.cellChangesAt('quota',now,read,()=>now+5,'s','24h','w'),now+5,'a selected range retains only its independent extra deadline');
+  retained.selection=selection;
+
+  // Missing rows and callers without an exact window keep the prior context path.
+  const next=period.index.curves.all.next.bind(period.index.curves.all);
+  let contextReads=0;
+  period.index.curves.contexts.push(Object.assign(Object.create(period.index.curves.all),{next:(at:number)=>{contextReads++;return next(at);}}));
+  period.index.trace.refs.push(ref('new'));
+  for(const [sourceId,window] of [['s','missing'],['missing','w'],['s',undefined]]){
+    const before=contextReads;
+    assert.equal(period.cellChangesAt('quota',now,()=>'',undefined,sourceId,'24h',window),null);
+    if(sourceId==='s')assert.ok(contextReads>before,'missing windows and unscoped callers keep the legacy path');
+  }
+});
 
 test('the session panel preserves equal semantic presence and refreshes actual disappearance',()=>{
   const before={...ref('a'),workedMs:100,lastWorkedAt:100,working:false,currentPresence:{working:false,startedAt:0}};
@@ -183,6 +238,49 @@ test('restored replay programs stay inside the shared transport reservation',asy
   assert.ok(peak>size);
   if(restored.values?.state!=='complete')throw new Error('missing values');
   assert.deepEqual(restored.values.value[0].states,{paths:[['validFor','from'],['validFor','to']],pieces:[[1,2,[[0,1],[1,2]]]]});
+});
+
+test('standalone metadata borrowing preserves mixed drawing tokens',async t=>{
+  const prior:HistoryBasis={run:'r',now:1000,meta:'captured',historyStart:0,known:{work:0,sources:{source:0}}};
+  const basis={run:'r',revision:'1',evaluatedAt:1000,evidenceCut:1000,range:{from:0,to:1000}};
+  const sent:PeriodRequest[]=[];
+  t.mock.method(globalThis,'fetch',async(_url:RequestInfo|URL,init?:RequestInit)=>{
+    const body=JSON.parse(String(init?.body)) as PeriodRequest;sent.push(body);
+    return new Response(JSON.stringify({basis,...Object.fromEntries((['quota','funds'] as const).filter(scope=>body[scope]).map(scope=>[scope,{state:'complete',basis,value:{run:'r',now:1000,meta:scope==='funds'?'funds-captured':body[scope]!.meta,chunks:[]}}]))}));
+  });
+  for(const [mixed,skipSibling] of [[false,true],[true,true],[true,false]]){
+    const pool=new HistoryPool(),request:PeriodRequest={version:1,selection:{mode:'range',from:0,to:1000},evaluatedAt:1000,quota:{cell:'1',from:'0',to:'1000',cells:'skip'},...(mixed?{funds:{cell:'1',from:'0',to:'1000',...(skipSibling?{cells:'skip' as const}:{})}}:{})};
+    const intent:PeriodIntent={board:'b',generation:1,revision:1,request};let borrowed=0,received=0;
+    const transport=new PeriodTransport(pool,()=>intent,()=>{received++;},fetchPeriod);
+    transport.metadataToken=()=>{borrowed++;return 'standalone-token';};
+    try{
+      if(mixed){
+        transport.restoreEvidence(new Map(['quota','funds'].map(scope=>[JSON.stringify(['b',scope,undefined,undefined,undefined,undefined]),'cursor'])));
+        await transport.read('quota',{cell:'1',from:'0',to:'1000',meta:prior.meta});
+      }else transport.change();
+      for(let i=0;i<100&&!received;i++)await new Promise(resolve=>setImmediate(resolve));
+      await settle();assert.equal(received,1);assert.equal(borrowed,mixed?0:1);
+      assert.equal(sent.at(-1)!.quota!.meta,mixed?'captured':'standalone-token');
+      if(mixed){
+        assert.equal(sent.at(-1)!.funds!.meta,'','an uncaptured sibling requests a full metadata baseline');
+        intent.revision++;
+        await transport.read('quota',{cell:'1',from:'0',to:'1000',meta:prior.meta});
+        await settle();assert.equal(received,2);assert.equal(borrowed,0);
+        assert.equal(sent.at(-1)!.quota!.meta,prior.meta);
+        assert.equal(sent.at(-1)!.funds!.meta,'funds-captured','an unchanged sibling reuses its own accepted metadata token');
+      }
+    }finally{transport.reset();await settle();assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);}
+  }
+});
+
+test('an aborted parsed period reply cannot expand or publish its body',async t=>{
+  const body={basis:{run:'r'},quota:{state:'complete',value:{run:'r',meta:'captured',chunks:[]}}};
+  const controller=new AbortController(),response=new Response(JSON.stringify(body)),parse=response.json.bind(response);
+  let reads=0,parsedReply:unknown;
+  t.mock.method(response,'json',async()=>{parsedReply=await parse();controller.abort();return parsedReply;});
+  t.mock.method(globalThis,'fetch',async()=>response);
+  await assert.rejects(fetchPeriod('b',{version:1,selection:{mode:'range',from:0,to:1000},evaluatedAt:1000,quota:{meta:'captured'}},controller.signal,()=>{reads++;return true;}),{name:'AbortError'});
+  assert.equal(reads,1,'only raw transport staging was reserved');assert.deepEqual(parsedReply,body);
 });
 
 test('a stale A response cannot publish after A to B to A or after new evidence during its flight',async()=>{

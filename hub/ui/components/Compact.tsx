@@ -2,7 +2,7 @@ import {useDataFilters} from '../lib/dataFilters';
 import {followDataFilters} from '../lib/filterSession';
 import {matchesWork} from '../../server/domain/dataFilters';
 import {budgetVisible, subscriptionFundsVisible} from '../lib/money';
-import {memo, useEffect, useLayoutEffect, useRef} from 'react';
+import {memo, useEffect, useInsertionEffect, useLayoutEffect, useRef} from 'react';
 import {useBoard} from '../lib/session';
 import {useApp, useBoardId, useCard, useConnection, useVisibleLimits, useServerView, useSessions, useTitle} from '../lib/board';
 import {app, inApp} from '../lib/app';
@@ -51,6 +51,16 @@ const Row = memo(function Row({id}: {id: string}) {
 });
 
 export function Compact({live,user}: {live: ReturnType<typeof startLive>;user:string}) {
+  const native = inApp();
+  useInsertionEffect(() => {
+    const root = document.documentElement;
+    const previous = root.getAttribute('data-compact');
+    root.setAttribute('data-compact', native ? 'native' : 'web');
+    return () => {
+      if (previous === null) root.removeAttribute('data-compact');
+      else root.setAttribute('data-compact', previous);
+    };
+  }, [native]);
   useLocale();
   const [board] = useBoard();
   useLayoutEffect(()=>board?followDataFilters(user,board.id,true):undefined,[user,board?.id]);
@@ -85,7 +95,7 @@ export function Compact({live,user}: {live: ReturnType<typeof startLive>;user:st
     return () => { observer.disconnect(); cancelAnimationFrame(frame); };
   }, []);
   const ids = view ? ordered(view.layout,lineup.map(cardId)).map(w => w.id).filter(id => !isHidden(view, id)).map(id => id.slice(7)) : [];
-  return <div className={`compact glass${inApp() ? " is-native" : ""}`} ref={root}>
+  return <div className={`compact glass${native ? " is-native" : ""}`} ref={root}>
     <header>
       <h1>{t('desktop.limits')}</h1>
       <button className="icon-button" title={t('desktop.open')} aria-label={t('desktop.open')} onClick={() => inApp() ? void app.openMain() : location.assign('/')}>

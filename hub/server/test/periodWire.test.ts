@@ -7,7 +7,43 @@ import {compactJSON} from '../history.js';
 import {withShiftWindow,shifted} from '../domain/periodShift.js';
 import {withValueStates,periodValueAt,type PeriodValues} from '../domain/periodValues.js';
 import {brotliCompressSync,constants} from 'node:zlib';
-import type {CalendarCell,CalendarSection} from '../domain/workCalendar.js';
+import {ValueChanges,applyValueChanges} from '../domain/valueChanges.js';
+
+test('record array tails keep exact changed prefix fields without resending their monetary evidence',()=>{
+  const semantics:MeterSemantics={limit:null,resetAt:null,minutes:null,scope:null,label:null,scale:6,
+    conversion:{original:{meterId:'balance:credits',amount:'9007199254740993001',unit:'credits:codex',at:1001,scale:12},
+      rate:{id:'recorded',source:'manual',base:'credits:codex',from:'1000000',to:'40000',date:3,fetchedAt:4},
+      steps:Array.from({length:6},(_,i)=>({id:`recorded-${i}`,source:'manual',base:'credits:codex',from:'1000000',to:'40000',date:i,fetchedAt:i+1}))}};
+  const point=(at:number)=>({at,value:'360287970189639720',knownFrom:at,knownUntil:at+100,validUntil:at+100,segment:at,semantics:structuredClone(semantics)});
+  const before={points:[point(1000),point(1100)]};
+  const after={points:[{...point(1010),value:'360287970189639721'},point(1100),point(1200)]};
+  const original=JSON.stringify(before),registry=new ValueChanges(()=>{});
+  const parent=registry.pathId(['points']);
+  const at=registry.pathId(['points',0,'at']);
+  const changes=registry.advanced(before,after,[[at,1]],10);
+  assert.ok(JSON.stringify(changes).length<JSON.stringify(after).length/2,'unchanged provenance must not be sent again for prefix points');
+  assert.ok(changes.some(change=>change.length===4&&change[0]===parent&&change[1]===2&&change[2]===0));
+  const start=structuredClone(before);start.points[0].at+=10;
+  const basis={run:'r',revision:'1',evaluatedAt:2010,evidenceCut:2010,range:{from:1010,to:2010}};
+  const fixed={range:basis.range,cell:100,money:[],quota:[],shift:{until:2010,steps:[],window:{paths:registry.paths,slopes:[[]],pieces:[[2010,2110,0,changes]]}}};
+  const reply={basis,budget:{state:'complete',basis,value:{chunks:[],tape:{fixed}}}} as unknown as PeriodReply;
+  const dictionary=periodDictionary(reply,()=>{}),wire=compactJSON(reply,dictionary.replacer);
+  const restored=expandPeriod(JSON.parse(wire));
+  if(restored.budget?.state!=='complete')throw new Error('missing budget');
+  const window=restored.budget.value.tape!.fixed!.shift!.window!;
+  assert.equal(window.pieces[0][3][0][0],parent,'packing puts the parent tail splice before prefix edits');
+  applyValueChanges(start,window.paths,window.pieces[0][3]);assert.deepEqual(start,after);
+  const reversed=structuredClone(before);reversed.points[0].at+=10;
+  applyValueChanges(reversed,registry.paths,changes);assert.deepEqual(reversed,after);
+  const trim=new ValueChanges(()=>{}),trimmed={points:[{...point(1000),value:'360287970189639719'}]};
+  const trimming=trim.between(after,trimmed),copy=structuredClone(after);
+  applyValueChanges(copy,trim.paths,trimming);assert.deepEqual(copy,trimmed);
+  assert.equal(JSON.stringify(before),original,'diffing cannot change retained input or its provenance');
+});
+
+import {calendarCells,calendarPartition,type CalendarCell,type CalendarSection} from '../domain/workCalendar.js';
+import {drain} from '../domain/prepare.js';
+import type {Stretch} from '../domain/work.js';
 
 test('calendar wire preserves fine bounds, unknowns, parallel work and expiry without repeated edges',()=>{
   const start=Date.UTC(2026,9,1),step=900_000,count=3072;
@@ -32,12 +68,43 @@ test('calendar sparse wire roundtrips exact replacements and rejects malformed g
   const basis={run:'r',revision:'2',evaluatedAt:180_000,evidenceCut:180_000,range:{from:0,to:180_000}};
   const calendar:CalendarSection={state:'delta',basis:{...basis,calendarKey:'c',workAuthority:'w',filterKey:'f'},value:{availableFrom:17,retainedFrom:0,cursor:'signed',updates:[[0,{agentMs:1,from:17,to:60_000,validUntil:200_001}],[2,{agentMs:null,from:180_000,to:180_000,validUntil:null}]]}};
   const reply:PeriodReply={basis,calendar},dictionary=periodDictionary(reply,()=>{}),text=compactJSON(reply,dictionary.replacer),wire=JSON.parse(text);
-  assert.equal(wire.calendar.value.updates,undefined);assert.ok(text.length<JSON.stringify(reply).length-200);
+  assert.equal(wire.calendar.value.updates,undefined);assert.equal(wire.calendar.value.relative,undefined);assert.ok(text.length<JSON.stringify(reply).length-200);
   assert.deepEqual(expandPeriod(structuredClone(wire)),reply);
   const invalid=structuredClone(wire);invalid.calendar.value.patch[1][0]=0;assert.throws(()=>expandPeriod(invalid),/invalid_calendar_patch/);
   const invalidCell=structuredClone(wire);invalidCell.calendar.value.patch[0][1]=.5;assert.throws(()=>expandPeriod(invalidCell),/invalid_calendar_cell/);
   for(const grid of [[0,60_000,3073],[0,1,3],[0,60_000,2]])assert.throws(()=>expandPeriod({basis,calendar:{state:'complete',basis:['c','w','f'],value:{grid,cells:[0,0,0]}}}),/invalid_calendar_grid/);
   const denied=structuredClone(wire);assert.throws(()=>expandPeriod(denied,()=>{throw new Error('history_limit');}),/history_limit/);
+});
+
+test('opted-in calendar deltas shorten twenty exact replacements without changing the legacy wire',()=>{
+  const start=1_800_000_000_123,day=86_400_000,range={from:start,to:start+day},edges=calendarPartition(range),first=Math.floor((start-edges[0])/60_000);
+  const indices=Array.from({length:20},(_,i)=>first+i),rows=[{from:start+17,to:start+19*60_000+4321},{from:start+61_001,to:start+10*60_000+3001}] as Stretch[];
+  const updates=drain(calendarCells(rows,edges,indices,range.to,start-123,0,90*day,range,day));
+  const basis={run:'r',revision:'2',evaluatedAt:range.to,evidenceCut:range.to,range};
+  const calendar:CalendarSection={state:'delta',basis:{...basis,calendarKey:'c',workAuthority:'w',filterKey:'f'},value:{availableFrom:start-123,retainedFrom:0,cursor:'signed',updates}};
+  const reply:PeriodReply={basis,calendar},before=JSON.stringify(reply);
+  const encode=(relative=false)=>{const dictionary=periodDictionary(reply,()=>{},false,relative);return compactJSON(reply,dictionary.replacer);};
+  const legacyText=encode(),relativeText=encode(true),legacy=JSON.parse(legacyText),wire=JSON.parse(relativeText);
+  assert.equal(updates.length,20);assert.equal(legacy.calendar.value.relative,undefined);assert.equal(wire.calendar.value.relative,true);
+  assert.deepEqual(legacy.calendar.value.patch,updates.map(([i,c])=>[i,c.agentMs,c.from,c.to,c.validUntil]));
+  assert.equal(wire.calendar.value.patch.length,20);assert.ok(Buffer.byteLength(relativeText)<Buffer.byteLength(legacyText),'the same twenty replacements must use fewer decoded wire bytes');
+  assert.deepEqual(expandPeriod(legacy),reply);assert.deepEqual(expandPeriod(structuredClone(wire)),reply);assert.equal(JSON.stringify(reply),before);
+  const foreign={...reply,basis:{...basis,revision:'foreign',range:{from:start-1,to:range.to-1}}},dictionary=periodDictionary(foreign,()=>{},false,true);
+  assert.deepEqual(expandPeriod(JSON.parse(compactJSON(foreign,dictionary.replacer))),foreign,'offsets use the calendar basis even when it differs from the common basis');
+  assert.throws(()=>expandPeriod(structuredClone(wire),()=>{throw new Error('history_limit');}),/history_limit/);
+});
+
+test('relative calendar bounds preserve negative offsets, null expiry and safe integer limits',()=>{
+  const start=1_800_000_000_123,basis={run:'r',revision:'1',evaluatedAt:start+60_000,evidenceCut:start+60_000,range:{from:start,to:start+60_000}};
+  const calendar:CalendarSection={state:'delta',basis:{...basis,calendarKey:'c',workAuthority:'w',filterKey:'f'},value:{availableFrom:0,retainedFrom:0,cursor:'c',updates:[[0,{agentMs:0,from:0,to:17,validUntil:null}],[1,{agentMs:null,from:start+17,to:start+17,validUntil:Number.MAX_SAFE_INTEGER}]]}};
+  const reply:PeriodReply={basis,calendar},dictionary=periodDictionary(reply,()=>{},false,true),wire=JSON.parse(compactJSON(reply,dictionary.replacer));
+  assert.equal(wire.calendar.value.relative,true);assert.equal(wire.calendar.value.patch[0][2],-start);assert.equal(wire.calendar.value.patch[0][4],null);assert.deepEqual(expandPeriod(structuredClone(wire)),reply);
+  for(const relative of [false,0,1,'true',null]){const invalid=structuredClone(wire);invalid.calendar.value.relative=relative;assert.throws(()=>expandPeriod(invalid),/invalid_calendar_patch/);}
+  for(const offset of [.5,-start-1,Number.MAX_SAFE_INTEGER]){const invalid=structuredClone(wire);invalid.calendar.value.patch[0][2]=offset;assert.throws(()=>expandPeriod(invalid),/invalid_calendar_cell/);}
+  const duplicate=structuredClone(wire);duplicate.calendar.value.patch[1][0]=0;assert.throws(()=>expandPeriod(duplicate),/invalid_calendar_patch/);
+  const oldBasis={...basis,range:{from:-1,to:60_000}},oldCalendar:CalendarSection={...calendar,basis:{...calendar.basis,...oldBasis},value:{...calendar.value,updates:[[0,{agentMs:0,from:0,to:60_000,validUntil:Number.MAX_SAFE_INTEGER}]]}};
+  const old:PeriodReply={basis:oldBasis,calendar:oldCalendar},fallback=periodDictionary(old,()=>{},false,true),absolute=JSON.parse(compactJSON(old,fallback.replacer));
+  assert.equal(absolute.calendar.value.relative,undefined,'unsafe offsets keep the legacy absolute representation');assert.deepEqual(expandPeriod(absolute),old);
 });
 
 test('filter-aware section bases share the top-level commit without changing legacy replies',()=>{

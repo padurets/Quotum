@@ -6,21 +6,23 @@ type Cell=null|0|[number|null,number|null]|[number|null,number|null,number,numbe
 type Basis=CalendarBasis|[string,string,string];
 type Common={availableFrom:number|null;retainedFrom:number;cursor:string};
 type Packed={state:'complete';basis:Basis;value:Common&{zone:string;grid:[number,number,number];cells?:Cell[];proof?:CalendarProof}}|
-  {state:'delta';basis:Basis;value:Common&{patch:[number,number|null,number,number,number|null][]}};
+  {state:'delta';basis:Basis;value:Common&{relative?:true;patch:[number,number|null,number,number,number|null][]}};
 
 const integer=(value:unknown):value is number=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0;
 const nullable=(value:unknown):value is number|null=>value===null||integer(value);
+const exactOffset=(value:number,base:number)=>integer(value)&&Number.isSafeInteger(value-base)&&base+(value-base)===value;
 const sameBasis=(a:PeriodBasis,b:PeriodBasis)=>a.run===b.run&&a.revision===b.revision&&a.evaluatedAt===b.evaluatedAt&&a.evidenceCut===b.evidenceCut&&a.range.from===b.range.from&&a.range.to===b.range.to;
 const unknownAt=(edge:number,step:number,basis:PeriodBasis)=>Math.max(edge,Math.min(edge+step,basis.range.to,basis.evidenceCut));
 
 /** Uniform edges and common bounds are implicit; credited amounts remain exact. */
-export function packCalendar(part:CalendarSection|undefined,basis:PeriodBasis,reserve:(bytes:number)=>void):Packed|undefined {
+export function packCalendar(part:CalendarSection|undefined,basis:PeriodBasis,reserve:(bytes:number)=>void,relativeTimes=false):Packed|undefined {
   if(!part||part.state==='error')return;
   const packedBasis:Basis=sameBasis(part.basis,basis)?[part.basis.calendarKey,part.basis.workAuthority,part.basis.filterKey]:part.basis;
   const {availableFrom,retainedFrom,cursor}=part.value,common={availableFrom,retainedFrom,cursor};
   if(part.state==='delta'){
     reserve(256+part.value.updates.length*112);
-    return {state:'delta',basis:packedBasis,value:{...common,patch:part.value.updates.map(([i,c])=>[i,c.agentMs,c.from,c.to,c.validUntil])}};
+    const base=part.basis.range.from,relative=relativeTimes&&Number.isSafeInteger(base)&&part.value.updates.every(([,c])=>exactOffset(c.from,base)&&exactOffset(c.to,base)&&(c.validUntil===null||exactOffset(c.validUntil,base)));
+    return {state:'delta',basis:packedBasis,value:{...common,...(relative?{relative:true as const}:{}),patch:part.value.updates.map(([i,c])=>[i,c.agentMs,relative?c.from-base:c.from,relative?c.to-base:c.to,c.validUntil===null?null:relative?c.validUntil-base:c.validUntil])}};
   }
   const {edges,cells,zone}=part.value,start=edges[0],step=edges[1]-start;
   if(!integer(start)||![60_000,900_000].includes(step)||cells.length>3072||edges.length!==cells.length+1||edges.some((edge,i)=>edge!==start+i*step))throw new Error('invalid_calendar_grid');
@@ -77,12 +79,19 @@ export function expandCalendar(part:unknown,common:PeriodBasis,reserve:(bytes:nu
     return {state:'complete',basis,value:{zone,availableFrom,retainedFrom,cursor,edges,cells:restored}};
   }
   if(packed.state==='delta'&&'patch' in packed.value){
-    const {patch,availableFrom,retainedFrom,cursor}=packed.value;
-    if(!Array.isArray(patch)||patch.length>3072)throw new Error('invalid_calendar_patch');
+    const {patch,availableFrom,retainedFrom,cursor,relative}=packed.value;
+    if(!Array.isArray(patch)||patch.length>3072||relative!==undefined&&relative!==true||relative&&!Number.isSafeInteger(basis.range.from))throw new Error('invalid_calendar_patch');
     reserve(256+patch.length*160);let previous=-1;
+    const absolute=(value:unknown)=>{
+      if(!relative)return value;
+      if(typeof value!=='number'||!Number.isSafeInteger(value))throw new Error('invalid_calendar_cell');
+      const restored=basis.range.from+value;
+      if(!integer(restored)||restored-basis.range.from!==value)throw new Error('invalid_calendar_cell');
+      return restored;
+    };
     const updates=patch.map((row):[number,CalendarCell]=>{
       if(!Array.isArray(row)||row.length!==5||!integer(row[0])||row[0]<=previous||row[0]>=3072)throw new Error('invalid_calendar_patch');
-      previous=row[0];return [row[0],cell(row[1],row[2],row[3],row[4])];
+      previous=row[0];return [row[0],cell(row[1],absolute(row[2]),absolute(row[3]),row[4]===null?null:absolute(row[4]))];
     });
     return {state:'delta',basis,value:{availableFrom,retainedFrom,cursor,updates}};
   }

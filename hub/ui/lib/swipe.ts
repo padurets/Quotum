@@ -21,13 +21,13 @@ type Wheel = {deltaX: number; deltaY: number; deltaMode: number; shiftKey: boole
  * sideways nor goes back in the browser's history. An event that cannot be held back is
  * left alone.
  */
-export function swiped(state: Swipe, event: Wheel): {state: Swipe; delta: number; own: boolean; ended: boolean} {
+export function swiped(state: Swipe, event: Wheel, idleMs = event.timeStamp - state.last): {state: Swipe; delta: number; own: boolean; ended: boolean} {
   if (!event.cancelable) return {state, delta: 0, own: false, ended: false};
   const scale = SCALE[event.deltaMode] ?? 1;
   const [dx, dy] = [event.deltaX * scale, event.deltaY * scale];
   // Shift turns the wheel sideways; some browsers do that themselves and report deltaX.
   const along = event.shiftKey && !dx ? dy : dx;
-  const ended = event.timeStamp - state.last >= WHEEL_END_MS;
+  const ended = idleMs >= WHEEL_END_MS;
   let next = ended ? SWIPE : state;
   if (!next.axis && (dx || dy)) next = {...next, axis: event.shiftKey || Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'};
   next = {...next, last: event.timeStamp};

@@ -59,8 +59,8 @@ export function expandPeriodSequences(reply:PeriodReply,reserve:(bytes:number)=>
     let previous:ValuePath=[];
     value.paths=value.paths.map(path=>previous=[...previous.slice(0,path[0] as number),...path.slice(1)]);
     for(const piece of value.pieces)piece.push([]);
-    // A diff replaces a parent or its descendants, never both in one piece.
-    // Its independent edits can therefore be restored in path order.
+    // Tail splices preserve every edited descendant index below their start.
+    // Other edits address separate fields, so path order preserves their result.
     for(const [path,row] of value.changes.entries())for(const change of row){const piece=change[0];change[0]=path;(value.pieces[piece].at(-1) as ValueChange[]).push(change);}
     delete (value as Partial<Packed>).pathEncoding;delete (value as Partial<Packed>).changes;
   }

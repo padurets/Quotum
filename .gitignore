@@ -5,6 +5,8 @@ target/
 npm/dist/
 *.tsbuildinfo
 coverage/
+/hub/server/secrets/managed-key.dll
+/hub/server/secrets/.managed-key-*/
 
 # Data and logs of a running hub or agent
 data/

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 
 export const HISTORY_COHORT_TAKES = 3;
 export class HistoryCutChanged extends Error {
-  constructor(readonly cut: {seedNow:number;answerNow:number;cell:number;seedCut:number;answerCut:number}) {
+  constructor(readonly cut: {seedNow:number;answerNow:number;cell:number;seedCut:number;answerCut:number;to?:number;seedGridCut?:number;answerGridCut?:number}) {
     super('history crossed its grid cutoff during this cohort');
   }
 }
@@ -16,10 +16,13 @@ export function historyCutInvalidation(error:unknown,name:string,take:number) {
 export function historyIdentity(answer: Pick<HistoryAnswer, 'run' | 'known'>, seed: Pick<HistoryAnswer, 'run' | 'known'>) {
   assert.equal(answer.run, seed.run); assert.deepEqual(answer.known, seed.known);
 }
-export function stableHistory(answer: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, seed: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, cell: number) {
+export function stableHistory(answer: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, seed: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, cell: number, to: number) {
   historyIdentity(answer, seed);
-  const answerCut=cellStart(answer.now+CLOCK_TOLERANCE_MS,cell),seedCut=cellStart(seed.now+CLOCK_TOLERANCE_MS,cell);
-  if (answerCut !== seedCut) throw new HistoryCutChanged({seedNow:seed.now,answerNow:answer.now,cell,seedCut,answerCut});
+  // The exclusive request end bounds the cutoff even inside a grid cell.
+  const last=(Math.ceil(to/cell)-1)*cell;
+  const answerGridCut=cellStart(answer.now+CLOCK_TOLERANCE_MS,cell),seedGridCut=cellStart(seed.now+CLOCK_TOLERANCE_MS,cell);
+  const answerCut=Math.min(last,answerGridCut),seedCut=Math.min(last,seedGridCut);
+  if (answerCut !== seedCut) throw new HistoryCutChanged({seedNow:seed.now,answerNow:answer.now,cell,seedCut,answerCut,to,seedGridCut,answerGridCut});
 }
 
 /** A reference union is partitioned only by holes and the existing API tile cap. */

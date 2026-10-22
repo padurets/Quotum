@@ -173,12 +173,21 @@ mod tests {
     /// `quotum run` in a thread: it measures with a client that is not there (nothing is
     /// started), and tells each preparation, with the settings it read, to the test.
     fn start(paths: &Paths) -> Started {
+        start_after_yield(paths, || {})
+    }
+
+    fn start_after_yield(paths: &Paths, after_yield: impl Fn() + Send + 'static) -> Started {
         let (done, ended) = mpsc::channel();
         let (read, prepared) = mpsc::channel();
         let logged = Arc::new(Mutex::new(Vec::new()));
         let (paths, lines) = (paths.clone(), logged.clone());
         thread::spawn(move || {
-            let log = |line: &str| lines.lock().unwrap().push(line.to_string());
+            let log = |line: &str| {
+                lines.lock().unwrap().push(line.to_string());
+                if line.starts_with("making way") {
+                    after_yield();
+                }
+            };
             let mut prepare = |stop: &Stop| {
                 let config = Config::load(&paths.config)?;
                 let _ = read.send(config.clone());
@@ -210,7 +219,10 @@ mod tests {
     fn asked_to_make_way_it_lets_go_at_once_waits_and_measures_again_with_new_settings() {
         let paths = state("yield");
         client_missing(&paths, 120);
-        let (ended, prepared, logged) = start(&paths);
+        let (app_taken, app_ready) = mpsc::channel();
+        let (ended, prepared, logged) = start_after_yield(&paths, move || {
+            app_ready.recv_timeout(Duration::from_secs(3)).expect("the test app took the machine");
+        });
         assert_eq!(prepared.recv_timeout(Duration::from_secs(3)).unwrap().interval, Some(120));
         eventually("it holds the machine", || paths.run_info().is_some());
         let me = std::process::id();
@@ -221,6 +233,8 @@ mod tests {
         assert_eq!(asked, Ok(Stopped::Asked(Some(me))));
         assert_eq!(paths.waiting(), Some(Some(me)), "waiting before the machine was free");
         let app = paths.lock_run(Holder::App).unwrap();
+        // The after-drop callback keeps the CLI from retaking before this actual App lock.
+        app_taken.send(()).unwrap();
         client_missing(&paths, 300);
         thread::sleep(Duration::from_millis(200));
         assert!(ended.try_recv().is_err(), "it waits while the app measures");
@@ -241,8 +255,11 @@ mod tests {
         let paths = state("wait");
         client_missing(&paths, 120);
         let app = paths.lock_run(Holder::App).unwrap();
-        let (ended, _, _) = start(&paths);
-        eventually("it waits", || paths.waiting().is_some());
+        let (ended, _, logged) = start(&paths);
+        eventually("it waits", || {
+            logged.lock().unwrap().iter().any(|line| line.starts_with("the Quotum app measures"))
+        });
+        assert!(paths.waiting().is_some(), "it owns the waiting slot");
 
         // A second one does not wait too.
         let (second, _, _) = start(&paths);
@@ -275,8 +292,11 @@ mod tests {
         client_missing(&paths, 120);
         fs::write(paths.wait_stop_file(), "").unwrap();
         let app = paths.lock_run(Holder::App).unwrap();
-        let (ended, _, _) = start(&paths);
-        eventually("it waits", || paths.waiting().is_some());
+        let (ended, _, logged) = start(&paths);
+        eventually("it waits", || {
+            logged.lock().unwrap().iter().any(|line| line.starts_with("the Quotum app measures"))
+        });
+        assert!(paths.waiting().is_some(), "it owns the waiting slot");
         thread::sleep(Duration::from_millis(100));
         assert!(ended.try_recv().is_err(), "still waiting");
         drop(app);

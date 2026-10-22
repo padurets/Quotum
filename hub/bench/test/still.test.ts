@@ -1,13 +1,115 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {runInNewContext} from 'node:vm';
 import {FADE_FOR, PULSE_FOR} from '../../ui/lib/quota.js';
 import {hourShift} from '../../server/forecasts.js';
 import type {Snapshot} from '../../server/projection.js';
-import {DOT_STILL_AFTER, foreseenAt, MARGIN_MS, overviewCards, quietAfter, SETTLE_MS, stillProblems, warmUntil} from '../still.js';
+import {DOT_STILL_AFTER, foreseenAt, idlePhaseProblems, idlePhaseScript, idleWindow, MARGIN_MS, overviewCards, quietAfter, SETTLE_MS, stillProblems, warmUntil, type IdlePhase} from '../still.js';
 import {scriptPerSecond, tally} from '../report.js';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
+
+test('an idle window too short for separate quota and axis deadlines is rejected',()=>{
+  for(const seconds of [10,30,60,69])assert.throws(()=>idleWindow(0,seconds,5*MIN),/unsupported idle phase/);
+});
+
+test('both idle durations include one cell transition and avoid minute ticks at their endpoints', () => {
+  const cell = 5 * MIN;
+  for (const seconds of [120, 300]) for (let ready = 0; ready < 2 * cell; ready++) {
+    const planned = idleWindow(ready, seconds, cell);
+    assert.ok(planned.from >= ready && planned.from - ready < cell);
+    assert.equal(planned.to - planned.from, seconds * 1000);
+    assert.equal(Math.floor(planned.to / cell) - Math.floor(planned.from / cell), 1);
+    assert.ok(planned.from < planned.boundary && planned.boundary < planned.to);
+    assert.equal(planned.cellMs, cell);
+    assert.equal(planned.expectedTransitions, 1);
+    assert.ok(planned.from - ready <= (seconds === 120 ? 240_000 : 60_000));
+    assert.equal(planned.quotaBoundary,planned.boundary-50_000+1);
+    assert.ok(planned.from<planned.quotaBoundary&&planned.quotaBoundary<planned.to);
+    for(const bound of [planned.from,planned.to])assert.ok(Math.min(bound%MIN,MIN-bound%MIN)>=5_000);
+  }
+});
+
+test('an already eligible idle window starts without waiting for a fixed midpoint', () => {
+  const ready = Date.parse('2026-10-11T13:03:17.139Z');
+  for (let difference = -1000; difference <= 1000; difference++) {
+    const at = ready + difference;
+    assert.equal(idleWindow(at, 120, 5 * MIN).from, at);
+  }
+});
+
+test('the warm deadline stays eligible at one minute before the next grid boundary',()=>{
+  const boundary=Date.parse('2026-10-11T13:05:00Z'),ready=boundary-MIN;
+  const planned=idleWindow(ready,120,5*MIN);
+  assert.equal(planned.from-ready,5_000,'do not skip this cell and add four minutes of waiting');
+  assert.equal(planned.boundary,boundary);
+  assert.equal(planned.quotaBoundary,boundary-50_000+1);
+  assert.ok(planned.from<planned.quotaBoundary&&planned.quotaBoundary<planned.boundary);
+});
+
+test('a chart-only window waits for both the next quota retirement and axis transition',()=>{
+  const ready=Date.parse('2026-10-11T13:04:17.139Z'),planned=idleWindow(ready,120,5*MIN);
+  assert.equal(planned.boundary,Date.parse('2026-10-11T13:10:00Z'));
+  assert.equal(planned.quotaBoundary,Date.parse('2026-10-11T13:09:10.001Z'));
+  assert.ok(planned.from>=ready&&planned.from<planned.quotaBoundary);
+  const late:IdlePhase={from:ready,to:ready+120000,monotonicFrom:0,monotonicTo:120000,cellMs:300000,starts:Array(5).fill(Math.floor(ready/300000)),ends:Array(5).fill(Math.floor((ready+120000)/300000)),transitions:[1,1,1,1,1]};
+  const boundary=Date.parse('2026-10-11T13:05:00Z');
+  assert.deepEqual(idlePhaseProblems(late,boundary),[]);
+  assert.ok(idlePhaseProblems(late,boundary,boundary-50_000+1).includes('idle phase did not include regular quota retirement before the grid boundary'));
+});
+
+test('idle phase rejects missing coverage, extra grid movement and clock discontinuity', () => {
+  const phase: IdlePhase = {from: 240000, to: 360000, monotonicFrom: 1000, monotonicTo: 121000, cellMs: 300000, starts: [0,0,0,0,0], ends: [1,1,1,1,1], transitions: [1,1,1,1,1]};
+  assert.deepEqual(idlePhaseProblems(phase, 300000), []);
+  for (const changed of [{transitions: [0,0,0]}, {transitions: [1,2,1]}, {starts: []}, {ends: [1,1,0]}, {transitions: [1,1,1,1]}, {starts: [0,0,0,0]}, {ends: [1,1,1,1]}, {transitions: [1,1,1,1,0]}, {ends: [1,1,1,1,0]}, {from: 310000}, {monotonicTo: 124000}]) {
+    assert.ok(idlePhaseProblems({...phase, ...changed}, 300000).length);
+  }
+});
+
+test('the actual idle phase probe requires and observes every explicit chart widget', () => {
+  const widgets = ['quota-history', 'quota-session-history', 'activity', 'budget-history', 'subscription-funds'];
+  function probe(missing?: string) {
+    const axes = widgets.filter(widget => widget !== missing).map(widget => ({widget, dataset: {axisEnd: '240000'}}));
+    const selected: string[] = [], observed: string[] = [];
+    let now = 240000, monotonic = 1000, notify = () => {}, disconnected = 0;
+    const window = {__quotumIdlePhase: undefined as {read(): IdlePhase; stop(): void} | undefined};
+    runInNewContext(idlePhaseScript(300000), {
+      window, Date: {now: () => now}, performance: {now: () => monotonic},
+      document: {querySelector: (selector: string) => {
+        selected.push(selector);
+        return axes.find(axis => selector === '[data-widget="' + axis.widget + '"] [data-axis-end]') ?? null;
+      }},
+      MutationObserver: class {
+        constructor(callback: () => void) {notify = callback;}
+        observe(axis: typeof axes[number], options: {attributes: boolean; attributeFilter: string[]}) {
+          observed.push(axis.widget);
+          assert.equal(options.attributes, true); assert.deepEqual(Array.from(options.attributeFilter), ['data-axis-end']);
+        }
+        disconnect() {disconnected++;}
+      },
+    });
+    return {selected, observed, cross(frozen?: string): IdlePhase {
+      for (const axis of axes) if (axis.widget !== frozen) axis.dataset.axisEnd = '360000';
+      now = 360000; monotonic = 121000; notify();
+      const phase = JSON.parse(JSON.stringify(window.__quotumIdlePhase!.read())) as IdlePhase;
+      window.__quotumIdlePhase!.stop(); assert.equal(disconnected, 1);
+      return phase;
+    }};
+  }
+  const complete = probe(), phase = complete.cross();
+  assert.deepEqual(complete.selected, widgets.map(widget => '[data-widget="' + widget + '"] [data-axis-end]'));
+  assert.deepEqual(complete.observed, widgets);
+  assert.deepEqual(phase.starts, [0,0,0,0,0]); assert.deepEqual(phase.ends, [1,1,1,1,1]); assert.deepEqual(phase.transitions, [1,1,1,1,1]);
+  assert.deepEqual(idlePhaseProblems(phase, 300000), []);
+  for (const widget of widgets) {
+    assert.throws(() => probe(widget), /idle phase requires all five chart axes/);
+    const frozen = probe().cross(widget);
+    assert.equal(frozen.transitions[widgets.indexOf(widget)], 0);
+    assert.ok(idlePhaseProblems(frozen, 300000).includes('idle phase did not observe one transition in each chart'), widget);
+    assert.ok(idlePhaseProblems(frozen, 300000).includes('idle chart grid disagrees with the measurement clock'), widget);
+  }
+});
 
 test('the page is counted once every dot has faded out, and not before it settled', () => {
   const opened = 10 * HOUR;
@@ -34,6 +136,9 @@ test('a stand that would change by itself during the window is told, card by car
   assert.deepEqual(stillProblems([measured],from,to,'measured'),[],'its own measurement may restart its dot');
   assert.deepEqual(stillProblems([{...measured,windows:[{resetAt:to}]}],from,to,'measured'),['measured has a limit that resets'],'the measured card keeps its quota deadline');
   assert.deepEqual(stillProblems([{...measured,id:'other'}],from,to,'measured'),["other's dot still fades"],'other cards stay under the original clock guard');
+  const creditClock={allowDotClock:true};
+  assert.deepEqual(stillProblems([{...measured,id:'other'}],from,to,'measured',creditClock),[],'credit rendering separately bounds natural dot clocks');
+  assert.deepEqual(stillProblems([{...measured,staleAfterMs:MIN,windows:[{resetAt:to}]}],from,to,'measured',creditClock),['measured goes stale','measured has a limit that resets']);
 });
 
 /**
@@ -69,6 +174,7 @@ test("a card's forecasts worked out again by themselves are told, as the overvie
 
   const told = ['codex:late has its forecasts worked out again'];
   assert.deepEqual(stillProblems([late], lateAt - MIN, lateAt + MIN), told);
+  assert.deepEqual(stillProblems([late],lateAt-MIN,lateAt+MIN,undefined,{allowDotClock:true}),told,'dot clock admission does not suppress forecast work');
   // Within a few seconds of either end: its frame may come in the window.
   assert.deepEqual(stillProblems([late], lateAt + MARGIN_MS / 2, lateAt + 3 * MIN), told);
   assert.deepEqual(stillProblems([late], lateAt - 3 * MIN, lateAt - MARGIN_MS / 2), told);

@@ -157,15 +157,26 @@ function destination(role) {
   if (role === 'compact' && url.protocol === 'http:') url.searchParams.set('view', 'compact');
   return url.href;
 }
+function navigationFailure(error, entry, request, sequence, requestedGeneration, startedMs) {
+  const codes = new Set(['ERR_ABORTED', 'ERR_FAILED', 'ERR_CONNECTION_REFUSED', 'ERR_CONNECTION_CLOSED', 'ERR_CONNECTION_RESET', 'ERR_EMPTY_RESPONSE', 'ERR_INVALID_URL', 'ERR_INVALID_ARGUMENT', 'ERR_FILE_NOT_FOUND', 'ERR_ACCESS_DENIED', 'ERR_TIMED_OUT', 'ERR_NAME_NOT_RESOLVED', 'ERR_INTERNET_DISCONNECTED', 'ERR_BLOCKED_BY_CLIENT', 'ERR_BLOCKED_BY_RESPONSE', 'ERR_TOO_MANY_REDIRECTS']);
+  const type = typeof error?.code;
+  return {reason: codes.has(error?.code) ? error.code : 'load failed', navigation: {
+    role: entry.role, instance: entry.instance, request, currentRequest: entry.request, sequence, currentSequence: entry.navigationSequence,
+    requestedGeneration, currentGeneration: generation, startedMs, rejectedMs: performance.now(),
+    errorNumber: Number.isSafeInteger(error?.errno) && error.errno >= -1000 && error.errno <= 0 ? error.errno : null,
+    codeType: type === 'string' || type === 'undefined' ? type : 'other',
+    loaded: entry.loaded === true, painted: entry.painted === true, revealed: entry.revealed === true,
+  }};
+}
 function navigate(entry) {
   const url = destination(entry.role);
   const window = entry.window;
-  // Error messages can include the entry key. Use only the code or a safe numeric errno.
+  const request = entry.request, requestedGeneration = generation, sequence = (entry.navigationSequence ?? 0) + 1, startedMs = performance.now();
+  entry.navigationSequence = sequence;
+  // Error messages can include the entry key. Keep only codes and request identity.
   window.loadURL(url).catch(error => {
-    if (!quitting && !entry.dismissed && !window.isDestroyed() && error.code !== 'ERR_ABORTED' && error.errno !== -3) {
-      const reason = error.code || (Number.isSafeInteger(error.errno) ? `load failed (errno ${error.errno})` : 'load failed');
-      send({type: 'fault', process: 'navigation', reason});
-    }
+    // Electron's did-fail-load can leave the description empty for net::ERR_ABORTED.
+    if (!quitting && !entry.dismissed && !window.isDestroyed() && error?.code !== 'ERR_ABORTED' && error?.errno !== -3) send({type: 'fault', process: 'navigation', ...navigationFailure(error, entry, request, sequence, requestedGeneration, startedMs)});
   });
 }
 
@@ -325,7 +336,9 @@ function openSurface(role, anchor, request) {
       if (changed || !existing.readyReported) existing.ready();
     } else if (changed || !existing.revealed) {
       if (existing.window.isMinimized()) existing.window.restore();
-      existing.window.show(); existing.window.focus(); existing.revealed = true;
+      // show() already focuses. A second focus could reclaim a newer native loader
+      // if this process was suspended after the window became visible.
+      existing.window.show(); existing.revealed = true;
       if (existing.loaded && role === 'main') send({type: 'loaded', url: existing.window.webContents.getURL()});
       scheduleGraphics();
     }
@@ -371,7 +384,7 @@ function openSurface(role, anchor, request) {
   }
   entry.reveal = () => {
     if (!current(entry)) return;
-    entry.revealed = true; window.show(); window.focus();
+    entry.revealed = true; window.show();
     send({type: 'panel_visible', request: entry.request});
     scheduleGraphics();
   };

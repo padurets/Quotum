@@ -1,7 +1,10 @@
 import {percentile} from './budget.js';
+import type {PanTransactions} from './panEvidence.js';
 
 export type PanReading = {
-  initiator: 'quota' | 'session' | 'activity' | 'budget' | 'funds'; period: string; series: number; budgetSeries: number; fundsSeries: number; sessionSeries:number;  charts: number; rate: number;
+  initiator: 'quota' | 'session' | 'activity' | 'budget' | 'funds'; period: string; series: number; budgetSeries: number; fundsSeries: number; sessionSeries:number; charts: number; rate: number;
+  transactions?: PanTransactions;
+  cost?: {valid: boolean; scriptMs: number; taskMs: number; seconds: number};
   frames: number[]; latency: number[]; inputs: number; updated: number;
   chartUpdates: number[]; synchronized: boolean;
   peakFlights: number; maxTiles: number; duplicateReads: number;
@@ -10,7 +13,9 @@ export type PanReading = {
   edgeSeries: {stage:'wheel'|'drag';series:number;sessionSeries:number;budgetSeries:number;fundsSeries:number}[];
   wheelGapMs:number;
   segments?: Record<string, {count: number; p95: number; max: number}>;
-  outliers?: {ms: number; segment: string; pending: number; requests: number}[];
+  outliers?: {ms: number; segment: string; pending: number; requests: number;
+    at?:number;stamp?:number;inputSegment?:string;foldMask?:number;svgFoldMask?:number;movedMask?:number;
+    callbacksSinceMovingFrame?: number; maxCallbackGapMs?: number; samplerMs?:number}[];
   responses?: {ms: number; queued: number; processed: number; segment: string; requests: number}[];
   mutationSamples?: {segment:string;surface:string;tag:string;type:string;attribute:string|null;measurement:boolean;panning:boolean}[];
 };

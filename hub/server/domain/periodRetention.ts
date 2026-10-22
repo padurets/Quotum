@@ -1,6 +1,6 @@
 import type {Preparation} from './prepare.js';
 import {WORK_BLOCK_MS,type WorkTrace} from './periodWork.js';
-import {numberAt,numberColumn,rateAt,bindRate,sampleAt,sampleCount,sampleBytes,type SampleRows,type PeriodTape,type MoneyTape} from './periodTape.js';
+import {numberColumn,numberTail,rateAt,bindRate,sampleAt,sampleCount,sampleBytes,type SampleRows,type PeriodTape,type MoneyTape} from './periodTape.js';
 import type {MeterSpan,Reading} from './meters.js';
 
 const lower=<T>(rows:readonly T[],at:number,time:(row:T)=>number)=>{let a=0,b=rows.length;while(a<b){const m=(a+b)>>>1;if(time(rows[m])<at)a=m+1;else b=m;}return a;};
@@ -31,11 +31,14 @@ export function* retainWork(trace:WorkTrace,from:number,reserve:(bytes:number)=>
 function* samplesAfter(rows:SampleRows,from:number,reserve:(bytes:number)=>void,release:(bytes:number)=>void):Preparation<SampleRows>{
   let a=0,b=sampleCount(rows);while(a<b){const m=(a+b)>>>1;if(sampleAt(rows,m)!.at<from)a=m+1;else b=m;}
   const start=Math.max(0,a-1),count=sampleCount(rows)-start;if(!start)return rows;
-  // Column construction overlaps its compressed output, never an expanded row ledger.
-  const bound=count*40+512;reserve(bound);
+  // Copies release expired buffers without expanding a compressed ledger.
+  const compressed='columns' in rows;let reserved=0;
+  const stage=(bytes:number)=>{reserve(bytes);reserved+=bytes;};
+  stage(compressed?256:count*40+512);
   const columns=[];
-  for(let field=0;field<5;field++)columns.push(yield*numberColumn(count,i=>'columns' in rows?numberAt(rows.columns[field],i+start)!:rows[(i+start)*5+field]));
-  const kept={length:count*5,columns};release(bound-sampleBytes(kept));return kept;
+  for(let field=0;field<5;field++)columns.push('columns' in rows?yield*numberTail(rows.columns[field],start,stage):yield*numberColumn(count,i=>rows[(i+start)*5+field]));
+  const kept={length:count*5,columns};
+  release(reserved-(compressed?256:0)-sampleBytes(kept));return kept;
 }
 
 function* tail<T>(rows:readonly T[],start:number,reserve:(bytes:number)=>void):Preparation<T[]> {
@@ -139,4 +142,17 @@ export function* retirementEdge(work:WorkTrace|null,tapes:Iterable<PeriodTape>,f
     }
   }
   return at;
+}
+
+export type QuotaTail={readonly before:PeriodTape['quota'][number];readonly after:PeriodTape['quota'][number];readonly removed:1};
+/** Mint retirement evidence only from the original producer's actual returned rows. */
+export function* retainTapeWithTails(tape:PeriodTape,from:number,reserve:(bytes:number)=>void,retained:(before:PeriodTape['quota'][number],after:PeriodTape['quota'][number])=>void,release:(bytes:number)=>void=()=>{}):Preparation<PeriodTape>{
+  const value=yield*retainTape(tape,from,reserve,release);
+  if(value===tape||value.quota.length!==tape.quota.length)return value;
+  for(let i=0;i<value.quota.length;i++){
+    const before=tape.quota[i],after=value.quota[i];
+    if(before.source===after.source&&before.window===after.window&&sampleCount(before.samples)===sampleCount(after.samples)+1)retained(before,after);
+    yield;
+  }
+  return value;
 }

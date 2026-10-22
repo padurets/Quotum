@@ -57,14 +57,14 @@ export const NOW=1_800_000_000_000,H=3_600_000,M=60_000;
 export const flush=async()=>{for(let i=0;i<300;i++)await Promise.resolve();};
 
 /** Actual producer, wire JSON boundary, page reducer, transport and bounded server reader. */
-export async function fixture({heatmap=false,personal=false,ownerDevice=false,transportLive=false,privateWork=false,unknown=false,current=false,stable=true,fixed=false,tableOnly=false,periodName="1h",creditFrom=NOW-3*M,creditTo=NOW-2*M,clocked=false,sessionMs=24*H,initialFilters=null as filterModelBindings.DataFilters|null,initialFailure=false,periodSource=undefined as string|undefined}={}) {
+export async function fixture({heatmap=false,activityOnly=false,personal=false,ownerDevice=false,transportLive=false,privateWork=false,unknown=false,current=false,stable=true,fixed=false,tableOnly=false,periodName="1h",creditFrom=NOW-3*M,creditTo=NOW-2*M,clocked=false,sessionMs=24*H,initialFilters=null as filterModelBindings.DataFilters|null,initialFailure=false,periodSource=undefined as string|undefined}={}) {
   let selectedRange=fixed?{from:NOW-H,to:NOW}:null;
   const start=NOW-Math.max(3*H,periodOf(periodName).ms+H);
   const store=new Store(':memory:',start),directory=new Directory(store.db);
   const alice=directory.createUser('a@example.com','Alice','unused',start),bob=directory.createUser('b@example.com','Bob','unused',start);
   const board=personal?directory.boards(alice.id)[0].id:directory.createBoard('Shared',alice.id,start).id;
   if(!personal)directory.addMember(board,bob.id,start);
-  directory.saveView(board,{...EMPTY_VIEW,shown:[AGENTS,'quota-history',...(heatmap?[AGENT_HOURS_HEATMAP]:[])],hidden:[ACTIVITY]},alice.id,start);
+  directory.saveView(board,{...EMPTY_VIEW,shown:[AGENTS,...(activityOnly?[ACTIVITY]:['quota-history']),...(heatmap?[AGENT_HOURS_HEATMAP]:[])],hidden:activityOnly?[...QUOTA_WIDGETS]:[ACTIVITY]},alice.id,start);
   const source=store.source('codex','a'.repeat(24),start);store.hold(source,alice.id,start);store.hold(source,bob.id,start);
   if(tableOnly)directory.saveView(board,{...EMPTY_VIEW,shown:[AGENTS],enabledWhenEmpty:[AGENTS],hidden:[ACTIVITY,'quota-history','quota-session-history','quota-table','quota-session-table','subscription-funds','budget-history','budget-table','source:'+source]},alice.id,start);
   if(!personal)store.share(board,source,alice.id,start);
@@ -83,7 +83,7 @@ export async function fixture({heatmap=false,personal=false,ownerDevice=false,tr
   const tiles=new HistoryTiles(store);let reader=new PeriodReader(hub,tiles,events);
   const attach=()=>{
     events.onHistory=(source,since,scopes,work)=>{tiles.touch(source,since,scopes);reader.touch(source,since,scopes,work);};
-    events.onClientHistory=(user,since)=>{tiles.touchClient(user,since);reader.touchClient(user,since);};events.attach();
+    events.onClientHistory=(user,since,device)=>{tiles.touchClient(user,since,device);reader.touchClient(user,since,device);};events.attach();
   };attach();
   const page=createStore(reduce,INITIAL),frames:Frame[]=[],requests:PeriodRequest[]=[],pool=new HistoryPool();
   let stream:ReadableStreamDefaultController<Uint8Array>|null=null;
@@ -113,10 +113,10 @@ export async function fixture({heatmap=false,personal=false,ownerDevice=false,tr
   const period=new context.exports.BoardPeriod();pan.onPhase(()=>period.refreshWorkClock());page.listen((event,state)=>period.changed(event,state));period.activate(true);await flush();
   const limited=!!initialFilters&&!filterModelBindings.executableWorkFilters(initialFilters);
   assert.equal(period.get().error,limited?'filters_limit':initialFailure?'unavailable':null);assert.equal(period.get().rows.length,limited||initialFailure?0:1);const initialRequests=requests.slice();requests.length=0;frames.length=0;
-  const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=next[1].at;timers.delete(next[0]);next[1].run();events.flush();}now=at;if(!clocked)period.tick();};
+  const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=Math.max(now,next[1].at);timers.delete(next[0]);next[1].run();events.flush();}now=Math.max(now,at);if(!clocked)period.tick();};
   const jump=(at:number)=>{now=at;for(const [token,timer] of [...timers])if(timer.at<=at){timers.delete(token);timer.run();}events.flush();if(clocked)pageClock.wakeDue();else period.tick();};
   const consumers=new Set<()=>void>();
-  return {onClose:(stop:()=>void)=>{consumers.add(stop);return()=>consumers.delete(stop);},hub,device,owner,advance,jump,elapse:(at:number)=>{now=at;},pan,selectedRange:()=>selectedRange,selectRange:(range:typeof selectedRange)=>{selectedRange=range;period.changed();},clock:pageClock,initialRequests,prepareWith:(value:Preparations|null)=>{preparer=value;},settings,pool,get reader(){return reader;},store,directory,board,alice,bob,source,credit,get events(){return events;},period,page,frames,requests,
+  return {onClose:(stop:()=>void)=>{consumers.add(stop);return()=>consumers.delete(stop);},hub,device,owner,advance,jump,elapse:(ms:number)=>{now+=ms;},elapseTo:(at:number)=>{now=at;},pan,selectedRange:()=>selectedRange,selectRange:(range:typeof selectedRange)=>{selectedRange=range;period.changed();},clock:pageClock,initialRequests,prepareWith:(value:Preparations|null)=>{preparer=value;},settings,pool,get reader(){return reader;},store,directory,board,alice,bob,source,credit,get events(){return events;},period,page,frames,requests,
     report:(working=false,at=NOW)=>{now=at;hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(at).toISOString(),sessions:[{provider:'codex',...(funding?{account:(privateWork?'b':'a').repeat(24)}:{}),sessionId:stable?'c'.repeat(32):null,origin:'terminal',project:'Work project',folder:'Private folder',startedAt:new Date(start).toISOString(),lastWorkedAt:new Date(NOW-2*M).toISOString(),working}]},at);events.flush();},
     endIdle:()=>{hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(NOW).toISOString(),sessions:[]},NOW);events.flush();},
     event:(event:HubEvent)=>page.dispatch({type:'hub',event}),
@@ -167,10 +167,10 @@ export function consumer(h: any, options:{now?:()=>number;focus?:{get:()=>string
     quotaHistory:{retry:()=>h.loader.retry()},AnalyticsPanel:()=>null,ActivitySettings:()=>null,Totals:()=>null,LegendItem:()=>null,
     setTimeRange:()=>{},timeRangeKey,navigationKey,useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),
     PlotLayer:()=>null,PlotOverlay:()=>null,Tooltip:()=>null,clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',
-    CSS:{escape:(id:any)=>id},Stacks:null as any};
-  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,Object.assign(context,{workChange},periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
+    CSS:{escape:(id:any)=>id},Stacks:null as any,StackArtwork:null as any};
+  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;globalThis.StackArtwork=StackArtwork;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,Object.assign(context,{workChange},periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   function find(node:any,type:any):any{if(Array.isArray(node))return node.map(n=>find(n,type)).find(Boolean);if(!React.isValidElement(node))return null;if(node.type===type)return node;return find((node.props as any).children,type);}
-  const pathsOf=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(pathsOf);if(!React.isValidElement(node))return [];const p=node.props as any;return p.className==='activity-stack'&&p.d!==undefined?[p.d]:pathsOf(p.children);};
+  const pathsOf=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(pathsOf);if(!React.isValidElement(node))return [];const p=node.props as any;if(node.type===context.StackArtwork)return pathsOf(context.StackArtwork(p));return p.className==='activity-stack'&&p.d!==undefined?[p.d]:pathsOf(p.children);};
   let latestParent:any,latestChild:any;const renderParent=()=>{Object.assign(context,parent);parent.begin();latestParent=context.exports.Activity({arrange:{view:h.page.get().board!.view}});return find(latestParent,context.Stacks).props;};
   const renderChild=(props:any)=>{Object.assign(context,child);child.begin();latestChild=context.Stacks(props);return pathsOf(latestChild);};
 
@@ -188,17 +188,18 @@ import {HistoryStore,follow} from '../lib/history';
 import {expandHistory} from '../../server/domain/history';
 
 export async function drawings(h:any,activity=true,scope:'quota'|'budget'='quota'){
+ const scheduled=new Map<object,{run:()=>void;ms:number}>();
  const source=readFileSync(new URL('../lib/history.ts',import.meta.url),'utf8');
  const read=source.split('\n').find(line=>line.trimStart().startsWith('read:')),retry=source.split('\n').find(line=>line.trimStart().startsWith('retry:'));assert.ok(read);assert.ok(retry);
  const adapter=source.slice(source.indexOf('const selectedMeters ='),source.indexOf('function activeReaders('));
  const workKey=source.split('\n').find(line=>line.startsWith('const selectedWorkKey='));assert.ok(workKey);
  const readerContext={read:null as any,retry:null as any,selected:null as any,workKey:null as any,boardPeriod:h.period,scope,family:'budget',pan:h.pan,expandHistory,prefs:()=>h.settings,subscriptionSelection,moneyReadSelection,...filterModelBindings,...filterRuntimeBindings};
  runInNewContext(ts.transpileModule(adapter+'\n'+workKey+'\nglobalThis.read=({'+read+'}).read;globalThis.retry=({'+retry+'}).retry;globalThis.selected=selectedMeters;globalThis.workKey=selectedWorkKey;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,readerContext);
- const loader=new HistoryStore({workInPresentation:scope!=='budget',now:()=>NOW,preparations:null,read:readerContext.read,retry:readerContext.retry,setTimeout:()=>({}),clearTimeout:()=>{},dropTimeRange:()=>{}},undefined,scope,h.pool);
+ const loader=new HistoryStore({sharedTransport:true,workInPresentation:scope!=='budget',now:()=>NOW,preparations:null,read:readerContext.read,retry:readerContext.retry,setTimeout:(run,ms)=>{const token={};scheduled.set(token,{run,ms});return token;},clearTimeout:token=>{scheduled.delete(token as object);},dropTimeRange:()=>{}},undefined,scope,h.pool);
  const stop=follow(loader,h.page);loader.setActivityActive(activity);loader.choose(h.settings.range,h.selectedRange());loader.open(h.board);loader.setWorkFilter(readerContext.workKey(h.page.get()),filterRuntimeBindings.effectiveFilters()??undefined);loader.hello(h.events.epoch);
  loader.setMeters(readerContext.selected(h.page.get(),scope));
  const board=h.page.get().board;loader.snapshot(board.lineup,Object.values(board.cards).flatMap((c:any)=>c.windows.map((w:any)=>`${c.id} ${w.id}`)),board.historyStart,board.workAuthority);await flush();
- const selectedSlots:any[]=[],financialSlots:any[]=[],activitySlots:any[]=[];let slots=selectedSlots,cursor=0;
+ const selectedSlots:any[]=[],financialSlots:any[]=[],activitySlots:any[]=[],forecastSlots:any[]=[];let slots=selectedSlots,cursor=0;
  const useRef=(current:any)=>slots[cursor++]??(slots[cursor-1]={current});
  const useMemo=(read:any,deps:any[])=>{const box=useRef(null);if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;};
  const context={useRef,useMemo,useSyncExternalStore:(_s:any,read:any)=>read(),pan:{active:()=>null,onPhase:()=>()=>{}},hubNow:()=>NOW,planEventsAt,planEventsDeadline,shallowEqual,useClock:()=>NOW,fundsHistory:{},page:h.page,timeRange:h.selectedRange,timeRangeKey,prefs:()=>h.settings,boardPeriod:h.period,read:null as any};
@@ -206,7 +207,8 @@ export async function drawings(h:any,activity=true,scope:'quota'|'budget'='quota
  const render=()=>{slots=selectedSlots;cursor=0;return context.read(loader,true);};
  const renderFinancial=()=>{slots=financialSlots;cursor=0;return context.read(loader,false,true);};
  const renderActivity=()=>{slots=activitySlots;cursor=0;return context.read(loader,true,false,true);};
- return {loader,render,renderFinancial,renderActivity,close:()=>{stop();loader.close();}};
+ const renderForecast=()=>{slots=forecastSlots;cursor=0;return context.read(loader,false);};
+ return {loader,render,renderFinancial,renderActivity,renderForecast,runScheduled:()=>{const timers=[...scheduled];for(const [token,timer] of timers){scheduled.delete(token);timer.run();}return timers.map(([,timer])=>timer.ms);},close:()=>{stop();loader.close();}};
 }
 import {subscriptionLinesOf} from '../lib/subscription';
 import {lineWork,workText} from '../lib/work';

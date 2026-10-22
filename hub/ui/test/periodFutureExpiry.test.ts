@@ -49,7 +49,7 @@ test('a sessions-only preparation crossing a card deadline publishes the expired
     assert.ok(h.requests.some(request=>request.sessions&&!request.values),'unfunded work needs sessions without another card-values response');
     assert.ok(scheduler.size>0,'the actual reply must be in cooperative preparation');
     // Time passes while preparation owns the event loop, before a clock task runs.
-    now=deadline+1;h.elapse(now);
+    now=deadline+1;h.elapseTo(now);
     while(tasks.length){tasks.shift()!();await flush();}
     await flush();
     assert.equal(h.period.getValue(h.source).value.windows[0].stale,true);

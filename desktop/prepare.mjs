@@ -19,14 +19,13 @@
  * to the nodejs package.
  */
 import {execFileSync} from 'node:child_process';
-import {createHash} from 'node:crypto';
-import {chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
-import {tmpdir} from 'node:os';
+import {copyFileSync, cpSync, existsSync, mkdirSync, rmSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {prepareText} from './prepare-text.mjs';
 import {prepareTray} from './prepare-tray.mjs';
 import {prepareElectron} from './prepare-electron.mjs';
+import {prepareNode} from './prepare-node.mjs';
 import {thirdPartyLicenses} from '../npm/licenses.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -74,33 +73,8 @@ copyFileSync(path.join(hub, 'package.json'), path.join(resources, 'package.json'
 for (const file of ['server.mjs', 'server-licenses.md']) copyFileSync(path.join(hub, 'dist/app', file), path.join(resources, 'dist/app', file));
 cpSync(path.join(hub, 'dist/client'), path.join(resources, 'dist/client'), {recursive: true});
 
-// 2. Node, once per version and target: a binary already in place is checked, not fetched again.
-const binaries = path.join(here, 'binaries');
-const binary = path.join(binaries, `quotum-node-${target}${windows ? '.exe' : ''}`);
-const license = path.join(binaries, `node-LICENSE-${NODE_VERSION}`);
-const stamp = path.join(binaries, `quotum-node-${target}.sha256`);
-const sha256 = file => createHash('sha256').update(readFileSync(file)).digest('hex');
-if (!existsSync(binary) || !existsSync(license) || !existsSync(stamp) || readFileSync(stamp, 'utf8') !== `${node.sha256} ${sha256(binary)}`) {
-  mkdirSync(binaries, {recursive: true});
-  const work = mkdtempSync(path.join(tmpdir(), 'quotum-node-'));
-  const archive = path.join(work, node.archive);
-  const url = `https://nodejs.org/dist/${NODE_VERSION}/${node.archive}`;
-  console.log(`downloading ${url}`);
-  const response = await fetch(url, {signal: AbortSignal.timeout(120_000)});
-  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
-  writeFileSync(archive, Buffer.from(await response.arrayBuffer()));
-  const actual = sha256(archive);
-  if (actual !== node.sha256) throw new Error(`${node.archive}: SHA-256 ${actual}, expected ${node.sha256}`);
-  // tar reads .tar.xz everywhere, and .zip on Windows (bsdtar); elsewhere unzip does.
-  if (node.archive.endsWith('.zip') && process.platform !== 'win32') run('unzip', ['-q', archive, '-d', work], work);
-  else run('tar', ['-xf', archive, '-C', work], work);
-  const unpacked = path.join(work, node.archive.replace(/\.(tar\.xz|zip)$/, ''));
-  copyFileSync(path.join(unpacked, node.binary), binary);
-  chmodSync(binary, 0o755);
-  copyFileSync(path.join(unpacked, 'LICENSE'), license);
-  writeFileSync(stamp, `${node.sha256} ${sha256(binary)}`);
-  rmSync(work, {recursive: true, force: true});
-}
+// 2. Node: check an installed binary or restore a checksum-verified archive.
+const license = await prepareNode(here, target, node, NODE_VERSION);
 
 // 3. Licenses: Quotum's, Node's, and those of the Rust crates the app links on this target.
 const licenses = path.join(here, 'resources/licenses');

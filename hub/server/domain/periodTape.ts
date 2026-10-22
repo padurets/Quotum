@@ -16,7 +16,23 @@ export function numberAt(rows:Numbers,index:number):number|undefined {
   return bases[a]+(index-(a?ends[a-1]:0))*steps[a];
 }
 export const numberBytes=(rows:Numbers)=>'base' in rows?(rows.runs?rows.runs.ends.byteLength+rows.runs.bases.byteLength+rows.runs.steps.byteLength+128:(rows.values?.byteLength??0)+32):rows.length*8;
-export const lowerNumber=(rows:Numbers,at:number)=>{let a=0,b=rows.length;while(a<b){const m=(a+b)>>>1;if(numberAt(rows,m)!<at)a=m+1;else b=m;}return a;};
+export const lowerNumber=(rows:Numbers,at:number)=>{
+  if('base' in rows&&rows.runs){
+    const {ends,bases,steps}=rows.runs;let a=0,b=rows.length,run=0,from=0,to=ends[0],base=bases[0],step=steps[0];
+    // Successive probes often stay in one run; keep it for this search only.
+    while(a<b){
+      const m=(a+b)>>>1;
+      if(m>=to||m<from){
+        let lo=0,hi=ends.length;
+        while(lo<hi){const mid=(lo+hi)>>>1;if(ends[mid]<=m)lo=mid+1;else hi=mid;}
+        run=lo;from=run?ends[run-1]:0;to=ends[run];base=bases[run];step=steps[run];
+      }
+      if(base+(m-from)*step<at)a=m+1;else b=m;
+    }
+    return a;
+  }
+  let a=0,b=rows.length;while(a<b){const m=(a+b)>>>1;if(numberAt(rows,m)!<at)a=m+1;else b=m;}return a;
+};
 /** Integer offsets use four bytes only when the complete range is exactly representable. */
 export function* numberColumn(length:number,value:(i:number,pass:number)=>number):Preparation<NumberColumn>{
   let min=Infinity,max=-Infinity,integers=true,count=0,start=0,base=0,step:number|undefined,previous=0;
@@ -45,6 +61,23 @@ export function* numberColumn(length:number,value:(i:number,pass:number)=>number
   base=narrow?min:0;const values=narrow?new Uint32Array(length):new Float64Array(length);
   for(let i=0;i<length;i++){values[i]=value(i,1)-base;if((i&63)===63)yield;}
   return {length,base,values};
+}
+/** Retire a prefix without decoding and recompressing the surviving cadence. */
+export function* numberTail(column:NumberColumn,start:number,reserve:(bytes:number)=>void=()=>{}):Preparation<NumberColumn>{
+  if(!start)return column;
+  const length=column.length-start;
+  if(!length){reserve(32);return {length:0,base:0,values:null};}
+  if(!column.runs){reserve(32+length*(column.values?.BYTES_PER_ELEMENT??0));return {length,base:column.base,values:column.values?.slice(start)??null};}
+  const {ends,bases,steps}=column.runs;let first=0,last=ends.length;
+  while(first<last){const middle=(first+last)>>>1;if(ends[middle]<=start)first=middle+1;else last=middle;}
+  // Re-associating a very large integer product can change its rounding.
+  const runStart=first?ends[first-1]:0;
+  if(!Number.isSafeInteger((ends[first]-runStart-1)*steps[first])){reserve(length*8+128);return yield*numberColumn(length,i=>numberAt(column,i+start)!);}
+  reserve(128+(ends.length-first)*20);
+  const nextEnds=new Uint32Array(ends.length-first),nextBases=bases.slice(first),nextSteps=steps.slice(first);
+  nextBases[0]=bases[first]+(start-runStart)*steps[first];
+  for(let i=first;i<ends.length;i++){nextEnds[i-first]=ends[i]-start;yield;}
+  return {length,base:0,values:null,runs:{ends:nextEnds,bases:nextBases,steps:nextSteps}};
 }
 type Sample=CellSamples['samples'][number];
 /** Flat numeric rows avoid repeating property names and per-observation objects. */
@@ -75,9 +108,27 @@ export function sampleBytes(rows:SampleRows,delta=false):number {
 }
 export const sampleCount=(rows:SampleRows)=>rows.length/SAMPLE_WIDTH;
 export function sampleAt(rows:SampleRows,index:number):Sample|undefined {
-  const at=index*SAMPLE_WIDTH;if(at<0||at>=rows.length)return undefined;
-  const get=(field:number)=>'columns' in rows?numberAt(rows.columns[field],index)!:rows[at+field];
-  return {at:get(0),used:get(1),resetAt:get(2)===-1?null:get(2),staleAfterMs:get(3),...(get(4)===-1?{}:{validUntil:get(4)})};
+  const offset=index*SAMPLE_WIDTH;if(offset<0||offset>=rows.length)return undefined;
+  let at:number,used:number,resetAt:number,staleAfterMs:number,validUntil:number;
+  if('columns' in rows){
+    const columns=rows.columns;
+    resetAt=numberAt(columns[2],index)!;validUntil=numberAt(columns[4],index)!;
+    at=numberAt(columns[0],index)!;used=numberAt(columns[1],index)!;staleAfterMs=numberAt(columns[3],index)!;
+  }else{
+    resetAt=rows[offset+2];validUntil=rows[offset+4];at=rows[offset];used=rows[offset+1];staleAfterMs=rows[offset+3];
+  }
+  return {at,used,resetAt:resetAt===-1?null:resetAt,staleAfterMs,...(validUntil===-1?{}:{validUntil})};
+}
+/** Read the observation's deadline without decoding its quota value. */
+export function sampleDeadlineAt(rows:SampleRows,index:number):number|undefined {
+  const offset=index*SAMPLE_WIDTH;if(offset<0||offset>=rows.length)return undefined;
+  let at:number,reset:number,stale:number,valid:number;
+  if('columns' in rows){
+    const columns=rows.columns;
+    at=numberAt(columns[0],index)!;reset=numberAt(columns[2],index)!;
+    stale=numberAt(columns[3],index)!;valid=numberAt(columns[4],index)!;
+  }else{at=rows[offset];reset=rows[offset+2];stale=rows[offset+3];valid=rows[offset+4];}
+  return Math.min(at+stale+1,reset===-1?Infinity:reset??Infinity,valid===-1?Infinity:valid??Infinity);
 }
 function* replaceSamples(before:SampleRows,after:SampleRows,from:number,to:number):Preparation<SampleRows> {
   let result=new Float64Array(0),length=0;

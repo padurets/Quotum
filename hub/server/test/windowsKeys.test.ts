@@ -1,7 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {spawn, spawnSync} from 'node:child_process';
+import childProcess, {spawn, spawnSync} from 'node:child_process';
+import {syncBuiltinESMExports} from 'node:module';
 import {existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
@@ -10,6 +11,7 @@ import {Store} from '../store/store.js';
 import {managedRegistry, reserveManagedId} from '../secrets/windows.js';
 import {readInputs, startSecrets} from '../secrets/index.js';
 import {SecretKey} from '../secrets/crypto.js';
+import {registryStages} from './registryDiagnostics.js';
 
 const windows={skip:process.platform!=='win32'};
 function cleanup(id:string) {
@@ -18,11 +20,32 @@ function cleanup(id:string) {
   spawnSync(executable,['-NoLogo','-NoProfile','-NonInteractive','-Command',"Remove-Item -LiteralPath 'Registry::HKEY_CURRENT_USER\\Software\\Quotum\\HubKeys\\v1\\"+id+"' -Recurse -Force -ErrorAction SilentlyContinue"],{stdio:'ignore',timeout:10_000,windowsHide:true});
 }
 test('Windows registry bootstrap is private, durable and never replaces a missing established store',windows,t=>{
+  // Observe the original helper call, including a cold failure; never print its frame or stderr.
+  const nativeSpawn=childProcess.spawnSync,attempts:{ms:number;pid:number|null;signal:string|null;status:number|null;failure:string|null;stderrKind:string;stderrBytes:number|null;outputBytes:number;header:boolean;helperStatus:number|null;stages:ReturnType<typeof registryStages>}[]=[];
+  t.mock.method(childProcess,'spawnSync',(...args:Parameters<typeof nativeSpawn>)=>{
+    const helper=Array.isArray(args[1])&&args[1].some(value=>typeof value==='string'&&value.endsWith('windows.ps1'));
+    if(helper)args[2]={...args[2],env:{...process.env,...args[2]?.env,QUOTUM_TEST_KEY_STAGES:'1'}};
+    const started=performance.now(),result=nativeSpawn(...args);
+    if(helper){
+      const output=result.stdout,header=Buffer.isBuffer(output)&&output.length>=5&&output.subarray(0,4).equals(Buffer.from('QKR1'));
+      const code=(result.error as NodeJS.ErrnoException|undefined)?.code;
+      attempts.push({ms:performance.now()-started,pid:Number.isSafeInteger(result.pid)&&result.pid>0?result.pid:null,
+        signal:result.signal===null?null:['SIGTERM','SIGKILL','SIGABRT','SIGINT','SIGBREAK'].includes(result.signal)?result.signal:'other',status:result.status,
+        failure:code===undefined?null:['ETIMEDOUT','ENOENT','EACCES','ENOBUFS'].includes(code)?code:'other',
+        stderrKind:Buffer.isBuffer(result.stderr)?'buffer':result.stderr===null?'null':'other',stderrBytes:Buffer.isBuffer(result.stderr)?result.stderr.length:null,
+        outputBytes:Buffer.isBuffer(output)?output.length:0,header,
+        helperStatus:header&&output[4]<=3?output[4]:null,stages:registryStages(result.stderr)});
+    }
+    return result;
+  });
+  syncBuiltinESMExports();
+  t.after(()=>{t.mock.restoreAll();syncBuiltinESMExports();t.diagnostic(JSON.stringify({attempts}));});
   const root=mkdtempSync(path.join(tmpdir(),'quotum-registry-')),data=path.join(root,'data');mkdirSync(data);
   const store=new Store(path.join(data,'hub.sqlite')),id=reserveManagedId(store.db);
   t.after(()=>{cleanup(id);store.close();rmSync(root,{recursive:true,force:true});});
   const first=readInputs({},data,false),report=startSecrets(store.db,first);
-  assert.equal(report.outcome,'created',report.reason);assert.ok(first.current);assert.equal(reserveManagedId(store.db),id);
+  assert.equal(report.outcome,'created',JSON.stringify({outcome:report.outcome,reason:report.reason}));assert.ok(first.current);assert.equal(reserveManagedId(store.db),id);
+  assert.deepEqual(attempts[0]?.stages.map(value=>value.stage),[1,2,3,4,5,6,7,8,9,10,11], 'the original helper must report both setup and native stages');
   assert.equal(startSecrets(store.db,readInputs({},data,false)).current,report.current);
   assert.equal(managedRegistry(id,false).fingerprint,report.current);
   cleanup(id);
@@ -44,6 +67,47 @@ test('concurrent Windows helpers share one native mutex and one published key',w
   assert.equal(managedRegistry(id,false).fingerprint,values[0]);
 });
 
+test('a missing packaged Windows helper fails closed without runtime compilation',windows,t=>{
+  const root=mkdtempSync(path.join(tmpdir(),'quotum-registry-missing-')),id=randomUUID();
+  const script=path.join(root,'windows.ps1');writeFileSync(script,readFileSync(new URL('../secrets/windows.ps1',import.meta.url)));
+  const nativeSpawn=childProcess.spawnSync;
+  let receipt:{timeout:number|undefined;exit:number|null;bytes:number;header:boolean;status:number|null;stages:number[]}|undefined;
+  t.after(()=>{t.mock.restoreAll();syncBuiltinESMExports();cleanup(id);rmSync(root,{recursive:true,force:true});});
+  t.mock.method(childProcess,'spawnSync',(...args:Parameters<typeof nativeSpawn>)=>{
+    assert.ok(Array.isArray(args[1]));const actual=[...args[1]],at=actual.indexOf('-File');assert.ok(at>=0);actual[at+1]=script;
+    const result=nativeSpawn(args[0],actual,{...args[2],env:{...process.env,...args[2]?.env,QUOTUM_TEST_KEY_STAGES:'1'}});
+    const output=result.stdout,header=Buffer.isBuffer(output)&&output.length>=5&&output.subarray(0,4).equals(Buffer.from('QKR1'));
+    receipt={timeout:args[2]?.timeout,exit:result.status,bytes:Buffer.isBuffer(output)?output.length:0,header,status:header?output[4]:null,stages:registryStages(result.stderr).map(value=>value.stage)};
+    return result;
+  });
+  syncBuiltinESMExports();
+  assert.throws(()=>managedRegistry(id,true),/secret_key_storage_unavailable/);
+  assert.deepEqual(receipt,{timeout:10_000,exit:0,bytes:5,header:true,status:3,stages:[1]});
+});
+
+test('numeric stages survive the original helper deadline before readiness and mutex acquisition',{...windows,timeout:25_000},t=>{
+  const root=mkdtempSync(path.join(tmpdir(),'quotum-registry-stages-'));
+  t.after(()=>rmSync(root,{recursive:true,force:true}));
+  const executable=path.join(process.env.SystemRoot!,'System32','WindowsPowerShell','v1.0','powershell.exe');
+  const original=sourceScript();
+  for(const point of ['setup','mutex'] as const) {
+    const before=point==='setup'?'Observe-SetupStage 1\ntry {':'var waited=WaitForSingleObject(mutex,8000);';
+    const delayed=point==='setup'?'Observe-SetupStage 1\nStart-Sleep -Seconds 11\ntry {':'System.Threading.Thread.Sleep(11000);'+before;
+    assert.equal(original.split(before).length,2);
+    const script=path.join(root,point+'.ps1');writeFileSync(script,original.replace(before,delayed));
+    const input=frame(randomUUID(),17).input,started=performance.now();
+    const result=spawnSync(executable,['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script],{
+      input,timeout:10_000,maxBuffer:4096,windowsHide:true,env:{...process.env,QUOTUM_TEST_KEY_STAGES:'1'},stdio:['pipe','pipe','pipe'],
+    });
+    input.fill(0);
+    const stages=registryStages(result.stderr),code=(result.error as NodeJS.ErrnoException|undefined)?.code;
+    result.stdout?.fill(0);result.stderr?.fill(0);
+    t.diagnostic(JSON.stringify({point,ms:performance.now()-started,status:result.status,failure:code==='ETIMEDOUT'?code:'other',stages}));
+    assert.equal(code,'ETIMEDOUT');
+    assert.deepEqual(stages.map(value=>value.stage),point==='setup'?[1]:[1,2,3,4,5]);
+  }
+});
+
 async function until(check:()=>boolean) {
   const deadline=Date.now()+15_000;
   while(!check()) {
@@ -62,9 +126,18 @@ function sendFrame(pipe:Writable,input:Buffer) {
   });
 }
 
+// Rebuild only instrumented fixtures from the same C# body; production only loads its DLL.
+function sourceScript() {
+  const script=readFileSync(new URL('../secrets/windows.ps1',import.meta.url),'utf8').replaceAll('\r\n','\n');
+  const source=readFileSync(new URL('../secrets/windows.cs',import.meta.url),'utf8').replaceAll('\r\n','\n');
+  const load="  Add-Type -LiteralPath (Join-Path $PSScriptRoot 'managed-key.dll') -ErrorAction Stop | Out-Null";
+  assert.equal(script.split(load).length,2);
+  return script.replace(load,()=>"  Add-Type -TypeDefinition @'\n"+source+"\n'@ -ErrorAction Stop | Out-Null");
+}
+
 // Instrument a disposable copy of the actual helper, without giving production a test switch.
 function pausedScript(root:string,name:string,point:'write'|'flush'|'wait'|'reader') {
-  let script=readFileSync(new URL('../secrets/windows.ps1',import.meta.url),'utf8').replaceAll('\r\n','\n');
+  let script=sourceScript();
   const ready=path.join(root,name+'-ready'),gate=path.join(root,name+'-gate'),acquired=path.join(root,name+'-acquired');
   const compiled=path.join(root,name+'-compiled'),start=path.join(root,name+'-start'),finished=path.join(root,name+'-finished'),status=path.join(root,name+'-status'),diagnostic=path.join(root,name+'-diagnostic');
   const before=point==='flush'?'if(RegFlushKey(leaf)!=0)throw new Exception();':point==='write'?'if(RegSetValueEx(leaf,"CurrentKey",0,3,candidate,43)!=0)':'var waited=WaitForSingleObject(mutex,8000);';

@@ -1,6 +1,6 @@
 /** A formatted monotone value can change only within a proven linear piece or at its boundary. */
-export function periodTextChangesAt(now:number,nextBoundary:(at:number)=>number|null,read:(at:number)=>string):number|null {
-  const seen=read(now),horizon=now+3_600_000;
+export function periodTextChangesAt(now:number,nextBoundary:(at:number)=>number|null,read:(at:number)=>string,initial?:string):number|null {
+  const seen=initial??read(now),horizon=now+3_600_000;
   for(let from=now;from<horizon;){
     const boundary=nextBoundary(from);
     if(boundary===null)return null;

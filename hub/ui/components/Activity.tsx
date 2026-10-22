@@ -11,7 +11,7 @@ import {usePersonalBoard, useBoardId, useLineup, useTitles,useProjectColorPins,u
 import {useClock} from '../lib/clock';
 import {quotaHistory, useActivityHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {boardPeriod,type ActivityProjection} from '../lib/period';
-import type {History} from '../../server/domain/history';
+import type {ActivityFrame as History} from '../lib/period';
 import {plotBar, plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
 import {usePrepared, usePreparationBasis} from './prepared';
 import {axisNavigation, navigationAt, navigationKey, type AxisNavigation} from '../lib/axisNavigation';
@@ -323,6 +323,17 @@ function ActivityReadout({history,by,hover,barMs,bar,parts,tipProps,retained=fal
   </Tooltip>;
 }
 
+/** The prepared stack paths remain unchanged while their parent moves or clips them. */
+const StackArtwork = memo(function StackArtwork({model,paint,by}: {by:ActivityDimension;paint:ReadonlyMap<string,string>;model: {
+  groups: {group: PlotGroup; color: string}[];
+  paths: string[];
+} | null}) {
+  if (!model) return null;
+  return <>{model.groups.map(({group, color}, i) => (
+    <path key={group.key} d={model.paths[i]} fill={paint?.get(group.key)??color} className="activity-stack" style={seriesFocusStyle(activitySeriesKey(by,group.key))} />
+  ))}</>;
+});
+
 const Stacks = memo(function Stacks({
   detailFrame,
   renderDetails,
@@ -436,7 +447,7 @@ const Stacks = memo(function Stacks({
   const barMs = model?.barMs ?? incomingActivity.barMs;
   const vertical = model?.vertical ?? activityScale(0);
   const heights=model?.heights??new Map<number,number>();
-  const paths = model?.paths ?? [], perMs = model?.perMs ?? (width - left - right) / Math.max(MINUTE, basis.to - basis.from), pathOrigin = model?.pathOrigin ?? basis.from;
+  const perMs = model?.perMs ?? (width - left - right) / Math.max(MINUTE, basis.to - basis.from), pathOrigin = model?.pathOrigin ?? basis.from;
   const hatchFrom = strip?.from ?? basis.from;
   const knownFrom = strip?.knownFrom ?? model?.originUnknownTo ?? incomingUnknownTo;
   const unknownTo = knownFrom !== null && knownFrom > hatchFrom ? knownFrom : null;
@@ -611,9 +622,7 @@ const Stacks = memo(function Stacks({
       <PlotLayer width={width} height={height} scale={scale} left={left} right={right} clipRef={bandClip} top={top} bottom={bottom}>
         <g clipPath={(strip || currentActivity) && !active ? `url(#${CSS.escape(innerClip)})` : undefined}>
           <g ref={valueBand}><g transform={`translate(${(left + (pathOrigin - basis.from) * perMs).toFixed(1)} 0)`}>
-            {groups.map(({group, color}, i) => (
-              <path key={group.key} d={paths[i]} fill={color} className="activity-stack" style={seriesFocusStyle(activitySeriesKey(by, group.key))}/>
-            ))}
+            <StackArtwork model={model} paint={paint} by={by} />
           </g></g>
         </g>
       </PlotLayer>

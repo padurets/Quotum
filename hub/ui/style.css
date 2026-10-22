@@ -144,11 +144,11 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .resize-handle.is-right { right: -8px; }
 .resize-handle.is-bottom { left: 0; right: 0; bottom: -8px; height: 8px; cursor: ns-resize; }
 .widget-body > :is(.card, .panel) { --edge-lit: #ffffff38; }
-.widget-body:has(> .is-left:hover) > :is(.card, .panel) { border-left-color: var(--edge-lit); }
-.widget-body:has(> .is-right:hover) > :is(.card, .panel) { border-right-color: var(--edge-lit); }
-.widget-body:has(> .is-bottom:hover) > :is(.card, .panel) { border-bottom-color: var(--edge-lit); }
-.widget-body:has(> .is-right:focus-visible) > :is(.card, .panel) { border-right-color: var(--accent); }
-.widget-body:has(> .is-bottom:focus-visible) > :is(.card, .panel) { border-bottom-color: var(--accent); }
+.widget-body > :is(.card, .panel):has(~ .is-left:hover) { border-left-color: var(--edge-lit); }
+.widget-body > :is(.card, .panel):has(~ .is-right:hover) { border-right-color: var(--edge-lit); }
+.widget-body > :is(.card, .panel):has(~ .is-bottom:hover) { border-bottom-color: var(--edge-lit); }
+.widget-body > :is(.card, .panel):has(~ .is-right:focus-visible) { border-right-color: var(--accent); }
+.widget-body > :is(.card, .panel):has(~ .is-bottom:focus-visible) { border-bottom-color: var(--accent); }
 .resize-handle.is-bottom-left, .resize-handle.is-bottom-right { z-index: 3; bottom: -8px; width: 12px; height: 12px; }
 .resize-handle.is-bottom-left { left: -8px; cursor: nesw-resize; }
 .resize-handle.is-bottom-right { right: -8px; cursor: nwse-resize; }
@@ -589,6 +589,9 @@ td.muted, small.muted { color: var(--text-3); }
 .period .text-button { max-width: 100%; height: 28px; min-height: 28px; padding: 4px 10px; white-space: nowrap; text-align: center; }
 .period .period-name { min-width: 0; }
 .period-name > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.period-caption { position: relative; }
+.period-caption > [aria-hidden] { visibility: hidden; }
+.period-caption > span:last-child { position: absolute; inset: 0; contain: size layout; overflow: hidden; text-overflow: ellipsis; }
 .period .icon-button { width: 28px; height: 28px; flex: 0 0 28px; }
 .period .icon-button svg { stroke-width: 1.6; stroke-linejoin: round; }
 .period .icon-button:disabled { opacity: .35; pointer-events: none; }
@@ -622,7 +625,7 @@ td.muted, small.muted { color: var(--text-3); }
 .plot-layer.is-under { z-index: 0; }
 .plot-overlay { z-index: 3; }
 .plot-clip { position: absolute; top: 0; bottom: 0; overflow: hidden; }
-.plot-move { position: absolute; top: 0; height: 100%; }
+.plot-move { position: absolute; top: 0; height: 100%; transform-origin: 0 0; }
 .plot-crop, .plot-unclip { position: absolute; inset: 0; }
 .plot-crop { overflow: hidden; }
 .plot-move > svg, .plot-overlay > svg { display: block; width: 100%; height: 100%; overflow: visible; }
@@ -971,9 +974,9 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 
-html:has(.compact) { scrollbar-gutter: auto; }
-html:has(.compact.is-native) { background: transparent; }
-body:has(.compact)::before, body:has(.compact)::after { display: none; }
+html[data-compact] { scrollbar-gutter: auto; }
+html:root[data-compact="native"] { background: transparent; }
+:where(html)[data-compact] body::before, :where(html)[data-compact] body::after { display: none; }
 .compact { padding: 10px; min-width: 0; border-radius: var(--popup-radius); background-color: var(--surface); }
 .compact > header { display: flex; align-items: center; gap: 8px; padding: 2px 2px 8px; }
 .compact h1 { font-size: 15px; margin: 0; flex: 1; }

@@ -37,7 +37,7 @@ async function fixture(holdPreparation=false){
   const reader=(scope:'quota'|'budget')=>{
     const context={read:null as unknown as HistoryEnv['read'],boardPeriod:{transport},scope,family:'budget',pan:{get:()=>null},expandHistory};
     runInNewContext(ts.transpileModule('globalThis.read=({'+readLine+'}).read;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
-    return new HistoryStore({read:context.read,now:()=>NOW,preparations:null,setTimeout:()=>({}),clearTimeout:()=>{},dropTimeRange:()=>{}},undefined,scope,pool);
+    return new HistoryStore({sharedTransport:true,read:context.read,now:()=>NOW,preparations:null,setTimeout:()=>({}),clearTimeout:()=>{},dropTimeRange:()=>{}},undefined,scope,pool);
   };
   const quota=reader('quota'),budget=reader('budget');
   const start=async(store:HistoryStore)=>{store.choose('1h',{from:NOW-H,to:NOW-5*M});store.open('b');store.hello('run');store.snapshot(['s'],['s w']);await flush();};
@@ -52,24 +52,30 @@ async function fixture(holdPreparation=false){
   }catch(error){await close();throw error;}
 }
 
-for(const outcome of ['reply','failure'] as const)test(`a coalesced native HTTP keeps its borrowed slot through ${outcome} across a work edit and another reader`,async()=>{
+for(const outcome of ['reply','failure'] as const)test(`a coalesced native HTTP keeps its shared slot through ${outcome} across a work edit and another reader`,async()=>{
   const h=await fixture();
   try{
+    const physicalBefore=h.sends.length;
     await h.start(h.budget);assert.equal(h.old.signal.aborted,false,'current native evidence remains useful');
+    const queued=[...(h.budget as unknown as {flights:Set<{submitted:boolean;started:boolean}>}).flights];
+    assert.equal(queued.length,1);assert.equal(queued[0].submitted,true);assert.equal(queued[0].started,false,'the recipient is queued before physical HTTP admission');
+    assert.equal(h.sends.length,physicalBefore);assert.deepEqual(h.active(),[h.old],'another reader cannot duplicate the shared visible admission');
     assert.ok(h.active().length<=2,'the retained response and new reads share the same two slots');
-    assert.equal(h.pool.activeFlights,2);
+    assert.equal(h.pool.activeFlights,1,'the shared transport owns the one visible HTTP slot');
     if(outcome==='reply')h.old.answer();else h.old.fail();await flush();assert.ok(h.active().length<=2);
     for(let i=0;h.active().length;i++){assert.ok(i<20);for(const send of h.active())send.answer();await flush();assert.ok(h.active().length<=2);}
     assert.equal(h.pool.activeFlights,0);assert.equal(h.pool.estimatedBytes,h.quota.estimatedBytes+h.budget.estimatedBytes);
+    assert.ok(h.sends.length>physicalBefore);assert.ok(h.sends.some(send=>send.body.budget),'the queued budget recipient reaches physical HTTP');
+    assert.ok(h.quota.get().history);assert.ok(h.budget.get().history);assert.equal(h.quota.get().loading,false);assert.equal(h.budget.get().loading,false);
     assert.equal(h.quota.get().error,undefined);assert.equal(h.budget.get().error,undefined);
   }finally{await h.close();assert.equal(h.pool.activeFlights,0);assert.equal(h.pool.estimatedBytes,0);}
 });
 
-test('reset keeps a cancelled borrowed slot until the late recipient settles',async()=>{
+test('reset keeps a cancelled shared slot until the late recipient settles',async()=>{
   const h=await fixture(true);
   try{
     h.old.answer();await flush();assert.equal(h.preparing(),true);
-    h.quota.close();h.transport.reset();assert.equal(h.pool.activeFlights,1,'recipient preparation still owns the borrowed transport');
+    h.quota.close();h.transport.reset();assert.equal(h.pool.activeFlights,1,'recipient preparation still owns the shared transport');
     h.finish();await flush();assert.equal(h.pool.activeFlights,0);assert.equal(h.pool.estimatedBytes,0);
   }finally{await h.close();}
 });

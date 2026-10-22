@@ -1,137 +1,170 @@
 import {Cdp, type Browser} from './cdp.js';
+import {deadline, devtoolsJson} from './deadline.js';
+import {safeEvidence} from './evidence.js';
+import type {ProcessIdentity} from './browserProcess.js';
 
-type Frame={functionName:string;url:string;location:{scriptId:string;lineNumber:number;columnNumber:number}};
-type Profile={nodes:{id:number;callFrame:{functionName:string;url:string;lineNumber:number;columnNumber:number}}[];samples?:number[];timeDeltas?:number[]};
-type Process={type:string;id:number;cpuTime:number};
 type DocumentMark={atMs:number;frame?:string;loader?:string};
 export type DiagnosticOrigin={startedAt:number;navigation:()=>{requested?:DocumentMark;committed?:DocumentMark;loadAtMs:number|null}};
+type Options = {mode?: 'canonical' | 'diagnostic'; profileBeforeInput?: boolean; postmortem?:boolean; closeTarget?: () => Promise<void>;signal?:AbortSignal;origin?:DiagnosticOrigin};
+type Process = {type: string; id: number; cpuTime: number};
+type ProcessSample = {status: 'pending' | 'observed' | 'unavailable'; fromMs: number; toMs: number | null; processes?: ProcessIdentity[]; omitted?: number};
+let serial = 0;
 
-/** Diagnostic commands must not wait for the page whose input acknowledgement is missing. */
-export async function bounded<T>(label:string,work:Promise<T>,ms=5000,signal?:AbortSignal):Promise<T>{
-  let timer:ReturnType<typeof setTimeout>;
-  let abort:()=>void=()=>{};
-  try{return await Promise.race([work,new Promise<never>((_,reject)=>{
-    timer=setTimeout(()=>reject(new Error(label+': diagnostic deadline')),ms);
-    abort=()=>reject(signal!.reason);signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
-  })]);}
-  finally{clearTimeout(timer!);signal?.removeEventListener('abort',abort);}
-}
+/** Cancellation releases the underlying CDP waiters, not just the outer Promise. */
+export const bounded = <T>(label: string, work: (signal: AbortSignal) => Promise<T>, ms = 5000, signal?: AbortSignal) =>
+  deadline(ms, work, signal).catch(error => {if (error instanceof Error && error.message === 'deadline exceeded') throw new Error(label + ': diagnostic deadline'); throw error;});
 
-/** Samples the page and browser independently; diagnostic intervention cannot supply a passing gate. */
-export async function observeReversal(page:Cdp,browser:Browser,profileBeforeInput=true,signal?:AbortSignal,origin?:DiagnosticOrigin){
-  const startedAt=origin?.startedAt??Date.now();
-  const mark=()=>({atMs:Date.now()-startedAt,navigation:origin?.navigation()});
-  const timing:Record<string,ReturnType<typeof mark>>={observerStarted:mark()};
-  signal?.throwIfAborted();
-  const response=await fetch(browser.endpoint+'/json/version',{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(5000)]):AbortSignal.timeout(5000)});
-  if(!response.ok)throw new Error('diagnostic browser endpoint refused');
-  const {webSocketDebuggerUrl}=await response.json() as {webSocketDebuggerUrl:string};
-  signal?.throwIfAborted();
-  const control=await Cdp.connect(webSocketDebuggerUrl,signal);
-  timing.browserConnected=mark();
-  let paused:Frame[]=[],capture:Promise<void>|null=null,profileActive=false,profilerEnabled=false,debuggerEnabled=false,pauseNotify:(()=>void)|null=null;
-  let closed=false,independent:Cdp|undefined;
-  const closeConnections=()=>{closed=true;independent?.close();control.close();};
-  signal?.addEventListener('abort',closeConnections,{once:true});
-  const step=<T>(label:string,run:()=>Promise<T>,ms=5000)=>{
-    signal?.throwIfAborted();if(closed)throw new Error('diagnostic observer closed');
-    return bounded(label,run(),ms,signal);
+/** Canonical observation is passive until the unchanged command deadline has failed. */
+export async function observeReversal(page: Cdp, browser: Browser, options: Options = {}) {
+  const diagnostic = options.mode === 'diagnostic';
+  const id = ++serial, signal = options.signal&&browser.owner?AbortSignal.any([options.signal,browser.owner.signal]):options.signal??browser.owner?.signal;
+  let intervention = false, capture: Promise<void> | undefined, released = false;
+  let cancelPassive: (() => void) | undefined;
+  const report: Record<string, unknown> = {id, mode: diagnostic ? 'diagnostic' : 'canonical', ownedBrowser: Boolean(browser.owned)};
+  if(diagnostic||options.postmortem&&browser.owned){
+    const sources:{scriptId:string;sourceHash:string;sourceLength:number}[]=[];
+    page.on<{scriptId:string;url:string;hash:string;length:number}>('Debugger.scriptParsed',event=>{
+      let pathname:string;try{const url=new URL(event.url);if(!['http:','https:'].includes(url.protocol))return;pathname=url.pathname;}catch{return;}
+      if(/^\/assets\/index-[\w-]+\.js$/.test(pathname)&&/^[\da-f]{64}$/i.test(event.hash)&&sources.length<4){sources.push({scriptId:event.scriptId,sourceHash:event.hash.toLowerCase(),sourceLength:event.length});report.sources=sources;}
+    });
+    page.on<{reason:string;callFrames:{location:{scriptId:string;lineNumber:number;columnNumber:number}}[]}>('Debugger.paused',event=>{
+      report.pause={reason:event.reason,frames:event.callFrames.slice(0,16).map(({location:{scriptId,lineNumber,columnNumber}})=>({scriptId,lineNumber,columnNumber})),omitted:Math.max(0,event.callFrames.length-16)};
+    });
+  }
+  const store = () => {
+    const safe = safeEvidence(report);
+    browser.owner?.evidence?.save('cdp-' + id, safe);
+    console.error('reversal diagnostic ' + JSON.stringify(safe));
   };
-  page.on<{callFrames:Frame[]}>('Debugger.paused',event=>{if(!closed){timing.paused=mark();paused=event.callFrames;pauseNotify?.();}});
-  const processes=()=>step('browser process information',()=>control.send<{processInfo:Process[]}>('SystemInfo.getProcessInfo')).then(r=>r.processInfo);
-  let before:Process[],observedAt=0;
-  const enable=async()=>{
-    await step('enable debugger',()=>{debuggerEnabled=true;return page.send('Debugger.enable');});
-    await step('enable profiler',()=>{profilerEnabled=true;return page.send('Profiler.enable');});
-    timing.profileRequested=mark();
-    await step('start profiler',()=>{profileActive=true;return page.send('Profiler.start');});
-    timing.profileStarted=mark();
+  const send = (method: string, pending: AbortSignal) => page.send(method, {}, pending);
+  // Host read brackets and raw proc ticks do not identify page work or continuous liveness.
+  const sampleProcesses = async (pending?: AbortSignal): Promise<ProcessSample> => {
+    const fromMs = performance.now();
+    try {
+      if (!browser.owned || !browser.observeProcesses) throw new Error('owned process observation unavailable');
+      const processes = await bounded('owned process observation', reading => browser.observeProcesses!(reading), 1000, pending);
+      pending?.throwIfAborted();
+      return {status: processes.length ? 'observed' : 'unavailable', fromMs, toMs: performance.now(), processes: processes.slice(0, 32), omitted: Math.max(0, processes.length - 32)};
+    } catch {return {status: 'unavailable', fromMs, toMs: performance.now()};}
   };
-  const cleanup=async()=>{
-    // Requested V8 commands need cleanup even when their acknowledgement never arrives.
-    const ms=signal?1000:5000;
-    if(debuggerEnabled)await bounded('resume cleanup',page.send('Debugger.resume'),ms).catch(()=>{});
-    if(profileActive)await bounded('stop profiler cleanup',page.send('Profiler.stop'),ms).catch(()=>{});
-    if(profilerEnabled)await bounded('disable profiler cleanup',page.send('Profiler.disable'),ms).catch(()=>{});
-    if(debuggerEnabled)await bounded('disable debugger cleanup',page.send('Debugger.disable'),ms).catch(()=>{});
-  };
-  try{
-    before=await processes();
-    observedAt=Date.now();
-    timing.processBefore=mark();
-    if(profileBeforeInput)await enable();
-  }catch(error){closeConnections();signal?.removeEventListener('abort',closeConnections);await cleanup();throw error;}
-  const sample=async(label:string)=>{
-    let browserCpu:unknown,native:unknown,pageState:unknown,independentState:unknown,activation:unknown,pause:unknown,event:unknown,top:unknown;
-    let cpuElapsedMs:number|undefined;
-    const frames=[];
-    try{
-    // Start /proc capture before waiting on either renderer socket. Optional native stacks
-    // may take longer, so page and browser probes continue independently of that capture.
-    const renderer=before.find(p=>p.type==='renderer');
-    const nativeProbe=(async()=>{
-      if(!browser.diagnostics)return;
-      timing.nativeStarted=mark();
-      try{native=await step('native process state',()=>browser.diagnostics!(before.map(p=>p.id),renderer?.id),25000).catch(error=>String(error));}
-      finally{timing.nativeFinished=mark();}
-    })();
-    const expression='({timeOrigin:performance.timeOrigin,visibility:document.visibilityState,focus:document.hasFocus(),ready:document.readyState})';
-    const pageProbe=(async()=>{
-      timing.pageStarted=mark();
-      try{pageState=await step('page state before debugger',()=>page.send<{result?:{value?:unknown}}>('Runtime.evaluate',{expression,returnByValue:true})).then(r=>r.result?.value,error=>String(error));}
-      finally{timing.pageFinished=mark();}
-    })();
-    const independentProbe=(async()=>{
-      if(!page.endpoint)return;
-      timing.independentStarted=mark();
-      try{
-        signal?.throwIfAborted();independent=await Cdp.connect(page.endpoint,signal);
-        independentState=await step('independent page state',()=>independent!.evaluate(expression));
-      }catch(error){independentState=String(error);}
-      finally{timing.independentFinished=mark();independent?.close();independent=undefined;}
-    })();
-    await Promise.all([nativeProbe,pageProbe,independentProbe]);
-    const after=await processes().catch(error=>String(error));
-    timing.processAfter=mark();
-    cpuElapsedMs=Date.now()-observedAt;
-    browserCpu=Array.isArray(after)?after.map(p=>({type:p.type,id:p.id,cpuSeconds:p.cpuTime,cpuDeltaSeconds:p.cpuTime-(before.find(prior=>prior.id===p.id)?.cpuTime??p.cpuTime)})):after;
-    activation=profileBeforeInput?'before input':await enable().then(()=> 'after stall',error=>String(error));
-    const pausedEvent=new Promise<void>(resolve=>{pauseNotify=resolve;});
-    timing.pauseRequested=mark();
-    pause=await step('pause page',()=>page.send('Debugger.pause')).then(()=> 'answered',error=>String(error));
-    event=pause==='answered'?await step('paused event',()=>pausedEvent).then(()=> 'received',error=>String(error)):'no reply';
-    for(const frame of paused.slice(0,10)){
-      const source=await step('paused script',()=>page.send<{scriptSource:string}>('Debugger.getScriptSource',{scriptId:frame.location.scriptId})).then(r=>r.scriptSource.split('\n')[frame.location.lineNumber]?.slice(frame.location.columnNumber,frame.location.columnNumber+240),error=>String(error));
-      frames.push({name:frame.functionName,url:frame.url,line:frame.location.lineNumber,column:frame.location.columnNumber,code:source});
+  const release = async () => {
+    if (!intervention || released) return;
+    released = true;
+    // Sending pause may have taken effect even if its reply never arrived.
+    let resumed = false;
+    try {
+      await bounded('release diagnostic', async pending => {
+        await send('Debugger.resume', pending); resumed = true;
+        await send('Profiler.stop', pending).catch(() => {});
+        await send('Debugger.disable', pending);
+      }, 2000);
+    } catch {report.cleanup = 'release incomplete';}
+    report.resumed = resumed;
+    if (!resumed) {
+      page.close();
+      try {await options.closeTarget?.();} catch {report.cleanup = 'owned target close unconfirmed';}
+      browser.owner?.failures.push('diagnostic resume unconfirmed');
     }
-    const profile=await step('stop profiler',()=>page.send<{profile:Profile}>('Profiler.stop')).then(r=>r.profile,error=>String(error));profileActive=false;
-    timing.profileFinished=mark();
-    top=profile;
-    if(typeof profile!=='string'){
-      const durations=new Map<number,number>();
-      profile.samples?.forEach((id,i)=>durations.set(id,(durations.get(id)??0)+(profile.timeDeltas?.[i]??0)/1000));
-      top=[...durations].sort((a,b)=>b[1]-a[1]).slice(0,15).map(([id,ms])=>({ms,frame:profile.nodes.find(n=>n.id===id)?.callFrame}));
-    }
-    }finally{
-      console.error('reversal diagnostic '+JSON.stringify({label,startedAt,elapsedMs:Date.now()-observedAt,timing,activation,browserCpu,cpuElapsedMs,native,pageState,independentState,pagePause:pause,pausedEvent:event,pausedFrames:frames,profile:top,aborted:signal?.aborted||undefined}));
-    }
-    await step('resume page',()=>page.send('Debugger.resume')).catch(()=>{});
   };
+  const enable = async (pending: AbortSignal) => {
+    intervention = true;
+    await send('Debugger.enable', pending);
+    await send('Profiler.enable', pending);
+    await send('Profiler.start', pending);
+  };
+  const liveness = async (pending: AbortSignal) => {
+    let control: Cdp | undefined;
+    try {
+      await bounded('browser liveness', async alive => {
+        const reply = await devtoolsJson(browser.endpoint + '/json/version', alive) as {webSocketDebuggerUrl?: string};
+        report.browserAlive = true;
+        if (!browser.owned) {report.native = 'unavailable for attached browser'; return;}
+        if (typeof reply.webSocketDebuggerUrl !== 'string') throw new Error('browser connection unavailable');
+        const connected=await Cdp.connect(reply.webSocketDebuggerUrl, alive);
+        if(alive.aborted){connected.close();alive.throwIfAborted();}
+        control=connected;
+        const processes = await control.send<{processInfo: Process[]}>('SystemInfo.getProcessInfo', {}, alive);
+        report.processes = processes.processInfo.map(({type, id, cpuTime}) => ({type, id, cpuTime}));
+        if (browser.diagnostics) report.native = await browser.diagnostics(processes.processInfo.map(value => value.id), undefined, alive);
+      }, 2000, pending);
+    } catch {report.livenessStatus = 'unavailable';}
+    finally {control?.close();}
+  };
+  const collect = async (label: string) => {
+    report.scenario = label; report.command = page.snapshot();
+    if(options.origin){
+      const {requested,committed,loadAtMs}=options.origin.navigation();
+      const mark=(value:DocumentMark|undefined)=>value?{atMs:value.atMs,frameId:value.frame,loaderId:value.loader}:undefined;
+      report.startedAt=options.origin.startedAt;
+      report.navigation={requested:mark(requested),committed:mark(committed),loadAtMs};
+    }
+    try {
+      await bounded('failure collection', async pending => {
+        await Promise.all([
+          sampleProcesses(pending).then(sample => {if (!pending.aborted) report.failedProcesses = sample;}),
+          liveness(pending),
+          bounded('page liveness', async probe => {
+            report.page = await page.evaluate('({visibility:document.visibilityState,focus:document.hasFocus(),ready:document.readyState})', probe);
+          }, 2000, pending).catch(() => {report.page = 'unresponsive';}),
+        ]);
+        // A failed owned page can be inspected after its original deadline;
+        // accepted commands and attached browsers remain passive.
+        const postmortem=options.postmortem&&browser.owned&&page.snapshot().failure&&report.page==='unresponsive';
+        if (diagnostic||postmortem) {
+          if(postmortem)report.postmortem=true;
+          if (!intervention) await enable(pending);
+          await send('Debugger.pause', pending);
+          const profile = await page.send<{profile: {samples?: number[]; timeDeltas?: number[]}}>('Profiler.stop', {}, pending);
+          report.profile = {samples: profile.profile.samples?.length, microseconds: profile.profile.timeDeltas?.reduce((sum, value) => sum + value, 0)};
+        }
+      }, 5000, signal);
+    } catch {report.collection = 'incomplete';}
+    finally {await release(); store();}
+  };
+  if (diagnostic && options.profileBeforeInput) {
+    try {await bounded('diagnostic setup', enable, 5000, signal);}
+    catch (error) {await release(); store(); throw error;}
+  }
   return {
-    diagnose(label:string){return capture=sample(label);},
-    async watch<T>(label:string,run:()=>Promise<T>){
-      const timer=setTimeout(()=>{capture=sample(label).catch(error=>{console.error('reversal diagnostic failed: '+String(error));});},5000);
-      try{
-        const result=await run();
-        if(capture)throw new Error(label+': response arrived after diagnostic intervention');
+    async diagnose(label:string){signal?.throwIfAborted();capture??=collect(label);await capture;signal?.throwIfAborted();},
+    async watch<T>(label: string, run: () => Promise<T>) {
+      signal?.throwIfAborted();
+      delete report.waiting; delete report.waitingProcesses;
+      const passive = new AbortController(), pending = signal ? AbortSignal.any([signal, passive.signal]) : passive.signal;
+      let waiting: {scenario: string; command: ReturnType<Cdp['snapshot']>; sample: ProcessSample} | undefined;
+      const cancel = () => {
+        passive.abort();
+        if (waiting?.sample.status === 'pending') waiting.sample = {status: 'unavailable', fromMs: waiting.sample.fromMs, toMs: performance.now()};
+      };
+      cancelPassive = cancel;
+      const timer = setTimeout(() => {
+        if (pending.aborted) return;
+        report.waiting = page.snapshot();
+        if (diagnostic) capture ??= collect(label);
+        else {
+          waiting = {scenario: label, command: page.snapshot(), sample: {status: 'pending', fromMs: performance.now(), toMs: null}};
+          report.waitingProcesses = waiting;
+          const entry = waiting;
+          void sampleProcesses(pending).then(sample => {if (!pending.aborted) entry.sample = sample;});
+        }
+      }, 5000);
+      try {
+        const result = await run();
+        if (capture) throw new Error(label + ': response arrived after diagnostic intervention');
         return result;
-      }finally{clearTimeout(timer);if(capture)await capture;}
+      } catch (error) {
+        clearTimeout(timer);
+        cancel();
+        report.status = 'failed';
+        capture ??= collect(label);
+        await capture;
+        throw error;
+      } finally {clearTimeout(timer); cancel(); if (cancelPassive === cancel) cancelPassive = undefined;}
     },
-    async close(){
-      try{
-        if(capture)await capture.catch(()=>{});
-        await cleanup();
-      }finally{closeConnections();signal?.removeEventListener('abort',closeConnections);}
+    async close() {
+      cancelPassive?.();
+      try {if (capture) await capture;}
+      finally {await release();}
     },
   };
 }

@@ -17,6 +17,21 @@ pub struct Head {
     pub target: Target,
     pub anchor: Option<(i32, i32)>,
 }
+pub struct MainRequests {
+    started: u64,
+    opened: u64,
+}
+impl MainRequests {
+    pub fn new(started: Head) -> Self {
+        Self { started: started.revision, opened: 0 }
+    }
+    pub fn opened(&mut self, revision: u64) {
+        self.opened = self.opened.max(revision);
+    }
+    pub fn pending(&self, head: Head) -> Option<Head> {
+        (head.target == Target::Main && head.revision > self.started && head.revision > self.opened).then_some(head)
+    }
+}
 #[derive(Default)]
 pub struct Foreground {
     pub head: Head,
@@ -73,6 +88,34 @@ impl Foreground {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_unopened_main_survives_an_older_engine_without_replaying_closed_windows() {
+        let mut foreground = Foreground::default();
+        let panel = foreground.accept(Role::Compact, None, false, None);
+        let mut engine = MainRequests::new(panel);
+        let main = foreground.accept(Role::Main, None, false, None);
+        assert_eq!(engine.pending(main), Some(main), "an exiting panel engine has not opened the new main");
+        engine.opened(main.revision);
+        assert!(engine.pending(main).is_none(), "closing a main that actually opened must not reopen it");
+        let next = foreground.accept(Role::Main, None, false, None);
+        assert_eq!(engine.pending(next), Some(next));
+        engine.opened(next.revision);
+        engine.opened(main.revision);
+        assert!(engine.pending(next).is_none(), "an older surface callback cannot forget a fulfilled request");
+    }
+    #[test]
+    fn a_new_engine_does_not_retry_its_initial_main_or_a_superseded_request() {
+        let mut foreground = Foreground::default();
+        let main = foreground.accept(Role::Main, None, false, None);
+        let engine = MainRequests::new(main);
+        assert!(engine.pending(main).is_none(), "starting a fresh engine already fulfills the launch attempt");
+        let newer = foreground.accept(Role::Main, None, false, None);
+        assert_eq!(engine.pending(newer), Some(newer));
+        let panel = foreground.accept(Role::Compact, None, false, None);
+        assert!(engine.pending(panel).is_none(), "a newer panel owns its existing recovery path");
+        let cancelled = foreground.cancel(panel.revision, false, None).unwrap();
+        assert!(engine.pending(cancelled).is_none(), "a cancellation must remain terminal");
+    }
     #[test]
     fn workers_cannot_overtake_the_accepted_main_panel_or_cancellation() {
         let mut foreground = Foreground::default();

@@ -116,16 +116,16 @@ test('actual Activity composition resolves retained stacks and the new legend to
     history:{board:'b'},authority:1,arrange:{view:{}},titles:{},drawing:{range:'24h',since:0},pins:[['A',CATEGORY_COLORS[8]]] as ProjectColorPins,colorsReady:true,resolveProjectColors,groupRegistry,
     activity:{barMs:60_000,by:{project:[] as ActivityGroup[]},cells:[]},drawnActivity:{barMs:60_000,by:{project:[] as ActivityGroup[]},cells:[]},currentGroups:[] as ActivityGroup[],
     board:'b',EMPTY_ACTIVITY:{},emptyFrame:null,panning:null,answered:true,error:undefined,from:0,to:length,since:null,onBase:()=>{},setTimeRange:()=>{},plot:undefined,navigation:{context:'b',range:'24h'},
-    render:null as unknown as ()=>Frame,Stacks:null as unknown as (props:object)=>React.ReactNode,
+    render:null as unknown as ()=>Frame,Stacks:null as unknown as (props:object)=>React.ReactNode,StackArtwork:null as unknown as (props:object)=>React.ReactNode,
   };
-  runInNewContext(ts.transpileModule(`function render(){${region}\n${details}\nreturn {element:(${element}),prepared};}\nglobalThis.render=render;\n${source.slice(source.indexOf('const Stacks = memo(function Stacks('))}\nglobalThis.Stacks=Stacks;`,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React}}).outputText,context);
+  runInNewContext(ts.transpileModule(`function render(){${region}\n${details}\nreturn {element:(${element}),prepared};}\nglobalThis.render=render;\n${source.slice(source.indexOf('const StackArtwork = memo(function StackArtwork('))}\nglobalThis.Stacks=Stacks;globalThis.StackArtwork=StackArtwork;`,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React}}).outputText,context);
   const frame=(names:string[])=>{
     context.groups=names.map(name=>({key:JSON.stringify(name),name,cells:Array.from({length:480},(_,i):[number,number]=>[i*60_000,60_000]),agentMs:60_000,activeMs:60_000,agents:1}));
     context.colors=groupColors(context.groups,'project',{} as Parameters<typeof groupColors>[2],()=> '');
     context.shown=context.groups.map((group,i)=>({group,color:context.colors[i],name:group.name!}));
     context.activity=context.drawnActivity={barMs:60_000,by:{project:context.groups},cells:[]};context.currentGroups=context.groups;context.numeric={history:{range:'24h',activity:context.activity},since:null};
   };
-  const nodes=(node:React.ReactNode):React.ReactElement<Record<string,unknown>>[]=>Array.isArray(node)?node.flatMap(nodes):React.isValidElement<Record<string,unknown>>(node)?[node,...nodes(node.props.children as React.ReactNode)]:[];
+  const nodes=(node:React.ReactNode):React.ReactElement<Record<string,unknown>>[]=>Array.isArray(node)?node.flatMap(nodes):React.isValidElement<Record<string,unknown>>(node)?node.type===context.StackArtwork?nodes(context.StackArtwork(node.props)):[node,...nodes(node.props.children as React.ReactNode)]:[];
   const render=()=>{
     let current!:Frame,paths!:React.ReactElement<Record<string,unknown>>[],legend!:React.ReactElement<Record<string,unknown>>[];
     // React flushes a parent's state from a child's layout effect before painting.
@@ -175,6 +175,8 @@ test('actual Activity generators hold one coherent model and produce exact stack
   const source = readFileSync(new URL('../components/Activity.tsx', import.meta.url), 'utf8');
   const start = source.indexOf('  const controls=useMemo(');
   const region = source.slice(start, source.indexOf('  // Numerical consumers keep', start));
+  const stacksStart = source.indexOf('const StackArtwork = memo(function StackArtwork(');
+  assert.ok(stacksStart >= 0, 'the fixture includes the actual prepared stack artwork');
   type Model = {identities: {key: string; name: string | null}[]; shown: {group: PlotGroup; color: string; name: string}[]; strip: PlotBuffer};
   const navigation = {context: 'test', range: 'range'};
   const axis = {box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {from: 0, to: length, end: length}, active: false, screenX: (at: number) => 48 + (at - axis.basis.from) / length * 340, commitDrawing: () => {}};
@@ -187,9 +189,9 @@ test('actual Activity generators hold one coherent model and produce exact stack
     useTimeAxis: () => axis,
     useTip: () => ({tip: {current: null}, style: {}}), PlotLayer: () => null, PlotOverlay: () => null, Tooltip: () => null,
     clock: () => '', shortDay: () => '', workHours: () => '', stamp: () => '', t: (key: string) => key,
-    prepareParent: null as unknown as () => {value: Model | null; ready: boolean}, Stacks: null as unknown as (props: object) => React.ReactNode,
+    prepareParent: null as unknown as () => {value: Model | null; ready: boolean}, Stacks: null as unknown as (props: object) => React.ReactNode, StackArtwork: null as unknown as (props: object) => React.ReactNode,
   };
-  runInNewContext(ts.transpileModule(`function prepareParent(){${region}\nglobalThis.paint=paint;return prepared;}\n${source.slice(source.indexOf('const Stacks = memo(function Stacks('))}\nglobalThis.prepareParent=prepareParent;globalThis.Stacks=Stacks;`, {compilerOptions: {target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React}}).outputText, context);
+  runInNewContext(ts.transpileModule(`function prepareParent(){${region}\nglobalThis.paint=paint;return prepared;}\n${source.slice(stacksStart)}\nglobalThis.prepareParent=prepareParent;globalThis.Stacks=Stacks;globalThis.StackArtwork=StackArtwork;`, {compilerOptions: {target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React}}).outputText, context);
   const renderParent = () => {Object.assign(context, parent); parent.begin(); return context.prepareParent();};
   assert.equal(renderParent().value, null); assert.equal(aggregates, 0); parent.commit(); parent.finish();
   const first = renderParent().value!; assert.equal(first.identities.length, 30); assert.equal(aggregates, 1);
@@ -209,6 +211,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
   const pathsOf = (node: React.ReactNode): string[] => {
     if (Array.isArray(node)) return node.flatMap(pathsOf);
     if (!React.isValidElement<{className?: string; d?: string; children?: React.ReactNode}>(node)) return [];
+    if (node.type === context.StackArtwork) return pathsOf(context.StackArtwork(node.props));
     return node.props.className === 'activity-stack' && node.props.d !== undefined ? [node.props.d] : pathsOf(node.props.children);
   };
   const props = {detailFrame:null,renderDetails:()=>({summary:null,legend:null}),activity: {barMs}, origin: 0, groups: current.shown,paint:context.paint, from: 0, to: length, unknownTo: null, plot: undefined, onBase: () => {}, onSelect: () => {}, strip: current.strip as PlotBuffer | null, prepared: true, navigation, by: 'project',  empty: null};
@@ -216,6 +219,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
   assert.deepEqual(renderChild(), []); assert.equal(draws, 0); child.commit(); child.finish();
   const actual = renderChild();
   const expected = new StackPaths().draw(current.shown, 0, 340 / length, barMs, 160, activityScale(465 * 60_000).max);
+  assert.ok(actual.some(path => path.length > 0), 'prepared stacks contain nonempty geometry');
   assert.deepEqual([...actual], expected); assert.equal(draws, 1);
   const beforePalette=aggregates;
   context.pins=[['s0',CATEGORY_COLORS[1]]];

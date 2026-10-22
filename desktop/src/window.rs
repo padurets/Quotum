@@ -96,6 +96,26 @@ impl PanelToggle {
         self.wanted
     }
 }
+#[cfg(any(windows, test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoadingActivation {
+    Show,
+    Foreground,
+    Focus,
+}
+
+// Native show and focus calls can dispatch another window request before returning.
+#[cfg(any(windows, test))]
+pub fn activate_loading(mut current: impl FnMut() -> bool, mut action: impl FnMut(LoadingActivation)) -> bool {
+    for operation in [LoadingActivation::Show, LoadingActivation::Foreground, LoadingActivation::Focus] {
+        if !current() {
+            return false;
+        }
+        action(operation);
+    }
+    current()
+}
+
 #[cfg(not(target_os = "linux"))]
 pub fn panel_target(state: &HubState) -> Url {
     let mut url = target(state);
@@ -418,5 +438,233 @@ mod tests {
         assert!(!navigation.request(3, next.clone(), false), "focus does not reload");
         assert!(navigation.request(3, next, true), "explicit reentry does reload");
         assert!(navigation.request(4, first, false), "generation is independent of the URL");
+    }
+
+    #[test]
+    fn loading_activation_stops_when_native_calls_accept_a_new_intent() {
+        use std::cell::RefCell;
+        let steps = [LoadingActivation::Show, LoadingActivation::Foreground, LoadingActivation::Focus];
+        for next_compact in [false, true] {
+            for (stop, stop_operation) in steps.iter().enumerate() {
+                let toggle = RefCell::new(PanelToggle::default());
+                toggle.borrow_mut().show();
+                let request = toggle.borrow().revision();
+                let mut calls = Vec::new();
+                let completed = activate_loading(
+                    || toggle.borrow().requested(request),
+                    |operation| {
+                        calls.push(operation);
+                        if operation == *stop_operation {
+                            if next_compact {
+                                toggle.borrow_mut().show();
+                            } else {
+                                toggle.borrow_mut().close();
+                            }
+                        }
+                    },
+                );
+                assert!(!completed, "a native call accepted a newer request");
+                assert_eq!(calls, steps[..=stop], "already started native calls remain observable");
+                assert_ne!(toggle.borrow().revision(), request);
+            }
+        }
+    }
+
+    #[test]
+    fn a_reentrant_loader_keeps_the_new_revision_without_old_continuation() {
+        use std::cell::{Cell, RefCell};
+        let toggle = RefCell::new(PanelToggle::default());
+        toggle.borrow_mut().show();
+        let first = toggle.borrow().revision();
+        let shown = Cell::new(first);
+        let calls = RefCell::new(Vec::new());
+        let completed = activate_loading(
+            || shown.get() == first && toggle.borrow().requested(first),
+            |operation| {
+                calls.borrow_mut().push((first, operation));
+                if operation == LoadingActivation::Show {
+                    toggle.borrow_mut().show();
+                    let next = toggle.borrow().revision();
+                    shown.set(next);
+                    assert!(activate_loading(
+                        || shown.get() == next && toggle.borrow().requested(next),
+                        |operation| calls.borrow_mut().push((next, operation)),
+                    ));
+                }
+            },
+        );
+        let next = shown.get();
+        assert!(!completed);
+        assert_ne!(first, next);
+        assert_eq!(
+            *calls.borrow(),
+            [
+                (first, LoadingActivation::Show),
+                (next, LoadingActivation::Show),
+                (next, LoadingActivation::Foreground),
+                (next, LoadingActivation::Focus),
+            ]
+        );
+    }
+
+    #[test]
+    fn loading_activation_preserves_a_current_request_and_skips_a_closed_one() {
+        let mut toggle = PanelToggle::default();
+        toggle.show();
+        let request = toggle.revision();
+        let mut calls = Vec::new();
+        assert!(activate_loading(|| toggle.requested(request), |operation| calls.push(operation)));
+        assert_eq!(calls, [LoadingActivation::Show, LoadingActivation::Foreground, LoadingActivation::Focus]);
+        toggle.close();
+        assert!(!activate_loading(|| toggle.requested(request), |_| panic!("a closed loader cannot activate")));
+    }
+}
+
+#[cfg(all(test, windows))]
+mod native_loading_tests {
+    use super::{LoadingActivation, PanelToggle, activate_loading};
+    use std::cell::{Cell, RefCell};
+    use windows_sys::Win32::{
+        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
+        System::LibraryLoader::GetModuleHandleW,
+        UI::{Input::KeyboardAndMouse::SetFocus, WindowsAndMessaging::*},
+    };
+
+    struct Request {
+        toggle: RefCell<PanelToggle>,
+        replace: Option<bool>,
+        showing: Cell<bool>,
+        reentered: Cell<bool>,
+        callbacks: Cell<usize>,
+        borrowed: Cell<bool>,
+    }
+
+    unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+        let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const Request;
+        if message == WM_SHOWWINDOW && w != 0 && !ptr.is_null() {
+            let request = unsafe { &*ptr };
+            request.callbacks.set(request.callbacks.get() + 1);
+            request.reentered.set(request.showing.get());
+            if let Some(compact) = request.replace {
+                if let Ok(mut toggle) = request.toggle.try_borrow_mut() {
+                    if compact {
+                        toggle.show();
+                    } else {
+                        toggle.close();
+                    }
+                } else {
+                    // Do not unwind through the native callback if a guard held its borrow.
+                    request.borrowed.set(true);
+                }
+            }
+        }
+        unsafe { DefWindowProcW(hwnd, message, w, l) }
+    }
+
+    struct Window {
+        hwnd: HWND,
+        class: Vec<u16>,
+        module: HINSTANCE,
+    }
+    impl Drop for Window {
+        fn drop(&mut self) {
+            unsafe {
+                SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
+                DestroyWindow(self.hwnd);
+                UnregisterClassW(self.class.as_ptr(), self.module);
+            }
+        }
+    }
+
+    #[test]
+    fn native_show_callback_retires_the_remaining_loading_activation() {
+        use LoadingActivation::{Focus, Foreground, Show};
+        // The unconditional control shows that Win32 itself does not stop the old tail.
+        for (case, (replace, guarded)) in
+            [(None, true), (Some(false), true), (Some(true), true), (Some(false), false)].into_iter().enumerate()
+        {
+            let request = Box::new(Request {
+                toggle: RefCell::new(PanelToggle::default()),
+                replace,
+                showing: Cell::new(false),
+                reentered: Cell::new(false),
+                callbacks: Cell::new(0),
+                borrowed: Cell::new(false),
+            });
+            request.toggle.borrow_mut().show();
+            let revision = request.toggle.borrow().revision();
+            let class: Vec<u16> = format!("QuotumLoadingCallbackTest{}-{case}", std::process::id())
+                .encode_utf16()
+                .chain(Some(0))
+                .collect();
+            let module = unsafe { GetModuleHandleW(std::ptr::null()) };
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(procedure),
+                hInstance: module,
+                lpszClassName: class.as_ptr(),
+                ..unsafe { std::mem::zeroed() }
+            };
+            assert_ne!(unsafe { RegisterClassW(&wc) }, 0);
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+                    class.as_ptr(),
+                    class.as_ptr(),
+                    WS_POPUP | WS_THICKFRAME,
+                    0,
+                    0,
+                    100,
+                    100,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    module,
+                    std::ptr::null(),
+                )
+            };
+            let window = Window { hwnd, class, module };
+            assert!(!hwnd.is_null());
+            let ptr = (&*request as *const Request) as isize;
+            unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, ptr) };
+            assert_eq!(unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) }, ptr);
+            let mut calls = Vec::new();
+            let mut action = |operation| {
+                calls.push(operation);
+                unsafe {
+                    match operation {
+                        Show => {
+                            request.showing.set(true);
+                            ShowWindow(hwnd, SW_SHOW);
+                            request.showing.set(false);
+                        }
+                        Foreground => {
+                            SetForegroundWindow(hwnd);
+                        }
+                        Focus => {
+                            SetFocus(hwnd);
+                        }
+                    }
+                }
+            };
+            let completed = if guarded {
+                activate_loading(|| request.toggle.borrow().requested(revision), &mut action)
+            } else {
+                for operation in [Show, Foreground, Focus] {
+                    action(operation);
+                }
+                true
+            };
+            assert_eq!(request.callbacks.get(), 1, "the real window must receive its show callback");
+            assert!(request.reentered.get(), "the callback must run inside ShowWindow");
+            assert!(!request.borrowed.get(), "the request guard must release its borrow before native calls");
+            let retired = replace.is_some() && guarded;
+            assert_eq!(completed, !retired);
+            assert_eq!(calls, if retired { vec![Show] } else { vec![Show, Foreground, Focus] });
+            if let Some(compact) = replace {
+                assert_ne!(request.toggle.borrow().revision(), revision);
+                assert_eq!(request.toggle.borrow().wanted(), compact);
+            }
+            drop(window);
+            assert_eq!(unsafe { IsWindow(hwnd) }, 0, "the owned native window must be destroyed");
+        }
     }
 }

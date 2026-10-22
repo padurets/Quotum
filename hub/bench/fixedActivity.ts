@@ -10,6 +10,7 @@ import {defaultFilters} from '../server/domain/dataFilters.js';
 import {ObservedWork} from './observed.js';
 import {openTab,type Browser,type Cdp} from './cdp.js';
 import {historyPoolReceiptScript} from './historyPoolReceipt.js';
+import {historyIdentityScript} from './historyTrafficBrowser.js';
 import {probeScript,type Reading} from './probe.js';
 
 /** The supported shared-filter path keeps the existing combined transport/preparation
@@ -37,7 +38,7 @@ function assertDrawing(body:PeriodRequest,selection:PeriodRequest['selection']) 
   assert.deepEqual(body.selection,selection);
 }
 
-/** The shared reader rebuilds native or Activity drawing cells one tile per request. */
+/** Fixed fine grids batch missing tiles; coarse grids decode one tile at a time. */
 export function assertActivityCancellation(requests:readonly PeriodRequest[],selection:PeriodRequest['selection']) {
   const work=requests.filter(body=>body.sessions),drawing=requests.filter(body=>!body.sessions);
   assert.ok(work.length>=2&&work.length<=3,'cancelled shared-work attempts remain counted');
@@ -50,7 +51,9 @@ export function assertActivityCancellation(requests:readonly PeriodRequest[],sel
     assert.equal(Number(body.quota!.cell),cell);
     const from=Number(body.quota!.from),to=Number(body.quota!.to);
     assert.ok(Number.isSafeInteger(from)&&Number.isSafeInteger(to)&&to>from);
-    assert.equal(Math.floor(from/span),Math.floor((to-1)/span),'a pooled drawing read fits one tile');
+    assert.ok(from%cell===0&&to%cell===0,'drawing endpoints align with their cells');
+    const tiles=Math.floor((to-1)/span)-Math.floor(from/span)+1;
+    assert.ok(tiles<=(cell>=3_600_000?1:MAX_READ_TILES),'a drawing read stays within its fine or coarse tile batch');
     assert.ok(from>=Math.floor(selection.from/span)*span-span&&to<=Math.ceil(selection.to/span)*span+span,'only the selected strip and its buffer are read');
   }
 }
@@ -79,7 +82,7 @@ export function activityOracle(trace:WorkTrace,from:number,to:number):Numbers {
   return {agentMs,activeMs,agents:identities.size};
 }
 
-function observationScript(period:string){return historyPoolReceiptScript()+`;(() => {
+export function fixedActivityScript(period:string){return historyPoolReceiptScript()+';'+historyIdentityScript()+`;(() => {
   localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d',activityBy:'project',filtersVisible:true}));
   const original=window.__quotumInspectHistoryPool,ids=new WeakMap(),news=new Set();let serial=0,pool,scheduler,stats;
   const reset=()=>stats={bytes:0,flights:0,advances:0,jobsStarted:0,fetches:0,preparationMs:0,failedReservations:0,preferenceWrites:0};reset();
@@ -91,13 +94,14 @@ function observationScript(period:string){return historyPoolReceiptScript()+`;((
     const reserve=p.reserve;p.reserve=function(...args){const result=reserve.apply(this,args);stats.bytes=Math.max(stats.bytes,this.estimatedBytes);if(!result)stats.failedReservations++;return result;};
     const request=p.request;p.request=function(owner,flight,start,cancel){return request.call(this,owner,flight,()=>{stats.flights=Math.max(stats.flights,this.active.size);start();},cancel);};
   };
-  window.__quotumInspectPreparations=value=>{scheduler=value;const replace=scheduler.replace;scheduler.replace=function(owner,work,...rest){stats.jobsStarted++;const next=work.next;work.next=function(...args){const start=performance.now();try{stats.advances++;return next.apply(this,args);}finally{stats.preparationMs+=performance.now()-start;}};return replace.call(this,owner,work,...rest);};};
+  const inspectPreparations=window.__quotumInspectPreparations;
+  window.__quotumInspectPreparations=value=>{if(typeof inspectPreparations==='function')inspectPreparations(value);scheduler=value;const replace=scheduler.replace;scheduler.replace=function(owner,work,...rest){stats.jobsStarted++;const next=work.next;work.next=function(...args){const start=performance.now();try{stats.advances++;return next.apply(this,args);}finally{stats.preparationMs+=performance.now()-start;}};return replace.call(this,owner,work,...rest);};};
   const status=()=>{const p=reader(),h=chart()?.get().history,s=p?.activityProjectionState(h),t=p?.transport;return {registered:!!p,error:s?.error,loading:p?.get().loading,ready:s?.ready,calendarPending:!!p?.calendar.demand(),transportPending:!!(t?.scheduled||t?.queue.length||t?.flights.size),preparing:scheduler?.size,flights:pool.activeFlights,bytes:pool.estimatedBytes,members:pool.members.size};};
   window.__quotumFixedActivity={reset,reader,status,observeNews:()=>{const p=reader(),changed=p.changed;p.changed=function(event,...args){if(event?.type==='hub'&&event.event.type==='history')news.add(event.event.data.workSince);return changed.call(this,event,...args);};},heardSince:at=>news.has(at),holdDispatch:()=>{const t=reader().transport,schedule=t.schedule;t.schedule=()=>{};return window.__quotumFixedActivity.resumeDispatch=()=>{t.schedule=schedule;schedule.call(t);};},sample:()=>{
     const p=reader(),c=chart(),h=c?.get().history;if(!h||!p.activityProjectionState(h).ready)return null;
     const a=p.project(h,'quota',Date.now(),true).activity;
     return {...stats,numbers:{agentMs:a.agentMs,activeMs:a.activeMs,agents:a.agents},activity:a,tiles:[...c.grids.values()].flatMap(grid=>[...grid.values()].map(tile=>{if(!ids.has(tile))ids.set(tile,++serial);return[tile.from,tile.to,ids.get(tile)];}))};
-  },ready:()=>{const s=status();return s.ready&&!s.calendarPending&&!s.transportPending&&s.flights===0&&s.preparing===0&&!document.querySelector('.chart>svg[data-draw-ready="false"],.activity.is-loading,.history.is-loading,.budget-history.is-loading,.subscription-funds.is-loading');}};
+  },ready:()=>{const s=status();return !!s.ready&&!s.calendarPending&&!s.transportPending&&s.flights===0&&s.preparing===0&&!document.querySelector('.chart>svg[data-draw-ready="false"],.activity.is-loading,.history.is-loading,.budget-history.is-loading,.subscription-funds.is-loading');}};
 })();`;}
 
 export function assertActivityGestureRange(actual:{from:number;to:number},selection:{from:number;to:number}){
@@ -149,6 +153,15 @@ export function fixedActivityGestureScript(){return `(() => {
   setup='ready';return point;
 })()`;}
 
+type GestureReceipt={complete:boolean;events?:{type:string;trusted:boolean;shift:boolean;target:string|null}[]};
+
+/** A failed native command cannot wait for another renderer command during cleanup. */
+export async function fixedActivityGestureReceipt(cdp:Pick<Cdp,'snapshot'|'evaluate'>):Promise<GestureReceipt|null>{
+  const command=cdp.snapshot();
+  if(command.socketState!==1||command.terminal||command.failure||command.pending.length)return null;
+  return cdp.evaluate<GestureReceipt>('window.__quotumFixedActivityGesture?.finish()??{complete:false,unavailable:true}').catch(()=>null);
+}
+
 /** Physical requests are retained through cancellation and their final response-body accounting. */
 function traffic(cdp:Cdp){
   const bodies:Body[]=[],active=new Map<string,Body>(),pending=new Set<Promise<unknown>>(),errors:unknown[]=[];
@@ -183,7 +196,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:probeScript()});
       await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
       const split=owner.cookie.indexOf('=');await cdp.send('Network.setCookie',{name:owner.cookie.slice(0,split),value:owner.cookie.slice(split+1),url:owner.base,httpOnly:true,sameSite:'Lax'});
-      await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:observationScript(days===1?'24h':'30d')});
+      await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:fixedActivityScript(days===1?'24h':'30d')});
       await cdp.send('Page.navigate',{url:owner.base+`/?from=${selection.from}&to=${selection.to}`});
       const waitFor=async(test:string,deadline=Date.now()+30_000)=>{while(!await cdp.evaluate<boolean>(test)){if(Date.now()>deadline){const state=await cdp.evaluate('window.__quotumFixedActivity?.status()').catch(()=>null);throw Error(`fixed Activity ${days}d did not become coherent: ${JSON.stringify(state)}`);}await pause(30);}};
       await waitFor(`document.querySelectorAll('.activity .legend-item').length>2&&!document.querySelector('.activity.is-loading')`);
@@ -203,7 +216,6 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       const shownRange=()=>cdp.evaluate<{from:number;to:number}>(`(()=>{const p=new URLSearchParams(location.search);if(!p.has('from')||!p.has('to'))throw Error('the gesture must remain historical');return {from:Number(p.get('from')),to:Number(p.get('to'))};})()`);
       // Establish the real release-owned value domains before exercising S/H.
       const gestureStart=await shownRange();assertActivityGestureRange(gestureStart,selection);
-      type GestureReceipt={complete:boolean;events?:{type:string;trusted:boolean;shift:boolean;target:string|null}[]};
       let gestureReceipt:GestureReceipt|null=null;
       try{
         const point=await cdp.evaluate<{x:number;y:number}>(fixedActivityGestureScript());
@@ -217,7 +229,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         await mouse('mouseReleased',point.x+48);await settled();
         await waitFor(`!document.querySelector('.chart>svg[data-pan-end],.chart>svg.is-panning')`);await settled();
       }finally{
-        gestureReceipt=await cdp.evaluate<GestureReceipt>('window.__quotumFixedActivityGesture?.finish()??{complete:false,unavailable:true}').catch(()=>null);
+        gestureReceipt=await fixedActivityGestureReceipt(cdp);
         console.error(`bench: fixed Activity ${days}d native gesture `+JSON.stringify(gestureReceipt));
       }
       assert.ok(gestureReceipt?.complete,'the native historical gesture receipt must be complete');
@@ -434,8 +446,8 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       }),null);
       await phase('through upper bound',async()=>{await actor.through(selection.to);},1);
       await phase('outside range',async()=>{await actor.through(selection.to+100);await waitFor(`window.__quotumFixedActivity.heardSince(${selection.to})`);},0);
-      const receipt=await cdp.evaluate<{status:string;members:{kind:string}[]}>(`(()=>{__quotumHistoryPoolReceipt.mark(2,3);return __quotumHistoryPoolReceipt.read();})()`);
-      assert.equal(receipt.status,'complete');assert.equal(receipt.members.length,4);assert.ok(!receipt.members.some(member=>member.kind==='activity'));
+      const receipt=await cdp.evaluate<{status:string;members:{kind:string}[];[key:string]:unknown}>(`(()=>{__quotumHistoryPoolReceipt.mark(2,3);return __quotumHistoryPoolReceipt.read();})()`);
+      assert.equal(receipt.status,'complete',JSON.stringify(Object.fromEntries(['status','attached','registrationOrderQualified','omitted','errors','snapshotOmitted','summaryOmitted','nearOmitted','sendingUnknown','lastCheckpoint'].map(key=>[key,receipt[key]]))));assert.equal(receipt.members.length,4);assert.ok(!receipt.members.some(member=>member.kind==='activity'));
     }finally{await tab.close();await actor.close();}
   }
   return {reports,problems:[] as string[]};

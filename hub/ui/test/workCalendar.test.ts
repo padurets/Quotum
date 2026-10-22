@@ -64,8 +64,23 @@ test('partial-minute selection and concurrent work precede responsive grouping',
   for(const width of [248,538,1138])for(const view of ['matrix','calendar'] as const){const layout=heatmapLayout(r,width,view,'en');assert.equal(layout.cells.reduce((n,c)=>n+(c.cell.agentMs??0),0),2*(to-from)-2*M);assert.ok(layout.cells.every(c=>c.from>=from&&c.to<=to));assert.ok(layout.cells.every(c=>!c.repeated));}
 });
 test('server-derived partition is bounded and colour thresholds name their resolution',()=>{
-  assert.ok(calendarPartition({from:NOW-31*DAY,to:NOW}).length<=3073);assert.ok(parseCalendar({zone:'UTC'}));assert.equal(parseCalendar({zone:'UTC',edges:[0,1]}),null);
+  assert.ok(calendarPartition({from:NOW-31*DAY,to:NOW}).length<=3073);assert.deepEqual(parseCalendar({zone:'UTC'}),{zone:'UTC'});assert.deepEqual(parseCalendar({zone:'UTC',relative:true}),{zone:'UTC',relative:true});assert.equal(parseCalendar({zone:'UTC',edges:[0,1]}),null);
+  for(const relative of [false,0,1,'true',null])assert.equal(parseCalendar({zone:'UTC',relative}),null);
   assert.deepEqual([0,1,H/2,H,2*H,4*H].map(n=>calendarLevel(n,H)),[0,1,2,3,4,5]);assert.equal(calendarLevel(4*H,4*H),calendarLevel(H,H));assert.equal(exactAgentHours(1,'en'),'0.000000278');
+});
+test('exact hours reuse their locale formatter across values and locale changes',t=>{
+  const created=new Map<string,number>();
+  t.mock.method(Intl,'NumberFormat',new Proxy(Intl.NumberFormat,{construct(target,args){
+    const locale=String(args[0]);created.set(locale,(created.get(locale)??0)+1);
+    return Reflect.construct(target,args);
+  }}));
+  const values=[0,1,H,H+1,12_345*H+H/2];
+  for(const locale of ['en-GB','ru-RU','en-GB','ru-RU']){
+    const separator=locale==='ru-RU'?',':'.';
+    assert.deepEqual(values.map(ms=>exactAgentHours(ms,locale)),
+      ['0','0'+separator+'000000278','1','1'+separator+'000000278','12345'+separator+'5']);
+  }
+  for(const count of created.values())assert.ok(count<=1,'the same locale needs only one formatter');
 });
 test('compact calendar fits all selected dates without separate date rows',()=>{
   const r=reading(NOW-30*DAY,NOW);for(const width of [248,318,538,1138]){const l=heatmapLayout(r,width,'calendar','en');assert.equal(l.height,300);assert.equal(l.cells.reduce((n,c)=>n+(c.cell.agentMs??0),0),30*DAY);assert.ok(l.cells.every(c=>c.x>=0&&c.x+c.width<=width));}
@@ -107,7 +122,7 @@ test('a delayed calendar reply crossing midnight cannot complete the replacement
   h.period.wakeCalendar();await flush();assert.equal(h.requests.filter(r=>r.calendar).length,2);
 });
 test('a selection replacement retires the old generation and hiding removes demand',()=>{
-  const calendar=new WorkCalendar();calendar.configure(true,'a',NOW,false,{mode:'live',periodMs:H});const generation=calendar.generation;calendar.configure(true,'a',NOW,false,{mode:'range',from:NOW-3*H,to:NOW-2*H});assert.ok(calendar.generation>generation);assert.equal(calendar.state.value,null);assert.deepEqual(calendar.demand(),{zone:calendar.state.window.zone});calendar.configure(false,'a',NOW);assert.equal(calendar.demand(),undefined);
+  const calendar=new WorkCalendar();calendar.configure(true,'a',NOW,false,{mode:'live',periodMs:H});const generation=calendar.generation;calendar.configure(true,'a',NOW,false,{mode:'range',from:NOW-3*H,to:NOW-2*H});assert.ok(calendar.generation>generation);assert.equal(calendar.state.value,null);assert.deepEqual(calendar.demand(),{zone:calendar.state.window.zone,relative:true});calendar.configure(false,'a',NOW);assert.equal(calendar.demand(),undefined);
 });
 
 

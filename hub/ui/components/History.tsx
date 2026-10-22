@@ -24,6 +24,7 @@ import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 import {usePlot} from './sizing';
 import {pan, usePanning} from '../lib/pan';
 import {usePrepared} from './prepared';
+import type {Preparation} from '../lib/prepare';
 import {axisNavigation, navigationKey} from '../lib/axisNavigation';
 import {historyProjection, type ProjectionHints} from '../lib/historyProjection';
 import {useQuotaPresentation} from '../lib/dataFilters';
@@ -129,7 +130,7 @@ const WindowHistory = memo(function WindowHistory({arrange,kind='weekly'}: {arra
     const announced = frame.live ? scheduled : null;
     const planAvailable = prefs.kind === 'weekly' && visible.some(line => !line.capCells&&planOf(view, line.sourceId) !== null);
     const planShown = planAvailable && prefs.showPlan;
-    const ahead: {line: PlotLine; drawn: NonNullable<ReturnType<typeof forecastLinePrepared> extends Generator<void, infer R, void> ? R : never>}[] = [];
+    const ahead: {line: PlotLine; drawn: NonNullable<ReturnType<typeof forecastLinePrepared> extends Preparation<infer R> ? R : never>}[] = [];
     for (const line of visible) {
       const source = futureSources.find(s => s.id === line.sourceId);
       const live = source?.windows.find(w => w.id === line.windowId);

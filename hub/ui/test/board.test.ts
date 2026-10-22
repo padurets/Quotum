@@ -83,6 +83,33 @@ test('device contact deltas preserve every board selector and ignore older conta
   assert.equal(accept(next,{type:'deviceContacts',data:{devices:[{deviceId:'a',lastSeenAt:1000}]}}),next);
 });
 
+test('unused calendar summaries retain card and analytics inputs while all displayed data still updates',()=>{
+  const meter={id:'balance',kind:'balance' as const,unit:'USD',amount:'9007199254740993',at:1000,staleAfterMs:10000,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null};
+  const summary={from:0,to:1000,amount:'7',complete:true,knownFrom:0,uncertain:false,unlocated:[]};
+  const spending={day:summary,week:summary,month:summary};
+  const wallet=card('wallet',0,{provider:'openrouter',windows:[],meters:[meter],spending});
+  const funds=card('funds',50,{spending:null});
+  const data=snapshot({sources:[wallet,funds]}),wire=JSON.stringify(data),store=createStore(reduce,INITIAL);
+  store.dispatch({type:'hub',event:{type:'snapshot',data}});
+  const before=store.get().board!,named=selector(store,()=>({select:s=>namedCardsOf(s,'budget'),equal:shallowEqual})),names=named();
+  assert.equal(JSON.stringify(data),wire,'snapshot ingestion does not mutate the wire');
+  const changed={...wallet,spending:{...spending,day:{...summary,from:2000,to:2000,amount:null,complete:false,knownFrom:null}}};
+  const packet=JSON.stringify(changed);
+  store.dispatch({type:'hub',event:{type:'card',data:changed}});
+  assert.equal(store.get().board,before,'an unconsumed calendar summary cannot wake card or analytical subscribers');
+  assert.equal(named(),names);assert.equal(JSON.stringify(changed),packet);
+  for(const value of [null,undefined]){const next={...wallet,spending:value};store.dispatch({type:'hub',event:{type:'card',data:next}});assert.equal(store.get().board,before);assert.ok(Object.hasOwn(next,'spending'));}
+  store.dispatch({type:'hub',event:{type:'snapshot',data:{...data,sources:[changed,{...funds,spending}]}}});
+  assert.equal(store.get().board,before,'reconnects use the same displayed-card boundary');assert.equal(named(),names);
+  for(const patch of [{successAt:2000},{meters:[{...meter,amount:'9007199254740994'}]},{meters:[{...meter,at:2000}]},{keys:[]},{inventory:{complete:false,observed:1,missing:0,error:null}},{budget:{enabled:false,since:null,anchor:null,revision:'off'}},{owners:['Other']},{provider:'deepseek'},{plan:'new'},{error:'failed'},{stale:true},{measureIntervalMs:300_000 as const},{extra:'retained'}]) {
+    const old=store.get().board!.cards.wallet;
+    store.dispatch({type:'hub',event:{type:'card',data:{...wallet,...patch}}});
+    assert.notEqual(store.get().board!.cards.wallet,old,'all non-calendar data retains its original update semantics');
+    for(const [key,value]of Object.entries(patch))assert.deepEqual((store.get().board!.cards.wallet as unknown as Record<string,unknown>)[key],value);
+  }
+  const current=store.get().board;store.dispatch({type:'hub',event:{type:'deviceContacts',data:{devices:[{deviceId:'own-device',lastSeenAt:2000}]}}});assert.equal(store.get().board,current);
+});
+
 const hub = (event: HubEvent): PageEvent => ({type: 'hub', event});
 const run = (...events: PageEvent[]) => events.reduce(reduce, INITIAL);
 
@@ -103,6 +130,25 @@ test('credit heartbeats preserve quota drawing inputs but quota windows, resets 
   store.dispatch(hub({type:'snapshot',data:snapshot({sources:[cap]})}));const beforeCap=quota();
   store.dispatch(hub({type:'card',data:{...cap,meters:[{...cap.meters![0],amount:'2400'}]}}));
   assert.notEqual(quota(),beforeCap);
+});
+
+test('named card scopes keep their order and cannot reuse a closed board with the same id',()=>{
+  const subscription=card('subscription'),wallet=card('wallet',0,{provider:'openrouter',windows:[]});
+  const initial=run(hub({type:'snapshot',data:snapshot({sources:[subscription,wallet]})}));
+  const ids=(state:PageState,scope?:'quota'|'budget'|'funds')=>namedCardsOf(state,scope).map(card=>card.id);
+  assert.deepEqual(ids(initial),['subscription','wallet']);
+  assert.deepEqual(ids(initial,'quota'),['subscription']);
+  assert.deepEqual(ids(initial,'funds'),['subscription']);
+  assert.deepEqual(ids(initial,'budget'),['wallet']);
+  const reversed=reduce(initial,hub({type:'lineup',data:{sources:['wallet','subscription']}}));
+  assert.deepEqual(ids(reversed),['wallet','subscription']);
+  const closed=reduce(reversed,{type:'board-close'});
+  for(const scope of [undefined,'quota','budget','funds'] as const)assert.deepEqual(ids(closed,scope),[]);
+  const reopened=reduce(closed,hub({type:'snapshot',data:snapshot({sources:[card('subscription',73)]})}));
+  assert.equal(reopened.board!.id,initial.board!.id);
+  assert.equal(namedCardsOf(reopened,'quota')[0].windows[0].used,73);
+  assert.equal(namedCardsOf(initial,'quota')[0].windows[0].used,50,'the earlier projection remains unchanged');
+  assert.deepEqual(ids(reopened,'budget'),[]);
 });
 /** Every slice of the state, to compare what stayed the same object. */
 const slices = (s: PageState) => ({
@@ -286,6 +332,37 @@ test('the names of the cards stay the same object while no name changes', () => 
     Object.values(titlesOf(shared.board)).map(t => t.title),
     ['Codex · Ana', 'Codex · Bob'],
   );
+});
+
+test('device contacts reuse the board title fingerprint while drafts and providers still change titles', () => {
+  let providerReads = 0;
+  const source = card('s1');
+  Object.defineProperty(source, 'provider', {enumerable: true, get: () => {providerReads++; return 'codex';}});
+  const initial = run(hub({type: 'snapshot', data: snapshot({sources: [source, card('s2')]})}));
+  const saved = titlesOf(initial.board);
+  assert.ok(providerReads > 0, 'the first fingerprint reads the actual card');
+  providerReads = 0;
+  const contacted = reduce(initial, hub({type: 'deviceContacts', data: {devices: [{deviceId: 'title-contact', lastSeenAt: 2000}]}}));
+  assert.equal(contacted.board, initial.board);
+  assert.equal(titlesOf(contacted.board), saved);
+  assert.equal(titlesOf(contacted.board), saved);
+  assert.equal(providerReads, 0, 'an unchanged board does not project title inputs again');
+  const names: Record<string, string> = {s1: 'Home'};
+  const drafted = titlesOf(contacted.board, names);
+  names.s1 = 'Work';
+  assert.equal(titlesOf(contacted.board, names).s1.title, 'Work');
+  assert.equal(drafted.s1.title, 'Home');
+  const replaced = reduce(contacted, hub({type: 'card', data: card('s1', 50, {provider: 'claude'})}));
+  assert.notEqual(replaced.board, contacted.board);
+  assert.equal(titlesOf(replaced.board).s1.provider, 'claude');
+  assert.notEqual(titlesOf(replaced.board).s1.title, saved.s1.title);
+  const named=reduce(contacted,hub({type:'view',data:{view:{...VIEW,names:{s1:'Saved'}}}}));
+  assert.equal(titlesOf(named.board,named.board!.view.names).s1.title,'Saved');
+  const closed=reduce(named,{type:'board-close'});
+  assert.deepEqual(titlesOf(closed.board),{});
+  const reopened=reduce(closed,hub({type:'snapshot',data:snapshot()}));
+  assert.equal(reopened.board!.id,named.board!.id);
+  assert.equal(titlesOf(reopened.board).s1.title,'Codex');
 });
 
 test('a board is shown only as the one opened: another still in the store is nothing, and closing keeps nothing of it', () => {

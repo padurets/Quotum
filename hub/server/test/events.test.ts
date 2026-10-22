@@ -779,7 +779,8 @@ test('what is a reader’s own or the hub’s that cannot be worked out: a new r
 });
 
 test('her boards cannot be worked out as her own sources and the board change: the board’s change reaches everyone, and what is hers comes whole next time', async t => {
-  const h = await hub();
+  const clock=new ManualClock(Date.now());
+  const h = await hub({},clock);
   t.after(() => (letGo(), h.app.close()));
   await h.person('alice');
   const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
@@ -808,8 +809,11 @@ test('her boards cannot be worked out as her own sources and the board change: t
     return real(user);
   };
   // Her devices measure it now too: the card changes, and so do her own sources.
+  clock.t=Date.now();
   h.store.hold(source, alice, Date.now());
   assert.notEqual(h.store.workKey(team),authority,'the admitted device owner’s holding changes work authority');
+  // Run the coalesced change before collecting its frames from the streams.
+  clock.advance(config.events.smoothMs);
   const [heard,told]=[await a.within(),await b.within()];
   assert.equal(failing,false,'her boards failed once before fresh authority replacement');
   for(const batch of [heard,told]){

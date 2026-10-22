@@ -16,7 +16,12 @@ export class HistoryPool {
   register(member: HistoryMember) {this.members.add(member);}
   unregister(member:HistoryMember){this.members.delete(member);}
   get activeFlights() {return this.active.size;}
-  get estimatedBytes() {return [...this.members].reduce((n, member) => n + member.estimatedBytes, 0) + [...this.reservations.values()].reduce((a,b) => a+b, 0);}
+  get estimatedBytes() {
+    let members = 0, reservations = 0;
+    for (const member of this.members) members += member.estimatedBytes;
+    for (const bytes of this.reservations.values()) reservations += bytes;
+    return members + reservations;
+  }
   isActive(flight: Flight) {return this.active.has(flight);}
 
   /** A shared HTTP response can outlive the drawing that supplied its slot. */

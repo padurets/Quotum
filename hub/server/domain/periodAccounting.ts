@@ -1,9 +1,10 @@
+import type {QuotaTail} from './periodRetention.js';
 import {MoneyWorkIndex} from './periodMoneyWork.js';
 import type {PeriodValues} from './periodValues.js';
 import {drain,type Preparation} from './prepare.js';
 import {edge} from './quota.js';
 import type {History,HistorySeries} from './history.js';
-import {sameMoneyTape,sampleAt,sampleCount,numberAt,numberBytes,numberColumn,lowerNumber,rateAt,rateObservations,type Numbers,type MoneyTape,type PeriodTape} from './periodTape.js';
+import {sameMoneyTape,sampleAt,sampleDeadlineAt,sampleCount,numberAt,numberBytes,numberColumn,numberTail,lowerNumber,rateAt,rateObservations,type NumberColumn,type Numbers,type MoneyTape,type PeriodTape} from './periodTape.js';
 import type {MeterHistory} from './meterHistory.js';
 import {locatedIn,meterStep,plottedAmount,semanticsOf,type ExceptionalStep,type MeterSpan,type Reading,type MeterSemantics} from './meters.js';
 import {convertBy} from './currency.js';
@@ -60,6 +61,55 @@ class Intervals {
   in(range:PeriodRange){return this.cumulative(range.to)-this.cumulative(range.from);}
 }
 type QuotaSummary=Pick<HistorySeries,'consumed'|'coveredMs'|'remainingAtStart'|'remainingAtEnd'|'work'|'selectedWork'>;
+// Strict integer observation order bounds every covered prefix by the complete time span.
+function* integerTimes(column:Numbers):Preparation<boolean> {
+  if(!('base' in column)||!Object.is(column.base,0)||column.values!==null||!column.runs)return false;
+  const {ends,bases,steps}=column.runs;
+  if(!ends.length||ends.length!==bases.length||ends.length!==steps.length||ends.at(-1)!==column.length)return false;
+  let from=0,previous=-1,first=0;
+  for(let i=0;i<ends.length;i++){
+    const to=ends[i],base=bases[i],step=steps[i],product=(to-from-1)*step,last=base+product;
+    if(to<=from||!Number.isSafeInteger(base)||base<0||!Number.isSafeInteger(step)||step<0||to-from>1&&step===0
+      ||!Number.isSafeInteger(product)||!Number.isSafeInteger(last)||base<=previous)return false;
+    if(!i)first=base;previous=last;from=to;yield;
+  }
+  return Number.isSafeInteger(previous-first)&&previous-first<=Number.MAX_SAFE_INTEGER;
+}
+function* numericDeadlines(column:Numbers):Preparation<boolean> {
+  if(!('base' in column))return false;
+  if(!column.runs)return column.values===null?!Number.isNaN(column.base):column.values instanceof Uint32Array&&Number.isFinite(column.base);
+  const {ends,bases,steps}=column.runs;
+  if(!Object.is(column.base,0)||column.values!==null||!ends.length||ends.length!==bases.length||ends.length!==steps.length||ends.at(-1)!==column.length)return false;
+  for(let i=0,from=0;i<ends.length;from=ends[i++]){
+    const to=ends[i],base=bases[i],step=steps[i],product=(to-from-1)*step;
+    if(to<=from||!Number.isSafeInteger(base)||!Number.isSafeInteger(step)||!Number.isSafeInteger(product)||!Number.isSafeInteger(base+product))return false;
+    yield;
+  }
+  return true;
+}
+function* integerTailReady(column:Numbers,origin:number):Preparation<boolean> {
+  if(!('base' in column)||!Number.isSafeInteger(origin)||origin<0||!Number.isSafeInteger(column.base-origin))return false;
+  if(column.runs){
+    const {ends,bases,steps}=column.runs;
+    if(column.values!==null||!ends.length||ends.length!==bases.length||ends.length!==steps.length||ends.at(-1)!==column.length)return false;
+    for(let i=0,from=0;i<ends.length;from=ends[i++]){
+      const to=ends[i],step=steps[i],base=bases[i],start=Math.max(1,from);
+      if(to<=from)return false;
+      if(to>1){
+        const offset=(start-from)*step,product=(to-from-1)*step,head=base+offset,last=base+product;
+        if(step<0||![step,base,offset,product,head,last,head-origin,last-origin].every(Number.isSafeInteger)||head-origin<0)return false;
+      }
+      yield;
+    }
+  }
+  return true;
+}
+function* integerTail(column:Numbers,origin:number,reserve:(bytes:number)=>void):Preparation<Numbers> {
+  const tail=yield*numberTail(column as NumberColumn,1,reserve);
+  if(tail.runs){for(let i=0;i<tail.runs.bases.length;i++){tail.runs.bases[i]-=origin;yield;}}
+  else tail.base-=origin;
+  return tail;
+}
 class QuotaIndex {
   readonly times:Numbers;
   private deadlines:Numbers=new Float64Array(0);
@@ -67,34 +117,125 @@ class QuotaIndex {
   private covered:Numbers=new Float64Array(0);
   private worked:Numbers=new Float64Array(0);
   private during:Numbers=new Float64Array(0);
-  constructor(readonly series:PeriodTape['quota'][number],private readonly activity:WorkTimeline|undefined,private readonly known:number,deferred=false) {
+  constructor(readonly series:PeriodTape['quota'][number],private readonly activity:WorkTimeline|undefined,private readonly known:number,deferred=false,prior?:QuotaIndex) {
     const count=sampleCount(series.samples);
-    this.times='columns' in series.samples?series.samples.columns[0]:new Float64Array(count);
-    if(!deferred)drain(this.build());
+    this.times=prior?.series===series?prior.times:'columns' in series.samples?series.samples.columns[0]:new Float64Array(count);
+    if(!deferred)drain(QuotaIndex.build(()=>this,prior));
   }
-  static *prepare(series:PeriodTape['quota'][number],activity:WorkTimeline|undefined,known:number):Preparation<QuotaIndex>{const value=new QuotaIndex(series,activity,known,true);yield*value.build();return value;}
-  private *build():Preparation<void>{
-    const series=this.series,{activity,known}=this;
-    const deadlines=new Float64Array(sampleCount(series.samples));
-    for(let i=0;i<sampleCount(series.samples);i++){const sample=sampleAt(series.samples,i)!;if(this.times instanceof Float64Array)this.times[i]=sample.at;deadlines[i]=Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity);yield;}
-    const sorted=yield*sortedNumbers(deadlines);this.deadlines=yield*numberColumn(sorted.length,i=>sorted[i]);
-    const spent=new Float64Array(sampleCount(series.samples)),covered=new Float64Array(spent.length),worked=new Float64Array(spent.length),during=new Float64Array(spent.length);
-    for(let i=1;i<sampleCount(series.samples);i++) {
-      yield;spent[i]=spent[i-1];covered[i]=covered[i-1];worked[i]=worked[i-1];during[i]=during[i-1];
-      const a=sampleAt(series.samples,i-1)!,b=sampleAt(series.samples,i)!,step=edge(a,b);if(!step.valid)continue;
-      const work=activity?.read({from:a.at,to:b.at},true)??0;
-      spent[i]+=step.delta;covered[i]+=b.at-a.at;
-      worked[i]+=a.at>=known?work:0;during[i]+=a.at>=known&&work>0?step.delta:0;
+  static prepare(series:PeriodTape['quota'][number],activity:WorkTimeline|undefined,known:number,prior?:QuotaIndex,batchQuota=false):Preparation<QuotaIndex>{return QuotaIndex.build(()=>new QuotaIndex(series,activity,known,true,prior),prior,batchQuota);}
+  private static *build(create:()=>QuotaIndex,prior?:QuotaIndex,batchQuota=false):Preparation<QuotaIndex>{
+    const value=create();
+    const series=value.series,{known}=value,activity=known===Infinity?undefined:value.activity,count=sampleCount(series.samples);
+    // Work retirement can leave quota observations untouched. Keep their exact prefixes.
+    const reuse=prior?.series===series;
+    const deadlines=reuse?null:new Float64Array(count),spent=reuse?null:new Float64Array(count),covered=reuse?null:new Float64Array(count),worked=activity?new Float64Array(count):null,during=activity?new Float64Array(count):null;
+    let previous:ReturnType<typeof sampleAt>,orderedDeadlines=true;
+    // Decode each observation once; unavailable work keeps constant zero prefixes.
+    // Retirement groups avoid resuming every delegation layer per observation.
+    // Explicit units preserve the UI's deadline checks across these larger yields.
+    for(let i=0;i<count&&(!reuse||activity);i++) {
+      if(!batchQuota)yield;else if((i&15)===0)yield 16;
+      const sample=sampleAt(series.samples,i)!;
+      if(!reuse&&value.times instanceof Float64Array)value.times[i]=sample.at;
+      if(deadlines){
+        deadlines[i]=Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity);
+        if(i&&!(deadlines[i-1]<=deadlines[i]))orderedDeadlines=false;
+      }
+      if(i) {
+        if(spent&&covered){spent[i]=spent[i-1];covered[i]=covered[i-1];}
+        if(worked&&during){worked[i]=worked[i-1];during[i]=during[i-1];}
+        const a=previous!,b=sample,step=edge(a,b);
+        if(step.valid) {
+          const work=a.at>=known?activity?.read({from:a.at,to:b.at},true)??0:0;
+          if(spent&&covered){spent[i]+=step.delta;covered[i]+=b.at-a.at;}
+          if(worked&&during){worked[i]+=work;during[i]+=work>0?step.delta:0;}
+        }
+      }
+      previous=sample;
     }
-    this.spent=yield*numberColumn(spent.length,i=>spent[i]);this.covered=yield*numberColumn(covered.length,i=>covered[i]);
-    this.worked=yield*numberColumn(worked.length,i=>worked[i]);this.during=yield*numberColumn(during.length,i=>during[i]);
+    // End the grouped region before ordinary packing resumes.
+    if(batchQuota&&count>0&&(!reuse||activity))yield 16;
+    if(reuse){value.deadlines=prior.deadlines;value.spent=prior.spent;value.covered=prior.covered;}
+    else if(deadlines&&spent&&covered){
+      const sorted=orderedDeadlines?deadlines:yield*sortedNumbers(deadlines);value.deadlines=yield*numberColumn(sorted.length,i=>sorted[i]);
+      value.spent=yield*numberColumn(spent.length,i=>spent[i]);value.covered=yield*numberColumn(covered.length,i=>covered[i]);
+    }
+    value.worked=worked?yield*numberColumn(count,i=>worked[i]):{length:count,base:0,values:null};
+    value.during=during?yield*numberColumn(count,i=>during[i]):{length:count,base:0,values:null};
+    return value;
   }
 
+  // This path consumes only a producer-issued, single-observation retirement proof.
+  static *retire(series:PeriodTape['quota'][number],activity:WorkTimeline|undefined,known:number,prior:QuotaIndex,tail:QuotaTail,reserve?:(bytes:number)=>void):Preparation<QuotaIndex|undefined>{
+    if(tail.removed!==1||tail.before!==prior.series||tail.after!==series||!('columns' in prior.series.samples)||!('columns' in series.samples)
+      ||sampleCount(prior.series.samples)!==sampleCount(series.samples)+1||prior.activity!==activity||!Object.is(prior.known,known)
+      ||!('base' in prior.spent)||!('base' in prior.during)||!('base' in prior.worked))return undefined;
+    const dropped=sampleDeadlineAt(prior.series.samples,0),origin=numberAt(prior.covered,1)!;
+    if(!(Number.isFinite(dropped)||dropped===Infinity)||!Object.is(dropped,numberAt(prior.deadlines,0))
+      ||!(yield*integerTimes(prior.series.samples.columns[0]))||!(yield*numericDeadlines(prior.deadlines))||!(yield*integerTailReady(prior.covered,origin)))return undefined;
+    const value=new QuotaIndex(series,activity,known,true);let scratch=0;
+    const copying=(bytes:number)=>{scratch+=bytes;reserve?.(scratch);};
+    yield;
+    value.deadlines=yield*numberTail(prior.deadlines as NumberColumn,1,copying);
+    const rebuildSpent=!Object.is(numberAt(prior.spent,1),0),rebuildWorked=!Object.is(numberAt(prior.worked,1),0),rebuildDuring=!Object.is(numberAt(prior.during,1),0);
+    const count=sampleCount(series.samples),columns=Number(rebuildSpent)+Number(rebuildWorked)+Number(rebuildDuring);
+    // Removing a nonzero prefix changes floating addition order. Rebuild only
+    // those sums forward; independent deadlines and integer coverage keep their tails.
+    if(columns)copying(columns*(count*16+64));
+    const spent=rebuildSpent?new Float64Array(count):null,worked=rebuildWorked?new Float64Array(count):null,during=rebuildDuring?new Float64Array(count):null;
+    // Exact integer coverage already records which observation edges were valid.
+    // Keep endpoint values once per observation and add each floating delta forward.
+    const fields=series.samples.columns;
+    let coverage=0,used=0,reset=-1,at=0,integers=true;
+    for(let i=0;i<count&&columns;i++){
+      if((i&15)===0)yield 16;
+      const nextCoverage=numberAt(prior.covered,i+1)!,nextUsed=spent||during?numberAt(fields[1],i)!:0,nextReset=spent||during?numberAt(fields[2],i)!:-1,nextAt=worked||during?numberAt(value.times,i)!:0;
+      if(i){
+        if(spent)spent[i]=spent[i-1];if(worked)worked[i]=worked[i-1];if(during)during[i]=during[i-1];
+        if(nextCoverage>coverage){
+          const delta=reset===-1||nextReset===-1?0:Math.max(0,nextUsed-used);
+          if(spent)spent[i]+=delta;
+          if(worked||during){const work=at>=known&&known!==Infinity?activity?.read({from:at,to:nextAt},true)??0:0;if(worked)worked[i]+=work;if(during)during[i]+=work>0?delta:0;}
+        }
+      }
+      if(spent)integers&&=Number.isSafeInteger(spent[i]);coverage=nextCoverage;used=nextUsed;reset=nextReset;at=nextAt;
+    }
+    if(count&&columns)yield 16;
+    yield;
+    // A finite prefix that cannot use integer packing starts at zero and is
+    // nondecreasing, so the ordinary packer would only copy this Float64 column.
+    value.spent=spent?!integers&&Number.isFinite(spent[count-1])?{length:count,base:0,values:spent}:yield*numberColumn(count,i=>spent[i]):yield*numberTail(prior.spent as NumberColumn,1,copying);
+    yield;
+    value.covered=yield*integerTail(prior.covered,origin,copying);
+    yield;
+    value.worked=worked?yield*numberColumn(count,i=>worked[i]):yield*numberTail(prior.worked as NumberColumn,1,copying);
+    yield;
+    value.during=during?yield*numberColumn(count,i=>during[i]):yield*numberTail(prior.during as NumberColumn,1,copying);
+    return value;
+  }
+
+  sharesWork(activity:WorkTimeline|undefined,known:number){return this.activity===activity&&Object.is(this.known,known);}
   get bytes(){return [this.deadlines,this.spent,this.covered,this.worked,this.during].reduce((n,c)=>n+numberBytes(c),0)+(this.times instanceof Float64Array?numberBytes(this.times):0);}
+  /** Zero spending is distinguished by whether measured time remains. */
+  spendingStateChangesAt(now:number,period:number){
+    const count=this.times.length;if(!count)return Infinity;
+    if(!Number.isFinite(numberAt(this.spent,count-1))||!Number.isFinite(numberAt(this.covered,count-1)))return this.changesAt(now,period);
+    const lo=lower(this.times,now-period),end=lower(this.times,now),hi=Math.max(0,end-1),right=(numberAt(this.times,end)??Infinity)+1;
+    if(hi<=lo)return right;
+    const start=numberAt(this.spent,lo)!,finish=numberAt(this.spent,hi)!;let next=count;
+    if(finish>start){
+      let a=lo+1,b=hi+1;
+      while(a<b){const middle=(a+b)>>>1;if(numberAt(this.spent,middle)===start)a=middle+1;else b=middle;}
+      next=a;
+    }else if(numberAt(this.covered,hi)!>numberAt(this.covered,lo)!)next=lower(this.covered,numberAt(this.covered,hi)!);
+    return Math.min(right,next<count?(numberAt(this.times,next-1)??Infinity)+1+period:Infinity);
+  }
   changesAt(now:number,period:number){
-    const from=now-period,last=sampleAt(this.series.samples,sampleCount(this.series.samples)-1);
-    const deadline=last?Math.min(last.at+last.staleAfterMs+1,last.resetAt??Infinity,last.validUntil??Infinity):Infinity;
-    return Math.min((numberAt(this.times,lower(this.times,from))??Infinity)+1+period,(numberAt(this.deadlines,lower(this.deadlines,from+1))??Infinity)+period,deadline>now?deadline:Infinity);
+    const from=now-period,deadline=sampleDeadlineAt(this.series.samples,sampleCount(this.series.samples)-1)??Infinity;
+    // Work and its clock use the same captured source curve, including after a
+    // replacement could not fit. Knowledge changes even without a work interval.
+    const work=Number.isFinite(this.known)?Math.min(this.activity?this.activity.next(from)+period:Infinity,this.activity?.next(now)??Infinity,this.known+1>now?this.known+1:Infinity,this.known+period>now?this.known+period:Infinity):Infinity;
+    return Math.min((numberAt(this.times,lower(this.times,from))??Infinity)+1+period,(numberAt(this.deadlines,lower(this.deadlines,from+1))??Infinity)+period,deadline>now?deadline:Infinity,work);
   }
 
   workSlope(now:number,period:number,active:boolean){
@@ -109,7 +250,8 @@ class QuotaIndex {
     const points=quotaInterior(previous,range,cell,coverageTo);
     if(!previous?.points.length&&!boundaryOnly){
       const cells=new Map<number,HistorySeries['points'][number]>();
-      for(let i=lower(this.times,leftEnd);i<lower(this.times,rightStart);i++){const s=sampleAt(this.series.samples,i)!,at=Math.floor(s.at/cell)*cell,old=cells.get(at),value=100-s.used;if(!old||value<old[1])cells.set(at,[at,value,i+1,Math.min(at+cell,s.at+s.staleAfterMs+1,s.resetAt??Infinity,s.validUntil??Infinity)]);}
+      const first=lower(this.times,leftEnd),end=lower(this.times,rightStart);
+      for(let i=first;i<end;i++){const s=sampleAt(this.series.samples,i)!,at=Math.floor(s.at/cell)*cell,old=cells.get(at),value=100-s.used;if(!old||value<old[1])cells.set(at,[at,value,i+1,Math.min(at+cell,s.at+s.staleAfterMs+1,s.resetAt??Infinity,s.validUntil??Infinity)]);}
       points.push(...cells.values());
     }
     for(const [from,to] of leftEnd>=rightStart?[[range.from,range.to]]:[[range.from,leftEnd],[rightStart,range.to]]) {
@@ -122,11 +264,14 @@ class QuotaIndex {
     return points.sort((a,b)=>a[0]-b[0]);
   }
 
-  at(range:PeriodRange,stateAt=range.to):QuotaSummary {
-    const lo=lower(this.times,range.from),hi=Math.max(0,lower(this.times,range.to)-1),last=sampleAt(this.series.samples,lower(this.times,range.to)-1);
-    const first=sampleAt(this.series.samples,lower(this.times,range.from+1)-1);
-    const valid=(sample:typeof first,at:number)=>sample&&at<Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity)?100-sample.used:null;
+  at(range:PeriodRange,spendingOnly:true):Pick<QuotaSummary,'consumed'|'coveredMs'>;
+  at(range:PeriodRange,spendingOnly?:false,stateAt?:number):QuotaSummary;
+  at(range:PeriodRange,spendingOnly=false,stateAt=range.to):QuotaSummary|Pick<QuotaSummary,'consumed'|'coveredMs'> {
+    const lo=lower(this.times,range.from),end=lower(this.times,range.to),hi=Math.max(0,end-1);
     const sum=(values:Numbers)=>hi>lo?numberAt(values,hi)!-numberAt(values,lo)!:0;
+    if(spendingOnly)return {consumed:sum(this.spent),coveredMs:sum(this.covered)};
+    const last=sampleAt(this.series.samples,end-1),first=sampleAt(this.series.samples,lower(this.times,range.from+1)-1);
+    const valid=(sample:typeof first,at:number)=>sample&&at<Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity)?100-sample.used:null;
     const workRange={from:Math.max(range.from,this.known),to:range.to};
     const workLo=lower(this.times,workRange.from);
     return {consumed:sum(this.spent),coveredMs:sum(this.covered),remainingAtStart:valid(first,range.from),remainingAtEnd:valid(last,stateAt),work:Number.isFinite(this.known)?{from:workRange.from,ms:workRange.to>workRange.from?this.activity?.read(workRange,true)??0:null,agentMs:workRange.to>workRange.from?this.activity?.read(workRange)??0:0,consumed:hi>workLo?numberAt(this.spent,hi)!-numberAt(this.spent,workLo)!:0,coveredMs:sum(this.worked),duringWork:sum(this.during)}:null};
@@ -268,7 +413,7 @@ class MoneyIndex {
     const original=semanticsOf(reading),converted=this.group.displayUnit&&this.group.displayUnit!==reading.unit;
     if(!converted)return original.conversion?{...original,conversion:{...original.conversion,original:{...original.conversion.original,at}}}:original;
     const steps=rateAt(this.group,reading.unit+'\n'+at);
-    return {...original,scale:6,limit:reading.limit===null?null:this.convert(reading.limit,reading,at),...(steps?.length?{conversion:{original:{meterId:this.group.meter,amount:native,unit:reading.unit,at,...(reading.scale===undefined?{}:{scale:reading.scale}),limit:reading.limit},rate:steps.at(-1)!,steps}}:{})};
+    return {...original,scale:6,limit:reading.limit===null?null:this.convert(reading.limit,reading,at),...(steps?.length?{conversion:{original:{meterId:this.group.meter,amount:native,unit:reading.unit,at,...(reading.scale===undefined?{}:{scale:reading.scale}),limit:reading.limit},rate:steps.at(-1)!,...(steps.length>1?{steps}:{})}}:{})};
   }
   private observation(at:number,inclusive=false) {
     const group=this.group,edge=at+(inclusive?1:0),reading=group.readings[lower(this.times,edge)-1];
@@ -331,9 +476,10 @@ class MoneyIndex {
 
 /** Native bounds often arrive ordered; other inputs sort within two fixed buffers. */
 function* sortedNumbers(input:Float64Array):Preparation<Float64Array> {
-  let ordered=true;
-  for(let i=1;i<input.length;i++){if(input[i]<input[i-1]){ordered=false;break;}yield;}
-  if(ordered)return input;
+  // Most retained deadlines already follow observation order, including repeated resets.
+  let sorted=true;
+  for(let i=1;i<input.length;i++){if(!(input[i-1]<=input[i])){sorted=false;break;}yield;}
+  if(sorted)return input;
   let rows:Float64Array=input,next:Float64Array=new Float64Array(input.length);
   for(let size=1;size<rows.length;size*=2) {
     for(let start=0;start<rows.length;start+=size*2) {
@@ -354,37 +500,74 @@ export class PeriodAccounting {
   private readonly quota=new Map<string,QuotaIndex>();
   private readonly money=new Map<string,MoneyIndex>();
   private readonly sampleTimes=new Map<string,Numbers>();
-  constructor(readonly tape:PeriodTape,work:WorkTrace|null,curves?:PeriodCurves,deferred=false) {if(!deferred)drain(this.build(work,curves));}
-  static *prepare(tape:PeriodTape,work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void,sourceWide?:SourceWorkCurves):Preparation<PeriodAccounting>{const value=new PeriodAccounting(tape,work,curves,true);yield*value.build(work,curves,prior,changedWork,progress,sourceWide);return value;}
-  private *build(work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void,sourceWide?:SourceWorkCurves):Preparation<void>{
-    const tape=this.tape;
-    if(tape.fixed){if(prior?.tape.fixed&&JSON.stringify(prior.tape.fixed.money)===JSON.stringify(tape.fixed.money)&&JSON.stringify(prior.tape.fixed.range)===JSON.stringify(tape.fixed.range))this.financialAuthority=prior.financialAuthority;return;}
-    this.selectedCurves=curves??(work?yield*PeriodCurves.prepare(work):undefined);this.selectedKnown=work?.available===false?Infinity:work?.knownFrom??Infinity;
-    const workCurves=sourceWide??this.selectedCurves,known=sourceWide?(sourceWide.available===false?Infinity:sourceWide.knownFrom):this.selectedKnown;
+  constructor(readonly tape:PeriodTape,work:WorkTrace|null,curves?:PeriodCurves,deferred=false) {if(!deferred)drain(PeriodAccounting.build(()=>this,work,curves));}
+  static prepare(tape:PeriodTape,work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void,sourceWide?:SourceWorkCurves,batchQuota=false):Preparation<PeriodAccounting>{return PeriodAccounting.build(()=>new PeriodAccounting(tape,work,curves,true),work,curves,prior,changedWork,progress,sourceWide,batchQuota);}
+  private static *build(create:()=>PeriodAccounting,work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void,sourceWide?:SourceWorkCurves,batchQuota=false):Preparation<PeriodAccounting>{
+    const value=create();
+    const tape=value.tape;
+    if(tape.fixed){if(prior?.tape.fixed&&JSON.stringify(prior.tape.fixed.money)===JSON.stringify(tape.fixed.money)&&JSON.stringify(prior.tape.fixed.range)===JSON.stringify(tape.fixed.range))value.financialAuthority=prior.financialAuthority;return value;}
+    value.selectedCurves=curves??(work?yield*PeriodCurves.prepare(work):undefined);value.selectedKnown=work?.available===false?Infinity:work?.knownFrom??Infinity;
+    const workCurves=sourceWide??value.selectedCurves,known=sourceWide?(sourceWide.available===false?Infinity:sourceWide.knownFrom):value.selectedKnown;
     let preparedBytes=0;
     for(const series of tape.quota) {
       const activity=workCurves?.groups.source.get(series.source);
       const key=series.source+'\n'+series.window,old=prior?.quota.get(key),reuse=old?.series===series&&!changedWork.has(series.source);
       if(!reuse)progress?.(preparedBytes+sampleCount(series.samples)*88+1024);
-      const index=reuse?old!:yield*QuotaIndex.prepare(series,activity,series.workFrom===null?Infinity:Math.max(known,series.workFrom??0));
+      const index=reuse?old!:yield*QuotaIndex.prepare(series,activity,series.workFrom===null?Infinity:Math.max(known,series.workFrom??0),old?.series===series?old:undefined,batchQuota);
       if(!reuse){preparedBytes+=index.bytes;progress?.(preparedBytes);}
-      this.quota.set(key,index);this.sampleTimes.set(key,index.times);
+      value.quota.set(key,index);value.sampleTimes.set(key,index.times);
     }
     for(const group of tape.money){
       const key=group.source+'\n'+group.meter+'\n'+(group.displayUnit??group.readings[0]?.unit),old=prior?.money.get(key),reuse=old?.group===group||!!old&&sameMoneyTape(old.group,group);
       if(!reuse)progress?.(preparedBytes+MoneyIndex.bytes(group));
       const index=reuse?old!:yield*MoneyIndex.prepare(group);
       if(!reuse){preparedBytes+=index.bytes;progress?.(preparedBytes);}
-      this.money.set(key,index);
+      value.money.set(key,index);
       if(group.workCounter) {
         const counter=group.workCounter,oldWork=prior?.moneyWork.get(group.source),reuse=oldWork?.counter===counter&&!changedWork.has(group.source);
         if(!reuse)progress?.(preparedBytes+1024+counter.readings.length*256);
         const workIndex=reuse?oldWork!:yield*MoneyWorkIndex.prepare(counter,workCurves?.groups.source.get(group.source));
-        this.moneyWork.set(group.source,workIndex);
+        value.moneyWork.set(group.source,workIndex);
         if(!reuse){preparedBytes+=workIndex.bytes;progress?.(preparedBytes);}
       }
     }
-    if(prior&&this.money.size===prior.money.size&&[...this.money].every(([key,index])=>prior.money.get(key)===index))this.financialAuthority=prior.financialAuthority;
+    if(prior&&value.money.size===prior.money.size&&[...value.money].every(([key,index])=>prior.money.get(key)===index))value.financialAuthority=prior.financialAuthority;
+    return value;
+  }
+  // Ordinary preparation stays unchanged; only an actual retirement can enter here.
+  static *prepareRetirement(tape:PeriodTape,work:WorkTrace|null,curves:PeriodCurves|undefined,prior:PeriodAccounting,changedWork:ReadonlySet<string>,progress:((bytes:number)=>void)|undefined,tails:ReadonlyMap<PeriodTape['quota'][number],QuotaTail>,sourceWide?:SourceWorkCurves):Preparation<PeriodAccounting>{
+    if(tape.fixed||!tails.size)return yield*PeriodAccounting.prepare(tape,work,curves,prior,changedWork,progress,sourceWide);
+    let meta=2048+tape.quota.length*640+tape.money.length*256,owned=0,scratch=0,partial:PeriodAccounting|undefined;
+    const charge=()=>progress?.(meta+owned+scratch);charge();
+    const rows:{key:string;index:QuotaIndex|undefined}[]=[],fallback:PeriodTape['quota']=[];
+    try{
+      const selectedCurves=curves??(work?yield*PeriodCurves.prepare(work):undefined),selectedKnown=work?.available===false?Infinity:work?.knownFrom??Infinity;
+      const workCurves=sourceWide??selectedCurves,known=sourceWide?(sourceWide.available===false?Infinity:sourceWide.knownFrom):selectedKnown;
+      for(const series of tape.quota){
+        meta+=4*(series.source.length+series.window.length+1);charge();
+        const key=series.source+'\n'+series.window,old=prior.quota.get(key);
+        let index=old?.series===series&&!changedWork.has(series.source)?old:undefined;
+        if(!index){
+          const tail=tails.get(series);
+          if(tail&&old){
+            scratch=sampleCount(series.samples)*88+1024;charge();
+            index=yield*QuotaIndex.retire(series,workCurves?.groups.source.get(series.source),series.workFrom===null?Infinity:Math.max(known,series.workFrom??0),old,tail,bytes=>{scratch=Math.max(scratch,bytes);charge();});
+            scratch=0;if(index)owned+=index.bytes;charge();
+          }
+          if(!index)fallback.push(series);
+        }
+        rows.push({key,index});yield;
+      }
+      for(const group of tape.money){if(group.workCounter)meta+=256;meta+=4*(group.source.length+group.meter.length+(group.displayUnit??group.readings[0]?.unit??'undefined').length+2);charge();yield;}
+      partial=yield*PeriodAccounting.prepare({...tape,quota:fallback},work,selectedCurves,prior,changedWork,bytes=>{scratch=bytes;charge();},sourceWide,true);
+      const value=new PeriodAccounting(tape,work,selectedCurves,true);
+      value.selectedCurves=partial.selectedCurves;value.selectedKnown=partial.selectedKnown;
+      for(const row of rows){const index=row.index??partial.quota.get(row.key)!;value.quota.set(row.key,index);value.sampleTimes.set(row.key,index.times);yield;}
+      for(const [key,index] of partial.money){value.money.set(key,index);yield;}
+      for(const [key,index] of partial.moneyWork){value.moneyWork.set(key,index);yield;}
+      value.financialAuthority=partial.financialAuthority;
+      return value;
+    }finally{rows.length=0;fallback.length=0;partial=undefined;}
   }
   get quotaBytes(){let bytes=0;for(const index of this.quota.values())bytes+=index.bytes;return bytes;}
   get bytes(){let bytes=this.quotaBytes;for(const index of this.money.values())bytes+=index.bytes;for(const index of this.moneyWork.values())bytes+=index.bytes;return bytes;}
@@ -398,7 +581,14 @@ export class PeriodAccounting {
     const curve=this.selectedCurves?.groups.source.get(source),left=Math.max(now-period,known);
     return Math.min(curve?.next(now)??Infinity,left===now-period?(curve?.next(left)??Infinity)+period:known+period);
   }
-  quotaSummary(source:string,window:string,range:PeriodRange){const index=this.quota.get(source+'\n'+window);return index?{...index.at(range),selectedWork:this.directWork(source,range,index.series.workFrom===null?Infinity:index.series.workFrom??0)}:undefined;}
+  quotaSummary(source:string,window:string,range:PeriodRange){
+    const index=this.quota.get(source+'\n'+window);if(!index)return;
+    const summary=index.at(range),cutoff=index.series.workFrom===null?Infinity:index.series.workFrom??0;
+    const selectedWork=index.sharesWork(this.selectedCurves?.groups.source.get(source),Math.max(this.selectedKnown,cutoff))
+      ?{from:summary.work?.from??range.to,ms:summary.work?.ms??null,agentMs:summary.work?.agentMs??0}:this.directWork(source,range,cutoff);
+    return {...summary,selectedWork};
+  }
+  quotaSpendingSummary(source:string,window:string,range:PeriodRange){return this.quota.get(source+'\n'+window)?.at(range,true);}
   quotaWorkSlope(source:string,window:string,now:number,period:number,active:boolean){
     const index=this.quota.get(source+'\n'+window);if(!index)return;
     const curve=this.selectedCurves?.groups.source.get(source),known=Math.max(this.selectedKnown,index.series.workFrom===null?Infinity:index.series.workFrom??0);
@@ -432,10 +622,26 @@ export class PeriodAccounting {
       const windowValue=membership?.windows.find(w=>w.id===row.window)??descriptor?.value;
       if(!history.live&&(membership?!membership.windows.some(w=>w.id===row.window):row.descriptors?numberAt(times,lower(times,range.to)-1)!==batches.get(row.source):row.member===false))continue;
       const old=previous.get(key);if(!old&&history.live)continue;
-      const summary={...this.quotaSummary(row.source,row.window,range)!,...index.at(range,stateAt)},points=!history.live?index.plot(range,history.cellMs,old,history.to,boundaryOnly):old!.points;
+      const summary={...this.quotaSummary(row.source,row.window,range)!,...index.at(range,false,stateAt)},points=!history.live?index.plot(range,history.cellMs,old,history.to,boundaryOnly):old!.points;
       series.push({...old,sourceId:row.source,windowId:row.window,staleAfterMs:sampleAt(row.samples,sampleCount(row.samples)-1)?.staleAfterMs??0,...summary,points,...(!history.live?{pointMode:'observation' as const,windowValue:windowValue??row.windowValue}:{})});
     }
     return {...history,exact:true,since:range.from,to:range.to,series,...(this.moneyWork.size?{moneyWork:[...this.moneyWork.keys()].map(source=>this.moneyWorkSummary(source,range)!)}:{}),meterSeries:history.meterSeries?.map(series=>{const index=this.money.get(series.sourceId+'\n'+series.meterId+'\n'+series.unit);return index?{...series,...index.at(range),...(!history.live?{points:index.plot(range,history.cellMs,series.points,{from:history.since,to:history.to}),...(series.kind!=='cap'?{pointMode:'observation' as const}:{})}:{})}:series;})};
+  }
+  /** Undefined leaves a missing window's captured fallback with its existing clock. */
+  quotaSelectedWorkChangesAt(source:string,window:string,now:number,period:number):number|null|undefined {
+    const index=this.quota.get(source+'\n'+window);if(!index)return undefined;
+    const cutoff=index.series.workFrom===null?Infinity:index.series.workFrom??0;
+    // Unknown work can name the current time; retain its existing display clock.
+    if(!Number.isFinite(Math.max(this.selectedKnown,cutoff)))return undefined;
+    const next=this.directWorkChangesAt(source,now,period,cutoff);return Number.isFinite(next)?next:null;
+  }
+  quotaSpendingStateChangesAt(source:string,window:string,now:number,period:number):number|null|undefined {
+    const index=this.quota.get(source+'\n'+window);if(!index)return undefined;
+    const next=index.spendingStateChangesAt(now,period);return Number.isFinite(next)?next:null;
+  }
+  quotaChangesAt(source:string,window:string,now:number,period:number):number|null|undefined {
+    const index=this.quota.get(source+'\n'+window);if(!index)return undefined;
+    const next=Math.min(index.changesAt(now,period),this.directWorkChangesAt(source,now,period,index.series.workFrom===null?Infinity:index.series.workFrom??0));return Number.isFinite(next)?next:null;
   }
   changesAt(now:number,period:number,source?:string):number|null {
     if(this.tape.fixed){

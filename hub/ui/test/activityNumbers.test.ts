@@ -107,6 +107,29 @@ test('numerical labels freeze during a gesture and retire on an authority replac
   }finally{totals.close();d.close();await h.close();}
 });
 
+test('a closed legend defers metrics and reads current work when focused, distinguishing unavailable from zero',async test=>{
+  test.mock.method(Date,'now',()=>NOW);setLocale('en');
+  const h=await fixture(),d=await drawings(h);let now=NOW,timers=0,amountTimers=0;
+  const clock=new PageClock({now:()=>now,visible:()=>true,setTimeout:()=>{timers++;return {};},clearTimeout:()=>{}});
+  const amountClock=new PageClock({now:()=>now,visible:()=>true,setTimeout:()=>{amountTimers++;return {};},clearTimeout:()=>{}});
+  const history=d.render().drawing!,group=history.activity.by.project[0];
+  const props={history,by:'project',groupKey:group.key,group,name:'Work project',color:'red',muted:false};
+  const legend=consumer('LegendItem',clock,h.period,props);
+  const amount=consumer('LegendAmount',amountClock,h.period,props);
+  try {
+    amount.render();
+    assert.ok(!legend.render().includes('data-time="activity-metrics"'));
+    now=NOW+H;h.advance(now);
+    assert.equal(h.period.get().rows.length,0);
+    assert.ok(!legend.update(props).includes('data-time="activity-metrics"'));
+    amount.update(props);
+    assert.equal(timers,amountTimers,'a closed legend adds no clock work beyond its visible amount');
+    legend.focus(true);
+    assert.ok(legend.render().includes(`>${t('activity.agents')}</span><strong>0</strong>`),'opening metrics cannot restore expired work from the retained drawing');
+    assert.ok(legend.update({...props,history:null,group:null}).includes(t('activity.pendingRange')),'unavailable work is distinct from confirmed zero');
+  }finally{legend.close();amount.close();d.close();await h.close();}
+});
+
 test('fixed-period numerical consumers never subscribe to a time deadline',async test=>{
   test.mock.method(Date,'now',()=>NOW);const h=await fixture({fixed:true});let timers=0;
   const clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>{timers++;return {};},clearTimeout:()=>{}});

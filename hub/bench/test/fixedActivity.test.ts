@@ -1,12 +1,39 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {runInNewContext} from 'node:vm';
-import {activityOracle,assertActivityOverlap,assertActivityOutside,assertActivityCancellation,assertActivityGestureRange,FIXED_ACTIVITY_BUDGET,fixedActivityGestureScript} from '../fixedActivity';
+import {activityOracle,assertActivityOverlap,assertActivityOutside,assertActivityCancellation,assertActivityGestureRange,FIXED_ACTIVITY_BUDGET,fixedActivityScript,fixedActivityGestureScript,fixedActivityGestureReceipt} from '../fixedActivity';
 import {packWork,type WorkTrace} from '../../server/domain/periodWork';
 import type {PeriodRequest} from '../../server/domain/periodRead';
 import {fixture,drawings,flush,NOW} from '../../ui/test/periodRuntimeFixture';
 import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
 import {publishDataFilters} from '../../ui/lib/filterSelection';
+import {HistoryPool} from '../../ui/lib/historyPool';
+import {TILE_CELLS,MAX_READ_TILES} from '../../server/domain/history';
+import vm from 'node:vm';
+
+for(const period of ['24h','30d'])test(`the complete fixed Activity script installs before the page loads: ${period}`,async()=>{
+  class Storage {values=new Map<string,string>();setItem(key:string,value:string){this.values.set(key,value);}getItem(key:string){return this.values.get(key)??null;}}
+  const localStorage=new Storage(),pool=new HistoryPool(),sent:Headers[]=[];
+  const context=vm.createContext({Storage,localStorage,Map,Set,WeakMap,WeakRef,Headers,Request,URL,pool,
+    performance:{now:()=>0},location:{href:'http://fixture.invalid/'},document:{querySelector:()=>null},
+    fetch:async(_url:string,init:{headers:Headers})=>{sent.push(init.headers);return 'stand-in';}});
+  vm.runInContext('window=globalThis;',context);
+  vm.runInContext(fixedActivityScript(period),context);
+  vm.runInContext('__quotumInspectHistoryPool(pool);',context);
+  assert.equal(typeof context.__quotumInspectPreparations,'function');
+  assert.equal(vm.runInContext('__quotumFixedActivity.ready()',context),false);
+  assert.equal(vm.runInContext('__quotumFixedActivity.sample()',context),null);
+  assert.deepEqual(JSON.parse(localStorage.getItem('quotum.prefs')!),{range:period,horizon:'1d',activityBy:'project',filtersVisible:true});
+  assert.equal(localStorage.getItem('quotum.locale'),'en');
+  await context.fetch('/api/boards/synthetic/period',{headers:{'content-type':'application/json'}});
+  assert.match(sent[0].get('x-quotum-bench-attempt')!,/^b\d+:\d+$/);
+  const receipt=vm.runInContext('__quotumHistoryPoolReceipt.read()',context);
+  assert.equal(receipt.entries.find((entry:{kind:string})=>entry.kind==='http').attemptId,sent[0].get('x-quotum-bench-attempt'),'identity wraps the observer before fetch reaches it');
+  context.__quotumInspectPreparations({size:3,replace:()=>{}});
+  pool.register({estimatedBytes:0,evictionCandidates:()=>[]});
+  const checkpoint=vm.runInContext("__quotumHistoryPoolReceipt.checkpoint('seed/settled')",context);
+  assert.equal(checkpoint.members[0].pending.preparationSize,3,'the fixed Activity probe forwards the shared scheduler to the receipt observer');
+});
 
 test('native gesture range compares URL endpoints with a full historical selection',()=>{
   const selection={mode:'range' as const,from:123,to:1000};
@@ -98,24 +125,28 @@ test('overlapping work counts its recorded native follow-up without allowing ano
   assert.throws(()=>assertActivityOverlap([work,work,{...native,selection:{mode:'range',from:123,to:2000}}],2));
 });
 
-test('the shared monthly reader rebuilds native and Activity tiles without creating a legend reader',async t=>{
+for(const period of ['24h','30d'] as const)test(`the shared ${period} reader rebuilds native and Activity tiles without creating a legend reader`,async t=>{
   t.mock.method(Date,'now',()=>NOW);
-  const filters=defaultFilters(),h=await fixture({periodName:'30d',fixed:true,initialFilters:filters});let d:Awaited<ReturnType<typeof drawings>>|undefined;
+  const filters=defaultFilters(),h=await fixture({periodName:period,fixed:true,initialFilters:filters});let d:Awaited<ReturnType<typeof drawings>>|undefined;
   t.after(async()=>{try{d?.close();await h.close();}finally{publishDataFilters(null,false);}});
-  const selection={mode:'range' as const,from:NOW-30*86400000,to:NOW};
+  const selection={mode:'range' as const,from:NOW-(period==='24h'?1:30)*86400000,to:NOW};
   h.selectRange(selection);await flush();
   const work=JSON.parse(JSON.stringify(h.requests.find(body=>body.sessions))) as PeriodRequest;
   assert.ok(work);h.requests.length=0;
   d=await drawings(h,true);await flush();
   const native=JSON.parse(JSON.stringify(h.requests)) as PeriodRequest[];
-  assert.ok(native.length>3&&native.length<=8,'a real monthly strip needs several one-tile reads');
+  if(period==='30d')assert.ok(native.length>3&&native.length<=8,'a real monthly strip needs several one-tile reads');
+  else assert.ok(native.some(body=>{const query=body.quota!,span=Number(query.cell)*TILE_CELLS;return Math.floor(Number(query.from)/span)!==Math.floor((Number(query.to)-1)/span);}), 'the actual fine-grid fixed reader batches several tiles');
   assertActivityCancellation([work,work,...native],selection);
   assertActivityCancellation([work,work,work,...native],selection);
   assert.throws(()=>assertActivityCancellation([work,work,work,work,...native],selection),'retired work still counts');
   assert.throws(()=>assertActivityCancellation([work,work,...Array.from({length:9},()=>native[0])],selection));
   const first=native[0],query=first.quota!;
+  const span=Number(query.cell)*TILE_CELLS;
   for(const extra of [{...first,facets:true as const},{...first,quota:{...query,evidence:'another-ledger'}},
-    {...first,quota:{...query,to:String(Number(query.from)+2*60*Number(query.cell))}},
+    {...first,quota:{...query,to:String(Number(query.from)+(period==='30d'?2:MAX_READ_TILES+1)*span)}},
+    {...first,quota:{...query,from:String(Number(query.from)+1)}},
+    {...first,quota:{...query,to:String(Number(query.to)-1)}},
     {...first,selection:{...selection,to:selection.to+1}}]){
     assert.throws(()=>assertActivityCancellation([work,work,extra],selection));
   }
@@ -131,7 +162,8 @@ test('the shared monthly reader rebuilds native and Activity tiles without creat
   }finally{held.release();}
   await flush();
   const replacement=JSON.parse(JSON.stringify(h.requests)) as PeriodRequest[];
-  assert.ok(replacement.some(body=>!body.sessions&&body.quota?.sources==='[]'),'the existing reader fetches Activity cells without native source data');
+  if(period==='30d')assert.ok(replacement.some(body=>!body.sessions&&body.quota?.sources==='[]'),'the existing reader fetches Activity cells without native source data');
+  else assert.ok(replacement.some(body=>!body.sessions&&body.quota),'the existing fine-grid reader refills its drawing cells');
   assertActivityCancellation(replacement,selection);
   assert.equal(members.size,2,'shared-filter replacement creates no legend-specific reader');
 });
@@ -157,4 +189,27 @@ test('work at the fixed exclusive endpoint leaves calendar and Activity evidence
     [{...body,selection:{mode:'range' as const,from:NOW-100,to:NOW}}]]){
     assert.throws(()=>assertActivityOutside(requests,body));
   }
+});
+
+
+test('native Activity failure cleanup never probes a failed or pending renderer',async()=>{
+  type GestureCdp=Parameters<typeof fixedActivityGestureReceipt>[0];
+  type Command=ReturnType<GestureCdp['snapshot']>;
+  const clean:Command={context:'fixed-activity/gesture',socketState:1,lastAck:null,lastEvent:null,terminal:null,failure:null,pending:[]};
+  const unavailable:Command[]=[
+    {...clean,failure:{id:1,method:'Input.dispatchMouseEvent',context:clean.context,started:10,deadline:30010,elapsedMs:30000}},
+    {...clean,pending:[{id:1,method:'Input.dispatchMouseEvent',started:10,deadline:30010}]},
+    {...clean,socketState:3},
+    {...clean,terminal:{method:'Inspector.targetCrashed',at:10}},
+  ];
+  for(const state of unavailable){
+    let evaluations=0;
+    const cdp:GestureCdp={snapshot:()=>state,evaluate:<T>()=>{evaluations++;return new Promise<T>(()=>{});}};
+    const receipt=await fixedActivityGestureReceipt(cdp);
+    assert.equal(receipt,null);assert.equal(evaluations,0);
+  }
+  let evaluations=0;const expected={complete:true,events:[]};
+  const cdp:GestureCdp={snapshot:()=>clean,evaluate:async<T>()=>{evaluations++;return expected as T;}};
+  const receipt=await fixedActivityGestureReceipt(cdp);
+  assert.equal(receipt,expected);assert.equal(evaluations,1);
 });

@@ -1,14 +1,15 @@
 import {createHash} from 'node:crypto';
+import {deadline} from './deadline.js';
 import type {Cdp} from './cdp.js';
 
 type Client = {status:'available';name:string;bytes:number;sha256:string} | {status:'unavailable'};
 type Response = {requestId?:unknown;type?:unknown;response?:{url?:unknown}};
 type Parsed = {url?:unknown;hash?:unknown;scriptId?:unknown};
-type Injected = {interval:number;kind:'idle-probe';bytes:number;sourceHash:string};
+type Injected = {interval:number;kind:'native-sampler'|'idle-probe';bytes:number;sourceHash:string};
 const digest=(value:unknown):value is string=>typeof value==='string'&&/^[a-f\d]{64}$/i.test(value);
 const scriptId=(value:unknown)=>typeof value==='string'&&/^[1-9]\d*$/.test(value)&&Number.isSafeInteger(Number(value))?Number(value):null;
 
-/** Received bytes and parsed script IDs are joined only after a completed input family. */
+/** Received bytes and parsed script IDs are joined outside the family's trace. */
 export class ScriptBinding {
   private received:{requestId:string;url:string}[]=[];
   private omitted=0;
@@ -24,15 +25,15 @@ export class ScriptBinding {
     this.received.push({requestId:event.requestId,url:event.response.url});
   };
   constructor(private readonly cdp:Pick<Cdp,'on'|'off'|'send'>,private readonly client:Client,private readonly save:(name:string,value:unknown)=>void){cdp.on('Network.responseReceived',this.response);}
-  /** Binds the exact existing page probe after its installation succeeds. */
-  rememberInjected(interval:number,expression:string){
+  /** Binds an existing page probe only after its installation succeeds. */
+  rememberInjected(interval:number,expression:string,kind:Injected['kind']='native-sampler'){
     if(!Number.isSafeInteger(interval)||interval<1||typeof expression!=='string'){this.injectedOmitted++;return;}
     const bytes=Buffer.byteLength(expression);
     if(bytes>64*1024){this.injectedOmitted++;return;}
     const sourceHash=createHash('sha256').update(expression).digest('hex'),prior=this.injected.find(value=>value.interval===interval);
     if(prior){if(prior.sourceHash!==sourceHash)this.injectedConflicts++;return;}
     if(this.injected.length>=2){this.injectedOmitted++;return;}
-    this.injected.push({interval,kind:'idle-probe',bytes,sourceHash});
+    this.injected.push({interval,kind,bytes,sourceHash});
   }
   close(){
     this.cdp.off('Network.responseReceived',this.response);this.received=[];
@@ -40,12 +41,12 @@ export class ScriptBinding {
     this.injected=[];this.injectedOmitted=this.injectedConflicts=0;
   }
 
-  async afterFamily(intervals:readonly number[]){
+  async afterFamily(intervals:readonly number[],stage:'after-family'|'after-failed-family'='after-family',parent?:AbortSignal){
     const family=++this.family,received=this.received;this.received=[];
     const expected=this.injected;this.injected=[];
     const omittedExpected=this.injectedOmitted,expectedConflicts=this.injectedConflicts;this.injectedOmitted=this.injectedConflicts=0;
     const injected:{[key:string]:unknown}={expected,omittedExpected,expectedConflicts,owners:[],conflicts:0,omittedOwners:0,anonymousScripts:0,omittedAnonymous:0,unmatchedIntervals:expected.map(value=>value.interval),status:expected.length||omittedExpected||expectedConflicts?'unavailable':'not-requested'};
-    const report:{[key:string]:unknown}={mode:'diagnostic',stage:'after-family',family,intervals,omitted:this.omitted,status:'unavailable',owners:[],debuggerDisabled:true};
+    const report:{[key:string]:unknown}={mode:'diagnostic',stage,family,intervals,omitted:this.omitted,status:'unavailable',owners:[],debuggerDisabled:true};
     report.injected=injected;
     if(this.client.status!=='available'||!received.length||this.omitted){report.reason=this.omitted?'received script limit':'received client unavailable';this.save('source-family-'+family,report);return;}
     const client=this.client,last=received.at(-1)!,owners=new Map<number,string>(),conflicting=new Set<number>();
@@ -72,15 +73,15 @@ export class ScriptBinding {
     };
     const started=performance.now();
     try{
-      await (async()=>{
-        const response=await this.cdp.send<{body:string;base64Encoded:boolean}>('Network.getResponseBody',{requestId:last.requestId});
+      await deadline(5000,async signal=>{
+        const response=await this.cdp.send<{body:string;base64Encoded:boolean}>('Network.getResponseBody',{requestId:last.requestId},signal);
         if(typeof response.body!=='string'||typeof response.base64Encoded!=='boolean'||response.body.length>4*1024*1024)throw Error('received script unavailable');
         const bytes=Buffer.from(response.body,response.base64Encoded?'base64':'utf8'),receivedHash=createHash('sha256').update(bytes).digest('hex');
         report.bytes=bytes.length;report.receivedHash=receivedHash;report.clientHash=client.sha256;
         report.receivedAssetHashMatches=bytes.length===client.bytes&&receivedHash===client.sha256;
         this.cdp.on('Debugger.scriptParsed',parsed);enabled=true;
-        await this.cdp.send('Debugger.enable');
-        await this.cdp.send('Debugger.disable');disabled=true;
+        await this.cdp.send('Debugger.enable',{},signal);
+        await this.cdp.send('Debugger.disable',{},signal);disabled=true;
         report.owners=[...owners].map(([scriptId,parsedHash])=>({scriptId,parsedHash,receivedAssetHashMatches:report.receivedAssetHashMatches===true&&!conflicting.has(scriptId)&&parsedHash===receivedHash}));
         report.conflicts=conflicts;report.omittedOwners=omitted;
         report.status=report.receivedAssetHashMatches===true&&owners.size>0&&!conflicts&&!omitted&&[...owners.values()].every(hash=>hash===receivedHash)?'complete':'mismatch';
@@ -91,11 +92,11 @@ export class ScriptBinding {
         const matched=new Set([...injectedOwners.values()].filter(consistent).flatMap(owner=>owner.intervals));
         const unmatched=expected.filter(value=>!matched.has(value.interval)).map(value=>value.interval);injected.unmatchedIntervals=unmatched;
         if(expected.length||omittedExpected||expectedConflicts)injected.status=expected.length&&!unmatched.length&&!omittedExpected&&!expectedConflicts&&!injected.conflicts&&!omittedInjectedOwners&&!omittedAnonymous?'complete':'insufficient-evidence';
-      })();
+      },parent);
     }catch{report.status='unavailable';report.reason='script binding command failed';}
     finally{
       this.cdp.off('Debugger.scriptParsed',parsed);
-      if(enabled&&!disabled)try{await this.cdp.send('Debugger.disable');disabled=true;}catch{/* An unconfirmed debugger cannot enter another measured interval. */}
+      if(enabled&&!disabled)try{await deadline(1000,signal=>this.cdp.send('Debugger.disable',{},signal));disabled=true;}catch{/* An unconfirmed debugger cannot enter another measured interval. */}
       report.elapsedMs=performance.now()-started;report.debuggerDisabled=!enabled||disabled;
       if(enabled&&!disabled&&injected.status!=='not-requested')injected.status='insufficient-evidence';
       this.save('source-family-'+family,report);
