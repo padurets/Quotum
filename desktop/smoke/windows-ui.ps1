@@ -38,7 +38,15 @@ if (-not ('QuotumWindowProbe' -as [type])) {
 # Installed and portable smoke can share one PowerShell process and its static types.
 [QuotumWindowProbe]::ResetDispatch()
 
-$manifest=[ordered]@{schemaVersion=1;status='running';sha=((& git rev-parse HEAD).Trim());run=$env:GITHUB_RUN_ID;attempt=$env:GITHUB_RUN_ATTEMPT;platform='windows';packageHash=(Get-FileHash -LiteralPath $appPath -Algorithm SHA256).Hash;files=@();errors=@()}
+$sourceSha=$null
+if($Diagnostics){
+  try {
+    $revision=& git -C $PSScriptRoot rev-parse HEAD 2>$null
+    if($LASTEXITCODE -eq 0 -and $revision -match '^[a-f0-9]{40}$'){$sourceSha=$revision}
+  } catch { # Source identity may be unavailable outside a checkout or without Git.
+  }
+}
+$manifest=[ordered]@{schemaVersion=1;status='running';sha=$sourceSha;run=$env:GITHUB_RUN_ID;attempt=$env:GITHUB_RUN_ATTEMPT;platform='windows';packageHash=(Get-FileHash -LiteralPath $appPath -Algorithm SHA256).Hash;files=@();errors=@()}
 $loaderDismissalEvidence=$null
 # Capture native facts in memory while any owned UI thread is paused.
 $nativePauseDepth=0
