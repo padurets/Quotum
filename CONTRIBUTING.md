@@ -42,9 +42,11 @@ each with a 20-minute job limit. `--scope history` selects the matrix, including
 traffic and cancellation checks; `--scope dashboard` selects idle, measurements, work,
 frequency, all ten native panning scenarios, subscription credits, currency checks and fixed Activity shared filters.
 The `bench` check passes only when both jobs succeed; a failed, skipped or cancelled job
-fails this check. The default `--scope all` keeps the full local run and its original
-order. Optional diagnostics require the full scope. Separate jobs retain normal warmup,
-chart-grid alignment and budgets.
+fails this check. The default `--scope all` runs the history matrix first, then every
+dashboard phase in the same order as `--scope dashboard`. CPU diagnostics (`trace`,
+`profile`, `native-trace`, `native-profile`) support `all` or `dashboard`; caption control
+requires `dashboard`. Other optional diagnostics require `all`. Separate jobs retain
+normal warmup, chart-grid alignment and budgets.
 DevTools commands keep their thirty-second response deadline. An explicit renderer
 crash or target-detach event fails pending commands immediately, even if the socket
 stays open, and retains the original failure before cleanup. It does not retry work.
@@ -80,8 +82,10 @@ extra clock read has overhead; this is not CPU time or a complete overhead corre
 These entries do not count every RAF callback or establish CPU ownership or presentation.
 The original idle interval can be inspected with
 `QUOTUM_BENCH_DIAGNOSE_IDLE_CPU=trace` or `profile`, using `--ci` and an owned
-synthetic browser. These optional modes retain the complete traffic matrix and
-120-second idle window. Numeric source bindings and bounded raw evidence remain
+synthetic browser. These optional modes support `--scope all` and `--scope dashboard`
+and retain the original 120-second idle window. The manual CI control uses `dashboard`,
+so its artifacts contain no history matrix; `all` runs the matrix before the dashboard.
+Numeric source bindings and bounded raw evidence remain
 separate from the required benchmark; observer overhead is unqualified.
 The manual CI control checks the requested checkout and compiled client hash before
 running. Neither diagnostic mode can satisfy the required benchmark.
