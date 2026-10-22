@@ -5,9 +5,9 @@ import type {PeriodRange} from './period.js';
 import type {Stretch} from './work.js';
 import type {CalendarCell,CalendarProof} from './workCalendar.js';
 
-export function calendarCurve(proof:CalendarProof,range:PeriodRange,cut:number,known:number|null,reserve:(bytes:number)=>void){
+export function calendarCurve(proof:CalendarProof,range:PeriodRange,cut:number,known:number|null,reserve:(bytes:number)=>void,release?:(bytes:number)=>void){
   if(!Number.isSafeInteger(proof.retentionMs)||proof.retentionMs<=0||proof.periodMs!==undefined&&(!Number.isSafeInteger(proof.periodMs)||proof.periodMs<900_000||proof.periodMs>31*86_400_000)||proof.from!==range.from||proof.cut!==cut||!Array.isArray(proof.sources)||proof.sources.length!==1||!proof.sources[0]||proof.sources[0].id!=='work'||proof.sources[0].knownFrom!==known)throw new Error('invalid_calendar_proof');
-  const curves=sourceWorkCurves(proof,reserve),curve=curves.groups.source.get('work');if(!curve)throw new Error('invalid_calendar_proof');return {curve,bytes:curves.bytes??0};
+  const curves=sourceWorkCurves(proof,reserve,undefined,release),curve=curves.groups.source.get('work');if(!curve)throw new Error('invalid_calendar_proof');return {curve,bytes:curves.bytes??0};
 }
 
 /** Anonymous hour patterns retain exact boundary changes without session identities. */
