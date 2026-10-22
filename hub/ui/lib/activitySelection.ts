@@ -1,4 +1,4 @@
-import {activityScope,selectActivityWork} from '../../server/domain/activityScope';
+import {activityGroupKey,activityScope,selectActivityWork} from '../../server/domain/activityScope';
 import {executableWorkFilters,jsonBytes,type WorkFilter} from '../../server/domain/dataFilters';
 import {cellOf,cellStart,composePrepared,expandHistory,targetOf,tileOf,tileStart,type Chunk,type History} from '../../server/domain/history';
 import {evaluatedRange,type PeriodSelection} from '../../server/domain/period';
@@ -13,8 +13,8 @@ import {periodTextChangesAt} from './periodClock';
 import type {ActivityDimension} from './types';
 
 export type ActivityScope = {board:string;authority:string;workAuthority?:string;run?:string;by:ActivityDimension;muted:readonly string[];filters:WorkFilter;selection:PeriodSelection;rangeKey:string;barMs:number};
-type Reading={trace:WorkTrace|null;ready:boolean;error:string|null};
-type Model={projector:PeriodActivity;activity:History['activity'];selection:PeriodSelection;rangeKey:string};
+type Reading={trace:WorkTrace|null;ready:boolean;error:string|null;evidence?:number};
+type Model={projector:PeriodActivity;activity:History['activity'];selection:PeriodSelection;rangeKey:string;by:ActivityDimension;muted:readonly string[];lifetime:object;bytes:number;evidence?:number};
 export type ActivitySelectionState={model:Model|null;loading:boolean;error:string|null;errorOwner?:'upstream-work'|'local-preparation'|'subset-read'};
 type Flight={role:'visible';controller:AbortController;generation:number};
 export type ActivitySelectionEnv={pool:HistoryPool;now():number;read():Reading;send(board:string,request:PeriodRequest,signal:AbortSignal,reserve:(bytes:number)=>boolean):Promise<PeriodReply>;scheduler?:()=>Preparations|null;accessLost?():void;retryWork?():void};
@@ -23,6 +23,7 @@ export type ActivitySelectionEnv={pool:HistoryPool;now():number;read():Reading;s
 export class ActivitySelection implements HistoryMember {
   private scope:ActivityScope|null=null;
   private identity='';
+  private lifetime={};
   private generation=0;
   private news=0;
   private dirty=Infinity;
@@ -34,10 +35,36 @@ export class ActivitySelection implements HistoryMember {
   private waitingForBoard=false;
   private tiles=new Map<number,HistoryTile>();
   private bytes=0;
+  private readonly retained=new Map<Model,number>();
+  private readonly compatibility=new WeakMap<Model,WeakMap<WorkTrace,boolean>>();
   private state:ActivitySelectionState={model:null,loading:false,error:null};
   private readonly listeners=new Set<()=>void>();
   constructor(private readonly env:ActivitySelectionEnv){}
-  get estimatedBytes(){return this.bytes;}
+  get estimatedBytes(){return this.bytes+[...this.retained.keys()].reduce((bytes,model)=>bytes+(model===this.state.model?0:model.bytes),0);}
+  /** A prepared drawing keeps its numerical basis until its replacement commits. */
+  retain(model:Model|null){
+    if(!model)return()=>{};
+    this.retained.set(model,(this.retained.get(model)??0)+1);this.env.pool.register(this);
+    let released=false;
+    return()=>{if(released)return;released=true;const count=this.retained.get(model)??0;if(count>1)this.retained.set(model,count-1);else this.retained.delete(model);if(!this.scope&&!this.retained.size)this.env.pool.unregister(this);};
+  }
+  sameScope(model=this.state.model):model is Model{return !!model&&model.lifetime===this.lifetime;}
+  /** Exact subset HTTP and shared work may finish in either order. Compare their
+   * admitted contexts, not the hub revision which also includes unrelated meters. */
+  compatible(model=this.state.model){
+    if(!this.sameScope(model)||!this.scope)return false;
+    const reading=this.env.read(),trace=reading.trace;
+    if(!reading.ready||!trace)return false;
+    if(model.selection.mode==='live')return model.evidence===reading.evidence;
+    const selected=model.projector.trace;
+    if(!trace.fixed||!selected.fixed)return false;
+    const cached=this.compatibility.get(model),previous=cached?.get(trace);if(previous!==undefined)return previous;
+    const muted=new Set(this.scope.muted),key=(value:WorkTrace,subset:boolean)=>JSON.stringify([
+      value.fixed!.range,value.knownFrom,value.available,
+      value.fixed!.totals.filter(([id])=>!subset||!muted.has(activityGroupKey(value.refs[id],model.by))).map(([id,ms,last])=>[value.refs[id].ref,ms,last]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))),
+    ]);
+    const value=key(trace,true)===key(selected,false),values=cached??new WeakMap<WorkTrace,boolean>();values.set(trace,value);this.compatibility.set(model,values);return value;
+  }
   evictionCandidates(){return [];}
   get=()=>this.state;
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
@@ -53,8 +80,8 @@ export class ActivitySelection implements HistoryMember {
   }
   private scheduler(){return this.env.scheduler?this.env.scheduler():preparations();}
   reset(){
-    this.generation++;this.identity='';this.scope=null;this.source=this.awaiting=null;this.waitingForBoard=false;this.tiles.clear();this.bytes=0;this.dirty=Infinity;
-    this.env.pool.unregister(this);
+    this.generation++;this.identity='';this.lifetime={};this.scope=null;this.source=this.awaiting=null;this.waitingForBoard=false;this.tiles.clear();this.bytes=0;this.dirty=Infinity;
+    if(!this.retained.size)this.env.pool.unregister(this);
     this.flight?.controller.abort();this.scheduler()?.cancel(this.owner);
     // A cancelled response/preparation owns its reservation until its finally block.
     this.publish({model:null,loading:false,error:null});
@@ -102,7 +129,7 @@ export class ActivitySelection implements HistoryMember {
     this.env.pool.request(this,flight,()=>{void this.run(scope,flight);},()=>flight.controller.abort());
   }
   private async run(scope:ActivityScope,flight:Flight){
-    const {pool}=this.env,generation=flight.generation,news=this.news,since=this.dirty;
+    const {pool}=this.env,generation=flight.generation,news=this.news,since=this.dirty,lifetime=this.lifetime;
     const valid=()=>!flight.controller.signal.aborted&&generation===this.generation&&this.scope===scope;
     let transport=0,scratch=0;
     const reserve=(bytes:number)=>{if(!pool.reserve(flight,transport+bytes))throw new Error('history_limit');scratch=bytes;};
@@ -123,7 +150,7 @@ export class ActivitySelection implements HistoryMember {
           const bytes=curves.bytes+jsonBytes({...selected,spans:[],packed:undefined})*4+selected.refs.length*1024+(selected.packed?.blocks.length??0)*16+
             (selected.packed?.patterns.reduce((bytes,pattern)=>bytes+64+pattern.length*16,0)??0)+selected.spans.length*64+1024;
           reserve(bytes);
-          return {model:{projector,activity,selection:scope.selection,rangeKey:scope.rangeKey},tiles:new Map<number,HistoryTile>(),bytes};
+          return {model:{projector,activity,selection:scope.selection,rangeKey:scope.rangeKey,by:scope.by,muted:scope.muted,lifetime,bytes,evidence:reading.evidence},tiles:new Map<number,HistoryTile>(),bytes};
         })();
       }else{
         const range=scope.selection,cell=cellOf(range.to-range.from),from=cellStart(Math.max(range.from,since),cell),to=Math.ceil(range.to/cell)*cell;
@@ -153,7 +180,7 @@ export class ActivitySelection implements HistoryMember {
           const history=yield*composePrepared(chunks,answer,targetOf(range.to-range.from,answer.now,scope.rangeKey,range),new Set());
           const projector=yield*PeriodActivity.prepare(trace),activity=projector.project(history.activity,range);
           const bytes=tileBytes+jsonBytes(activity)*4+jsonBytes(trace)*4+1024;reserve(bytes);
-          return {model:{projector,activity,selection:scope.selection,rangeKey:scope.rangeKey},tiles,bytes};
+          return {model:{projector,activity,selection:scope.selection,rangeKey:scope.rangeKey,by:scope.by,muted:scope.muted,lifetime,bytes},tiles,bytes};
         })();
       }
       const result=await prepareAsync(this.owner,build,valid,this.scheduler());
@@ -173,21 +200,25 @@ export class ActivitySelection implements HistoryMember {
       if(generation!==this.generation||news!==this.news)this.schedule();
     }
   }
-  numbers(now:number,bar?:number){
-    const model=this.state.model;if(!model)return null;
+  numbers(now:number,bar?:number,model=this.state.model,key?:string){
+    if(!this.sameScope(model))return null;
     const range=evaluatedRange(model.selection,now);
     if(bar!==undefined){range.from=Math.max(range.from,bar);range.to=Math.min(range.to,bar+model.activity.barMs);}
-    if(model.selection.mode==='live')return model.projector.numbers(model.activity,range,this.scope!.by);
-    if(bar===undefined)return model.activity;
+    if(model.selection.mode==='live')return model.projector.numbers(model.activity,range,model.by,key);
+    if(bar===undefined){
+      if(key===undefined)return model.activity;
+      const group=model.activity.by[model.by].find(group=>group.key===key);
+      return {...model.activity,agentMs:group?.agentMs??0,activeMs:group?.activeMs??0,agents:group?.agents??0,by:{...model.activity.by,[model.by]:group?[group]:[]}};
+    }
     const cell=model.activity.cells.find(([at])=>at===bar);
-    const by=this.scope!.by;
+    const by=model.by;
     return {...model.activity,agentMs:cell?.[2]??0,activeMs:cell?.[1]??0,agents:cell?.[3]??0,by:{...model.activity.by,[by]:model.activity.by[by].map(group=>({...group,agentMs:group.cells.find(([at])=>at===bar)?.[1]??0}))}};
   }
-  changesAt(now:number,read:(at:number)=>string){
-    const model=this.state.model;if(!model||model.selection.mode!=='live'||!this.scope)return null;
+  changesAt(now:number,read:(at:number)=>string,model=this.state.model,key?:string){
+    if(!this.sameScope(model)||model.selection.mode!=='live')return null;
     const period=model.selection.periodMs;
     return periodTextChangesAt(now,at=>{
-      const next=Math.min(model.projector.changesAt(at,period,this.scope!.by)??Infinity,
+      const next=Math.min(model.projector.changesAt(at,period,model.by,key)??Infinity,
         ...[model.projector.trace.knownFrom+period,(model.projector.trace.cut??Infinity)+period].filter(value=>value>at));
       return Number.isFinite(next)?next:null;
     },read);

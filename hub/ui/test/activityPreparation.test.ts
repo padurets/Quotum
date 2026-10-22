@@ -27,7 +27,7 @@ test('the actual activity edge painter advances clipped bars without preparing t
   const clips: number[][] = []; let draft: {token: number} | null = null;
   const node = (values: Map<string, string>) => ({getAttribute: (name: string) => values.get(name), setAttribute: (name: string, value: string) => values.set(name, value)});
   const context = {navigationAt,navigationKey,navigation:{context:'test',range:'live'},timeRange:()=>null,valueContext:'',valuePin:{current:null},activityScale,heights:new Map(),paintValue:()=>{},bandClip: {current: {}}, mask: {current: node(attributes)}, edges: {current: {querySelectorAll: () => [node(path)]}},
-    currentActivity: {}, activity: {by: {source: [{key: 's', cells: [[0, 25_000], [60_000, 60_000], [120_000, 5_000]]}]}},
+    scoped:false,currentActivity: {}, activity: {by: {source: [{key: 's', cells: [[0, 25_000], [60_000, 60_000], [120_000, 5_000]]}]}},
     strip: null, groups: [{group: {key: 's'}}], from: 15_000, to: 135_000, by: 'source', barMs: 60_000, vertical: {max: 60_000}, height: 100, perMs: 0.001,
     left: 0, right: 0, width: 120, scale: 1, x: (at: number) => at / 1000, y: (ms: number) => 100 - ms / 1000,
     axis: {held: false, visualGeometry: () => ({})}, pan: {get: () => draft}, painted: {current: ''}, clipPlot: (_node: unknown, ...bounds: number[]) => clips.push(bounds), cellStart,plotBar,targetOf,
@@ -55,10 +55,10 @@ test('ordinary Activity frames allocate unpinned colours by current rank while m
   const hooks=preparationFixture();let preparations=0;
   const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
   const start=source.indexOf('  const prepared = usePrepared(');
-  const region=source.slice(start,source.indexOf('  const currentGroups=',start));
+  const region=source.slice(start,source.indexOf('  // Numerical consumers keep',start));
   type Model={identities:ProjectIdentity[]};
   type Presentation={model:Model|null;identities:ProjectIdentity[]};
-  const context={...hooks,resolveProjectColors,groupRegistry,
+  const context={...hooks,resolveProjectColors,groupRegistry,numeric:{history:null,model:null,scoped:false,allOff:false,since:null},subset:{retain:()=>()=>{}},muted:{},activityMutedKeys:()=>[],panning:null,loading:false,error:null,scoped:false,allOff:false,local:{model:null,loading:false,error:null},
     usePrepared:(work:()=>Generator<void,unknown,void>,deps:readonly unknown[],scope:unknown=null,enabled=true)=>hooks.usePrepared(()=>{preparations++;return work();},deps,scope,enabled),
     groups:[] as ActivityGroup[],colors:[] as string[],shown:[] as {group:ActivityGroup;color:string;name:string}[],strip:null,registry:{current:null},
     pins:[] as ProjectColorPins,colorsReady:true,authority:0,history:{board:'b'},drawing:{range:'24h'},by:'project',arrange:{view:{}},titles:{},prefs:{muted:{}},locale:'en',
@@ -105,40 +105,40 @@ test('actual Activity composition resolves retained stacks and the new legend to
   let groupPreparations=0,stackPreparations=0,draws=0;
   class CountedPaths extends StackPaths {override *drawPrepared(...args:Parameters<StackPaths['drawPrepared']>){draws++;return yield*super.drawPrepared(...args);}}
   const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
-  const start=source.indexOf('  const prepared = usePrepared('),region=source.slice(start,source.indexOf('  const currentGroups=',start));
+  const start=source.indexOf('  const prepared = usePrepared('),region=source.slice(start,source.indexOf('  // Numerical consumers keep',start));
   const elementStart=source.indexOf('<Stacks\n'),element=source.slice(elementStart,source.indexOf('/>',elementStart)+2);
-  const legendStart=source.indexOf('<div className="legend">'),legend=source.slice(legendStart,source.indexOf('</div>',legendStart)+6);
+  const detailStart=source.indexOf('  const detailFrame='),details=source.slice(detailStart,source.indexOf('  return (\n    <AnalyticsPanel ref={panel} className="activity"',detailStart));
   const axis={box:{current:null},svg:{current:null},width:400,scale:1,hover:null,drag:null,clip:'c',handlers:{},basis:{from:0,to:length,end:length},active:false,screenX:(at:number)=>at,commitDrawing:()=>{}};
   type Row={group:ActivityGroup;color:string;name:string};
   type Frame={element:React.ReactElement<Record<string,unknown>>;legend:React.ReactNode;prepared:{value:unknown}};
-  const context={...parent,React,activityMutedKeys:()=>[],memo:(fn:unknown)=>fn,useEffect:()=>{},useId:()=> 'c',seriesFocusStyle:()=>({}),mutedKey:(_by:string,key:string)=>key,
+  const context={...parent,React,numeric:null as any,muted:{},loading:false,local:{model:null,loading:false,error:null},allOff:false,focus:{},Totals:()=>null,activityMutedKeys:()=>[],memo:(fn:unknown)=>fn,useEffect:()=>{},useId:()=> 'c',seriesFocusStyle:()=>({}),mutedKey:(_by:string,key:string)=>key,
     StackPaths:CountedPaths,stacksHeight:()=>160,activityScale,niceTicks,cellStart,navigationKey,MINUTE:60_000,CSS:{escape:(id:string)=>id},pan:{active:()=>null,subscribe:()=>()=>{},onStop:()=>()=>{}},
     useLocale:()=> 'en',useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),PlotLayer:()=>null,PlotOverlay:()=>null,
     clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',t:(key:string)=>key,LegendItem:()=>null,groupName:(group:{name:string|null})=>group.name??'',groupMuted:()=>false,
     EMPTY_CELLS:[],registry:{current:null},groups:[] as ActivityGroup[],colors:[] as string[],shown:[] as Row[],strip:null,by:'project',prefs:{muted:{}},locale:'en',
     history:{board:'b'},authority:1,arrange:{view:{}},titles:{},drawing:{range:'24h',since:0},pins:[['A',CATEGORY_COLORS[8]]] as ProjectColorPins,colorsReady:true,resolveProjectColors,groupRegistry,
     activity:{barMs:60_000,by:{project:[] as ActivityGroup[]},cells:[]},drawnActivity:{barMs:60_000,by:{project:[] as ActivityGroup[]},cells:[]},currentGroups:[] as ActivityGroup[],
-    subset:{},scoped:false,EMPTY_ACTIVITY:{},emptyFrame:null,panning:null,answered:true,error:undefined,from:0,to:length,since:null,onBase:()=>{},setTimeRange:()=>{},plot:undefined,navigation:{context:'b',range:'24h'},
+    subset:{retain:()=>()=>{}},board:'b',scoped:false,EMPTY_ACTIVITY:{},emptyFrame:null,panning:null,answered:true,error:undefined,from:0,to:length,since:null,onBase:()=>{},setTimeRange:()=>{},plot:undefined,navigation:{context:'b',range:'24h'},
     render:null as unknown as ()=>Frame,Stacks:null as unknown as (props:object)=>React.ReactNode,
   };
-  runInNewContext(ts.transpileModule(`function render(){${region}\nreturn {element:(${element}),legend:(${legend}),prepared};}\nglobalThis.render=render;\n${source.slice(source.indexOf('const Stacks = memo(function Stacks('))}\nglobalThis.Stacks=Stacks;`,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React}}).outputText,context);
+  runInNewContext(ts.transpileModule(`function render(){${region}\n${details}\nreturn {element:(${element}),prepared};}\nglobalThis.render=render;\n${source.slice(source.indexOf('const Stacks = memo(function Stacks('))}\nglobalThis.Stacks=Stacks;`,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React}}).outputText,context);
   const frame=(names:string[])=>{
     context.groups=names.map(name=>({key:JSON.stringify(name),name,cells:Array.from({length:480},(_,i):[number,number]=>[i*60_000,60_000]),agentMs:60_000,activeMs:60_000,agents:1}));
     context.colors=groupColors(context.groups,'project',{} as Parameters<typeof groupColors>[2],()=> '');
     context.shown=context.groups.map((group,i)=>({group,color:context.colors[i],name:group.name!}));
-    context.activity=context.drawnActivity={barMs:60_000,by:{project:context.groups},cells:[]};context.currentGroups=context.groups;
+    context.activity=context.drawnActivity={barMs:60_000,by:{project:context.groups},cells:[]};context.currentGroups=context.groups;context.numeric={history:{range:'24h',activity:context.activity},model:null,scoped:false,allOff:false,since:null};
   };
   const nodes=(node:React.ReactNode):React.ReactElement<Record<string,unknown>>[]=>Array.isArray(node)?node.flatMap(nodes):React.isValidElement<Record<string,unknown>>(node)?[node,...nodes(node.props.children as React.ReactNode)]:[];
   const render=()=>{
-    let current!:Frame,paths!:React.ReactElement<Record<string,unknown>>[];
+    let current!:Frame,paths!:React.ReactElement<Record<string,unknown>>[],legend!:React.ReactElement<Record<string,unknown>>[];
     // React flushes a parent's state from a child's layout effect before painting.
     for(let i=0;i<2;i++){
       Object.assign(context,parent,{usePrepared:(work:()=>Generator<void,unknown,void>,deps:readonly unknown[],scope:unknown,enabled:boolean)=>parent.usePrepared(()=>{groupPreparations++;return work();},deps,scope,enabled)});
       parent.begin();current=context.render();parent.commit();
       Object.assign(context,child,{usePrepared:(work:()=>Generator<void,unknown,void>,deps:readonly unknown[],scope:unknown,enabled:boolean)=>child.usePrepared(()=>{stackPreparations++;return work();},deps,scope,enabled)});
-      child.begin();paths=nodes(context.Stacks(current.element.props)).filter(node=>node.props.className==='activity-stack');child.commit();
+      child.begin();const childNodes=nodes(context.Stacks(current.element.props));paths=childNodes.filter(node=>node.props.className==='activity-stack');legend=childNodes.filter(node=>node.type===context.LegendItem);child.commit();
     }
-    return {current,paths,legend:nodes(current.legend).filter(node=>node.type===context.LegendItem)};
+    return {current,paths,legend};
   };
   const settle=()=>{for(let i=0;i<4;i++){render();parent.finish();child.finish();}return render();};
   const fills=(value:ReturnType<typeof render>,name:string)=>value.paths.filter(node=>node.key===JSON.stringify(name)).map(node=>node.props.fill);
@@ -177,11 +177,11 @@ test('actual Activity generators hold one coherent model and produce exact stack
   class CountedPaths extends StackPaths {override *drawPrepared(...args: Parameters<StackPaths['drawPrepared']>) {draws++; return yield* super.drawPrepared(...args);}}
   const source = readFileSync(new URL('../components/Activity.tsx', import.meta.url), 'utf8');
   const start = source.indexOf('  const prepared = usePrepared(');
-  const region = source.slice(start, source.indexOf('  const currentGroups=', start));
+  const region = source.slice(start, source.indexOf('  // Numerical consumers keep', start));
   type Model = {identities: {key: string; name: string | null}[]; shown: {group: PlotGroup; color: string; name: string}[]; strip: PlotBuffer};
   const navigation = {context: 'test', range: 'range'};
   const axis = {box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {from: 0, to: length, end: length}, active: false, screenX: (at: number) => 48 + (at - axis.basis.from) / length * 340, commitDrawing: () => {}};
-  const context = {resolveProjectColors,pins:[] as ProjectColorPins,paint:new Map<string,string>(),colorsReady:true,drawing:{range:undefined},navigationKey, React, ...parent, memo: (fn: unknown) => fn, useState: child.useState, useEffect: () => {}, seriesFocusStyle:()=>({}), useId: () => 'c',
+  const context = {numeric:{history:null,model:null,scoped:false,allOff:false,since:null},subset:{retain:()=>()=>{}},muted:{},activityMutedKeys:()=>[],panning:null,loading:false,error:null,scoped:false,allOff:false,local:{model:null,loading:false,error:null},resolveProjectColors,pins:[] as ProjectColorPins,paint:new Map<string,string>(),colorsReady:true,drawing:{range:undefined},navigationKey, React, ...parent, memo: (fn: unknown) => fn, useState: child.useState, useEffect: () => {}, seriesFocusStyle:()=>({}), useId: () => 'c',
     EMPTY_CELLS: [], registry: {current: null}, groups: [], colors: [], shown: [], strip: buffer(0), by: 'project', prefs: {muted: {}}, locale: 'en', history: {board: 'b'}, authority: 0, arrange: {view: {}}, titles: {},
     groupMuted:()=>false,groupRegistry, groupName: (group: {key: string}) => group.key, mutedKey: (_by: string, key: string) => key,
     plotGroupsPrepared: function* (...args: Parameters<typeof plotGroupsPrepared>) {aggregates++; return yield* plotGroupsPrepared(...args);},
@@ -214,7 +214,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
     if (!React.isValidElement<{className?: string; d?: string; children?: React.ReactNode}>(node)) return [];
     return node.props.className === 'activity-stack' && node.props.d !== undefined ? [node.props.d] : pathsOf(node.props.children);
   };
-  const props = {activity: {barMs}, origin: 0, groups: current.shown,paint:context.paint, from: 0, to: length, unknownTo: null, plot: undefined, onBase: () => {}, onSelect: () => {}, strip: current.strip as PlotBuffer | null, prepared: true, navigation, by: 'project', allMuted: false, empty: null};
+  const props = {subset:{retain:()=>()=>{}},detailFrame:null,renderDetails:()=>({summary:null,legend:null}),activity: {barMs}, origin: 0, groups: current.shown,paint:context.paint, from: 0, to: length, unknownTo: null, plot: undefined, onBase: () => {}, onSelect: () => {}, strip: current.strip as PlotBuffer | null, prepared: true, navigation, by: 'project', allMuted: false, empty: null};
   const renderChild = () => {Object.assign(context, child); child.begin(); return pathsOf(context.Stacks(props));};
   assert.deepEqual(renderChild(), []); assert.equal(draws, 0); child.commit(); child.finish();
   const actual = renderChild();
@@ -254,7 +254,7 @@ test('native Activity value projection excludes a departed peak before release a
   const band=element(),edges={...element(),querySelectorAll:()=>[]},axis={held:false,visualGeometry:()=>({from:visualFrom}),screenX:(at:number)=>at/M};
   const context={navigationAt,navigationKey,navigation:{context:'test',range:'live'},timeRange:()=>selected,valueContext:'',valuePin:{current:null as {context:string;range:string;maximum:number}|null},activityScale,workHours,valueBand:{current:band},valueAxis:{current:{children:rows}},paintedValue:{current:''},vertical:{max:12*H},height:300,top:12,bottom:28,
     heights:new Map([[0,12*H],[M,H],[-M,100*H]]),bandClip:{current:{}},mask:{current:element()},edges:{current:edges},pan:{get:()=>draft},axis,strip:null,
-    groups:[{group:{key:'s'}}],activity:{by:{source:[]}},currentActivity:{},from:0,to:2*M,barMs:M,by:'source',left:0,right:0,width:120,scale:1,perMs:1/M,x:(at:number)=>at/M,y:(value:number)=>272-value/(12*H)*260,
+    scoped:false,groups:[{group:{key:'s'}}],activity:{by:{source:[]}},currentActivity:{},from:0,to:2*M,barMs:M,by:'source',left:0,right:0,width:120,scale:1,perMs:1/M,x:(at:number)=>at/M,y:(value:number)=>272-value/(12*H)*260,
     cellStart,plotBar,targetOf,clipPlot:()=>{},painted:{current:''},paint:null as unknown as (range?:{from:number;to:number},pin?:boolean)=>void};
   const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8'),start=source.indexOf('  const paintValue=');
   const body=source.slice(start,source.indexOf('  // Value projection follows the committed time pose',start));

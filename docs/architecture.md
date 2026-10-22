@@ -2183,7 +2183,13 @@ results never borrow wider-cohort totals. All-visible and all-off choices need n
 additional reader request.
 An ordinary same-context refresh retains one complete, coherent set of all four
 metrics, including while replacement preparation fails; its retained model remains
-charged to the shared pool. Same-run greetings and compatible snapshots, ownership
+charged to the shared pool. The summary, legend amounts, previews and bar readout
+commit with the prepared stacks. Neither an early local reply nor an early shared
+reply can replace only part of that frame. Fixed subsets compare admitted context
+totals and work endpoints with the shared selected work, while live subsets bind to
+its evidence generation; unrelated measurement revisions do not delay them. Parent
+and drawing preparation share a retained-model lease until replacement, and a retired
+lifetime cannot be restored by returning to identical filters. Same-run greetings and compatible snapshots, ownership
 and lineup baselines retain that model; a fixed subset replaces its complete cell
 range, while live subsets follow the board's replacement evidence. The page records
 the hub run before widgets mount. A changed run immediately retires both all-visible

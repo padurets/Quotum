@@ -278,3 +278,18 @@ test('mounted live Activity retry repeats failed upstream work before preparing 
     assert.equal(reader.get().model,complete);assert.equal(reader.get().loading,false);assert.equal(h.requests.length,reads,'same-authority financial news never strands local work as pending');
   }finally{cleanups.forEach(stop=>stop());reader.reset();await flush();await h.close();}
 });
+
+test('a displayed subset stays charged through replacement and retirement until its last drawing releases it',async()=>{
+  const pool=new HistoryPool();let trace:WorkTrace={anchor:0,knownFrom:0,cut:100,refs:[],spans:[]};
+  const reader=new ActivitySelection({pool,now:()=>100,read:()=>({trace,ready:true,error:null}),scheduler:()=>null,send:async()=>{throw Error('unexpected transport');}});
+  const scope:ActivityScope={board:'b',authority:'a',by:'project',muted:['"other"'],filters:workFilter(defaultFilters()),selection:{mode:'live',periodMs:50},rangeKey:'live',barMs:10};
+  reader.configure(scope);
+  await flush();const a=reader.get().model!;assert.ok(a);
+  const releaseParent=reader.retain(a),releaseChild=reader.retain(a);
+  assert.equal(pool.estimatedBytes,a.bytes,'the two preparation phases share one retained basis');
+  trace={...trace,cut:110};reader.refresh();await flush();const b=reader.get().model!;assert.notEqual(a,b);
+  assert.equal(pool.estimatedBytes,a.bytes+b.bytes,'the previous drawing cannot escape the shared memory budget');
+  releaseParent();assert.equal(pool.estimatedBytes,a.bytes+b.bytes);releaseChild();releaseChild();assert.equal(pool.estimatedBytes,b.bytes);
+  const release=reader.retain(b);reader.reset();assert.equal(reader.numbers(100,undefined,b),null,'retention never restores a retired scope');
+  assert.equal(pool.estimatedBytes,b.bytes);reader.configure(scope);assert.equal(reader.numbers(100,undefined,b),null,'returning to identical scope text cannot revive its retired lifetime');reader.reset();release();await flush();assert.equal(pool.estimatedBytes,0);assert.equal(pool.activeFlights,0);
+});

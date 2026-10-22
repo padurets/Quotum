@@ -2,6 +2,7 @@ import {plotBar} from '../lib/historyPlot';
 import {targetOf} from '../../server/domain/history';
 import {workChange} from '../lib/workChanges';
 import {projectColorBindings} from './projectColorBindings';
+import {ActivitySelection} from '../lib/activitySelection';
 import * as periodValueClockBindings from '../../server/domain/periodValues';
 import {WorkCalendar} from '../lib/workCalendar';
 import {AGENT_HOURS_HEATMAP} from '../../server/domain/widgets';
@@ -147,21 +148,22 @@ import {niceTicks} from '../lib/periods';
 import {navigationKey} from '../lib/axisNavigation';
 import {cardId,isHidden} from '../lib/view';
 
-export function consumer(h: any) {
+export function consumer(h: any, options:{muted?:Record<string,boolean>;subset?:ActivitySelection;now?:()=>number}={}) {
   const parent=preparationFixture(),child=preparationFixture();
   const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
   const axis={box:{current:null},svg:{current:null},width:400,scale:1,hover:null,drag:null,clip:'c',handlers:{},basis:{from:NOW-H,to:NOW,end:NOW},active:false,screenX:(at:number)=>48+(at-(NOW-H))/H*340,commitDrawing:()=>{}};
   const EMPTY_ACTIVITY={since:0,known:null,barMs:60_000,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}};
   const titles=Object.fromEntries(Object.values(h.page.get().board!.cards).map((c:any)=>[c.id,{provider:c.provider,title:'Shared source'}]));
   let panning:number|null=null;
-  const prefs={range:'1h',activityBy:'project',muted:{}};
+  const prefs={range:'1h',activityBy:'project',muted:options.muted??{}};
+  const idleSubset={get:()=>({model:null,loading:false,error:null}),subscribe:()=>()=>{},retain:()=>()=>{}};
   const context={...projectColorBindings(h.page),chartSeriesMuted,ACTIVITY,
     exports:{} as any,React,...parent,memo:(f:any)=>f,useMemo:(f:any,deps:any[])=>{const slot=parent.useRef(null) as any;if(!slot.current||deps.some((v,i)=>!Object.is(v,slot.current.deps[i])))slot.current={deps,value:f()};return slot.current.value;},
-    activityMutedKeys:()=>[],useActivitySubset:()=>({}),useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useActivityHistory:()=>h.renderActivity(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
+    activityMutedKeys:()=>Object.keys(prefs.muted).filter(key=>prefs.muted[key]&&key.startsWith('activity:project:')).map(key=>key.slice('activity:project:'.length)),useActivitySubset:()=>options.subset??idleSubset,useSyncExternalStore:(_subscribe:any,get:any)=>get(),useEffect:()=>{},useSeriesFocus:()=>({subscribe:()=>()=>{},get:()=>null}),seriesFocusStyle:()=>({}),useId:()=> 'c',useActivityHistory:()=>h.renderActivity(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
     useLineup:()=>h.page.get().board!.lineup,usePersonalBoard:()=>false,useTitles:()=>titles,
     useChartMuted:()=>prefs.muted,usePref:(key:keyof typeof prefs)=>prefs[key],useLocale:()=> 'en',useTimeRange:()=>h.selectedRange(),useBoardId:()=>h.board,
-    axisNavigation:()=>({context:'b',range:'1h'}),useClock:()=>NOW,usePanning:()=>panning,
-    pan:{get:()=>null,active:()=>null,subscribe:()=>()=>{},onStop:()=>()=>{}},useHistoryBegins:()=>0,frameOf:()=>({from:NOW-H,to:NOW,live:true}),measuredTo:()=>NOW,
+    axisNavigation:()=>({context:'b',range:'1h'}),useClock:()=>options.now?.()??NOW,usePanning:()=>panning,
+    pan:{get:()=>null,active:()=>null,subscribe:()=>()=>{},onStop:()=>()=>{}},useHistoryBegins:()=>0,frameOf:()=>({from:(options.now?.()??NOW)-H,to:options.now?.()??NOW,live:true}),measuredTo:()=>options.now?.()??NOW,
     activityEmpty,groupColors,groupRegistry,mutedKey,plotGroupsPrepared,StackPaths,stacksHeight:()=>160,activityScale,niceTicks,cellStart,plotBar,targetOf,MINUTE:60_000,EMPTY_ACTIVITY,groupName:(g:any)=>g.name??g.key,cardId,isHidden,t:(s:any)=>s,
     quotaHistory:{retry:()=>{}},AnalyticsPanel:()=>null,ActivitySettings:()=>null,Totals:()=>null,LegendItem:()=>null,
     setTimeRange:()=>{},timeRangeKey,navigationKey,useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),
@@ -170,13 +172,14 @@ export function consumer(h: any) {
   runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,Object.assign(context,periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   function find(node:any,type:any):any{if(Array.isArray(node))return node.map(n=>find(n,type)).find(Boolean);if(!React.isValidElement(node))return null;if(node.type===type)return node;return find((node.props as any).children,type);}
   const pathsOf=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(pathsOf);if(!React.isValidElement(node))return [];const p=node.props as any;return p.className==='activity-stack'&&p.d!==undefined?[p.d]:pathsOf(p.children);};
-  let latestParent:any;const renderParent=()=>{Object.assign(context,parent);parent.begin();latestParent=context.exports.Activity({arrange:{view:h.page.get().board!.view}});return find(latestParent,context.Stacks).props;};
-  const renderChild=(props:any)=>{Object.assign(context,child);child.begin();return pathsOf(context.Stacks(props));};
+  let latestParent:any,latestChild:any;const renderParent=()=>{Object.assign(context,parent);parent.begin();latestParent=context.exports.Activity({arrange:{view:h.page.get().board!.view}});return find(latestParent,context.Stacks).props;};
+  const renderChild=(props:any)=>{Object.assign(context,child);child.begin();latestChild=context.Stacks(props);return pathsOf(latestChild);};
 
     const names=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(names);if(!React.isValidElement(node))return [];const props=node.props as any;return node.type===context.LegendItem?[props.name]:names(props.children);};
-    const render=()=>{const props=renderParent();parent.commit();const paths=renderChild(props);child.commit();return {paths,names:names(latestParent),ready:props.prepared};};
+    const render=()=>{const props=renderParent();parent.commit();const paths=renderChild(props);child.commit();const legend=(node:any):any[]=>{if(Array.isArray(node))return node.flatMap(legend);if(!React.isValidElement(node))return [];const p=node.props as any;return node.type===context.LegendItem?[p]:legend(p.children);};
+      const result={paths,names:names(latestChild),ready:props.prepared};return Object.defineProperties(result,{entries:{value:legend(latestChild)},tree:{value:latestChild},totals:{value:find(latestChild,context.Totals)?.props}}) as typeof result&{entries:any[];tree:any;totals:any};};
     const settle=()=>{for(let i=0;i<4;i++){render();parent.finish();child.finish();}return render();};
-    return {render,settle,pan:()=>{panning=1;axis.active=true;}};
+    return {render,settle,finishParent:parent.finish,finishChild:child.finish,close:()=>{parent.dispose();child.dispose();},pan:()=>{panning=1;axis.active=true;}};
 }
 
 

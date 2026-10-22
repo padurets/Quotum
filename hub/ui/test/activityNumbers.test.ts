@@ -217,7 +217,7 @@ test('the Activity clock advances the plot without invalidating unchanged numeri
   const prefs={range:'1h',activityBy:'project',muted:{}},titles={},view=h.page.get().board!.view;
   const context:any={...projectColorBindings(h.page),activityMutedKeys:()=>[],chartSeriesMuted,ACTIVITY,exports:{},require,memo:(value:any)=>value,...hooks,
     useMemo:(read:any,deps:any[])=>{const box=hooks.useRef(null) as any;if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;},
-    useActivitySubset:()=>({}),useActivityHistory:()=>shown,useHistoryPlot:()=>null,usePlot:()=>({}),useLineup:()=>[],usePersonalBoard:()=>false,useTitles:()=>titles,
+    useSyncExternalStore:(_subscribe:any,get:any)=>get(),useActivitySubset:()=>({get:()=>({model:null,loading:false,error:null}),subscribe:()=>()=>{},retain:()=>()=>{}}),useActivityHistory:()=>shown,useHistoryPlot:()=>null,usePlot:()=>({}),useLineup:()=>[],usePersonalBoard:()=>false,useTitles:()=>titles,
     useChartMuted:()=>prefs.muted,usePref:(key:keyof typeof prefs)=>prefs[key],useSeriesFocus:()=>{},useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=>h.board,useClock:()=>now,usePanning:()=>null,useHistoryBegins:()=>0,
     axisNavigation:()=>({context:h.board,range:'1h'}),frameOf:()=>({from:now-H,to:now}),measuredTo:()=>now,
     activityEmpty,groupColors,groupName:(group:any)=>group.name,mutedKey,stamp,t,useLayoutEffect:hooks.useLayoutEffect,
@@ -226,7 +226,7 @@ test('the Activity clock advances the plot without invalidating unchanged numeri
   };
   runInNewContext(compile(source.slice(source.indexOf('export const Activity ='),source.indexOf('/** How tall'))),context);
   const find=(node:any,type:any):any=>Array.isArray(node)?node.flatMap(part=>find(part,type)):React.isValidElement(node)?[...(node.type===type?[node]:[]),...find((node.props as any).children,type)]:[];
-  const render=()=>{hooks.begin();const node=context.exports.Activity({arrange:{view}});hooks.commit();return {totals:find(node,context.Totals)[0].props,legend:find(node,context.LegendItem).map((entry:any)=>entry.props),plot:find(node,context.Stacks)[0].props};};
+  const render=()=>{hooks.begin();const node=context.exports.Activity({arrange:{view}});hooks.commit();const plot=find(node,context.Stacks)[0].props,details=plot.renderDetails(plot.detailFrame,false);return {totals:details.summary.props,legend:find(details.legend,context.LegendItem).map((entry:any)=>entry.props),plot};};
   try{
     render();hooks.finish();const before=render();assert.equal(before.legend.length,1);
     now+=5*M;h.advance(now);shown={...shown,history:h.period.project(shown.history,'quota',now)};
@@ -236,4 +236,23 @@ test('the Activity clock advances the plot without invalidating unchanged numeri
     shown={...shown,history:null,drawing:null,presentation:1};const retired=render();
     assert.equal(retired.legend.length,0);assert.equal(retired.totals.history,null,'a new authority cannot retain withdrawn numerical evidence');
   }finally{d.close();await h.close();}
+});
+
+test('frozen selected numbers retire during a gesture even when the same scope text is configured again',async test=>{
+  test.mock.method(Date,'now',()=>NOW);setLocale('en');
+  const h=await fixture(),d=await drawings(h),pool=new HistoryPool();let panning:number|null=null;
+  const subset=new ActivitySelection({pool,now:()=>NOW,scheduler:()=>null,read:()=>({trace:h.period.get().value,ready:true,error:null}),send:async()=>{throw Error('unexpected transport');}});
+  subset.configure({board:h.board,authority:'same',by:'project',muted:['"other"'],filters:workFilter(defaultFilters()),selection:{mode:'live',periodMs:H},rangeKey:'1h',barMs:M});
+  await flush();const model=subset.get().model;assert.ok(model);
+  const clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}});
+  const props={history:d.render().history,by:'project',subset,model,scoped:true,since:null},view=consumer('Totals',clock,h.period,props,()=>panning);
+  try{
+    assert.ok(view.render().includes(`data-agent-ms="${M}"`));panning=1;
+    assert.ok(view.update(props).includes(`data-agent-ms="${M}"`));
+    subset.invalidate();assert.equal(subset.sameScope(model),false);
+    assert.ok(!view.update(props).includes('data-agent-ms='),'the old frozen value cannot bypass the lifetime guard');
+    await flush();const next=subset.get().model;assert.ok(next);assert.notEqual(next,model);
+    assert.ok(!view.update({...props,model:next}).includes('data-agent-ms='),'a replacement waits until accounting resumes after the gesture');
+    panning=null;assert.ok(view.update({...props,model:next}).includes(`data-agent-ms="${M}"`));
+  }finally{view.close();subset.reset();await flush();assert.equal(pool.estimatedBytes,0);d.close();await h.close();}
 });

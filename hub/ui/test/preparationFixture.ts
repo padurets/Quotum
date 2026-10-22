@@ -31,6 +31,7 @@ export function preparationFixture() {
     commit: () => {effects.splice(0).forEach(effect => effect());},
     tick: () => tasks.shift()?.(),
     finish: () => {for (let i = 0; tasks.length && i < 100_000; i++) tasks.shift()!(); if (tasks.length) throw new Error('preparation did not quiesce');},
+    dispose:()=>{for(const slot of slots)if(slot&&typeof slot==='object'&&'cleanup' in slot&&typeof slot.cleanup==='function')slot.cleanup();scheduler.dispose();},
     scheduler,
   };
 }

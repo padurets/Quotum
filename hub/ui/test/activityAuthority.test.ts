@@ -32,7 +32,7 @@ function consumer(h: ReturnType<typeof harness>) {
   const prefs={range:'1h',activityBy:'project',muted:{}};
   const context={...projectColorBindings(h.page),chartSeriesMuted,ACTIVITY,
     exports:{} as any,React,...parent,memo:(f:any)=>f,useMemo:(f:any,deps:any[])=>{const slot=parent.useRef(null) as any;if(!slot.current||deps.some((v,i)=>!Object.is(v,slot.current.deps[i])))slot.current={deps,value:f()};return slot.current.value;},
-    activityMutedKeys:()=>[],useActivitySubset:()=>({}),useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useActivityHistory:()=>h.render(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
+    activityMutedKeys:()=>[],useSyncExternalStore:(_subscribe:any,get:any)=>get(),useActivitySubset:()=>({get:()=>({model:null,loading:false,error:null}),subscribe:()=>()=>{},retain:()=>()=>{}}),useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useActivityHistory:()=>h.render(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
     useLineup:()=>h.page.get().board!.lineup,usePersonalBoard:()=>false,useTitles:()=>titles,
     useChartMuted:()=>prefs.muted,usePref:(key:keyof typeof prefs)=>prefs[key],useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=> 'b',
     axisNavigation:()=>({context:'b',range:'1h'}),useClock:()=>NOW,usePanning:()=>panning,
@@ -45,11 +45,11 @@ function consumer(h: ReturnType<typeof harness>) {
   runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,context);
   function find(node:any,type:any):any{if(Array.isArray(node))return node.map(n=>find(n,type)).find(Boolean);if(!React.isValidElement(node))return null;if(node.type===type)return node;return find((node.props as any).children,type);}
   const pathsOf=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(pathsOf);if(!React.isValidElement(node))return [];const p=node.props as any;return p.className==='activity-stack'&&p.d!==undefined?[p.d]:pathsOf(p.children);};
-  let latestParent:any;const renderParent=()=>{Object.assign(context,parent);parent.begin();latestParent=context.exports.Activity({arrange:{view:h.page.get().board!.view}});return find(latestParent,context.Stacks).props;};
-  const renderChild=(props:any)=>{Object.assign(context,child);child.begin();return pathsOf(context.Stacks(props));};
+  let latestParent:any,latestChild:any;const renderParent=()=>{Object.assign(context,parent);parent.begin();latestParent=context.exports.Activity({arrange:{view:h.page.get().board!.view}});return find(latestParent,context.Stacks).props;};
+  const renderChild=(props:any)=>{Object.assign(context,child);child.begin();latestChild=context.Stacks(props);return pathsOf(latestChild);};
 
     const names=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(names);if(!React.isValidElement(node))return [];const props=node.props as any;return node.type===context.LegendItem?[props.name]:names(props.children);};
-    const render=()=>{const props=renderParent();parent.commit();const paths=renderChild(props);child.commit();return {paths,names:names(latestParent),ready:props.prepared};};
+    const render=()=>{const props=renderParent();parent.commit();const paths=renderChild(props);child.commit();return {paths,names:names(latestChild),ready:props.prepared};};
     const settle=()=>{for(let i=0;i<4;i++){render();parent.finish();child.finish();}return render();};
     return {render,settle,pan:()=>{panning=1;axis.active=true;}};
 }
