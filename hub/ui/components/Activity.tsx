@@ -258,6 +258,8 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const subset=useActivitySubset(drawing,by,muted,authority,allOff,scoped);
   const local=useSyncExternalStore(subset.subscribe,subset.get);
   const numeric=useMemo(()=>({history:drawing?{range:drawing.range,activity:drawing.activity}:null,model:local.model,scoped,allOff,since:history&&activity?.known&&activity.known.from>history.since?activity.known.from:null}),[drawing,local.model,scoped,allOff]);
+  // A queued preparation owns its input even before its output can be displayed.
+  useLayoutEffect(()=>subset.retain(numeric.model),[subset,numeric.model]);
   // What the groups look like changes with the answer, the board and the legend, not with time: the same objects as the clock moves the frame.
   const {groups, colors, shown} = useMemo(() => {
     const groups = drawnActivity?.by[by] ?? [];
@@ -512,6 +514,7 @@ const Stacks = memo(function Stacks({
   }, [...inputs, requested.from, requested.to, requested.end], `${authority}:${by}:${width}:${height}:${valueContext}`, incomingReady);
   const model = prepared.value;
   const coherent=incomingReady&&prepared.ready;
+  useLayoutEffect(()=>subset.retain(detailFrame?.model??null),[subset,detailFrame?.model]);
   useLayoutEffect(()=>subset.retain(model?.detailFrame?.model??null),[subset,model?.detailFrame?.model]);
   const details=renderDetails(model?.detailFrame??null,!coherent);
   useLayoutEffect(()=>{onDrawing?.(model?.registry??null);},[model?.registry,onDrawing]);

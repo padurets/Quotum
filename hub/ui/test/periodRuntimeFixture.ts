@@ -177,9 +177,9 @@ export function consumer(h: any, options:{muted?:Record<string,boolean>;subset?:
 
     const names=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(names);if(!React.isValidElement(node))return [];const props=node.props as any;return node.type===context.LegendItem?[props.name]:names(props.children);};
     const render=()=>{const props=renderParent();parent.commit();const paths=renderChild(props);child.commit();const legend=(node:any):any[]=>{if(Array.isArray(node))return node.flatMap(legend);if(!React.isValidElement(node))return [];const p=node.props as any;return node.type===context.LegendItem?[p]:legend(p.children);};
-      const result={paths,names:names(latestChild),ready:props.prepared};return Object.defineProperties(result,{entries:{value:legend(latestChild)},tree:{value:latestChild},totals:{value:find(latestChild,context.Totals)?.props}}) as typeof result&{entries:any[];tree:any;totals:any};};
+      const result={paths,names:names(latestChild),ready:props.prepared};return Object.defineProperties(result,{entries:{value:legend(latestChild)},tree:{value:latestChild},totals:{value:find(latestChild,context.Totals)?.props},incomingModel:{value:props.detailFrame?.model}}) as typeof result&{entries:any[];tree:any;totals:any;incomingModel:any};};
     const settle=()=>{for(let i=0;i<4;i++){render();parent.finish();child.finish();}return render();};
-    return {render,settle,finishParent:parent.finish,finishChild:child.finish,close:()=>{parent.dispose();child.dispose();},pan:()=>{panning=1;axis.active=true;}};
+    return {render,settle,queuedParent:()=>parent.scheduler.size,queuedChild:()=>child.scheduler.size,finishParent:parent.finish,finishChild:child.finish,close:()=>{parent.dispose();child.dispose();},pan:()=>{panning=1;axis.active=true;}};
 }
 
 
