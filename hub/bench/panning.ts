@@ -325,9 +325,15 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       report.initiator = initiator; report.period = period; report.series = geometry.series; report.sessionSeries=geometry.sessionSeries; report.edgeSeries=edgeSeries; report.budgetSeries = geometry.budgetSeries; report.fundsSeries = geometry.fundsSeries; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;
       reports.push(report);
       evidence?.save('panning-'+initiator+'-'+period,report);
-      if(traced){await traced.stop();await traced.bindAndClose();}
+      // The frozen report ends measurement; exporting diagnostics needs no CPU throttle.
+      let diagnosticFailure:{error:unknown}|undefined;
+      try{
+        await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
+        if(traced)await traced.stop();
+      }catch(error){diagnosticFailure={error};}
+      if(traced)try{await traced.bindAndClose();}catch(error){diagnosticFailure??={error};}
+      if(diagnosticFailure)throw diagnosticFailure.error;
       at('postconditions');
-      await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
       const live = await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`);
       if (!live) {
         const returned = await cdp.evaluate<unknown>('({after:window.__quotumPan.returnAfter,input:window.__quotumPan.returnInput})');

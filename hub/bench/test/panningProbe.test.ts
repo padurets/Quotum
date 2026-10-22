@@ -14,6 +14,28 @@ const edgeSeries=():PanReading['edgeSeries']=>['wheel','drag'].map(stage=>({stag
 const source = readFileSync(new URL('../panning.ts', import.meta.url), 'utf8');
 const probe = source.match(/const samplerSource=`(\(\(\) => \{\n\s*const initiator=[\s\S]+?\}\)\(\))`;/)![1];
 
+test('native diagnostics restore CPU after the frozen report and bind even when stopping fails', async t => {
+  const finish = source.split('reports.push(report);')[1].split("at('postconditions');")[0];
+  const script = ts.transpileModule(`(async()=>{${finish}})()`, {compilerOptions:{target:ts.ScriptTarget.ESNext}}).outputText;
+  for (const failing of ['none','restore','stop','bind','undefined'] as const) await t.test(failing,async()=>{
+    const events:string[]=[],first=failing==='undefined'?undefined:new Error(failing),report={frames:[67],latency:[39]};
+    let rejected=false,reason:unknown;
+    try {
+      await runInNewContext(script,{
+        report,initiator:'budget',period:'24h',
+        evidence:{save:()=>events.push('frozen')},
+        cdp:{send:async(method:string,params:{rate:number})=>{assert.equal(method,'Emulation.setCPUThrottlingRate');assert.equal(params.rate,1);events.push('restore');if(failing==='restore')throw first;}},
+        traced:{stop:async()=>{events.push('stop');if(failing==='stop'||failing==='undefined')throw first;},bindAndClose:async()=>{events.push('bind');if(failing==='bind'||failing==='stop'||failing==='undefined')throw new Error('binding failed');}},
+      });
+    } catch(error) {rejected=true;reason=error;}
+    assert.deepEqual(events,failing==='restore'?['frozen','restore','bind']:['frozen','restore','stop','bind']);
+    assert.equal(rejected,failing!=='none');
+    if(failing==='bind')assert.equal((reason as Error).message,'binding failed');
+    else if(rejected)assert.equal(reason,first,'a secondary binding error cannot replace the original failure');
+    assert.deepEqual(report,{frames:[67],latency:[39]},'diagnostic cleanup never changes recorded gaps');
+  });
+});
+
 function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quota', typed = false, diagnostic = false) {
   let time = 0;
   let observe:(records:unknown[])=>void=()=>{};
