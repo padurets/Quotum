@@ -2108,7 +2108,9 @@ a smaller partial boundary bar cannot enlarge all the unchanged interior stacks.
 Higher newly read work can expand that scale; another navigation, legend selection,
 authority or explicit geometry change establishes a new value projection.
 Budget and subscription-funds charts also preserve the monetary value domain painted
-at a historical gesture's release. Replacing an overscan strip with exact cells cannot
+at a historical gesture's release. The committed Chart model supplies that domain;
+an earlier parent preparation cannot replace it before its drawing commits.
+Replacing an overscan strip with exact cells cannot
 rescale unchanged balances. New values may expand the domain; another navigation,
 currency, resource selection or authority establishes a new one. Its bounds stay in
 integer millionths independently of the prepared path's numeric offset.

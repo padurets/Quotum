@@ -22,6 +22,7 @@ import {seriesFocusStyle} from './seriesFocus';
  * behind (`past`), something that happened to a source, such as an early reset.
  */
 export type Marker = {key: string; at: number; label: string; name?:string;color: string; strong?: boolean; past?: boolean; detail?: string; until?: number};
+export type ValueAxis={min:number;max:number;ticks:number[];label:string;formatTick:(value:number)=>string;formatValue:(key:string,value:number,at:number)=>string;rawValue?:(key:string,at:number)=>string|undefined;observation?:(key:string,at:number)=>{at:number;value:string}|undefined;detail?:(key:string,at:number)=>ReactNode};
 
 /** The mark of a past event: a small diamond centred at (x, y). */
 const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r},${r}l${-r},${-r}z`;
@@ -285,6 +286,7 @@ export const Chart = memo(function Chart({
   navigation,
   live: desiredLive = true,
   clock: currentClock = desiredNow,
+  onDrawing,
 }: {
   lines: Line[];
   plans?: PlanLine[];
@@ -301,7 +303,8 @@ export const Chart = memo(function Chart({
   onSelect?: (range: TimeRange) => void;
   plot?: number;
   onBase?: (height: number) => void;
-  axis?:{min:number;max:number;ticks:number[];label:string;formatTick:(value:number)=>string;formatValue:(key:string,value:number,at:number)=>string;rawValue?:(key:string,at:number)=>string|undefined;observation?:(key:string,at:number)=>{at:number;value:string}|undefined;detail?:(key:string,at:number)=>ReactNode};
+  axis?:ValueAxis;
+  onDrawing?:(axis:ValueAxis|undefined)=>void;
   stepped?:boolean;
   strip?: PlotBuffer | null;
   prepared?: boolean;
@@ -423,6 +426,7 @@ export const Chart = memo(function Chart({
     return {basis, valueAxis, lines: incomingLines, plans: incomingPlans, forecasts, markers, strip: incomingStrip, from: basis.from, now: drawNow, to: basis.to, paths, planPaths, forecastPaths};
   }, [...inputs, requested.from, requested.to, requested.end], `${modelContext}:${width}:${height}:${cellMs}`, incomingReady);
   const model = prepared.value;
+  useLayoutEffect(()=>onDrawing?.(model?.valueAxis),[model?.valueAxis,onDrawing]);
   const shownAxis=model?.valueAxis??valueAxis;
   const basis = model?.basis ?? axis.basis;
   const lines = model?.lines ?? [];

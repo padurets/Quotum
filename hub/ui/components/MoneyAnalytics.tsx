@@ -18,7 +18,7 @@ import {clock,hubNow,useClock} from '../lib/clock';
 import {stamp} from '../lib/format';
 import type {Line} from '../lib/lines';
 import {t,useLocale} from '../i18n';
-import {Chart} from './Chart';
+import {Chart,type ValueAxis} from './Chart';
 import {usePlot} from './sizing';
 import {MoneyChartSettings} from './MoneySettings';
 import {axisNavigation} from '../lib/axisNavigation';
@@ -119,9 +119,9 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
   const modelContext=JSON.stringify([authority,family,board,history?.board,unit,selection?.ids]);
   const baseNavigation=axisNavigation(board,selected,prefs),navigation={...baseNavigation,context:JSON.stringify([baseNavigation.context,unit,authority])};
   type Domain={low:bigint;high:bigint};
-  const pose=useRef<{context:string;range:string;pan:number|null;domain:Domain|null;held:Domain|null}|null>(null);
+  const pose=useRef<{context:string;range:string;pan:number|null;domain:Domain|null;held:Domain|null;axes:WeakMap<ValueAxis,Domain|null>}|null>(null);
   const poseContext=JSON.stringify([modelContext,navigation.context,muted]);
-  if(pose.current?.context!==poseContext)pose.current={context:poseContext,range:navigation.range,pan:panning,domain:null,held:null};
+  if(pose.current?.context!==poseContext)pose.current={context:poseContext,range:navigation.range,pan:panning,domain:null,held:null,axes:new WeakMap()};
   const previous=pose.current;
   if(panning!==null&&previous.pan===null)previous.held=null;
   else if(panning===null&&previous.pan!==null)previous.held=selected&&previous.range!==navigation.range?previous.domain:null;
@@ -153,7 +153,6 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
     return {entries,lines,origin,span,pad,strip,domain:low===null||high===null?null:{low,high}};
   },[drawing,strip,prefs.muted,unit,sources,arrange.view,locale,context,held],modelContext);
   const model=prepared.value,entries=model?.entries??[],lines=model?.lines??[];
-  previous.domain=model?.domain??null;
   const axis=useMemo(()=>{
     const origin=model?.origin??0n,span=model?.span??1_000_000n,pad=model?.pad??1n;
     const min=-Number(pad)/1_000_000,max=Number(span+pad)/1_000_000;
@@ -171,6 +170,10 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
         return <>{point?.semantics?.limit!==null&&point?.semantics?.limit!==undefined&&<div>{t('money.limitTotal')}: {money(point.semantics.limit,unit,true,context)}{point.semantics.resetAt!==null&&<div>{stamp(point.semantics.resetAt)}</div>}</div>}{point?.steps.map(step=><div key={step.from+':'+step.to}>{t('money.unlocated')}: {money(step.amount,unit,true,context)}<div>{stamp(step.from)} — {stamp(step.to)}</div></div>)}</>;
       }};
   },[model,unit,locale,context,strip?.cell,history?.cellMs]);
+  previous.axes.set(axis,model?.domain??null);
+  const onDrawing=useMemo(()=>(valueAxis:ValueAxis|undefined)=>{
+    if(pose.current===previous)previous.domain=valueAxis?previous.axes.get(valueAxis)??null:null;
+  },[previous]);
   const legend=useMemo(()=><div className="legend">{original.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId);return <SeriesLegendItem key={key} seriesKey={key} name={nameOf(s,card?.title??s.sourceId,context,family)} description={descriptions.find(entry=>entry.key===key)?.detail} color={colorOf(arrange.view,s.sourceId,card?.provider??'')} dash={s.kind==='cap'?'7 5':undefined} muted={isMuted(s)} onToggle={()=>setMuted(chartMuteKey(widget,s.sourceId,s.meterId),!isMuted(s))}><b><MoneyLegendAmount value={s.end} unit={s.unit} context={context}/></b></SeriesLegendItem>;})}</div>,[original,sources,context,family,history,arrange.view,muted,settings,widget,locale,authority,board,descriptions]);
   const answered=history?.range===(selected?timeRangeKey(selected):prefs.range);
   const emptySelection=noResources||noSelection,settledEmpty=emptySelection&&!loading&&!error;
@@ -178,7 +181,7 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
     settings={<MoneyChartSettings arrange={arrange} widget={widget} family={family} sources={sources} series={history?.meterSeries??[]}/>}>
 
     <SeriesDetails focus={focus} entries={descriptions} panel={panel}/>
-    <Chart lines={lines} axis={axis} stepped from={frame.from} now={strip?now:measured} to={frame.to} cellMs={strip?.cell??history?.cellMs??60_000} strip={model?.strip??null} prepared={prepared.ready&&(panning!==null||answered||!!error||settledEmpty)} empty={error?null:noResources?t(funds?'analytics.noFunds':'analytics.noBudget'):noSelection?t('analytics.noSelection'):!history?null:entries.length&&!lines.length?t('analytics.allMuted'):t('money.unknown')} plot={plot} onBase={onBase} onSelect={setTimeRange} navigation={navigation} live={frame.live} clock={now} modelContext={modelContext}/>
+    <Chart lines={lines} axis={axis} onDrawing={onDrawing} stepped from={frame.from} now={strip?now:measured} to={frame.to} cellMs={strip?.cell??history?.cellMs??60_000} strip={model?.strip??null} prepared={prepared.ready&&(panning!==null||answered||!!error||settledEmpty)} empty={error?null:noResources?t(funds?'analytics.noFunds':'analytics.noBudget'):noSelection?t('analytics.noSelection'):!history?null:entries.length&&!lines.length?t('analytics.allMuted'):t('money.unknown')} plot={plot} onBase={onBase} onSelect={setTimeRange} navigation={navigation} live={frame.live} clock={now} modelContext={modelContext}/>
     {legend}
   </AnalyticsPanel>;
 }
