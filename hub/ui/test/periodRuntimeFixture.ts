@@ -79,9 +79,13 @@ export async function fixture({heatmap=false,personal=false,ownerDevice=false,tr
   const live=(working=false)=>({accountBy:funding?'login' as const:null,source:funding,clientId:'codex',sessionId:stable?'c'.repeat(32):null,device:{id:device,name:'Work laptop'},origin:'terminal' as const,project:'Work project',folder:'Private folder',startedAt:start,sentStartedAt:start,lastWorkedAt:NOW-2*M,working});
   if(current)hub.ingest.live.report(device,owner,[live()],NOW);
   const timers=new Map<object,{at:number;run:()=>void}>();
-  const events=new Events(hub,undefined,{now:()=>now,after:(ms,run)=>{const token={};timers.set(token,{at:now+ms,run});return ()=>{timers.delete(token);};}},null),tiles=new HistoryTiles(store),reader=new PeriodReader(hub,tiles,events);
-  events.onHistory=(source,since,scopes,work)=>{tiles.touch(source,since,scopes);reader.touch(source,since,scopes,work);};
-  events.onClientHistory=(user,since)=>{tiles.touchClient(user,since);reader.touchClient(user,since);};events.attach();
+  const eventClock={now:()=>now,after:(ms:number,run:()=>void)=>{const token={};timers.set(token,{at:now+ms,run});return ()=>{timers.delete(token);};}};
+  let events=new Events(hub,undefined,eventClock,null);
+  const tiles=new HistoryTiles(store);let reader=new PeriodReader(hub,tiles,events);
+  const attach=()=>{
+    events.onHistory=(source,since,scopes,work)=>{tiles.touch(source,since,scopes);reader.touch(source,since,scopes,work);};
+    events.onClientHistory=(user,since)=>{tiles.touchClient(user,since);reader.touchClient(user,since);};events.attach();
+  };attach();
   const page=createStore(reduce,INITIAL),frames:Frame[]=[],requests:PeriodRequest[]=[],pool=new HistoryPool();
   let stream:ReadableStreamDefaultController<Uint8Array>|null=null;
   const connection=transportLive?new Live({fetch:async()=>new Response(new ReadableStream<Uint8Array>({start:controller=>{stream=controller;}}),{headers:{'content-type':'text/event-stream'}}),now:()=>now,setTimeout:(run,ms)=>{const token={};timers.set(token,{at:now+ms,run});return token;},clearTimeout:token=>{timers.delete(token as object);},random:()=>0.5,visible:()=>true,hubNow:()=>now,heard:()=>{},dispatch:event=>page.dispatch(event),unauthorized:()=>{},gone:()=>{},epochChanged:()=>{},script:null,reload:()=>{},storage:()=>({getItem:()=>null,setItem:()=>{}})}):null;
@@ -112,12 +116,19 @@ export async function fixture({heatmap=false,personal=false,ownerDevice=false,tr
   assert.equal(period.get().error,limited?'filters_limit':null);assert.equal(period.get().rows.length,limited?0:1);const initialRequests=requests.slice();requests.length=0;frames.length=0;
   const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=next[1].at;timers.delete(next[0]);next[1].run();events.flush();}now=at;if(!clocked)period.tick();};
   const jump=(at:number)=>{now=at;for(const [token,timer] of [...timers])if(timer.at<=at){timers.delete(token);timer.run();}events.flush();if(clocked)pageClock.wakeDue();else period.tick();};
-  return {hub,device,owner,advance,jump,pan,selectedRange:()=>selectedRange,selectRange:(range:typeof selectedRange)=>{selectedRange=range;period.changed();},clock:pageClock,initialRequests,prepareWith:(value:Preparations|null)=>{preparer=value;},settings,pool,reader,store,directory,board,alice,bob,source,credit,events,period,page,frames,requests,
+  return {hub,device,owner,advance,jump,pan,selectedRange:()=>selectedRange,selectRange:(range:typeof selectedRange)=>{selectedRange=range;period.changed();},clock:pageClock,initialRequests,prepareWith:(value:Preparations|null)=>{preparer=value;},settings,pool,get reader(){return reader;},store,directory,board,alice,bob,source,credit,get events(){return events;},period,page,frames,requests,
     report:(working=false,at=NOW)=>{now=at;hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(at).toISOString(),sessions:[{provider:'codex',...(funding?{account:(privateWork?'b':'a').repeat(24)}:{}),sessionId:stable?'c'.repeat(32):null,origin:'terminal',project:'Work project',folder:'Private folder',startedAt:new Date(start).toISOString(),lastWorkedAt:new Date(NOW-2*M).toISOString(),working}]},at);events.flush();},
     endIdle:()=>{hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(NOW).toISOString(),sessions:[]},NOW);events.flush();},
     event:(event:HubEvent)=>page.dispatch({type:'hub',event}),
     hold:()=>{let release!:()=>void,reject!:(error:Error)=>void;wait=new Promise<void>((yes,no)=>{release=yes;reject=no;});return {release,reject};},
     disconnect:()=>{opened.close();page.dispatch({type:'connection',status:'retrying',lostAt:now});}, reconnect:()=>{page.dispatch({type:'connection',status:'connecting',lostAt:now});opened=events.open({user:alice.id,secret,board,kind:'stream',send:feed,end:()=>{}}) as any;feed(opened.frames);}, remove:()=>{directory.removeMember(board,bob.id);store.unshareOrphans(board);events.flush();},
+    restart:()=>{
+      opened.close();events.close();now++;
+      events=new Events(hub,undefined,eventClock,null);reader=new PeriodReader(hub,tiles,events);attach();
+      opened=events.open({user:alice.id,secret,board,kind:'stream',send:feed,end:()=>{}}) as any;
+      const baseline=opened.frames.filter(frame=>frame.type!=='hello');feed(opened.frames.filter(frame=>frame.type==='hello'));
+      return ()=>feed(baseline);
+    },
     fresh:()=>expandPeriod(JSON.parse(reader.read(board,alice.id,{version:1,selection:{mode:'live',periodMs:H},evaluatedAt:NOW,sessions:{}}))) as PeriodReply,
     close:async()=>{period.activate(false);connection?.close();stream?.close();opened.close();events.close();await new Promise(resolve=>setImmediate(resolve));store.close();assert.equal(pool.estimatedBytes,0);assert.equal(pool.activeFlights,0);}};
 }
@@ -176,10 +187,11 @@ export async function drawings(h:any,activity=true,scope:'quota'|'budget'='quota
  const source=readFileSync(new URL('../lib/history.ts',import.meta.url),'utf8');
  const read=source.split('\n').find(line=>line.trimStart().startsWith('read:')),retry=source.split('\n').find(line=>line.trimStart().startsWith('retry:'));assert.ok(read);assert.ok(retry);
  const adapter=source.slice(source.indexOf('const selectedMeters ='),source.indexOf('function activeReaders('));
- const readerContext={read:null as any,retry:null as any,selected:null as any,boardPeriod:h.period,scope,family:'budget',pan:h.pan,expandHistory,prefs:()=>h.settings,subscriptionSelection,moneyReadSelection};
- runInNewContext(ts.transpileModule(adapter+'\nglobalThis.read=({'+read+'}).read;globalThis.retry=({'+retry+'}).retry;globalThis.selected=selectedMeters;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,readerContext);
+ const workKey=source.split('\n').find(line=>line.startsWith('const selectedWorkKey='));assert.ok(workKey);
+ const readerContext={read:null as any,retry:null as any,selected:null as any,workKey:null as any,boardPeriod:h.period,scope,family:'budget',pan:h.pan,expandHistory,prefs:()=>h.settings,subscriptionSelection,moneyReadSelection,...filterModelBindings,...filterRuntimeBindings};
+ runInNewContext(ts.transpileModule(adapter+'\n'+workKey+'\nglobalThis.read=({'+read+'}).read;globalThis.retry=({'+retry+'}).retry;globalThis.selected=selectedMeters;globalThis.workKey=selectedWorkKey;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,readerContext);
  const loader=new HistoryStore({workInPresentation:scope!=='budget',now:()=>NOW,preparations:null,read:readerContext.read,retry:readerContext.retry,setTimeout:()=>({}),clearTimeout:()=>{},dropTimeRange:()=>{}},undefined,scope,h.pool);
- const stop=follow(loader,h.page);loader.setActivityActive(activity);loader.choose(h.settings.range,h.selectedRange());loader.open(h.board);loader.setWorkFilter(JSON.stringify(filterRuntimeBindings.effectiveFilters()?filterModelBindings.workFilter(filterRuntimeBindings.effectiveFilters()!):null),filterRuntimeBindings.effectiveFilters()??undefined);loader.hello(h.events.epoch);
+ const stop=follow(loader,h.page);loader.setActivityActive(activity);loader.choose(h.settings.range,h.selectedRange());loader.open(h.board);loader.setWorkFilter(readerContext.workKey(h.page.get()),filterRuntimeBindings.effectiveFilters()??undefined);loader.hello(h.events.epoch);
  loader.setMeters(readerContext.selected(h.page.get(),scope));
  const board=h.page.get().board;loader.snapshot(board.lineup,Object.values(board.cards).flatMap((c:any)=>c.windows.map((w:any)=>`${c.id} ${w.id}`)),board.historyStart,board.workAuthority);await flush();
  const selectedSlots:any[]=[],financialSlots:any[]=[],activitySlots:any[]=[];let slots=selectedSlots,cursor=0;

@@ -2179,7 +2179,10 @@ metrics, including while replacement preparation fails; its retained model remai
 charged to the shared pool. Same-run greetings and compatible snapshots, ownership
 and lineup baselines retain that model; a fixed subset replaces its complete cell
 range, while live subsets follow the board's replacement evidence. The page records
-the hub run before widgets mount, so a new run immediately retires the old subset.
+the hub run before widgets mount. A changed run immediately retires both all-visible
+work and local subsets, including session indexes, calendar evidence and prepared
+drawings. Independent native financial evidence keeps its authority. Replacement
+work must confirm the new run; a late old reply cannot restore the previous frame.
 Source-free zero work cutoffs, relevant quota zero
 cutoffs and compatible legacy zero cutoffs retire it synchronously even when the
 authority token is unchanged. Financial and unrelated-source news do not. Retry

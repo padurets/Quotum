@@ -1122,11 +1122,11 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>,
         else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since, hub.data.workAuthority);
       }
     }
-    if(state.board){loader.setWorkFilter(selectedWorkKey(),effectiveFilters()??undefined);loader.setMeters(selection(state));}
+    if(state.board){loader.setWorkFilter(selectedWorkKey(state),effectiveFilters()??undefined);loader.setMeters(selection(state));}
   });
 }
 const windowsOf = (state: PageState) => Object.values(state.board?.cards ?? {}).flatMap(card => card.windows.map(window => `${card.id} ${window.id}`));
-const selectedWorkKey=()=>{const filters=effectiveFilters();return JSON.stringify(filters?workFilter(filters):null);};
+const selectedWorkKey=(state:PageState=page.get())=>{const filters=effectiveFilters();return JSON.stringify([state.hubEpoch,filters?workFilter(filters):null]);};
 if(typeof window!=='undefined')followPeriod();
 follow(quotaHistory,page);follow(budgetHistory,page);follow(fundsHistory,page,'funds');
 page.listen((_event,state)=>activeReaders(state));

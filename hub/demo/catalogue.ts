@@ -81,6 +81,8 @@ export const CHART_SERIES_SCENES=[
  * unlimited credits remain measurement evidence in ui/test/sourcePeriodEvidence.test.ts.
  * Native logical choices and first wallet-cap identity are held by nativeLogicalSelection
  * and walletPrimarySelection; exact monetary cells by tableMoneyDetails.
+ * Split greetings, changed-run work retirement, late/error replies and cooperative
+ * cancellation are held by ui/test/workRunLifetime.test.ts.
  */
 export const PERIOD_SCENES=[
   {id:'retained-period',expect:['past-values','retained-work','exclusive-interval','shared-activity']},

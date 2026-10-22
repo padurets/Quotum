@@ -96,6 +96,7 @@ class BoardPeriod {
   private authority='';
   private financialIdentity='';
   private workAuthority:string|undefined;
+  private hubEpoch:string|undefined;
   private readonly valueCache=new Map<string,{values:Map<string,Reading<PeriodValues>>;to:number;validBefore:number;bytes:number;at:number}>();
   private readonly values=new Map<string,Reading<PeriodValues>>();
   private readonly valueListeners=new Map<string,Set<()=>void>>();
@@ -387,6 +388,8 @@ class BoardPeriod {
     if(event?.type==='hub'&&event.event.type==='deviceContacts')return;
     const snapshot=event?.type==='hub'&&event.event.type==='snapshot';
     const changedWork=this.workAuthority!==undefined&&board.workAuthority!==this.workAuthority;
+    const changedRun=this.hubEpoch!==undefined&&state.hubEpoch!==undefined&&state.hubEpoch!==this.hubEpoch;
+    this.hubEpoch=state.hubEpoch;
     if(snapshot||!this.identity||event?.type==='hub'&&event.event.type==='history'&&event.event.data.workAuthority)this.workAuthority=board.workAuthority;
     const selected=timeRange(),selection:PeriodSelection=selected?{mode:'range',...selected}:{mode:'live',periodMs:periodOf(prefs().range).ms};
     const filters=effectiveFilters(),nextFilter=filters?JSON.stringify(workFilter(filters)):'';
@@ -426,7 +429,7 @@ class BoardPeriod {
     if(cacheKey!==this.cacheKey){this.retainCurrent();this.cacheKey=cacheKey;}
     this.filterKey=nextFilter;
     this.selection=selection;this.sourceIds=sources;this.wantsWork=wantsWork;this.scopeKeys=scopeKeys;
-    if(changedWork)this.retireWork();
+    if(changedWork||changedRun)this.retireWork();
     if(selectedChanged){
       this.invalidateFacets();
       this.generation++;this.revision++;preparations()?.cancel(this.preparationOwner);this.cursor=undefined;this.index=null;this.activity=null;this.activityRetained=null;
@@ -530,6 +533,9 @@ class BoardPeriod {
     }
   }
   private receive(reply:PeriodReply,intent:PeriodIntent,reserve?:(bytes:number)=>boolean) {
+    // A replacement read must confirm the run that revoked the old work basis.
+    // Local transport failures have no run and still need their error state.
+    if(reply.basis.run&&this.hubEpoch&&reply.basis.run!==this.hubEpoch)return;
     // Sibling resource replies share one retained projection. Let each commit before
     // taking the next snapshot, so a later chart cannot cancel values or sessions.
     if(this.retirementPreparing)preparations()?.cancel(this.preparationOwner);

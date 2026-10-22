@@ -1172,6 +1172,11 @@ without `changes`, have the same meaning. A top-level workSince:0 retires work e
 with no sources on a shared or personal board. Budget-only and
 unselected-source changes do not retire the work index. Positive work cutoffs refresh
 credited work while retaining the last complete frame under the same authority.
+An unchanged `hello.epoch` preserves compatible work. A changed known epoch retires
+the session index, calendar evidence and every Activity presentation, including
+all-visible and local subsets. Independent native financial observations remain
+valid under their own authority. Replacement work confirms the current run before
+adoption; delayed replies from an earlier run cannot restore its presentation.
 Consumers coalesce affected sections into one foreground read. All accounting endpoint
 requests and bytes, including aborted attempts, count toward the same benchmark budget.
 
