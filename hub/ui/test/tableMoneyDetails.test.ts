@@ -48,7 +48,7 @@ for(const locale of ['en','ru'] as const)for(const layout of ['table','list'] as
     };
     open();value='987654321';assert.ok(open().includes(money(value,'USD',true)),'a timed replacement supplies its own current detail');
     const measured=nodes(render(true)).filter(node=>node.type===preview.exports.TablePreview&&node.props.details);
-    assert.ok(measured.every(node=>node.props.still),'static measurement never adds interactive controls');
+    assert.ok(measured.length);assert.ok(measured.every(node=>node.props.still),'static measurement never adds interactive controls');
     const topup=producer.exports.cell(series,'topup').at(1000);assert.ok(topup.details.at(1000).includes(money(series.topup,'USD',true)));
     const zero=producer.exports.cell({...series,topup:'0'},'topup').at(1000);assert.ok(zero.details.at(1000).includes(money('0','USD',true)));
     const rateCell=producer.exports.cell(series,'rate'),rate=rateCell.at(1000);assert.ok(rate.details.at(1000).includes(money(work.spent,'USD',true)));assert.ok(rate.details.at(1000).includes(t('money.workEstimate')));

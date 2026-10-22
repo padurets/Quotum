@@ -6,6 +6,10 @@ import {t} from '../i18n';
 /** A bounded row preview retains its complete, accessible contents beside the cell. */
 export function TablePreview({children,label,details,still=false}:{children:ReactNode;label:string;details?:ReactNode;still?:boolean}) {
   const box=useRef<HTMLDivElement>(null),content=useRef<HTMLDivElement>(null),[overflow,setOverflow]=useState(false);
+  const semantic=!!details,[portal,setPortal]=useState<HTMLElement|null>(null);
+  useLayoutEffect(()=>{
+    if(semantic&&!still)setPortal(box.current?.closest<HTMLElement>('.panel,.dialog')??null);
+  },[semantic,still]);
   useLayoutEffect(()=>{
     if(still)return;
     const measure=()=>{
@@ -16,7 +20,7 @@ export function TablePreview({children,label,details,still=false}:{children:Reac
     measure();const observer=new ResizeObserver(measure);if(content.current)observer.observe(content.current);return()=>observer.disconnect();
   },[children,still]);
   return <div ref={box} className={`table-preview${overflow||details?' has-detail':''}${details?' has-semantic':''}`}>
-    <div ref={content} className="table-preview-content">{details&&!still?<Popover label={t('table.details',{name:label})} trigger={children} triggerClass="table-preview-value" portal={box.current?.closest<HTMLElement>('.panel,.dialog')}><div className="popover-body table-cell-details">{details}</div></Popover>:children}</div>
-    {overflow&&!details&&!still&&<Popover label={t('table.details',{name:label})} trigger="…" triggerClass="table-preview-trigger" portal={box.current?.closest<HTMLElement>('.panel,.dialog')}><div className="popover-body table-cell-details">{children}</div></Popover>}
+    <div ref={content} className="table-preview-content">{details&&!still?<Popover label={t('table.details',{name:label})} trigger={children} triggerClass="table-preview-value" portal={portal??box.current?.closest<HTMLElement>('.panel,.dialog')}><div className="popover-body table-cell-details">{details}</div></Popover>:children}</div>
+    {overflow&&!details&&!still&&<Popover label={t('table.details',{name:label})} trigger="…" triggerClass="table-preview-trigger" portal={portal??box.current?.closest<HTMLElement>('.panel,.dialog')}><div className="popover-body table-cell-details">{children}</div></Popover>}
   </div>;
 }

@@ -469,7 +469,7 @@ td.muted, small.muted { color: var(--text-3); }
 .table-preview { position: relative; min-width: 0; }
 .table-preview-content { max-height: calc(var(--row-budget, 100000px) - 22px); overflow: hidden; }
 .table-preview > .picker { position: absolute; right: 0; top: 0; }
-.table-preview.has-semantic > .table-preview-content > .picker { display: block; min-width: 0; }
+.table-preview.has-semantic > .table-preview-content > .picker { display: block; min-width: 0; margin-left: 0; }
 .text-button.table-preview-value { display: block; max-width: 100%; height: auto; padding: 0; border: 0; border-radius: 0; color: inherit; font: inherit; line-height: inherit; text-align: inherit; white-space: inherit; }
 .text-button.table-preview-trigger { border: 0; padding: 0 3px; height: 20px; color: var(--text-2); background: var(--surface); border-radius: 4px; }
 .table-cell-details { white-space: pre-line; overflow-wrap: anywhere; }
