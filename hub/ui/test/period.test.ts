@@ -391,7 +391,11 @@ test('complete live and fixed targets share supplier evidence in the LRU and cac
   selected={from:300,to:1_400_300};period.changed();await flush();assert.equal(reads,2);assert.equal(period.getValue('s').value.currencyUnavailable,undefined);assert.equal(period.get().rows[0].workedMs,59_700);
   assert.ok(stagedRestores>=2);
   period.changed({type:'hub',event:{type:'history',data:{sources:['s'],since:4_000_000}}});await flush();assert.equal(reads,2,'later live work cannot rewrite this past target');
-  selected={from:1800,to:1_401_800};period.changed();await flush();assert.equal(reads,3,'new evidence retires old forward-reuse proofs and cached value intervals');
+  selected={from:1800,to:1_401_800};period.changed();await flush();assert.equal(reads,2,'a proven nearby shift before the dirty tail preserves its evidence');
+  selected={from:2500,to:1_402_500};period.changed();await flush();assert.equal(reads,2,'positive control: this further target is also covered before new evidence');
+  selected={from:1800,to:1_401_800};period.changed();await flush();assert.equal(reads,2);
+  period.changed({type:'hub',event:{type:'history',data:{sources:['s'],since:1_402_000}}});await flush();assert.equal(reads,2,'the dirty tail starts after the active exclusive endpoint');
+  selected={from:2500,to:1_402_500};period.changed();await flush();assert.equal(reads,3,'neither a cached exact target nor shifted proofs can cross the changed tail');
   period.changed({type:'hub',event:{type:'history',data:{sources:['s'],since:1_000_000,changes:[{source:'s',scope:'quota',since:1_000_000}]}}});await flush();assert.equal(reads,4,'a changed fixed measurement refreshes its exact accounting even without a chart demand');
   selected=null;period.changed();await flush();assert.equal(reads,5,'live evidence invalidated while hidden is refreshed on return');
 });

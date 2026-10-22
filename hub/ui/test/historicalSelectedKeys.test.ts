@@ -44,7 +44,7 @@ test('a selected key beyond the preview keeps its known name across live, pendin
   let delivered!:Promise<Response>;
   globalThis.fetch=url=>{requests.push(String(url));delivered=app.inject({method:'GET',url:String(url)}).then(reply=>new Response(reply.body,{status:reply.statusCode,headers:{'content-type':'application/json'}}));return delivered;};
 
-  let cursor=0,hookRenders=0,selected:typeof range|null=null,reading:{value:typeof value|null;basis:{range:typeof range};loading:boolean;error:null}={value,basis:{range},loading:false,error:null};
+  let cursor=0,hookRenders=0,selected:typeof range|null=null,reading:{value:typeof value|null;basis:{range:typeof range};loading:boolean;error:string|null}={value,basis:{range},loading:false,error:null};
   const slots:any[]=[],effects:(()=>void)[]=[];
   const hooks={useState:(initial:any)=>{const at=cursor++;if(!(at in slots))slots[at]=initial;return [slots[at],(next:any)=>slots[at]=typeof next==='function'?next(slots[at]):next];},useEffect:(run:()=>unknown,deps:any[])=>{const at=cursor++,previous=slots[at];if(!previous||deps.some((d,i)=>d!==previous.deps[i]))effects.push(()=>{previous?.cleanup?.();slots[at]={deps,cleanup:run()};});}};
   const modules:Record<string,unknown>={react:hooks,'./moneySelection':{selectedAllowanceIds},'./dataFilters':{useDataFilters:()=>({current:selection})},'./prefs':{usePref:()=>({unit:'USD'})},'./http':{ApiError},'./keyReads':{readKeyIds},'../../server/domain/meterHistory':{MAX_METERS}};
@@ -76,7 +76,7 @@ test('a selected key beyond the preview keeps its known name across live, pendin
   selection.wallet={mode:'only',values:[]};
   for(const locale of ['en','ru'] as const){setLocale(locale);for(const state of ['live','pre-first','pending','failed']){
     selected=state==='live'?null:range;
-    reading={value:state==='pending'||state==='failed'?null:{...value,meters:[],keys:[]},basis:{range},loading:state==='pending',error:null};
+    reading={value:state==='pending'||state==='failed'?null:{...value,meters:[],keys:[]},basis:{range},loading:state==='pending',error:state==='failed'?'history_failed':null};
     const tree=render();
     assert.equal(tree.filter(n=>n.props.children===t('header.filters')).length,1,'an explicit empty wallet selection always keeps its existing filter action');
     assert.equal(tree.some(n=>n.props.children===t('period.noEvidence')),false,'wallet content has one semantic owner');
