@@ -1613,6 +1613,9 @@ Anonymous aggregate hour patterns share the history budget and preserve exact
 within-cell changes, so cached return and nearby endpoints reuse accepted work
 without rereading it or dividing already aggregated amounts. Work or authority
 changes invalidate these patterns; eviction falls back to the common transport.
+Wire decoding releases its temporary anonymous sweep after projecting numeric cells,
+before expanding other reply sections. Restored cells and the original packed proof
+keep their own charge in the shared history budget.
 Named local dates, repeated hours and partial bounds preserve actual elapsed time.
 Shared filter choices cover the common selected work range; closed controls request
 nothing. Shared-clock expiry retires stale contributions in individual buckets

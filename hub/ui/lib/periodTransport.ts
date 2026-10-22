@@ -187,6 +187,14 @@ export async function fetchPeriod(board:string,body:PeriodRequest,signal:AbortSi
     const parsed=await response.json();
     if(!response.ok)throw new ApiError(response.status,parsed.error??'history_failed');
     let expanded=0;
-    return expandPeriod(parsed as PeriodWireReply,extra=>{expanded+=extra;if(!reserve(bytes*3+expanded))throw new ApiError(413,'history_limit');});
+    return expandPeriod(parsed as PeriodWireReply,extra=>{
+      const next=expanded+extra;
+      if(!reserve(bytes*3+next))throw new ApiError(413,'history_limit');
+      expanded=next;
+    },extra=>{
+      const next=expanded-extra;
+      // A refused shrink retains the previous reservation and its conservative charge.
+      if(reserve(bytes*3+next))expanded=next;
+    });
   }finally{reader.releaseLock();}
 }

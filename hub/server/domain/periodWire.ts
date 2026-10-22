@@ -57,8 +57,8 @@ export function periodDictionary(reply:PeriodReply,reserve:(bytes:number)=>void,
 }
 
 /** Restore aliases in the already charged native JSON body without copying its cells. */
-export function expandPeriod(reply:PeriodWireReply,reserve:(bytes:number)=>void=()=>{}):PeriodReply{
-  if(reply.calendar)reply.calendar=expandCalendar(reply.calendar,reply.basis,reserve);
+export function expandPeriod(reply:PeriodWireReply,reserve:(bytes:number)=>void=()=>{},release?:(bytes:number)=>void):PeriodReply{
+  if(reply.calendar)reply.calendar=expandCalendar(reply.calendar,reply.basis,reserve,release);
   for(const scope of [...PERIOD_SCOPES,'values','sessions','facets','sourceWork'] as const){
     const part=reply[scope] as {basis?:unknown}|undefined;
     if(part?.basis===0)part.basis=reply.basis;

@@ -36,7 +36,7 @@ export function packCalendar(part:CalendarSection|undefined,basis:PeriodBasis,re
 }
 
 /** Charge restored cells before allocating them; legacy object replies still decode. */
-export function expandCalendar(part:unknown,common:PeriodBasis,reserve:(bytes:number)=>void):CalendarSection|undefined {
+export function expandCalendar(part:unknown,common:PeriodBasis,reserve:(bytes:number)=>void,release?:(bytes:number)=>void):CalendarSection|undefined {
   if(!part||typeof part!=='object')return part as undefined;
   const packed=part as Packed;
   if(packed.state!=='complete'&&packed.state!=='delta')return part as CalendarSection;
@@ -55,9 +55,17 @@ export function expandCalendar(part:unknown,common:PeriodBasis,reserve:(bytes:nu
     reserve(256+grid[2]*112+(grid[2]+1)*16);
     const [start,step,count]=grid,edges=Array.from({length:count+1},(_,i)=>start+i*step);
     if(proof){
-      const {curve}=calendarCurve(proof,basis.range,basis.evidenceCut,availableFrom,reserve);
-      const restored=calendarProjection(edges,basis.range,basis.evidenceCut,availableFrom,retainedFrom,proof.retentionMs,proof.periodMs,[{from:proof.from,to:proof.cut,curve}]);
-      return {state:'complete',basis,value:{zone,availableFrom,retainedFrom,cursor,edges,cells:restored,proof}};
+      let staging=0;
+      const add=(bytes:number)=>{reserve(bytes);staging+=bytes;};
+      const drop=release?((bytes:number)=>{release(bytes);staging-=bytes;}):undefined;
+      try{
+        const {curve}=calendarCurve(proof,basis.range,basis.evidenceCut,availableFrom,add,drop);
+        const restored=calendarProjection(edges,basis.range,basis.evidenceCut,availableFrom,retainedFrom,proof.retentionMs,proof.periodMs,[{from:proof.from,to:proof.cut,curve}]);
+        return {state:'complete',basis,value:{zone,availableFrom,retainedFrom,cursor,edges,cells:restored,proof}};
+      }finally{
+        // Only numeric cells and the original proof survive this projection.
+        if(release&&staging)release(staging);
+      }
     }
     const restored=cells!.map((c,i)=>{
       const from=edges[i],to=edges[i+1];
