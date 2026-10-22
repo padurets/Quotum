@@ -1984,7 +1984,11 @@ through a source/time index. Fixed summaries retain compact numeric columns whil
 built; temporary wire rows are released before the next source is read.
 Complete live indexes and fixed
 summaries can move into the shared LRU when a different interval is selected. Returning
-to a retained target reuses it; new evidence or authority changes invalidate those entries.
+to a retained target reuses it. History events invalidate each retained target against
+its own exclusive endpoint. A later change preserves earlier evidence and bounds its
+shift proofs at the first changed instant; it cannot be replayed into the changed tail.
+Calendar curves can retain that unchanged prefix of a wider interval. Authority changes
+retire their evidence immediately, independently of event timestamps.
 Fixed summaries also describe exact duration and timestamp changes between
 observation, work, availability and grid boundaries. Nearby endpoint cells use sparse
 changes between those intervals and an immutable starting summary. The initial reply
@@ -2305,6 +2309,11 @@ of supplier reply order or remaining amounts. Every selected native window
 remains in their existing measurement disclosure. Wallet cards show one available
 balance, or the first selected cap when the balance is excluded; other caps and exact
 amounts remain in the balance disclosure.
+The first cap follows current key-name and ID order before it joins historical evidence.
+An absent first cap stays unavailable instead of promoting a later arrived cap; unresolved
+selected names keep the primary unknown until their bounded metadata read completes.
+Native choices combine current descriptors with historical-only windows. A selected
+missing window remains named in the disclosure without borrowing a current percentage.
 A successful historical read before any observation shows one empty state inside
 the primary area, replacing empty quota scales rather than appending a row.
 An explicitly empty limit selection keeps its hidden-limits state and filter action.
@@ -2317,6 +2326,9 @@ older gap, but current amounts cannot fill it. Compact uses the same full disclo
 The budget chart, legend and table name a total balance by its account rather than
 repeating "Available balance". Scoped key limits keep their names; balance components,
 roles and currency provenance remain reachable in card details.
+Monetary table values open their exact amount and existing provenance through the shared
+Popover even when the rounded value fits. The same timed cell supplies both presentations,
+including in narrow lists; static row measurement adds no interactive controls.
 
 On charts narrower than 560 SVG units, reset and exhaustion labels show the name
 and countdown, with an arrow only beyond the visible edge. Their backing is bounded

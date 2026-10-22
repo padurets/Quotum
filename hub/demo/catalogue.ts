@@ -43,8 +43,10 @@ export {LINK_SCENES} from './links.js';
 
 /** Mixed analytics stays visible; transient reads, errors, hard cutoffs and retries
  * are held by analyticsPanel, activitySelection, activityCoherence, moneyKeys,
- * historicalSelectedKeys and filterSavePresentation UI tests. Stable
- * intermediate plot/table geometry is checked on the real demo in the browser.
+ * historicalSelectedKeys and filterSavePresentation UI tests.
+ * Split reconnect legends and resize preparation are held by periodContinuity and
+ * chartPreparation; future-relative cache admission by periodEventAdmission.
+ * Stable intermediate plot/table geometry is checked on the real demo in the browser.
  * Legend mutes, table-only views and explicit empty Add are exercised on this set in
  * both languages. The shared range and all five charts use the native-input bench.
  * Plan-event access and retention expiry are held in server/test/planHistory.test.ts
@@ -77,6 +79,8 @@ export const CHART_SERIES_SCENES=[
  * initial errors, in ui/test/sourcePeriodPresentation.test.ts.
  * Session dialogs retain that status in ui/test/agentsPeriodDialog.test.ts; saved
  * unlimited credits remain measurement evidence in ui/test/sourcePeriodEvidence.test.ts.
+ * Native logical choices and first wallet-cap identity are held by nativeLogicalSelection
+ * and walletPrimarySelection; exact monetary cells by tableMoneyDetails.
  */
 export const PERIOD_SCENES=[
   {id:'retained-period',expect:['past-values','retained-work','exclusive-interval','shared-activity']},
@@ -1699,6 +1703,8 @@ const activity: DemoSet = {
 
 const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter and DeepSeek wallets, partial readings and private access failures',entries:all.entries.map(entry=>entry.kind==='person'&&entry.id==='ana'?{...entry,look:[...(entry.look??[]),
   'Select several OpenRouter key allowances, including a key beyond the preview. Move the common historical endpoint before its first observation and between observations: the balance disclosure keeps the selected count, full names and unavailable values beside any known caps. Current amounts never fill an older gap. Check both languages; compact opens the same full detail layout.',
+  'Exclude balance and select two allowances. The first in current name order stays primary when its historical cap is missing; another arrived amount never takes its place. Turn balance and all allowances off, then move before the first observation: the existing filter action remains available.',
+  'Open a monetary table value with keyboard or touch, in a wide table and narrow list. Its shared disclosure gives the exact amount and currency provenance, including when the rounded number fits without an ellipsis.',
 ]}:entry)};
 export const FILTER_SCENES=['mixed-resources','populated-work','selected-empty','unfiltered-facets','resources-continue','member-current','save-restore'] as const;
 const dataFilters:DemoSet={...SESSION_ANALYTICS,id:'filters',about:'Populated mixed-resource filter playground, with a separate saved-empty board',entries:[
