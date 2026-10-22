@@ -12,7 +12,7 @@ import {prepareAsync,preparations,type Preparation,type Preparations} from './pr
 import {periodTextChangesAt} from './periodClock';
 import type {ActivityDimension} from './types';
 
-export type ActivityScope = {board:string;authority:string;workAuthority?:string;by:ActivityDimension;muted:readonly string[];filters:WorkFilter;selection:PeriodSelection;rangeKey:string;barMs:number};
+export type ActivityScope = {board:string;authority:string;workAuthority?:string;run?:string;by:ActivityDimension;muted:readonly string[];filters:WorkFilter;selection:PeriodSelection;rangeKey:string;barMs:number};
 type Reading={trace:WorkTrace|null;ready:boolean;error:string|null};
 type Model={projector:PeriodActivity;activity:History['activity'];selection:PeriodSelection;rangeKey:string};
 export type ActivitySelectionState={model:Model|null;loading:boolean;error:string|null;errorOwner?:'upstream-work'|'local-preparation'|'subset-read'};
@@ -46,7 +46,7 @@ export class ActivitySelection implements HistoryMember {
     if(scope)try{
       if(!executableWorkFilters(activityScope(scope.filters,scope.by,scope.muted)))throw new Error('history_limit');
     }catch{this.reset();this.publish({model:null,loading:false,error:'history_limit'});return;}
-    const identity=scope?JSON.stringify([scope.board,scope.authority,scope.workAuthority,scope.by,[...scope.muted].sort(),scope.filters,scope.selection,scope.rangeKey,scope.barMs]):'';
+    const identity=scope?JSON.stringify([scope.board,scope.authority,scope.workAuthority,scope.run,scope.by,[...scope.muted].sort(),scope.filters,scope.selection,scope.rangeKey,scope.barMs]):'';
     if(identity===this.identity){this.refresh();return;}
     this.reset();this.identity=identity;this.scope=scope;
     if(scope){this.env.pool.register(this);this.dirty=-Infinity;this.publish({model:null,loading:true,error:null});this.schedule();}
@@ -131,6 +131,8 @@ export class ActivitySelection implements HistoryMember {
         if(jsonBytes(request)>76*1024)throw new Error('history_limit');
         const reply=await this.env.send(scope.board,request,flight.controller.signal,bytes=>{if(!pool.reserve(flight,bytes+scratch))return false;transport=bytes;return true;});
         if(!valid())return;
+        // HTTP can reach a restarted hub before its stream announces the new run.
+        if(scope.run!==undefined&&reply.basis.run!==scope.run)return;
         if(reply.quota?.state!=='complete'||reply.sessions?.state!=='complete')throw new Error([reply.quota,reply.sessions].some(part=>part?.state==='error'&&part.error==='history_limit')?'history_limit':'history_failed');
         const answer=expandHistory(reply.quota.value),trace=reply.sessions.value,previous=this.tiles;
         build=(function*(){
