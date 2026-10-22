@@ -313,6 +313,15 @@ test('manual native tracing uses only the existing dashboard job and rejects mis
   }
   assert.equal(selected('bench-dashboard',{},'pull_request'),true);
   assert.equal(selected('bench-dashboard',{},'workflow_call','refs/tags/v1.0.0'),false);
+  const raster={diagnostic_ref:'1'.repeat(40),raster_worker_control:true};
+  assert.equal(selected('raster-worker-control',raster),true);
+  for(const name of ['bench-dashboard','idle-cpu-control','bench-history','bench'])assert.equal(selected(name,raster),false);
+  assert.equal(selected('raster-worker-control',raster,'pull_request'),false);
+  assert.equal(selected('raster-worker-control',{diagnostic_ref:'1'.repeat(40)}),false);
+  for(const mode of ['native_trace','native_profile','caption_control','trace_only','original_timing']){
+    const mixed={...raster,[mode]:true};
+    assert.equal(selected('bench-dashboard',mixed),false);assert.equal(selected('idle-cpu-control',mixed),false);
+  }
   const script=job('bench-dashboard').split("          node --import tsx --input-type=module <<'JS'\n")[1].split('\n          JS')[0]
     .replace(/^\s*import .+;\n/gm,'');
   const source='1'.repeat(40),hash='2'.repeat(64);

@@ -41,6 +41,11 @@ on:
         required: false
         type: boolean
         default: false
+      raster_worker_control:
+        description: Compare forced and default raster workers on one runner
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -134,7 +139,7 @@ jobs:
           if-no-files-found: warn
 
   bench-dashboard:
-    if: ${{ !startsWith(github.ref, 'refs/tags/') && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
+    if: ${{ !inputs.raster_worker_control && !startsWith(github.ref, 'refs/tags/') && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
     runs-on: ubuntu-latest
     # Independent traffic checks run on another runner; every dashboard phase stays here.
     timeout-minutes: 20
@@ -198,7 +203,7 @@ jobs:
           if-no-files-found: warn
 
   idle-cpu-control:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.raster_worker_control }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -245,6 +250,47 @@ jobs:
             /tmp/quotum-idle-cpu-diagnostic/
             ${{ runner.temp }}/quotum-idle-control/
             hub/dist/client/assets/index-*.js
+          if-no-files-found: warn
+
+  # One bounded causal control; it cannot satisfy either required benchmark job.
+  raster-worker-control:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && inputs.raster_worker_control }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.diagnostic_ref }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Compare raster configuration with the original Activity scenario
+        run: |
+          if [ "$TRACE_ONLY" = true ] || [ "$ORIGINAL_TIMING" = true ] || [ "$NATIVE_TRACE" = true ] || [ "$NATIVE_PROFILE" = true ] || [ "$CAPTION_CONTROL" = true ]; then
+            exit 1
+          fi
+          QUOTUM_CHROME="$(command -v google-chrome)" node --import tsx bench/rasterWorkerControl.ts
+        env:
+          QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
+          QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ inputs.expected_client_sha256 }}
+          QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-raster-worker-control
+          TRACE_ONLY: ${{ inputs.trace_only }}
+          ORIGINAL_TIMING: ${{ inputs.original_timing }}
+          NATIVE_TRACE: ${{ inputs.native_trace }}
+          NATIVE_PROFILE: ${{ inputs.native_profile }}
+          CAPTION_CONTROL: ${{ inputs.caption_control }}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: raster-worker-control-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quotum-raster-worker-control
           if-no-files-found: warn
 
   managed-keys:
