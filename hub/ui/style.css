@@ -356,9 +356,11 @@ body.is-resizing-bottom-right, body.is-resizing-bottom-right * { cursor: nwse-re
 .card-primary .limit-value { flex-shrink: 0; }
 .card-primary .limit-bottom { white-space: nowrap; }
 .card-primary .limit-bottom > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.measurement-details { display: flex; flex-direction: column; gap: 20px; }
+.measurement-details { display: flex; flex-direction: column; gap: 20px; min-width: 0; overflow-wrap: anywhere; }
 .measurement-proof { display: block; white-space: pre-line; margin-top: 8px; color: var(--text-3); }
-.measurement-details .limit-name { white-space: pre-line; overflow-wrap: anywhere; }
+.measurement-details .limit-name { min-width: 0; white-space: pre-line; overflow-wrap: anywhere; }
+.measurement-details .limit-value { flex-shrink: 0; }
+.measurement-details .cap-label > span { white-space: pre-line; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 .text-button.money-primary-trigger { display: block; height: auto; padding: 0; border: 0; background: none; width: 100%; text-align: left; color: inherit; }
 .limit-top { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .limit-name { font-size: 13px; color: var(--text-2); padding-bottom: 2px; }

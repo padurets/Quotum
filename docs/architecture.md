@@ -2385,6 +2385,8 @@ of supplier reply order or remaining amounts. Every selected native window
 remains in their existing measurement disclosure. Wallet cards show one available
 balance, or the first selected cap when the balance is excluded; other caps and exact
 amounts remain in the balance disclosure.
+Full disclosure names wrap within the glass, including nested historical status labels
+and unavailable allowance names; their values and status marks stay beside the text.
 The first cap follows canonical English key-name and ID order before it joins historical
 evidence, independently of server or browser locale.
 An absent first cap stays unavailable instead of promoting a later arrived cap; unresolved

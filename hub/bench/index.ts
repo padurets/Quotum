@@ -34,6 +34,7 @@ import {creditSnapshot} from './credits.js';
 import {IdleCpuDiagnostic,clientIdentity,sourceIdentity,idleGeometry,planIdleEdge,type IdleEdgePlan,type IdleGeometry} from './idleCpuDiagnostic.js';
 import {ObservedWork} from './observed.js';
 import {fixedActivity} from './fixedActivity.js';
+import {measurementDetails} from './measurementDetailsFixture.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -350,8 +351,11 @@ async function main() {
     const selectedActivity=await fixedActivity(browser,stand);
     problems.push(...selectedActivity.problems);
     problems.push(...monetary.problems);
+    say('checking complete measurement disclosure text after all performance readings');
+    const measurementDisclosures=await measurementDetails(browser,ana);
     const result = {
       set: set.id,
+      measurementDisclosures,
       idle: {
         seconds,
         requests: {count: requests.count, bytes: requests.bytes, byPath: requests.byPath},
