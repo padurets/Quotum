@@ -36,6 +36,7 @@ import {dotChangesAt,dotOf,FADE_FOR,PULSE_FOR} from '../ui/lib/quota.js';
 import {observeReversal} from './reversalDiagnostic.js';
 import {reloadHubProbe} from './panningReload.js';
 import {IdleCpuDiagnostic,sourceIdentity} from './idleCpuDiagnostic.js';
+import {ScriptClock} from './scriptClock.js';
 import {idleRetentionScript,idleRetentionProblems,type IdleRetention} from './idleRetention.js';
 import {ObservedWork} from './observed.js';
 import {fixedActivity} from './fixedActivity.js';
@@ -146,6 +147,7 @@ async function main() {
 
   let browser: Browser | undefined;
   let tab: Awaited<ReturnType<typeof openTab>> | undefined;
+  let scriptClock:ScriptClock|undefined;
   let heard: Heard | undefined;
   const owner = new RunOwner(evidence);
   let cancelled = false;
@@ -153,6 +155,7 @@ async function main() {
   const finish = (code: number): Promise<void> => finishing ??= (async () => {
     heard?.close();
     evidence.begin('cleanup');
+    await scriptClock?.close();
     try{await idleCpu?.close();}catch{
       code=1;owner.failures.push('Idle CPU cleanup unconfirmed');
       try{saveDiagnostic('idle-cpu-cleanup',{mode:'diagnostic',status:'insufficient-evidence'});}catch{/* Continue owned browser cleanup if receipt writing fails. */}
@@ -289,6 +292,7 @@ async function main() {
     say(`waiting ${Math.round((planned.from-Date.now())/1000)} s to include one real chart-cell transition`);
     await sleep(planned.from-Date.now());
     if(idleCpu)await idleCpu.start();
+    scriptClock=await ScriptClock.open(cdp);
     const from = Date.now();
     const to = from + seconds * 1000;
     const moving = stillProblems(await overview(), from, to);
@@ -338,6 +342,8 @@ async function main() {
       return {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo,retentionBefore};
     };
     const {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond} = await readIdle();
+    evidence.save('idle-script-clock',await scriptClock.after(before,after));
+    scriptClock=undefined;
     if(idleCpu){
       const diagnosticProblems=originalIdleTimingProblems!;
       const window={before,after,instrumentMs:reading.instrumentMs,seconds};

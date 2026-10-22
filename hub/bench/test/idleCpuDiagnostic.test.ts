@@ -14,6 +14,7 @@ import {numericProfile,profileWindow} from '../cpuProfile.js';
 import {Evidence,safeEvidence} from '../evidence.js';
 import {RunOwner} from '../runOwner.js';
 import {idleWindow,idlePhaseScript,idlePhaseProblems} from '../still.js';
+import {ScriptClock} from '../scriptClock.js';
 
 type Saved={name:string;value:unknown;large?:boolean};
 
@@ -202,7 +203,7 @@ async function originalIndex(collection:''|'trace'|'profile',boundaryFailure?:'o
   cdp.emit('Network.responseReceived',{type:'Script',requestId:'asset-1',response:{url:asset}});
   const source=readFileSync(new URL('../index.ts',import.meta.url),'utf8'),start=source.indexOf('    const cellMs = cellOf('),end=source.indexOf('    const measured =',start);
   assert.ok(start>=0&&end>start);
-  const context={Date:class extends Date{static override now(){return wall;}},idleCpu,idleCpuMode:collection,shortIdleProfile:false,seconds:120,cdp,reading:traceReading,
+  const context={Date:class extends Date{static override now(){return wall;}},ScriptClock,scriptClock:undefined,idleCpu,idleCpuMode:collection,shortIdleProfile:false,seconds:120,cdp,reading:traceReading,
     idleWindow,idlePhaseScript,idlePhaseProblems,idleRetentionProblems:()=>[],
     cellOf:()=>300_000,sleep:async(ms:number)=>{cdp.commands.push('ORIGINAL.sleep:'+ms);wall+=Math.max(0,ms);if(ms===120_000){cdp.timestamp=121;for(let i=0;i<5;i++)ledger.push('event: ping\ndata: {}\n\n');}},
     overview:async()=>[],stillProblems:()=>[],Stop:Error,say:()=>{},heard,requests:{counting:false,count:0,byPath:{}},
@@ -231,7 +232,7 @@ test('actual original-profile index preserves the counter sequence and samples w
   assert.equal(result(saved,'idle-cpu-profile').samplingInterval,2000);
   assert.equal(result(saved,'idle-cpu-original-trace').profileStatus,'complete');
 });
-test('actual ordinary index installs no diagnostic and retains the original120s sequence',async()=>{
+test('actual ordinary index installs no trace or profiler and retains the original120s sequence',async()=>{
   const {cdp,saved,failure}=await originalIndex('');assert.equal(failure,undefined);assert.equal(saved.length,0);
   assert.ok(!cdp.commands.some(command=>/^(Profiler|Tracing|Debugger)\./.test(command)));
   assert.deepEqual(cdp.commands,['ORIGINAL.sleep:5000',...canonicalCounterSequence]);
