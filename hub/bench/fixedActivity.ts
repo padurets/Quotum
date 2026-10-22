@@ -162,6 +162,61 @@ export async function fixedActivityGestureReceipt(cdp:Pick<Cdp,'snapshot'|'evalu
   return cdp.evaluate<GestureReceipt>('window.__quotumFixedActivityGesture?.finish()??{complete:false,unavailable:true}').catch(()=>null);
 }
 
+/** Native focus scrolls must not carry the preceding gesture's pointer cleanup into emphasis. */
+export function fixedActivityPointerParkScript(origin:{x:number;y:number}){return `(() => {
+  if(window.__quotumFixedActivityPointerPark)throw Error('fixed Activity pointer setup is already owned');
+  const origin=${JSON.stringify(origin)},chart=document.querySelector('.activity .chart');
+  const excluded='.chart,.legend,.legend-item,[data-series-legend],[data-series-details],.series-tip,[role="tooltip"],button,input,select,textarea,a,summary,[role="button"],[contenteditable],[tabindex]';
+  const outside=hit=>!!hit&&!hit.closest(excluded);
+  if(!chart||!Number.isFinite(origin.x)||!Number.isFinite(origin.y)||!chart.contains(document.elementFromPoint(origin.x,origin.y)))throw Error('fixed Activity pointer must start over its released plot');
+  let point=null,heading=null;
+  for(const bar of document.querySelectorAll('header.topbar,.analytics-head,.board-bar')){
+    if(getComputedStyle(bar).position!=='sticky')continue;
+    const box=bar.getBoundingClientRect();
+    if(!(box.width>0&&box.height>0))continue;
+    for(const fraction of [.95,.75,.55,.35]){
+      const x=Math.min(innerWidth-4,Math.max(4,box.left+box.width*fraction)),y=Math.min(innerHeight-4,Math.max(4,box.top+box.height/2)),hit=document.elementFromPoint(x,y);
+      if(outside(hit)&&bar.contains(hit)){point={x,y};heading=bar;break;}
+    }
+    if(point)break;
+  }
+  if(!point)throw Error('fixed Activity pointer needs a blank existing sticky heading');
+  const snapshot=()=>{
+    const params=new URLSearchParams(location.search);
+    return {historical:params.has('from')&&params.has('to'),from:Number(params.get('from')),to:Number(params.get('to')),plots:[...document.querySelectorAll('.panel[data-time="chart"] .chart>svg')].map(svg=>({from:Number(svg.dataset.drawFrom),to:Number(svg.dataset.drawTo),ready:svg.dataset.drawReady==='true',panning:svg.classList.contains('is-panning'),token:svg.dataset.panToken??null,end:svg.dataset.panEnd??null}))};
+  };
+  const before=snapshot(),coherent=state=>state.historical&&state.to>state.from&&state.plots.length===5&&state.plots.every(plot=>plot.from===state.from&&plot.to===state.to&&plot.ready&&!plot.panning&&plot.token===null&&plot.end===null);
+  if(!coherent(before))throw Error('fixed Activity pointer setup needs five settled historical projections');
+  let trustedExit=false,stopped=false;
+  const record=event=>{if(event.isTrusted&&event.pointerType==='mouse'&&event.buttons===0&&chart.contains(event.target)&&!chart.contains(event.relatedTarget))trustedExit=true;};
+  document.addEventListener('pointerout',record,{capture:true,passive:true});
+  window.__quotumFixedActivityPointerPark={finish:()=>{
+    if(!stopped){stopped=true;document.removeEventListener('pointerout',record,true);delete window.__quotumFixedActivityPointerPark;}
+    const after=snapshot(),hit=document.elementFromPoint(point.x,point.y),finalOutside=outside(hit)&&heading.contains(hit)&&getComputedStyle(heading).position==='sticky';
+    return {version:1,complete:trustedExit&&finalOutside&&coherent(after)&&JSON.stringify(before)===JSON.stringify(after),trustedExit,finalOutside,point,before,after};
+  }};
+  return point;
+})()`;}
+
+type PointerParkReceipt={version:number;complete:boolean;trustedExit:boolean;finalOutside:boolean;point:{x:number;y:number}};
+
+export async function fixedActivityPointerPark(cdp:Pick<Cdp,'snapshot'|'evaluate'|'send'>,origin:{x:number;y:number},settled:()=>Promise<void>):Promise<PointerParkReceipt>{
+  const point=await cdp.evaluate<{x:number;y:number}>(fixedActivityPointerParkScript(origin));
+  let finished=false;
+  try{
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:point.x,y:point.y,modifiers:0,button:'none',buttons:0});
+    await settled();
+    const receipt=await cdp.evaluate<PointerParkReceipt>('window.__quotumFixedActivityPointerPark.finish()');finished=true;
+    assert.ok(receipt.complete,'pointer setup must observe a trusted Activity exit onto a blank heading without changing five historical projections');
+    return receipt;
+  }finally{
+    if(!finished){
+      const command=cdp.snapshot();
+      if(command.socketState===1&&!command.terminal&&!command.failure&&!command.pending.length)await cdp.evaluate('window.__quotumFixedActivityPointerPark?.finish()').catch(()=>null);
+    }
+  }
+}
+
 /** Physical requests are retained through cancellation and their final response-body accounting. */
 function traffic(cdp:Cdp){
   const bodies:Body[]=[],active=new Map<string,Body>(),pending=new Set<Promise<unknown>>(),errors:unknown[]=[];
@@ -216,9 +271,9 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       const shownRange=()=>cdp.evaluate<{from:number;to:number}>(`(()=>{const p=new URLSearchParams(location.search);if(!p.has('from')||!p.has('to'))throw Error('the gesture must remain historical');return {from:Number(p.get('from')),to:Number(p.get('to'))};})()`);
       // Establish the real release-owned value domains before exercising S/H.
       const gestureStart=await shownRange();assertActivityGestureRange(gestureStart,selection);
-      let gestureReceipt:GestureReceipt|null=null;
+      let gestureReceipt:GestureReceipt|null=null,gesturePoint:{x:number;y:number}|null=null;
       try{
-        const point=await cdp.evaluate<{x:number;y:number}>(fixedActivityGestureScript());
+        const point=gesturePoint=await cdp.evaluate<{x:number;y:number}>(fixedActivityGestureScript());
         // Held moves retain the left button so Chromium keeps pointer capture.
         const mouse=(type:string,x:number)=>cdp.send('Input.dispatchMouseEvent',{type,x,y:point.y,modifiers:8,button:'left',buttons:type==='mouseReleased'?0:1});
         await mouse('mousePressed',point.x);
@@ -236,10 +291,9 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       assert.ok(gestureReceipt.events?.some(event=>event.type==='pointerdown'&&event.trusted&&event.shift&&event.target==='activity'),'the native historical gesture must reach its plot');
       assert.ok(gestureReceipt.events?.some(event=>event.type==='pointerup'&&event.trusted),'the native historical gesture must release its pointer');
       assert.notEqual((await shownRange()).to,gestureStart.to,'the native historical gesture must commit a changed range');
+      assert.ok(gesturePoint);
       console.error('bench: fixed Activity settled '+JSON.stringify(await cdp.evaluate('window.__quotumFixedActivity.status()')));
       const sample=()=>cdp.evaluate<Sample>('window.__quotumFixedActivity.sample()');
-      let baseline=await sample();assert.ok(baseline.activity.known);assert.ok(baseline.tiles.length<=8);
-      await cdp.evaluate('window.__quotumFixedActivity.observeNews()');
       const selectedFilter=[...bodies.bodies].reverse().find(row=>row.body.workFilter)!.body.workFilter;assert.ok(selectedFilter);
       assert.equal(await cdp.evaluate('window.__quotumFixedActivity.status().members'),4,'emphasis adds no history reader');
       // SVG viewport bounds lose float precision after native focus scrolls the page.
@@ -262,6 +316,13 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         return JSON.stringify({boxes,projections});
       }`;
       const geometry=()=>cdp.evaluate<string>('('+geometryScript+')()');
+      const beforePark={range:await shownRange(),geometry:await geometry(),numbers:(await sample()).numbers};
+      const pointerPark=await fixedActivityPointerPark(cdp,{x:gesturePoint.x+48,y:gesturePoint.y},()=>settled());
+      assert.deepEqual(await shownRange(),beforePark.range,'pointer setup preserves the committed historical range');
+      assert.equal(await geometry(),beforePark.geometry,'pointer setup preserves widget geometry, time landmarks and value projections');
+      let baseline=await sample();assert.deepEqual(baseline.numbers,beforePark.numbers,'pointer setup preserves the complete cohort numbers');assert.ok(baseline.activity.known);assert.ok(baseline.tiles.length<=8);
+      console.error(`bench: fixed Activity ${days}d pointer setup `+JSON.stringify(pointerPark));
+      await cdp.evaluate('window.__quotumFixedActivity.observeNews()');
       const beforeHover=await geometry(),hoverStart=bodies.bodies.length;
       await cdp.evaluate('window.__quotumFixedActivity.reset();__quotumBench.reset()');
       console.error(`bench: ${days}d emphasis matrix and native keys`);

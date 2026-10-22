@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {runInNewContext} from 'node:vm';
-import {activityOracle,assertActivityOverlap,assertActivityOutside,assertActivityCancellation,assertActivityGestureRange,FIXED_ACTIVITY_BUDGET,fixedActivityScript,fixedActivityGestureScript,fixedActivityGestureReceipt} from '../fixedActivity';
+import {activityOracle,assertActivityOverlap,assertActivityOutside,assertActivityCancellation,assertActivityGestureRange,FIXED_ACTIVITY_BUDGET,fixedActivityScript,fixedActivityGestureScript,fixedActivityGestureReceipt,fixedActivityPointerParkScript,fixedActivityPointerPark} from '../fixedActivity';
 import {packWork,type WorkTrace} from '../../server/domain/periodWork';
 import type {PeriodRequest} from '../../server/domain/periodRead';
 import {fixture,drawings,flush,NOW} from '../../ui/test/periodRuntimeFixture';
@@ -93,6 +93,87 @@ test('native gesture receipt fails completeness rather than silently truncating 
   for(let i=0;i<35;i++)h.listeners.get('pointermove')!({type:'pointermove',isTrusted:true,clientX:point.x+i,clientY:point.y,shiftKey:true,button:-1,buttons:1,pointerId:7,pointerType:'mouse',target:h.chart,defaultPrevented:false});
   h.drain();const receipt=h.finish();
   assert.equal(receipt.events.length,32);assert.equal(receipt.omitted,3);assert.equal(receipt.complete,false);
+});
+
+// Execute the actual setup and receipt. Stand-in events test rejection and cleanup;
+// trusted native delivery is qualified separately by the browser benchmark.
+function pointerParkFixture({blocked=false,sticky=true}={}){
+  const origin={x:50,y:150},listeners=new Map<string,(event:unknown)=>void>();
+  const child={},chart={contains:(node:unknown)=>node===chart||node===child};
+  const blank={closest:()=>null},control={closest:()=>control};let hit:unknown=blocked?control:blank;
+  const heading={contains:(node:unknown)=>node===blank||node===control,getBoundingClientRect:()=>({left:0,top:0,width:200,height:60})};
+  const plots=Array.from({length:5},()=>({dataset:{drawFrom:'100',drawTo:'200',drawReady:'true'},classList:{contains:()=>false}}));
+  const context={window:{} as {__quotumFixedActivityPointerPark?:{finish:()=>{complete:boolean;trustedExit:boolean;finalOutside:boolean;before:unknown;after:unknown}}},URLSearchParams,location:{search:'?from=100&to=200&token=private-token'},innerWidth:200,innerHeight:300,getComputedStyle:()=>({position:sticky?'sticky':'static'}),document:{
+    querySelector:()=>chart,querySelectorAll:(selector:string)=>selector.includes('chart>svg')?plots:[heading],
+    elementFromPoint:(x:number,y:number)=>x===origin.x&&y===origin.y?chart:hit,
+    addEventListener:(type:string,listener:(event:unknown)=>void)=>listeners.set(type,listener),
+    removeEventListener:(type:string,listener:(event:unknown)=>void)=>{assert.equal(listeners.get(type),listener);listeners.delete(type);},
+  }};
+  const vmContext=vm.createContext(context);
+  return {origin,listeners,plots,context,chart,child,blank,control,setHit:(value:unknown)=>{hit=value;},
+    evaluate:<T>(source:string)=>vm.runInContext(source,vmContext) as T,
+    begin:()=>vm.runInContext(fixedActivityPointerParkScript(origin),vmContext) as {x:number;y:number},
+    emit:(change:Record<string,unknown>={})=>listeners.get('pointerout')?.({isTrusted:true,pointerType:'mouse',buttons:0,target:chart,relatedTarget:blank,...change}),
+    finish:()=>context.window.__quotumFixedActivityPointerPark!.finish(),
+  };
+}
+
+test('pointer setup requires a blank sticky heading and an actual trusted mouse exit from Activity',()=>{
+  for(const options of [{blocked:true},{sticky:false}]){
+    const h=pointerParkFixture(options);assert.throws(()=>h.begin(),/blank existing sticky heading/);assert.equal(h.listeners.size,0);
+  }
+  for(const change of [{isTrusted:false},{pointerType:'touch'},{buttons:1},{target:{}},{relatedTarget:'inside'}]){
+    const h=pointerParkFixture();h.begin();h.emit(change.relatedTarget==='inside'?{relatedTarget:h.child}:change);
+    assert.equal(h.finish().complete,false);assert.equal(h.listeners.size,0);assert.equal(h.context.window.__quotumFixedActivityPointerPark,undefined);
+  }
+  const h=pointerParkFixture(),point=h.begin();h.emit();const receipt=h.finish();
+  assert.deepEqual(JSON.parse(JSON.stringify(point)),{x:190,y:30});
+  assert.equal(receipt.complete,true);assert.equal(receipt.trustedExit,true);assert.equal(receipt.finalOutside,true);
+  assert.deepEqual(receipt.after,receipt.before);assert.equal(h.listeners.size,0);
+  assert.ok(!JSON.stringify(receipt).includes('private-token'));
+});
+
+test('pointer receipt rejects a blocked final hit or a changed historical projection',()=>{
+  const blocked=pointerParkFixture();blocked.begin();blocked.emit();blocked.setHit(blocked.control);
+  assert.equal(blocked.finish().complete,false);
+  for(const field of ['drawFrom','drawTo','drawReady'] as const){
+    const h=pointerParkFixture();h.begin();h.emit();h.plots[4].dataset[field]=field==='drawReady'?'false':'201';
+    assert.equal(h.finish().complete,false,'every one of the five projections remains part of the receipt');assert.equal(h.listeners.size,0);
+  }
+  const changed=pointerParkFixture();changed.begin();changed.emit();changed.context.location.search='?from=101&to=200';
+  assert.equal(changed.finish().complete,false);
+});
+
+test('pointer setup sends native released mouse input and waits for cleanup before reading its receipt',async()=>{
+  const h=pointerParkFixture(),commands:{method:string;params:object}[]=[],finished:string[]=[];
+  let entered!:()=>void,resume!:()=>void;
+  const waiting=new Promise<void>(resolve=>entered=resolve),gate=new Promise<void>(resolve=>resume=resolve);
+  type ParkCdp=Parameters<typeof fixedActivityPointerPark>[0];
+  const cdp:ParkCdp={snapshot:()=>{throw Error('successful setup needs no recovery probe');},
+    evaluate:async<T>(source:string)=>{if(source.includes('PointerPark.finish()'))finished.push('receipt');return h.evaluate<T>(source);},
+    send:async<T>(method:string,params:object={})=>{commands.push({method,params});h.emit();return undefined as T;},
+  };
+  const work=fixedActivityPointerPark(cdp,h.origin,async()=>{entered();await gate;});
+  await waiting;assert.equal(finished.length,0,'the receipt cannot precede completion of the ready/RAF settlement');assert.equal(h.listeners.size,1);
+  resume();const receipt=await work;
+  assert.equal(receipt.complete,true);assert.equal(finished.length,1);assert.equal(h.listeners.size,0);
+  assert.deepEqual(commands,[{method:'Input.dispatchMouseEvent',params:{type:'mouseMoved',x:190,y:30,modifiers:0,button:'none',buttons:0}}]);
+});
+
+test('pointer setup preserves the native failure and avoids probing a failed or pending renderer',async()=>{
+  type ParkCdp=Parameters<typeof fixedActivityPointerPark>[0];type Command=ReturnType<ParkCdp['snapshot']>;
+  const clean:Command={context:'fixed-activity/pointer-setup',socketState:1,lastAck:null,lastEvent:null,terminal:null,failure:null,pending:[]};
+  const failed={id:1,method:'Input.dispatchMouseEvent',context:clean.context,started:10,deadline:30010,elapsedMs:30000};
+  for(const command of [clean,{...clean,failure:failed},{...clean,pending:[failed]},{...clean,socketState:3},{...clean,terminal:{method:'Inspector.targetCrashed' as const,at:10}}]){
+    const h=pointerParkFixture(),error=Error('original native failure');let evaluations=0,settlements=0;
+    const cdp:ParkCdp={snapshot:()=>command,evaluate:async<T>(source:string)=>{evaluations++;return h.evaluate<T>(source);},send:async()=>{throw error;}};
+    await assert.rejects(fixedActivityPointerPark(cdp,h.origin,async()=>{settlements++;}),actual=>actual===error);
+    assert.equal(settlements,0);assert.equal(evaluations,command===clean?2:1);
+    assert.equal(h.listeners.size,command===clean?0:1,'a healthy renderer releases its own listener; failed renderers receive no further commands');
+  }
+  const h=pointerParkFixture(),error=Error('settlement failed');let evaluations=0;
+  const cdp:ParkCdp={snapshot:()=>clean,evaluate:async<T>(source:string)=>{if(++evaluations>1)throw Error('cleanup also failed');return h.evaluate<T>(source);},send:async<T>()=>undefined as T};
+  await assert.rejects(fixedActivityPointerPark(cdp,h.origin,async()=>{throw error;}),actual=>actual===error);
 });
 
 test('the shared-filter benchmark oracle clips intervals, unions overlap and deduplicates identities',()=>{
