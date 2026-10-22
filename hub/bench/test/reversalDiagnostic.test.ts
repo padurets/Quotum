@@ -247,7 +247,7 @@ for(const outcome of ['reply','connect timeout','evaluate timeout'] as const)tes
   const wait=(signal:AbortSignal)=>new Promise<never>((_,reject)=>{signals.push(signal);signal.addEventListener('abort',()=>reject(signal.reason),{once:true});});
   page.evaluate=async(expression,signal)=>{expressions.push(expression);return wait(signal!);};
   let connections=0,closed=0,reject!:(error:Error)=>void;
-  t.mock.method(Cdp,'connect',async(url,signal)=>{
+  t.mock.method(Cdp,'connect',async(url:string,signal?:AbortSignal)=>{
     assert.equal(url,endpoint);connections++;
     if(outcome==='connect timeout')return wait(signal!);
     return {evaluate:async(expression:string,signal:AbortSignal)=>{
