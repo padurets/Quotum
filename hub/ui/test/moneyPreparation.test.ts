@@ -3,6 +3,7 @@ import {chartSeriesMuted} from '../lib/prefs';
 import {moneyBalanceSeries} from '../lib/moneyTable';
 import {defaultCurrencyContext} from '../../server/domain/currency';
 import {axisNavigation} from '../lib/axisNavigation';
+import {pan} from '../lib/pan';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -87,8 +88,9 @@ test('the actual prepared money chart keeps its value axis, step geometry and ex
   const next=context.draw().value!;assert.equal(next.valueAxis,context.valueAxis);assert.equal(next.paths[0].latest,'60000:3000000');
 });
 
-for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'resource revision', 'empty selection']) test(`MoneyHistory retires ${change} through the prepared Chart`, () => {
+for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'resource revision', 'empty selection']) test(`MoneyHistory retires ${change} through the prepared Chart`, t => {
     const outer = preparationFixture(), inner = preparationFixture();
+    t.after(()=>{outer.dispose();inner.dispose();});
     const cards: Card[] = ['A', 'B'].map(id => ({id, title: id, provider: 'openrouter', plan: '', successAt: 60000, error: null, stale: false, windows: [], resets: null, owners: [], staleAfterMs: 1000, measureIntervalMs: null,
       meters: [{id: 'balance', amount: '10000000', kind: 'balance', unit: 'USD', limit: null, at: 60000, stale: false, staleAfterMs: 1000, resetAt: null, minutes: null, scope: null, label: null}]}));
     const chunks = [{from: 0, meterSeries: cards.map(c => ({source: c.id, meter: 'balance', kind: 'balance', unit: 'USD', semantics: null, cells: [[0, '10000000', '1000000', '0', 60000], [1, '10000000', '3000000', '0', 60000]]} as MeterSeriesCells))}];
@@ -99,13 +101,13 @@ for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'reso
     const Chart = () => null;
     const memo = (read: () => unknown, deps: unknown[]) => {const box = outer.useRef(null) as {current: {deps: unknown[]; value: unknown} | null}; if (!box.current || deps.some((v, i) => !Object.is(v, box.current!.deps[i]))) box.current = {deps, value: read()}; return box.current.value;};
     const modules: Record<string, unknown> = {
-      'react/jsx-runtime': jsx, react: {memo: reactMemo, useRef: outer.useRef, useMemo: memo},
+      'react/jsx-runtime': jsx, react: {memo: reactMemo, useRef: outer.useRef, useMemo: memo,useLayoutEffect:outer.useLayoutEffect},
       '../../server/domain/providers': providers, '../../server/domain/currency': currency, '../../server/domain/meterHistory': {composeMetersPrepared},
       '../lib/board': {useServerView:()=>undefined,useBoardId: () => 'board', useCurrencyContext: () => defaultCurrencyContext, useNamed: () => sources},
       '../lib/history': {useBudgetFinancialHistory: () => ({history,drawing:history,loading:loading??!history,presentation}),useBudgetHistory: () => ({history, drawing: history, loading: !history, presentation}), useBudgetHistoryPlot: () => null, useHistoryBegins: () => 0, budgetHistory: {retry: () => {}}},
       '../lib/prefs': {useChartMuted:()=>prefs.muted,chartSeriesMuted,usePref: (key:keyof typeof prefs) => prefs[key]}, '../lib/moneySelection': {moneySelection,fundsLegacyMuted}, '../lib/moneyView': moneyView, '../lib/money': money,
       '../lib/view': {...widgets,colorOf: () => '#fff'}, '../lib/periods': {frameOf: () => ({from: 0, to: 120000, live: true}), measuredTo: () => 60000},
-      '../lib/timeRange': {useTimeRange: () => null}, '../lib/clock': {useClock: () => 60000}, '../lib/pan': {usePanning: () => null},
+      '../lib/timeRange': {useTimeRange: () => null}, '../lib/clock': {useClock: () => 60000}, '../lib/pan': {pan,usePanning: () => null},
       '../lib/axisNavigation': {axisNavigation: () => ({context: 'board'})}, '../i18n': {t: (key: string) => key, useLocale: () => 'en'},
       './prepared': {usePrepared: outer.usePrepared}, './sizing': {usePlot: () => ({plot: {}, onBase: () => {}})}, './Chart': {Chart},
       './seriesFocus': {useSeriesFocus:()=>{}}, '../lib/moneyTable': moneyTable,

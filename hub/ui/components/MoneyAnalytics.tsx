@@ -23,7 +23,7 @@ import {usePlot} from './sizing';
 import {MoneyChartSettings} from './MoneySettings';
 import {axisNavigation} from '../lib/axisNavigation';
 import {usePrepared} from './prepared';
-import {usePanning} from '../lib/pan';
+import {pan,usePanning} from '../lib/pan';
 import {boardPeriod} from '../lib/period';
 import {composeMetersPrepared} from '../../server/domain/meterHistory';
 import type {History} from '../lib/types';
@@ -119,14 +119,12 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
   const modelContext=JSON.stringify([authority,family,board,history?.board,unit,selection?.ids]);
   const baseNavigation=axisNavigation(board,selected,prefs),navigation={...baseNavigation,context:JSON.stringify([baseNavigation.context,unit,authority])};
   type Domain={low:bigint;high:bigint};
-  const pose=useRef<{context:string;range:string;pan:number|null;domain:Domain|null;held:Domain|null;axes:WeakMap<ValueAxis,Domain|null>}|null>(null);
+  const pose=useRef<{context:string;range:string;domain:Domain|null;held:Domain|null;axes:WeakMap<ValueAxis,Domain|null>}|null>(null);
   const poseContext=JSON.stringify([modelContext,navigation.context,muted]);
-  if(pose.current?.context!==poseContext)pose.current={context:poseContext,range:navigation.range,pan:panning,domain:null,held:null,axes:new WeakMap()};
+  if(pose.current?.context!==poseContext)pose.current={context:poseContext,range:navigation.range,domain:null,held:null,axes:new WeakMap()};
   const previous=pose.current;
-  if(panning!==null&&previous.pan===null)previous.held=null;
-  else if(panning===null&&previous.pan!==null)previous.held=selected&&previous.range!==navigation.range?previous.domain:null;
-  else if(panning===null&&previous.range!==navigation.range)previous.held=null;
-  previous.pan=panning;previous.range=navigation.range;
+  if(previous.range!==navigation.range)previous.held=null;
+  previous.range=navigation.range;
   const held=previous.held;
   const prepared=usePrepared(function* () {
     const entries:MeterHistory[]=[],visible:MeterHistory[]=[];
@@ -141,7 +139,7 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
       for(const point of entry.points){const value=BigInt(point.value);if(low===null||value<low)low=value;if(high===null||value>high)high=value;yield;}
     }
     // Exact composition must preserve the value pose painted at release. New
-    // evidence can expand it; another navigation or display context releases it.
+    // evidence can expand it; an explicit range or display context releases it.
     if(held){low=low===null||held.low<low?held.low:low;high=high===null||held.high>high?held.high:high;}
     const origin=low??0n,span=(high??origin)-origin||1_000_000n,pad=span/10n||1n,lines:Line[]=[];
     for(const series of visible) {
@@ -174,6 +172,12 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
   const onDrawing=useMemo(()=>(valueAxis:ValueAxis|undefined)=>{
     if(pose.current===previous)previous.domain=valueAxis?previous.axes.get(valueAxis)??null:null;
   },[previous]);
+  useLayoutEffect(()=>pan.onStop(stop=>{
+    if(pose.current!==previous||!stop.changed)return;
+    // A stop owns the painted domain even if React skipped its active phase.
+    previous.range=stop.range?timeRangeKey(stop.range):'live';
+    previous.held=stop.range?previous.domain:null;
+  }),[previous]);
   const legend=useMemo(()=><div className="legend">{original.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId);return <SeriesLegendItem key={key} seriesKey={key} name={nameOf(s,card?.title??s.sourceId,context,family)} description={descriptions.find(entry=>entry.key===key)?.detail} color={colorOf(arrange.view,s.sourceId,card?.provider??'')} dash={s.kind==='cap'?'7 5':undefined} muted={isMuted(s)} onToggle={()=>setMuted(chartMuteKey(widget,s.sourceId,s.meterId),!isMuted(s))}><b><MoneyLegendAmount value={s.end} unit={s.unit} context={context}/></b></SeriesLegendItem>;})}</div>,[original,sources,context,family,history,arrange.view,muted,settings,widget,locale,authority,board,descriptions]);
   const answered=history?.range===(selected?timeRangeKey(selected):prefs.range);
   const emptySelection=noResources||noSelection,settledEmpty=emptySelection&&!loading&&!error;

@@ -17,6 +17,7 @@ import {PeriodAccounting} from '../../server/domain/periodAccounting';
 import * as meterHistory from '../../server/domain/meterHistory';
 import * as widgets from '../../server/domain/widgets';
 import {chartMuteKey,chartSeriesMuted} from '../lib/prefs';
+import {pan} from '../lib/pan';
 import * as views from '../../server/domain/view';
 import * as preparation from './preparationFixture';
 import type {Card,History} from '../lib/types';
@@ -61,7 +62,7 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
     const useMemo=(f:()=>unknown,deps:unknown[])=>{const r=hooks.useRef(null) as {current:{deps:unknown[];value:unknown}|null};if(!r.current||deps.length!==r.current.deps.length||deps.some((v,i)=>!Object.is(v,r.current!.deps[i])))r.current={deps,value:f()};return r.current.value;};
     const useLocale=()=>{if(activeLeaf)activeLeaf.subscribesLocale=true;return locale;};
     const modules:Record<string,unknown>={
-      'react/jsx-runtime':jsx,react:{useRef:hooks.useRef,useMemo,memo:reactMemo},
+      'react/jsx-runtime':jsx,react:{useRef:hooks.useRef,useMemo,memo:reactMemo,useLayoutEffect:hooks.useLayoutEffect},
       '../../server/domain/providers':providers,'../../server/domain/currency':currency,'../../server/domain/meterHistory':{composeMetersPrepared:meterHistory.composeMetersPrepared},
       '../lib/board':{useServerView:()=>undefined,useBoardId:()=> 'b',useCurrencyContext:()=>context,useNamed:()=>sources},
       '../lib/history':{useBudgetFinancialHistory:()=>({history,drawing,loading:!history,presentation:authority}),useBudgetHistoryPlot:()=>null,useHistoryBegins:()=>0,budgetHistory:{retry(){}},fundsHistory:{retry(){}}},
@@ -69,7 +70,7 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
       '../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},
       './MoneySettings':{MoneyChartSettings},
       '../lib/moneySelection':{moneySelection,fundsLegacyMuted},'../lib/moneyView':moneyView,'../lib/money':{...money,money:(...args:Parameters<typeof money.money>)=>{calls++;return money.money(...args);}},
-      '../lib/view':{...widgets,colorOf:()=> '#fff'},'../lib/periods':periods,'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>now},'../lib/pan':{usePanning:()=>null},
+      '../lib/view':{...widgets,colorOf:()=> '#fff'},'../lib/periods':periods,'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>now},'../lib/pan':{pan,usePanning:()=>null},
       '../lib/axisNavigation':{axisNavigation:()=>({context:'b'})},'../i18n':{t:i18n.t,useLocale},'./prepared':{usePrepared:hooks.usePrepared},'./sizing':{usePlot:()=>({plot:160,onBase(){}})},'./Chart':{Chart},'./SeriesDetails':{SeriesDetails:()=>null},'./AnalyticsPanel':{SeriesLegendItem},
     };
     const vm={exports:{} as {MoneyHistory:(props:unknown)=>ReactElement<{children:unknown[]}>},require:(n:string)=>modules[n]??{}};
@@ -131,7 +132,7 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
       if(phase==='revoke'){history=null;drawing=null;authority++;}
       return render();
     }
-    return {render,settle,update,toggle:(r:ReturnType<typeof render>)=>{
+    return {render,settle,update,close:hooks.dispose,toggle:(r:ReturnType<typeof render>)=>{
       const callback=nodeOf(r.legend.props.children[0])?.props.onToggle;
       assert.equal(typeof callback,'function');
       if(typeof callback==='function')callback();
@@ -139,6 +140,7 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
     }};
   }
   const h=harness(),rows:{phase:string;moneyCalls:number;prepared:ChartProps['prepared'];lines:number}[]=[];
+  t.after(h.close);
   const first=h.settle();
   let retained=first.chart.props.lines;
   for(let n=0;n<50;n++)assert.equal(h.update('frame').legend,first.legend,'frame-only renders retain the actual legend JSX');

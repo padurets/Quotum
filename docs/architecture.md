@@ -2110,8 +2110,10 @@ authority or explicit geometry change establishes a new value projection.
 Budget and subscription-funds charts also preserve the monetary value domain painted
 at a historical gesture's release. The committed Chart model supplies that domain;
 an earlier parent preparation cannot replace it before its drawing commits.
+The native stop owns this handoff even when React coalesces an active phase.
+Consecutive gestures inherit the domain; a no-op or cancellation never releases it.
 Replacing an overscan strip with exact cells cannot
-rescale unchanged balances. New values may expand the domain; another navigation,
+rescale unchanged balances. New values may expand the domain; an explicit range,
 currency, resource selection or authority establishes a new one. Its bounds stay in
 integer millionths independently of the prepared path's numeric offset.
 Activity publishes a replacement only when its selected work and native drawing

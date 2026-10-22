@@ -1,5 +1,6 @@
 import * as widgets from '../../server/domain/widgets';
 import {chartSeriesMuted} from '../lib/prefs';
+import {pan} from '../lib/pan';
 import {test,type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -111,12 +112,12 @@ function drawing(h:Awaited<ReturnType<typeof creditHistory>>,initial:Update,page
   const Chart=()=>null;
   const memo=(read:()=>unknown,deps:unknown[])=>{const box=outer.useRef(null) as {current:{deps:unknown[];value:unknown}|null};if(!box.current||deps.some((value,i)=>!Object.is(value,box.current!.deps[i])))box.current={deps,value:read()};return box.current.value;};
   const modules:Record<string,unknown>={
-    'react/jsx-runtime':jsx,react:{memo:reactMemo,useRef:outer.useRef,useMemo:memo},
+    'react/jsx-runtime':jsx,react:{memo:reactMemo,useRef:outer.useRef,useMemo:memo,useLayoutEffect:outer.useLayoutEffect},
     '../../server/domain/providers':providers,'../../server/domain/currency':currency,'../../server/domain/meterHistory':{composeMetersPrepared},
     '../lib/board':{useServerView:()=>undefined,useBoardId:()=> 'board',useCurrencyContext:()=>currency.defaultCurrencyContext,useNamed:()=>sources},
     '../lib/history':{useBudgetFinancialHistory:()=>({history:shown,drawing:shown,loading:false,presentation}),useBudgetHistoryPlot:()=>null,useHistoryBegins:()=>current.historyStart,fundsHistory:{retry(){}}},
     '../lib/prefs':{useChartMuted:()=>prefs.muted,chartSeriesMuted,usePref:(key:keyof typeof prefs)=>prefs[key]},'../lib/moneySelection':{moneySelection,fundsLegacyMuted},'../lib/moneyView':moneyView,'../lib/money':money,'../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},
-    '../lib/view':{...widgets,colorOf:()=> '#fff'},'../lib/periods':periods,'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>current.now},'../lib/pan':{usePanning:()=>null},
+    '../lib/view':{...widgets,colorOf:()=> '#fff'},'../lib/periods':periods,'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>current.now},'../lib/pan':{pan,usePanning:()=>null},
     '../lib/axisNavigation':{axisNavigation:()=>({context:'board'})},'../i18n':{t:(key:string)=>key,useLocale:()=> 'en'},
     './prepared':{usePrepared:outer.usePrepared},'./sizing':{usePlot:()=>({plot:160,onBase(){}})},'./Chart':{Chart},
   };
@@ -148,7 +149,7 @@ function drawing(h:Awaited<ReturnType<typeof creditHistory>>,initial:Update,page
   };
   const settle=()=>{for(let i=0;i<5;i++){render();outer.finish();inner.finish();}return render();};
   return {render,settle,finishParent:()=>outer.finish(),finishChart:()=>inner.finish(),replace:(update:Update)=>{current=update;shown=history();},retire:()=>{presentation++;},
-    mutations:()=>({path:pathChanges,observation:observationChanges}),close:()=>{outer.scheduler.dispose();inner.scheduler.dispose();}};
+    mutations:()=>({path:pathChanges,observation:observationChanges}),close:()=>{outer.dispose();inner.dispose();}};
 }
 
 test('equal credit heartbeats count only after their new prepared observation reaches the chart',async t=>{
