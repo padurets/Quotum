@@ -20,8 +20,9 @@ function section(text:string,start:string,end?:string){
  return text.slice(from,to);
 }
 /** Mount the actual chart hooks and DOM painters; keep RAF and React commits independent. */
-export function activityAxisFixture(live:boolean){
- let selected:any=live?null:{from:9*M,to:11*M},dirty=true,index=0,renderCount=0,now=100*M,nextFrame=0,tree:any=null,flushCause='initial';
+export function activityAxisFixture(live:boolean,scenario:{range?:{from:number;to:number};periodMs?:number;now?:number;cells?:[number,number][];warmup?:boolean}={}){
+ let selected:any=live?null:scenario.range??{from:9*M,to:11*M},dirty=true,index=0,renderCount=0,now=scenario.now??100*M,nextFrame=0,tree:any=null,flushCause='initial';
+ const periodMs=scenario.periodMs??2*M,initialFrom=selected?.from??now-periodMs,initialTo=selected?.to??now;
  const states:any[]=[],effects:Function[]=[],tasks:Function[]=[],rafs=new Map<number,Function>(),commits:any[]=[],trace:any[]=[];
  const scheduler=new Preparations({now:()=>0,post:(run:Function)=>tasks.push(run)});
  const useRef=(current:any)=>states[index++]??(states[index-1]={current});
@@ -29,11 +30,11 @@ export function activityAxisFixture(live:boolean){
  const useLayoutEffect=(effect:Function,deps?:any[])=>{const at=index++,old=states[at];if(deps&&old?.deps&&deps.length===old.deps.length&&deps.every((v,i)=>Object.is(v,old.deps[i])))return;effects.push(()=>{old?.stop?.();states[at]={deps,stop:effect()};});};
  const useMemo=(read:Function,deps:any[])=>{const slot=useRef(null);if(!slot.current||deps.some((v,i)=>!Object.is(v,slot.current.deps[i])))slot.current={deps,value:read()};return slot.current.value;};
  const useSyncExternalStore=(subscribe:Function,get:Function)=>{useLayoutEffect(()=>subscribe(()=>{dirty=true;trace.push({event:'external-store',cause:flushCause});}),[subscribe]);return get();};
- const props:any={history:null,detailFrame:null,renderDetails:()=>({summary:null,legend:null}),activity:{barMs:M,cells:[],by:{source:[]}},origin:live?98*M:9*M,groups:[],paint:new Map([['s','red']]),registry:null,from:live?98*M:9*M,to:live?100*M:11*M,unknownTo:null,onSelect:()=>{},plot:300,onBase:()=>{},strip:null,prepared:true,authority:0,navigation:{context:'test',range:live?'live':`${selected.from}-${selected.to}`},by:'source',empty:null};
- const cells=live?[[97*M,12*H],[98*M,H],[99*M,H]]:[[9*M,H],[10*M,H],[11*M,H],[12*M,12*H]];
+ const props:any={history:null,detailFrame:null,renderDetails:()=>({summary:null,legend:null}),activity:{barMs:M,cells:[],by:{source:[]}},origin:initialFrom,groups:[],paint:new Map([['s','red']]),registry:null,from:initialFrom,to:initialTo,unknownTo:null,onSelect:()=>{},plot:300,onBase:()=>{},strip:null,prepared:true,authority:0,navigation:{context:'test',range:live?'live':`${selected.from}-${selected.to}`},by:'source',empty:null};
+ const cells=scenario.cells??(live?[[97*M,12*H],[98*M,H],[99*M,H]]:[[9*M,H],[10*M,H],[11*M,H],[12*M,12*H]]);
  props.groups=[{group:{key:'s',name:'S',cells},name:'S',color:'red'}];props.activity.by.source=[props.groups[0].group];props.currentActivity=props.activity;
  const frame=(run:Function)=>{rafs.set(++nextFrame,run);return nextFrame;};
- const pan=new Pan({now:()=>now,commit:(range:any)=>{commits.push(range);selected=range;props.from=range?.from??now-2*M;props.to=range?.to??now;props.navigation={context:'test',range:range?`${range.from}-${range.to}`:'live'};dirty=true;},requestFrame:frame,cancelFrame:id=>rafs.delete(id as number),setTimeout:()=>null,clearTimeout:()=>{}});
+ const pan=new Pan({now:()=>now,commit:(range:any)=>{commits.push(range);selected=range;props.from=range?.from??now-periodMs;props.to=range?.to??now;props.navigation={context:'test',range:range?`${range.from}-${range.to}`:'live'};dirty=true;},requestFrame:frame,cancelFrame:id=>rafs.delete(id as number),setTimeout:()=>null,clearTimeout:()=>{}});
  class Host {
   tag:string;props:any={};children:Host[]=[];parent:Host|null=null;style:any={};dataset:any={};attrs=new Map<string,string>();textContent='';isConnected=true;
   constructor(tag:string){this.tag=tag;}
@@ -48,10 +49,11 @@ export function activityAxisFixture(live:boolean){
   querySelectorAll(selector:string):Host[]{const parts=selector.split(' ');const all=this.children.flatMap(child=>[child,...child.querySelectorAll('*')]);if(selector==='*')return all;return all.filter(node=>{if(!node.matches(parts.at(-1)!))return false;let parent=node.parent;for(let i=parts.length-2;i>=0;i--){while(parent&&!parent.matches(parts[i]))parent=parent.parent;if(!parent)return false;parent=parent.parent;}return true;});}
   querySelector(selector:string){return this.querySelectorAll(selector)[0]??null;}
  }
- const hosts=new Map<string,Host>();
+ const hosts=new Map<string,Host>(),Fragment=Symbol('Fragment');
  const createElement=(type:any,props:any,...children:any[])=>({type,props:{...props,children:children.length===1?children[0]:children}});
  function commitHost(node:any,path:string,parent:Host|null):Host[]{
   if(node==null||node===false)return [];if(Array.isArray(node))return node.flatMap((n,i)=>commitHost(n,path+'.'+(n?.props?.key??i),parent));if(typeof node==='string'||typeof node==='number')return [];
+  if(node.type===Fragment)return commitHost(node.props.children,path+'.fragment',parent);
   if(typeof node.type==='function')return commitHost(node.type(node.props),path+'.fn',parent);
   const host=hosts.get(path)??new Host(node.type);hosts.set(path,host);host.parent=parent;const old=host.props,p=node.props;
   for(const [key,value]of Object.entries(p)){if(key==='children'||key==='ref'||key==='key'||key.startsWith('on'))continue;if(key==='style'){for(const [k,v]of Object.entries(value as object??{}))if(!Object.is(old.style?.[k],v))host.style[k]=v;continue;}if(Object.is(old[key],value))continue;if(value==null||value===false)host.removeAttribute(key==='className'?'class':key);else host.setAttribute(key==='className'?'class':key,String(value));if(key.startsWith('data-'))host.dataset[key.slice(5).replace(/-([a-z])/g,(_a,b)=>b.toUpperCase())]=String(value);}
@@ -60,7 +62,7 @@ export function activityAxisFixture(live:boolean){
   host.children=commitHost(p.children,path+'.children',host);host.props=p;if(p.ref){if(typeof p.ref==='function')p.ref(host);else p.ref.current=host;}return [host];
  }
  const hooks={useRef,useState,useLayoutEffect,useEffect:useLayoutEffect,useMemo,useSyncExternalStore};
- const context:any={...hooks,React:{createElement},memo:(fn:any)=>fn,useId:()=>useRef('id').current,pan,usePanning:()=>useSyncExternalStore(pan.onPhase,pan.active),useShifting:()=>useSyncExternalStore(pan.onPhase,pan.shifting),hubNow:()=>now,timeRange:()=>selected,periodOf:()=>({ms:2*M}),prefs:()=>({range:'2m'}),useHistoryBegins:()=>0,useSizing:()=>({width:'400'}),axisNavigation,navigationAt,navigationKey,tickKeyframes,tickVisible,tickPresentation,requestAnimationFrame:frame,cancelAnimationFrame:(id:number)=>rafs.delete(id),ResizeObserver:class{observe(){}disconnect(){}},document:{timeline:{currentTime:0},fonts:{addEventListener(){},removeEventListener(){}}},window:{},matchMedia:()=>({matches:true}),performance:{now:()=>0},useLocale:()=> 'en',useTip:()=>({tip:{current:null},style:{}}),activityScale,stacksHeight:()=>160,StackPaths,niceTicks,MINUTE:M,cellStart,plotBar,targetOf,seriesFocusStyle:()=>({}),activitySeriesKey:(_by:string,key:string)=>key,workHours,clock:()=>'',shortDay:()=>'',stamp:()=>'',t:(key:string)=>key,CSS:{escape:(s:string)=>s},getComputedStyle:()=>({transform:'none'}),slideOf:null};
+ const context:any={...hooks,React:{createElement,Fragment},memo:(fn:any)=>fn,useId:()=>useRef('id').current,pan,usePanning:()=>useSyncExternalStore(pan.onPhase,pan.active),useShifting:()=>useSyncExternalStore(pan.onPhase,pan.shifting),hubNow:()=>now,timeRange:()=>selected,periodOf:()=>({ms:periodMs}),prefs:()=>({range:'2m'}),useHistoryBegins:()=>0,useSizing:()=>({width:'400'}),axisNavigation,navigationAt,navigationKey,tickKeyframes,tickVisible,tickPresentation,requestAnimationFrame:frame,cancelAnimationFrame:(id:number)=>rafs.delete(id),ResizeObserver:class{observe(){}disconnect(){}},document:{timeline:{currentTime:0},fonts:{addEventListener(){},removeEventListener(){}}},window:{},matchMedia:()=>({matches:true}),performance:{now:()=>0},useLocale:()=> 'en',useTip:()=>({tip:{current:null},style:{}}),activityScale,stacksHeight:()=>160,StackPaths,niceTicks,MINUTE:M,cellStart,plotBar,targetOf,seriesFocusStyle:()=>({}),activitySeriesKey:(_by:string,key:string)=>key,workHours,clock:()=>'',shortDay:()=>'',stamp:()=>'',t:(key:string)=>key,CSS:{escape:(s:string)=>s},getComputedStyle:()=>({transform:'none'}),slideOf:null};
  const compile=(code:string)=>ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React,module:ts.ModuleKind.CommonJS}}).outputText;
  context.exports={};context.require=(name:string)=>name==='react'?hooks:{prepare:(owner:any,work:any,valid:any,ready:any)=>prepare(owner,work,valid,ready,scheduler),preparations:()=>scheduler};
  runInNewContext(compile(source('ui/components/prepared.ts')),context);Object.assign(context,context.exports);
@@ -85,8 +87,8 @@ export function activityAxisFixture(live:boolean){
   const lowBarY=272+(lowTop-272)*ratio;return {label,transform,ratio,labels:ys,landmarks,lowBarY,path,preparing:scheduler.size,tasks:tasks.length,panEnd:axis.dataset.panEnd,drawReady:axis.dataset.drawReady,renderCount,pendingRender:dirty,rafs:rafs.size,selected};
  }
  function runFrame(){flushCause='RAF';const callbacks=[...rafs.values()];rafs.clear();callbacks.forEach(run=>run());return snapshot('after-native-RAF-before-React');}
- function begin(){flushCause='begin';return pan.begin({source:Symbol('input'),input:'pointer',selected,length:2*M,now,historyStart:0,span:2*M,width:340})!;}
+ function begin(){flushCause='begin';const length=selected?selected.to-selected.from:periodMs;return pan.begin({source:Symbol('input'),input:'pointer',selected,length,now,historyStart:0,span:length,width:340})!;}
  settle();
- if(!live){const token=begin();flush();pan.move(token,170);runFrame();settle();flushCause='finish';pan.finish(token);flush();runFrame();settle();assert.equal(selected.from,10*M);}
+ if(!live&&scenario.warmup!==false){const token=begin();flush();pan.move(token,170);runFrame();settle();flushCause='finish';pan.finish(token);flush();runFrame();settle();assert.equal(selected.from,10*M);}
  return {pan,begin,flush,settle,runFrame,snapshot,props,commits,trace,stageModel:()=>{props.groups=props.groups.map((row:any)=>({...row,group:{...row.group,cells:[...row.group.cells]}}));dirty=true;},parentUpdate:()=>{dirty=true;},setCause:(name:string)=>flushCause=name,pendingFrames:()=>[...rafs.values()]};
 }

@@ -2369,7 +2369,9 @@ the historical projection. The SVG matrix and CSS offset compose to the same dis
 coordinates before and after adoption. Activity paints its value scale and clipped
 edges after the committed time pose in that same native frame, including cancellation;
 logical completion cannot pin a value scale from a pose that is still about to be
-restored. A new gesture samples that
+restored. A retained drawing without a strip keeps its prepared period length when
+returning to a different live period. The pending replacement's bounds cannot rescale
+its old bars. A new gesture samples that
 actual presentation, including an interrupted fold, separately from its URL origin.
 Partial plots continue to publish during the gesture. Its final drawing readiness
 also requires the complete history answer for the requested range, so a partial

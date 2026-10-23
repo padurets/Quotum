@@ -491,7 +491,7 @@ const Stacks = memo(function Stacks({
     if (!bandClip.current) return;
     const draft = pan.get();
     const visual = axis.visualGeometry();
-    const range = forced??(draft || axis.held ? {from: visual.from, to: visual.from + (draft?.length ?? strip?.length ?? to-from)} : {from, to});
+    const range = forced??(draft || axis.held ? {from: visual.from, to: visual.from + (draft?.length ?? strip?.length ?? basis.to-basis.from)} : {from, to});
     const target = strip ? targetOf(strip.length, draft?.now ?? to, 'edge', range) : null;
     let maximum=0;
     for(const [at,value] of heights)if(strip?at>=range.from&&at+barMs<=range.to:at<range.to&&at+barMs>range.from)maximum=Math.max(maximum,value);

@@ -69,7 +69,8 @@ export const ANALYTICS_SCENES=[
  * recovery are held by activityFrame, activityLiveFrame, activityProjectorMemory
  * and activityFeedback. Full monetary disclosure is held by unnamedMoneyDisclosure
  * and the late browser measurementDetails fixture. Native strip-to-exact value
- * poses are held by moneyPanDomain and activityAxisCancel.
+ * poses are held by moneyPanDomain and activityAxisCancel. A retained fixed-period
+ * drawing returning to a different live period is held by activityAxisRetention.
  */
 export const CHART_SERIES_SCENES=[
   {id:'board-cohort',expect:['board-summary','exact-union','distinct-sessions']},
