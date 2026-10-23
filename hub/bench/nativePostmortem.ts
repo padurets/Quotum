@@ -68,6 +68,36 @@ export function nativeProgress(text:string){
     detachCommandSeen:/^QGDB_BT_DONE$/m.test(text),detachAcknowledged:/^QGDB_DETACHED$/m.test(text)};
 }
 
+type NativeMainFrame = {index:number;status:'file-location';buildId:string;fileOffset:number}
+  | {index:number;status:'unknown';reason:string};
+type NativeMainLocations = {status:'observed'|'unavailable';tid:number;frames:NativeMainFrame[]};
+
+/** Module-relative file positions supplement names; they never qualify a symbol. */
+export function nativeMainLocations(text:string,pid:number,frameCount:number):NativeMainLocations {
+  const unavailable:NativeMainLocations={status:'unavailable',tid:pid,frames:[]};
+  const lines=text.split('\n'),records=lines.filter(line=>line.startsWith('QGDB_MAIN '));
+  const begin=lines.indexOf('QGDB_BT_DONE'),end=lines.indexOf('QGDB_DETACHED');
+  if(records.length!==1||begin<0||end<=begin||lines.indexOf(records[0])<=begin||lines.indexOf(records[0])>=end)return unavailable;
+  try{
+    const value=JSON.parse(records[0].slice('QGDB_MAIN '.length));
+    if(!value||value.tid!==pid||!Number.isSafeInteger(pid)||pid<=0||!Array.isArray(value.frames))return unavailable;
+    if(value.status==='unavailable'&&value.frames.length===0)return unavailable;
+    if(value.status!=='observed'||!Number.isInteger(frameCount)||frameCount<1||frameCount>16||value.frames.length!==frameCount)return unavailable;
+    const reasons=['anonymous-executable','non-executable','unmapped','identity-unavailable','ambiguous','deleted',
+      'offset-outside-file','frame-unavailable','mapping-changed','unsupported'];
+    const frames:NativeMainFrame[]=[];
+    for(const [index,frame] of value.frames.entries()){
+      if(!frame||frame.index!==index)return unavailable;
+      if(frame.status==='file-location'&&typeof frame.buildId==='string'&&/^(?:[a-f0-9]{2}){4,64}$/.test(frame.buildId)
+        &&Number.isSafeInteger(frame.fileOffset)&&frame.fileOffset>=0){
+        frames.push({index,status:'file-location',buildId:frame.buildId,fileOffset:frame.fileOffset});
+      }else if(frame.status==='unknown'&&reasons.includes(frame.reason))frames.push({index,status:'unknown',reason:frame.reason});
+      else return unavailable;
+    }
+    return {status:'observed',tid:pid,frames};
+  }catch{return unavailable;}
+}
+
 const current = async(pid:number,signal?:AbortSignal)=>{
   const [stat,status]=await Promise.all([
     readFile(`/proc/${pid}/stat`,{encoding:'utf8',signal}),
@@ -89,7 +119,8 @@ export async function nativePostmortem(scope:NativeScope,candidates:NativeCandid
     helperSample:null as {fromMs:number;toMs:number;processes:ProcessIdentity[];omitted:number}|null,
     exit:null as number|null,cleanup:{term:false,kill:false,killExit:null as number|null},
     partial:false,
-    threads:[] as ReturnType<typeof nativeFrames>['threads'],omitted:0};
+    threads:[] as ReturnType<typeof nativeFrames>['threads'],omitted:0,
+    mainLocations:{status:'unavailable',tid:0,frames:[]} as NativeMainLocations};
   try {
     if(process.platform!=='linux'||!scope.live()||!scope.resource)return report;
     signal.throwIfAborted();
@@ -110,6 +141,9 @@ export async function nativePostmortem(scope:NativeScope,candidates:NativeCandid
       ||!['R','S'].includes(now.state)||now.tracer!==0||now.uid!==process.getuid?.())return report;
     signal.throwIfAborted();
     report.pid=now.pid;report.birth=now.birth;
+    const locations=await readFile(new URL('./nativeMainLocations.py',import.meta.url),{encoding:'utf8',signal});
+    if(locations.split('EXPECTED_PID = 0').length!==2)throw new Error('native location source unavailable');
+    const mainCommand='python exec('+JSON.stringify(locations.replace('EXPECTED_PID = 0','EXPECTED_PID = '+now.pid))+')';
     const settings=['set auto-load off','set debuginfod enabled off','set print frame-arguments none',
       'set print entry-values no','set print frame-info location','set libthread-db-search-path $sdir',
       'echo QGDB_SETTINGS\\n','echo QGDB_ATTACH\\n'];
@@ -118,6 +152,7 @@ export async function nativePostmortem(scope:NativeScope,candidates:NativeCandid
       ...settings.flatMap(value=>['-iex',value]),'--pid',String(now.pid),
       '-ex','echo QGDB_ATTACHED\\n','-ex','echo QGDB_BT_BEGIN\\n',
       '-ex','thread apply all -c bt 16','-ex','echo QGDB_BT_DONE\\n',
+      '-ex',mainCommand,
       '-ex','detach','-ex','echo QGDB_DETACHED\\n'];
     const environment={...process.env,DEBUGINFOD_URLS:''};
     const child=process.getuid?.()===0?spawn('/bin/sh',args,{detached:true,stdio:['pipe','pipe','pipe'],env:environment})
@@ -226,6 +261,7 @@ export async function nativePostmortem(scope:NativeScope,candidates:NativeCandid
     const parsed=nativeFrames(transcript);
     parsed.partial ||= Buffer.concat(diagnostics).toString('utf8').trim().length>0;
     report.threads=parsed.threads;report.omitted=parsed.omitted;report.partial=parsed.partial;
+    report.mainLocations=nativeMainLocations(transcript,now.pid,parsed.threads.find(thread=>thread.tid===now.pid)?.frames.length??0);
     // A debugger frontend can exit before its native tracing backend detaches.
     await deadline(200,async pending=>{
       for(;;){

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {nativeFrames,nativePostmortem,nativeProgress} from '../nativePostmortem.js';
+import {nativeFrames,nativeMainLocations,nativePostmortem,nativeProgress} from '../nativePostmortem.js';
 import {safeEvidence} from '../evidence.js';
 
 test('native receipts retain thread identity and fixed wait classes without native symbol text',()=>{
@@ -60,4 +60,37 @@ test('missing, malformed, duplicate and capped native threads remain partial',()
   assert.equal(many.threads.length,32);assert.equal(many.omitted,1);assert.equal(many.partial,true);
   const frames=read('Thread 1 (LWP 100):\n'+Array.from({length:17},(_,i)=>`#${i} pthread_cond_wait ()\n`).join(''));
   assert.equal(frames.threads[0].frames.length,16);assert.equal(frames.omitted,1);assert.equal(frames.partial,true);
+});
+
+const locationReceipt=(value:unknown)=>'QGDB_BT_DONE\nQGDB_MAIN '+JSON.stringify(value)+'\nQGDB_DETACHED\n';
+const fileLocation={index:0,status:'file-location',buildId:'a123456789abcdef',fileOffset:123456};
+const mainLocations={status:'observed',tid:100,frames:[fileLocation]};
+
+test('main locations retain exact file offsets without claiming symbols or saving native text',()=>{
+  const parsed=nativeMainLocations(locationReceipt({...mainLocations,path:'/private-canary',frames:[{...fileLocation,pc:'0x1234',symbol:'private-canary'}]}),100,1);
+  assert.deepEqual(parsed,mainLocations);
+  assert.deepEqual(safeEvidence(parsed),mainLocations);
+  assert.doesNotMatch(JSON.stringify(parsed),/private-canary|0x1234|symbol|path/);
+  const unknown={status:'observed',tid:100,frames:[{index:0,status:'unknown',reason:'anonymous-executable'}]};
+  assert.deepEqual(nativeMainLocations(locationReceipt(unknown),100,1),unknown);
+});
+
+test('missing or ambiguous main locations never manufacture a native position',()=>{
+  const unavailable={status:'unavailable',tid:100,frames:[]};
+  const cases=[
+    '',locationReceipt(mainLocations).replace('QGDB_BT_DONE\n',''),
+    locationReceipt(mainLocations).replace('QGDB_DETACHED\n',''),
+    locationReceipt(mainLocations)+'QGDB_MAIN '+JSON.stringify(mainLocations)+'\n',
+    'QGDB_MAIN '+JSON.stringify(mainLocations)+'\nQGDB_BT_DONE\nQGDB_DETACHED\n',
+    'QGDB_BT_DONE\nQGDB_MAIN {\nQGDB_DETACHED\n',
+    ...[null,{...mainLocations,tid:101},{...mainLocations,status:'other'},
+      {...mainLocations,frames:[]},{...mainLocations,frames:Array(17).fill(fileLocation)},
+      ...[{...fileLocation,index:1},{...fileLocation,buildId:'abc'},{...fileLocation,buildId:'a'.repeat(130)},
+        {...fileLocation,buildId:'0x123456'},{...fileLocation,fileOffset:-1},{...fileLocation,fileOffset:1.5},
+        {...fileLocation,fileOffset:Number.MAX_SAFE_INTEGER+1},{...fileLocation,fileOffset:'123'},
+        {index:0,status:'unknown',reason:'/private-canary'}].map(frame=>({...mainLocations,frames:[frame]})),
+    ].map(locationReceipt),
+  ];
+  for(const text of cases)assert.deepEqual(nativeMainLocations(text,100,1),unavailable);
+  for(const count of [0,2,17,1.5])assert.deepEqual(nativeMainLocations(locationReceipt(mainLocations),100,count),unavailable);
 });

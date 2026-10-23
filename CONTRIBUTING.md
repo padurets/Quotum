@@ -64,8 +64,14 @@ After an owned command has failed and its page probe does not respond, Linux may
 capture one native renderer snapshot using an already installed system GDB. The renderer
 with the largest cumulative CPU counter is selected; this does not bind it to the
 failed page. PID, birth, group, session, UID and tracing state are checked before
-attach. Only bounded thread identities and fixed wait classes are retained, never
-raw debugger text. Capture and helper cleanup use the existing five-second
+attach. Bounded thread identities and fixed wait classes are retained, never
+raw debugger text. Up to sixteen main-thread frames additionally retain a validated
+file-backed module build ID and file offset, or a fixed reason why that position is unknown.
+These offsets are resume addresses relative to the file, not ELF virtual addresses or
+proof of a function name; they do not satisfy the control's named-frame check.
+Anonymous executable positions remain unknown; a file location alone does not identify
+whether code was generated. Map reads are capped at 1 MiB and 8192 entries.
+Capture and helper cleanup use the existing five-second
 collection and two-second release windows. An unconfirmed detach, helper exit or
 pipe closure fails cleanup. Missing GDB falls back to the existing page debugger;
 attached browsers and successful commands receive no native intervention.
