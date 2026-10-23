@@ -58,12 +58,18 @@ on:
         type: boolean
         default: false
 
+      compositor_guard_control:
+        description: Compare one pinned compositor guard on independent OLD1/NEW/OLD2 runners
+        required: false
+        type: boolean
+        default: false
+
 permissions:
   contents: read
 
 jobs:
   dev-tooling:
-    if: ${{ !inputs.startup_io_control && !inputs.diagnostic_ref }}
+    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -74,7 +80,7 @@ jobs:
       - name: Require a pinned source for diagnostic modes
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
-          HAS_DIAGNOSTIC_MODE: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control || inputs.history_scroll_control }}
+          HAS_DIAGNOSTIC_MODE: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control || inputs.history_scroll_control || inputs.compositor_guard_control }}
         run: node -e 'if(process.env.HAS_DIAGNOSTIC_MODE==="true")throw Error("Diagnostic modes require diagnostic_ref")'
       - run: make dev-test
         env:
@@ -88,7 +94,7 @@ jobs:
           if-no-files-found: warn
 
   hub:
-    if: ${{ !inputs.startup_io_control && !inputs.diagnostic_ref }}
+    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
     runs-on: ubuntu-latest
     # It takes about a minute; a test that hangs fails it instead of holding the runner.
     timeout-minutes: 15
@@ -112,7 +118,7 @@ jobs:
   # What an open dashboard costs, measured in Chrome on the built hub and page (hub/bench).
   # A release does not wait for it: the commit it tags already passed it.
   bench:
-    if: ${{ !inputs.startup_io_control && always() && !inputs.diagnostic_ref && !startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && always() && !inputs.diagnostic_ref && !startsWith(github.ref, 'refs/tags/') }}
     needs: [bench-history, bench-dashboard]
     runs-on: ubuntu-latest
     timeout-minutes: 1
@@ -128,7 +134,12 @@ jobs:
           fi
 
   bench-history:
-    if: ${{ !inputs.startup_io_control && !startsWith(github.ref, 'refs/tags/') && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && inputs.history_scroll_control)) }}
+    name: ${{ inputs.compositor_guard_control && format('bench-history ({0})', matrix.arm) || 'bench-history' }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.compositor_guard_control) || (!startsWith(github.ref, 'refs/tags/') && !inputs.startup_io_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && inputs.history_scroll_control))) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.compositor_guard_control && '[{"arm":"OLD1","feature":"disable"},{"arm":"NEW","feature":"enable"},{"arm":"OLD2","feature":"disable"}]' || '[{"arm":"ordinary","feature":""}]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -145,33 +156,95 @@ jobs:
           cache-dependency-path: hub/package-lock.json
       - run: npm ci
       - run: npm run build
+      - name: Require the isolated pinned compositor guard control
+        if: ${{ inputs.compositor_guard_control }}
+        env:
+          QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
+          EXPECTED_CLIENT: ${{ inputs.expected_client_sha256 }}
+          CONTROL_EVENT: ${{ github.event_name }}
+          CONTROL_ARM: ${{ matrix.arm }}
+          FEATURE_STATE: ${{ matrix.feature }}
+          CONFLICT: ${{ inputs.startup_io_control || inputs.history_scroll_control || inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control }}
+        run: |
+          node --import tsx --input-type=module <<'JS'
+          import assert from 'node:assert/strict';import {execFileSync} from 'node:child_process';
+          import {sourceIdentity} from './bench/idleCpuDiagnostic.ts';import {clientIdentity} from './bench/evidence.ts';
+          assert.equal(process.env.CONTROL_EVENT,'workflow_dispatch');assert.notEqual(process.env.CONFLICT,'true');
+          assert.match(process.env.QUOTUM_BENCH_SOURCE_SHA??'',/^[a-f0-9]{40}$/);assert.match(process.env.EXPECTED_CLIENT??'',/^[a-f0-9]{64}$/);
+          assert.match(process.env.CONTROL_ARM??'',/^(OLD1|NEW|OLD2)$/);
+          assert.equal(({OLD1:'disable',NEW:'enable',OLD2:'disable'})[process.env.CONTROL_ARM],process.env.FEATURE_STATE);
+          const source=sourceIdentity(),client=clientIdentity();
+          assert.equal(source.sourceHead,process.env.QUOTUM_BENCH_SOURCE_SHA);assert.equal(source.checkoutSha,source.sourceHead);
+          assert.equal(execFileSync('git',['status','--porcelain'],{encoding:'utf8',timeout:1000}).trim(),'');
+          assert.equal(client.status,'available');assert.equal(client.sha256,process.env.EXPECTED_CLIENT);
+          JS
+      - name: Install the identical pinned Google Chrome Beta package
+        if: ${{ inputs.compositor_guard_control }}
+        run: |
+          package="$RUNNER_TEMP/quotum-c3-google-chrome-beta.deb"
+          [[ ! -e "$package" && ! -L "$package" ]]
+          trap 'rm -f -- "$package"' EXIT
+          curl --fail --location --max-time 120 --max-filesize 536870912 --output "$package" https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-beta/google-chrome-beta_157.0.8103.15-1_amd64.deb
+          printf '%s  %s\n' b78ca10a22599e2a1024a39edd5a3235a06c26e2afad606c6c9ec123378c55cf "$package" | sha256sum --check --status
+          [[ "$(dpkg-deb -f "$package" Package)" == google-chrome-beta ]]
+          [[ "$(dpkg-deb -f "$package" Version)" == 157.0.8103.15-1 ]]
+          [[ "$(dpkg-deb -f "$package" Architecture)" == amd64 ]]
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends "$package"
+          [[ "$(dpkg-query -W -f='${Version}' google-chrome-beta)" == 157.0.8103.15-1 ]]
       - name: Require the isolated history scroll control
         if: ${{ inputs.history_scroll_control }}
         env:
           CONFLICTING_MODE: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control }}
         run: node -e 'if(process.env.CONFLICTING_MODE==="true")throw Error("Choose only the history scroll control")'
       - name: Prepare the diagnostic native debugger
-        if: ${{ inputs.history_scroll_control }}
+        if: ${{ inputs.history_scroll_control || inputs.compositor_guard_control }}
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gdb
       - name: Prepare matching renderer unwind tables
-        if: ${{ inputs.history_scroll_control }}
-        run: bash bench/prepareNativeUnwind.sh
-      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope history
+        if: ${{ inputs.history_scroll_control || inputs.compositor_guard_control }}
         env:
-          QUOTUM_BENCH_HISTORY_SCROLL_CONTROL: ${{ inputs.history_scroll_control && '1' || '' }}
-          QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.history_scroll_control && inputs.diagnostic_ref || '' }}
-          QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ inputs.history_scroll_control && inputs.expected_client_sha256 || '' }}
-          QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-bench-history
+          COMPOSITOR_GUARD: ${{ inputs.compositor_guard_control }}
+        run: |
+          if [[ "$COMPOSITOR_GUARD" == true ]]; then
+            bash bench/prepareNativeUnwind.sh google-chrome-beta google-chrome-beta
+          else
+            bash bench/prepareNativeUnwind.sh
+          fi
+      - name: Prepare the single-feature vendor launcher
+        if: ${{ inputs.compositor_guard_control }}
+        env:
+          CONTROL_ARM: ${{ matrix.arm }}
+          FEATURE_STATE: ${{ matrix.feature }}
+        run: |
+          case "$CONTROL_ARM:$FEATURE_STATE" in OLD1:disable|NEW:enable|OLD2:disable) ;; *) exit 1 ;; esac
+          control_dir="$RUNNER_TEMP/quotum-c3-guard-$CONTROL_ARM"
+          mkdir "$control_dir"
+          vendor="$(command -v google-chrome-beta)"
+          beta_image="$(dirname "$(readlink -f "$vendor")")/chrome"
+          [[ -x "$vendor" && -f "$beta_image" ]]
+          printf '#!/usr/bin/env bash\nexec %q --%s-features=DeferMainFrameBeforeCommitWithPendingTree "$@"\n' "$vendor" "$FEATURE_STATE" > "$control_dir/chrome"
+          chmod 700 "$control_dir/chrome"
+          sha256sum "$vendor" "$beta_image" "$control_dir/chrome" > "$control_dir/pins-first.txt"
+          cat "$control_dir/pins-first.txt"
+      - run: QUOTUM_CHROME="${QUOTUM_C3_CHROME:-$(command -v google-chrome)}" npm run bench -- --ci --scope history
+        env:
+          QUOTUM_C3_CHROME: ${{ inputs.compositor_guard_control && format('{0}/quotum-c3-guard-{1}/chrome', runner.temp, matrix.arm) || '' }}
+          QUOTUM_BENCH_HISTORY_SCROLL_CONTROL: ${{ (inputs.history_scroll_control || inputs.compositor_guard_control) && '1' || '' }}
+          QUOTUM_BENCH_SOURCE_SHA: ${{ (inputs.history_scroll_control || inputs.compositor_guard_control) && inputs.diagnostic_ref || '' }}
+          QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ (inputs.history_scroll_control || inputs.compositor_guard_control) && inputs.expected_client_sha256 || '' }}
+          QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ inputs.compositor_guard_control && format('{0}/quotum-bench-history-{1}', runner.temp, matrix.arm) || format('{0}/quotum-bench-history', runner.temp) }}
       - name: History benchmark evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: bench-history-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/quotum-bench-history
+          name: ${{ inputs.compositor_guard_control && format('bench-history-guard-{0}-{1}-{2}', matrix.arm, github.run_id, github.run_attempt) || format('bench-history-{0}-{1}-{2}', github.sha, github.run_id, github.run_attempt) }}
+          path: |
+            ${{ inputs.compositor_guard_control && format('{0}/quotum-bench-history-{1}', runner.temp, matrix.arm) || format('{0}/quotum-bench-history', runner.temp) }}
+            ${{ inputs.compositor_guard_control && format('{0}/quotum-c3-guard-{1}/pins-first.txt', runner.temp, matrix.arm) || '' }}
           if-no-files-found: warn
 
   bench-dashboard:
-    if: ${{ !inputs.startup_io_control && !startsWith(github.ref, 'refs/tags/') && !inputs.native_postmortem_control && !inputs.history_scroll_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
+    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && !startsWith(github.ref, 'refs/tags/') && !inputs.native_postmortem_control && !inputs.history_scroll_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
     runs-on: ubuntu-latest
     # Independent traffic checks run on another runner; every dashboard phase stays here.
     timeout-minutes: 20
@@ -235,7 +308,7 @@ jobs:
           if-no-files-found: warn
 
   idle-cpu-control:
-    if: ${{ !inputs.startup_io_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control }}
+    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -285,7 +358,7 @@ jobs:
           if-no-files-found: warn
 
   native-postmortem-control:
-    if: ${{ !inputs.startup_io_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && inputs.native_postmortem_control }}
+    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && inputs.native_postmortem_control }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -360,7 +433,7 @@ jobs:
           if-no-files-found: warn
 
   startup-io-control:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.startup_io_control }}
+    if: ${{ !inputs.compositor_guard_control && github.event_name == 'workflow_dispatch' && inputs.startup_io_control }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -569,7 +642,7 @@ jobs:
           if-no-files-found: warn
 
   managed-keys:
-    if: ${{ !inputs.startup_io_control && !inputs.diagnostic_ref }}
+    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
     strategy:
       fail-fast: false
       matrix:
@@ -593,7 +666,7 @@ jobs:
 
   # On every system the agent ships for: its process handling differs between them.
   agent:
-    if: ${{ !inputs.startup_io_control && !inputs.diagnostic_ref }}
+    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
     strategy:
       fail-fast: false
       matrix:
@@ -620,7 +693,7 @@ jobs:
   # The installers run on people's machines straight from a download: they must at least
   # be sound as scripts (shellcheck is on the runner; pwsh parses without running).
   installers:
-    if: ${{ !inputs.startup_io_control && !inputs.diagnostic_ref }}
+    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

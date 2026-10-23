@@ -712,6 +712,17 @@ observation without the demo prefix, not an exact reproduction or repair of an e
 startup failure, and does not replace the required benchmark jobs. Missing receipts
 remain unknown. Select it without any other diagnostic mode.
 
+The manual `compositor_guard_control` input compares the pending-tree compositor
+guard in pinned Google Chrome Beta 157.0.8103.15. Three independent runners execute
+the complete original history control, with the guard disabled in OLD1 and OLD2 and
+enabled in NEW. They use the same package and launcher, source and client pins,
+twenty-second startup and twenty-minute job limits. Matching native unwind tables
+must qualify before input. These parallel observations are not a sequential crossover.
+An ordinary CI run keeps its existing browser. This control is exclusive with every
+other diagnostic mode; successful runs without a matching original failure do not
+establish a repair. The upstream regression uses compositor hooks unavailable to a
+page, so this workload does not claim to reproduce those controlled scheduler states.
+
 ## Pull requests
 
 - **One task, one pull request.** A pull request takes one issue (or one fix) to `main`

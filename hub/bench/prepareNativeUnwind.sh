@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-chrome_version="$(dpkg-query -W -f='${Version}' google-chrome-stable)"
+(( $# <= 2 ))
+chrome_package="${1-google-chrome-stable}"
+chrome_command="${2-google-chrome}"
+case "$chrome_package:$chrome_command" in google-chrome-stable:google-chrome|google-chrome-beta:google-chrome-beta) ;; *) exit 1 ;; esac
+chrome_version="$(dpkg-query -W -f='${Version}' "$chrome_package")"
 chrome_version="${chrome_version%%-*}"
 [[ "$chrome_version" =~ ^[0-9]+(\.[0-9]+){3}$ ]]
-chrome_image="$(dirname "$(readlink -f "$(command -v google-chrome)")")/chrome"
+chrome_image="$(dirname "$(readlink -f "$(command -v "$chrome_command")")")/chrome"
 unwind_dir="$(mktemp -d "$RUNNER_TEMP/quotum-native-unwind-XXXXXX")"
 trap 'rm -f -- "$unwind_dir/archive.zip" "$unwind_dir/chrome.debug" "$unwind_dir/unwind.debug"; rmdir "$unwind_dir"' EXIT
 curl --fail --location --max-time 120 --max-filesize 536870912 --output "$unwind_dir/archive.zip" "https://edgedl.me.gvt1.com/chrome/linux/symbols/google-chrome-debug-info-linux64-$chrome_version.zip"
