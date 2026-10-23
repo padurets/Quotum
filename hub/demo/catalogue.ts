@@ -70,7 +70,8 @@ export const ANALYTICS_SCENES=[
  * and activityFeedback. Full monetary disclosure is held by unnamedMoneyDisclosure
  * and the late browser measurementDetails fixture. Native strip-to-exact value
  * poses are held by moneyPanDomain and activityAxisCancel. A retained fixed-period
- * drawing returning to a different live period is held by activityAxisRetention.
+ * drawing returning to a different live period, its dates and its known-data
+ * boundary are held by activityAxisRetention; chartPreparation checks shared ticks.
  */
 export const CHART_SERIES_SCENES=[
   {id:'board-cohort',expect:['board-summary','exact-union','distinct-sessions']},

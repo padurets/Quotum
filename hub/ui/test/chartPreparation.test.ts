@@ -6,6 +6,7 @@ import ts from 'typescript';
 import {plotPathPrepared} from '../lib/plotPath';
 import {clipPrepared} from '../lib/forecast';
 import {preparationFixture} from './preparationFixture';
+import {niceTicks} from '../lib/periods';
 
 test('actual quota generators prepare outside render and retain displayed paths through replacement and cancellation', () => {
   const cellMs = 60_000, end = 720 * cellMs;
@@ -60,4 +61,24 @@ test('actual quota generators prepare outside render and retain displayed paths 
   assert.ok(caption.show(),'a completed empty model still shows the supplied empty or all-muted state');
   context.incomingLines=lines;caption.prepared=render();
   assert.ok(!caption.show(),'reenabling series cannot keep the old all-muted caption while their paths prepare');
+});
+
+test('the shared chart keeps held time labels while ordinary navigation and strips use their own range',()=>{
+  const source=readFileSync(new URL('../components/Chart.tsx',import.meta.url),'utf8');
+  const start=source.indexOf('  const tickFrom = '),region=source.slice(start,source.indexOf('  useLayoutEffect(() => {axis.commitDrawing',start));
+  assert.ok(start>=0&&region.includes('niceTicks'));
+  const H=3_600_000,to=Date.UTC(2026,9,23,3,17,17),basis={from:to-72*H,to};
+  const context={niceTicks,strip:null as {from:number;to:number}|null,axis:{held:false},basis,from:basis.from,to:basis.to,width:400,span:72*H,read:null as unknown as ()=>number[]};
+  runInNewContext(ts.transpileModule(`globalThis.read=()=>{${region}\nreturn ticks;};`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+  const read=()=>[...context.read()],original=read();
+  assert.equal(original.length,3);
+  for(const period of [H,24*H,72*H]){
+    context.axis.held=true;context.from=to+1000-period;context.to=to+1000;
+    assert.deepEqual(read(),original,'the captured drawing owns pending timestamp labels');
+    context.axis.held=false;
+    assert.deepEqual(read(),niceTicks(context.from,context.to,4*period/context.span).ticks,'explicit navigation uses the requested projection');
+    context.axis.held=true;context.strip={from:to-96*H,to:to+24*H};
+    assert.deepEqual(read(),niceTicks(context.strip.from,context.strip.to,4*120*H/context.span).ticks,'a prepared strip still supplies its complete tick inventory');
+    context.strip=null;
+  }
 });

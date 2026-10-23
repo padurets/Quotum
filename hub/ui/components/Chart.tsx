@@ -508,7 +508,7 @@ export const Chart = memo(function Chart({
   const bx = (at: number) => axis.screenX(Math.min(now, at + cellMs / 2));
   const hover = incomingReady && prepared.ready && axis.hover !== null && (!strip || axis.hover > now || covered(strip.coverage, axis.hover, axis.hover + cellMs)) ? axis.hover : null;
   const pointedAt = axis.hoverAt ?? axis.rawHover ?? hover;
-  const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
+  const tickFrom = strip?.from ?? (axis.held ? basis.from : from), tickTo = strip?.to ?? (axis.held ? basis.to : to);
   const {ticks, daily} = niceTicks(tickFrom, tickTo, (width < 560 ? 4 : 7) * (tickTo - tickFrom) / span);
   useLayoutEffect(() => {axis.commitDrawing(basis, incomingReady && prepared.ready);});
 

@@ -449,13 +449,14 @@ const Stacks = memo(function Stacks({
   const heights=model?.heights??new Map<number,number>();
   const perMs = model?.perMs ?? (width - left - right) / Math.max(MINUTE, basis.to - basis.from), pathOrigin = model?.pathOrigin ?? basis.from;
   const hatchFrom = strip?.from ?? basis.from;
-  const knownFrom = strip?.knownFrom ?? model?.originUnknownTo ?? incomingUnknownTo;
+  // A confirmed absence of an unknown prefix belongs to the saved frame too.
+  const knownFrom = strip?.knownFrom ?? (model ? model.originUnknownTo : incomingUnknownTo);
   const unknownTo = knownFrom !== null && knownFrom > hatchFrom ? knownFrom : null;
   const span = Math.max(MINUTE, basis.to - basis.from);
   const x = (at: number) => left + (at - basis.from) / span * (width - left - right);
   const y = (value: number) => top + (1 - value / vertical.max) * (height - top - bottom);
   const hover = incomingReady && prepared.ready ? axis.hover : null;
-  const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
+  const tickFrom = strip?.from ?? (axis.held ? basis.from : from), tickTo = strip?.to ?? (axis.held ? basis.to : to);
   const {ticks, daily} = niceTicks(tickFrom, tickTo, (narrow ? 4 : 7) * (tickTo - tickFrom) / span);
 
   const innerClip = `${clip}-inner`;

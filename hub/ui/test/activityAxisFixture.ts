@@ -7,7 +7,7 @@ import {Preparations,prepare} from '../lib/prepare';
 import {navigationAt,navigationKey,axisNavigation} from '../lib/axisNavigation';
 import {activityScale} from '../lib/activity';
 import {StackPaths} from '../lib/stackPaths';
-import {workHours} from '../lib/format';
+import {clock,shortDay,workHours} from '../lib/format';
 import {cellStart,targetOf} from '../../server/domain/history';
 import {plotBar} from '../lib/historyPlot';
 import {tickKeyframes,tickVisible,tickPresentation} from '../lib/axisTicks';
@@ -20,7 +20,7 @@ function section(text:string,start:string,end?:string){
  return text.slice(from,to);
 }
 /** Mount the actual chart hooks and DOM painters; keep RAF and React commits independent. */
-export function activityAxisFixture(live:boolean,scenario:{range?:{from:number;to:number};periodMs?:number;now?:number;cells?:[number,number][];warmup?:boolean}={}){
+export function activityAxisFixture(live:boolean,scenario:{range?:{from:number;to:number};periodMs?:number;now?:number;cells?:[number,number][];landmarks?:number[];warmup?:boolean}={}){
  let selected:any=live?null:scenario.range??{from:9*M,to:11*M},dirty=true,index=0,renderCount=0,now=scenario.now??100*M,nextFrame=0,tree:any=null,flushCause='initial';
  const periodMs=scenario.periodMs??2*M,initialFrom=selected?.from??now-periodMs,initialTo=selected?.to??now;
  const states:any[]=[],effects:Function[]=[],tasks:Function[]=[],rafs=new Map<number,Function>(),commits:any[]=[],trace:any[]=[];
@@ -34,7 +34,8 @@ export function activityAxisFixture(live:boolean,scenario:{range?:{from:number;t
  const cells=scenario.cells??(live?[[97*M,12*H],[98*M,H],[99*M,H]]:[[9*M,H],[10*M,H],[11*M,H],[12*M,12*H]]);
  props.groups=[{group:{key:'s',name:'S',cells},name:'S',color:'red'}];props.activity.by.source=[props.groups[0].group];props.currentActivity=props.activity;
  const frame=(run:Function)=>{rafs.set(++nextFrame,run);return nextFrame;};
- const pan=new Pan({now:()=>now,commit:(range:any)=>{commits.push(range);selected=range;props.from=range?.from??now-periodMs;props.to=range?.to??now;props.navigation={context:'test',range:range?`${range.from}-${range.to}`:'live'};dirty=true;},requestFrame:frame,cancelFrame:id=>rafs.delete(id as number),setTimeout:()=>null,clearTimeout:()=>{}});
+ const choose=(range:any)=>{selected=range;props.from=range?.from??now-periodMs;props.to=range?.to??now;props.navigation={context:'test',range:range?`${range.from}-${range.to}`:'live'};dirty=true;};
+ const pan=new Pan({now:()=>now,commit:(range:any)=>{commits.push(range);choose(range);},requestFrame:frame,cancelFrame:id=>rafs.delete(id as number),setTimeout:()=>null,clearTimeout:()=>{}});
  class Host {
   tag:string;props:any={};children:Host[]=[];parent:Host|null=null;style:any={};dataset:any={};attrs=new Map<string,string>();textContent='';isConnected=true;
   constructor(tag:string){this.tag=tag;}
@@ -62,7 +63,7 @@ export function activityAxisFixture(live:boolean,scenario:{range?:{from:number;t
   host.children=commitHost(p.children,path+'.children',host);host.props=p;if(p.ref){if(typeof p.ref==='function')p.ref(host);else p.ref.current=host;}return [host];
  }
  const hooks={useRef,useState,useLayoutEffect,useEffect:useLayoutEffect,useMemo,useSyncExternalStore};
- const context:any={...hooks,React:{createElement,Fragment},memo:(fn:any)=>fn,useId:()=>useRef('id').current,pan,usePanning:()=>useSyncExternalStore(pan.onPhase,pan.active),useShifting:()=>useSyncExternalStore(pan.onPhase,pan.shifting),hubNow:()=>now,timeRange:()=>selected,periodOf:()=>({ms:periodMs}),prefs:()=>({range:'2m'}),useHistoryBegins:()=>0,useSizing:()=>({width:'400'}),axisNavigation,navigationAt,navigationKey,tickKeyframes,tickVisible,tickPresentation,requestAnimationFrame:frame,cancelAnimationFrame:(id:number)=>rafs.delete(id),ResizeObserver:class{observe(){}disconnect(){}},document:{timeline:{currentTime:0},fonts:{addEventListener(){},removeEventListener(){}}},window:{},matchMedia:()=>({matches:true}),performance:{now:()=>0},useLocale:()=> 'en',useTip:()=>({tip:{current:null},style:{}}),activityScale,stacksHeight:()=>160,StackPaths,niceTicks,MINUTE:M,cellStart,plotBar,targetOf,seriesFocusStyle:()=>({}),activitySeriesKey:(_by:string,key:string)=>key,workHours,clock:()=>'',shortDay:()=>'',stamp:()=>'',t:(key:string)=>key,CSS:{escape:(s:string)=>s},getComputedStyle:()=>({transform:'none'}),slideOf:null};
+ const context:any={...hooks,React:{createElement,Fragment},memo:(fn:any)=>fn,useId:()=>useRef('id').current,pan,usePanning:()=>useSyncExternalStore(pan.onPhase,pan.active),useShifting:()=>useSyncExternalStore(pan.onPhase,pan.shifting),hubNow:()=>now,timeRange:()=>selected,periodOf:()=>({ms:periodMs}),prefs:()=>({range:'2m'}),useHistoryBegins:()=>0,useSizing:()=>({width:'400'}),axisNavigation,navigationAt,navigationKey,tickKeyframes,tickVisible,tickPresentation,requestAnimationFrame:frame,cancelAnimationFrame:(id:number)=>rafs.delete(id),ResizeObserver:class{observe(){}disconnect(){}},document:{timeline:{currentTime:0},fonts:{addEventListener(){},removeEventListener(){}}},window:{},matchMedia:()=>({matches:true}),performance:{now:()=>0},useLocale:()=> 'en',useTip:()=>({tip:{current:null},style:{}}),activityScale,stacksHeight:()=>160,StackPaths,niceTicks,MINUTE:M,cellStart,plotBar,targetOf,seriesFocusStyle:()=>({}),activitySeriesKey:(_by:string,key:string)=>key,workHours,clock,shortDay,stamp:()=>'',t:(key:string)=>key,CSS:{escape:(s:string)=>s},getComputedStyle:()=>({transform:'none'}),slideOf:null};
  const compile=(code:string)=>ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React,module:ts.ModuleKind.CommonJS}}).outputText;
  context.exports={};context.require=(name:string)=>name==='react'?hooks:{prepare:(owner:any,work:any,valid:any,ready:any)=>prepare(owner,work,valid,ready,scheduler),preparations:()=>scheduler};
  runInNewContext(compile(source('ui/components/prepared.ts')),context);Object.assign(context,context.exports);
@@ -82,13 +83,15 @@ export function activityAxisFixture(live:boolean,scenario:{range?:{from:number;t
   const axis=required<Host>(tree.querySelector('svg'),'chart SVG'),main=required<Host>(tree.querySelector('[data-plot-main]'),'main movement owner'),slides=required(main.querySelector('.slides'),'main slides');
   const matrix=slides.style.transform??'',a=Number(matrix.match(/scaleX\(([-.\d]+)\)/)?.[1]??1),b=Number(matrix.match(/translateX\(([-.\d]+)px\)/)?.[1]??0),offset=Number(main.style.transform?.match(/translateX\(([-.\d]+)px\)/)?.[1]??0);
   const drawFrom=Number(axis.dataset.drawFrom),drawTo=Number(axis.dataset.drawTo);assert.ok(Number.isFinite(drawFrom)&&Number.isFinite(drawTo),'the actual axis committed its drawing bounds');
-  const landmarks=[live?98*M:10*M,live?99*M:11*M].map(at=>a*(48+(at-drawFrom)/Math.max(M,drawTo-drawFrom)*340)+b+offset);
+  const landmarks=(scenario.landmarks??[live?98*M:10*M,live?99*M:11*M]).map(at=>a*(48+(at-drawFrom)/Math.max(M,drawTo-drawFrom)*340)+b+offset);
+  const timeTicks=required<Host>(tree.querySelector('.time-ticks'),'time labels').children.map(node=>({at:Number(node.props.key),text:node.textContent,position:Number(node.getAttribute('x'))+Number(node.style.transform?.match(/translateX\(([-.\d]+)px\)/)?.[1]??0)+offset,visible:node.style.visibility!=='hidden'}));
+  const unknown=tree.querySelector('.activity-unknown rect'),hatch=unknown?{x:Number(unknown.getAttribute('x')),width:Number(unknown.getAttribute('width'))}:null;
   const lowTop=Number([...path.matchAll(/M[^,]*,([-.\d]+)/g)][live?1:0]?.[1]??NaN);assert.ok(Number.isFinite(lowTop),'the measured stack has a real path landmark');
-  const lowBarY=272+(lowTop-272)*ratio;return {label,transform,ratio,labels:ys,landmarks,lowBarY,path,preparing:scheduler.size,tasks:tasks.length,panEnd:axis.dataset.panEnd,drawReady:axis.dataset.drawReady,renderCount,pendingRender:dirty,rafs:rafs.size,selected};
+  const lowBarY=272+(lowTop-272)*ratio;return {label,transform,ratio,labels:ys,landmarks,timeTicks,hatch,lowBarY,path,preparing:scheduler.size,tasks:tasks.length,panEnd:axis.dataset.panEnd,drawReady:axis.dataset.drawReady,renderCount,pendingRender:dirty,rafs:rafs.size,selected};
  }
  function runFrame(){flushCause='RAF';const callbacks=[...rafs.values()];rafs.clear();callbacks.forEach(run=>run());return snapshot('after-native-RAF-before-React');}
  function begin(){flushCause='begin';const length=selected?selected.to-selected.from:periodMs;return pan.begin({source:Symbol('input'),input:'pointer',selected,length,now,historyStart:0,span:length,width:340})!;}
  settle();
  if(!live&&scenario.warmup!==false){const token=begin();flush();pan.move(token,170);runFrame();settle();flushCause='finish';pan.finish(token);flush();runFrame();settle();assert.equal(selected.from,10*M);}
- return {pan,begin,flush,settle,runFrame,snapshot,props,commits,trace,stageModel:()=>{props.groups=props.groups.map((row:any)=>({...row,group:{...row.group,cells:[...row.group.cells]}}));dirty=true;},parentUpdate:()=>{dirty=true;},setCause:(name:string)=>flushCause=name,pendingFrames:()=>[...rafs.values()]};
+ return {pan,choose,begin,flush,settle,runFrame,snapshot,props,commits,trace,stageModel:()=>{props.groups=props.groups.map((row:any)=>({...row,group:{...row.group,cells:[...row.group.cells]}}));dirty=true;},parentUpdate:()=>{dirty=true;},setCause:(name:string)=>flushCause=name,pendingFrames:()=>[...rafs.values()]};
 }
