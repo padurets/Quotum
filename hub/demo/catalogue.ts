@@ -770,7 +770,7 @@ const all: DemoSet = {
         {stale: false},
         {agents: 10, drawn: true},
         {window: 'weekly', name: 'Weekly', level: 'ok', note: null, reset: 'resetsIn', started: true},
-        {window: 'weekly:fable', name: 'Fable · weekly', note: 'behind'},
+        {window: 'weekly:fable', name: 'Fable\nweekly', note: 'behind'},
         {window: 'session', name: '5 hours', note: null},
         // Ten agents round the clock spend its week along the plan's first days, faster than it lasts: it runs out days before the reset.
         {forecast: 'weekly', outlook: 'runsOut', tone: 'v-crit', unit: 'd'},
@@ -806,9 +806,9 @@ const all: DemoSet = {
       on: {ana: {plan: 'off'}, grid: {plan: 'off', place: {x: 3, y: 2, w: 3, h: 8}}},
       expect: [
         {title: 'Antigravity'},
-        {window: 'gemini:session', name: 'Gemini Pro · 5 hours'},
-        {window: 'claude:weekly', name: 'Claude · weekly', note: null, reset: 'resetUnknown'},
-        {window: 'flash:window-1440', name: 'Flash · 1d'},
+        {window: 'gemini:session', name: 'Gemini Pro\n5 hours'},
+        {window: 'claude:weekly', name: 'Claude\nweekly', note: null, reset: 'resetUnknown'},
+        {window: 'flash:window-1440', name: 'Flash\n1d'},
         {work: 'gemini:weekly', range: {from: -13 * DAY, to: -11 * DAY}, none: 'unknown', from: 0, to: 0},
         {window: 'credits', name: 'Credits', reset: 'resetUnknown'},
         {forecast: 'gemini:weekly', outlook: 'pace'},
