@@ -10,13 +10,13 @@ const code=ts.transpileModule(fn.getText(file)+'\nglobalThis.execute=historyScro
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},
 }).outputText;
 
-async function replay(fault?:'throw'|'invalidated'|'budget'){
-  const calls:number[]=[],saved=new Map<string,unknown>(),original=new Error('original CDP timeout');
+async function replay(fault?:'throw'|'invalidated'|'budget'|'missing'){
+  const calls:boolean[]=[],saved=new Map<string,unknown>(),original=new Error('original CDP timeout');
   const context={exports:{},execute:null as unknown as (...args:unknown[])=>Promise<{reports:unknown[];problems:string[]}>,
-    browserHistoryTraffic:async(_browser:unknown,_proxy:unknown,_cookie:string,_board:string,evidence:{save(name:string,value:unknown):void},iteration:number)=>{
-      calls.push(iteration);evidence.save('traffic-stage',{iteration});
-      if(iteration===2&&fault==='throw')throw original;
-      return{reports:[iteration],invalidated:iteration===2&&fault==='invalidated'?[{}]:[],problems:iteration===2&&fault==='budget'?['over budget']:[]};
+    browserHistoryTraffic:async(_browser:unknown,_proxy:unknown,_cookie:string,_board:string,evidence:{save(name:string,value:unknown):void},firstCohort:boolean)=>{
+      calls.push(firstCohort);evidence.save('traffic-stage',{firstCohort});
+      if(fault==='throw')throw original;
+      return{reports:fault==='missing'?[]:[{name:'browser/1d/history/0ms/0.5/take1/all-accounting'}],invalidated:fault==='invalidated'?[{}]:[],problems:fault==='budget'?['over budget']:[]};
     }};
   runInNewContext(code,context);
   let result:Awaited<ReturnType<typeof context.execute>>|undefined,error:unknown;
@@ -24,21 +24,20 @@ async function replay(fault?:'throw'|'invalidated'|'budget'){
   return{calls,saved,result,error,original};
 }
 
-test('the finite scroll control preserves all 24 iteration receipts without claiming a benchmark pass',async()=>{
-  const run=await replay();assert.equal(run.error,undefined);assert.equal(run.calls.length,24);assert.equal(run.result?.reports.length,24);
-  for(let i=1;i<=24;i++){
-    assert.equal(run.calls[i-1],i);assert.ok(run.saved.has(`scroll-${i}-traffic-stage`));assert.ok(run.saved.has(`scroll-${i}-result`));
-  }
+test('each scroll control process completes exactly its original first cohort without claiming a benchmark pass',async()=>{
+  const run=await replay();assert.equal(run.error,undefined);assert.deepEqual(run.calls,[true]);assert.equal(run.result?.reports.length,1);
+  assert.ok(run.saved.has('traffic-stage'));assert.ok(run.saved.has('scroll-result'));
   const terminal=run.saved.get('scroll-control') as {mode:string;completed:number;total:number};
-  assert.equal(terminal.mode,'diagnostic');assert.equal(terminal.completed,24);assert.equal(terminal.total,24);
+  assert.equal(terminal.mode,'diagnostic');assert.equal(terminal.completed,1);assert.equal(terminal.total,1);
 });
 
-test('the first failed or invalidated cohort stops the control with no retry or completed receipt',async()=>{
-  for(const fault of ['throw','invalidated','budget'] as const){
-    const run=await replay(fault);assert.equal(run.calls.length,2);assert.ok(!run.saved.has('scroll-3-traffic-stage'));
-    assert.equal((run.saved.get('scroll-control') as {completed:number}).completed,1);
+test('a failed, invalidated or missing first cohort cannot retry or receive a completed receipt',async()=>{
+  for(const fault of ['throw','invalidated','budget','missing'] as const){
+    const run=await replay(fault);assert.deepEqual(run.calls,[true]);
+    assert.equal((run.saved.get('scroll-control') as {completed:number}).completed,0);
     if(fault==='throw')assert.equal(run.error,run.original);
     else if(fault==='invalidated')assert.match(String(run.error),/invalidated; no retry/);
+    else if(fault==='missing')assert.match(String(run.error),/cohort missing/);
     else{assert.equal(run.error,undefined);assert.equal(run.result?.problems[0],'over budget');}
   }
 });

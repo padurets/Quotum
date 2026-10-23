@@ -47,7 +47,7 @@ on:
         type: boolean
         default: false
       history_scroll_control:
-        description: Observe up to 24 first history-scroll cohorts, stopping at the first failure
+        description: Observe the first history-scroll cohort in three independent browsers, stopping at the first failure
         required: false
         type: boolean
         default: false
@@ -147,7 +147,17 @@ jobs:
       - name: Prepare the diagnostic native debugger
         if: ${{ inputs.history_scroll_control }}
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gdb
-      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope history
+      - name: Run history traffic
+        run: |
+          export QUOTUM_CHROME="$(command -v google-chrome)"
+          if [ "$QUOTUM_BENCH_HISTORY_SCROLL_CONTROL" != 1 ]; then
+            npm run bench -- --ci --scope history
+            exit
+          fi
+          for instance in 1 2 3; do
+            printf 'Independent history control %s/3\n' "$instance"
+            QUOTUM_BENCH_DIAGNOSTICS_DIR="$QUOTUM_BENCH_DIAGNOSTICS_DIR/instance-$instance" npm run bench -- --ci --scope history || exit "$?"
+          done
         env:
           QUOTUM_BENCH_HISTORY_SCROLL_CONTROL: ${{ inputs.history_scroll_control && '1' || '' }}
           QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.history_scroll_control && inputs.diagnostic_ref || '' }}
