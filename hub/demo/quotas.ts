@@ -50,6 +50,7 @@ export async function seedQuotas(store:Store,directory:Directory,stand:Stand) {
     store.db.prepare('DELETE FROM state WHERE source_id=?').run(source);
     store.db.prepare('DELETE FROM readings WHERE source_id=?').run(source);
     store.db.prepare('DELETE FROM meter_spans WHERE source_id=?').run(source);
+    store.db.prepare('DELETE FROM quota_anchors WHERE source_id=?').run(source);
     for(let at=now-3*3600000;at<now;at+=3600000) {
       const result=mapZai(decodeZai(JSON.stringify(quotaFixture(1,now))),at);
       result.measurement!.staleAfterMs=3*3600000;
