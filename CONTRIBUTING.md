@@ -47,6 +47,9 @@ dashboard phase in the same order as `--scope dashboard`. CPU diagnostics (`trac
 `profile`, `native-trace`, `native-profile`) support `all` or `dashboard`; caption control
 requires `dashboard`. Other optional diagnostics require `all`. Separate jobs retain
 normal warmup, chart-grid alignment and budgets.
+Manual CI without diagnostic inputs runs the same ordinary checks. A diagnostic
+mode still requires an immutable source SHA and the expected compiled-client hash;
+missing identity cannot turn a diagnostic request into a successful ordinary run.
 DevTools commands keep their thirty-second response deadline. An explicit renderer
 crash or target-detach event fails pending commands immediately, even if the socket
 stays open, and retains the original failure before cleanup. It does not retry work.

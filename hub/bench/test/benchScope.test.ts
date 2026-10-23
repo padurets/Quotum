@@ -318,6 +318,12 @@ test('manual native tracing uses only the existing dashboard job and rejects mis
     for(const job of ['bench-dashboard','bench-history','idle-cpu-control','bench'])assert.equal(selected(job,inputs),false);
   }
   assert.equal(selected('native-postmortem-control',{},'pull_request'),false);
+  assert.equal(selected('bench-history',{}),true);
+  assert.equal(selected('bench',{}),true);
+  assert.equal(selected('dev-tooling',{}),true);
+  const ordinaryGuard=job('dev-tooling').match(/run: node -e '([^']+)'/)![1];
+  assert.doesNotThrow(()=>runInNewContext(ordinaryGuard,{process:{env:{HAS_DIAGNOSTIC_MODE:'false'}}}));
+  assert.throws(()=>runInNewContext(ordinaryGuard,{process:{env:{HAS_DIAGNOSTIC_MODE:'true'}}}),/require diagnostic_ref/);
   const nativeGuard=job('native-postmortem-control').match(/run: node -e '([^']+)'/)![1];
   assert.doesNotThrow(()=>runInNewContext(nativeGuard,{process:{env:{}}}));
   for(const key of ['TRACE','PROFILE','NATIVE_TRACE','NATIVE_PROFILE','CAPTION'])assert.throws(()=>runInNewContext(nativeGuard,{process:{env:{[key]:'true'}}}),/Choose only/);

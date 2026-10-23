@@ -9,12 +9,12 @@ on:
   workflow_dispatch:
     inputs:
       diagnostic_ref:
-        description: Full public commit SHA for the independent benchmark control
-        required: true
+        description: Full public commit SHA for diagnostic controls; leave empty for ordinary CI
+        required: false
         type: string
       expected_client_sha256:
-        description: SHA256 of the previously received compiled client
-        required: true
+        description: Previously received compiled-client SHA256, required for diagnostic controls
+        required: false
         type: string
       trace_only:
         description: Observe the original idle window without CPU sampling or alignment
@@ -60,6 +60,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      - name: Require a pinned source for diagnostic modes
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          HAS_DIAGNOSTIC_MODE: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control }}
+        run: node -e 'if(process.env.HAS_DIAGNOSTIC_MODE==="true")throw Error("Diagnostic modes require diagnostic_ref")'
       - run: make dev-test
         env:
           QUOTUM_TEST_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-dev-diagnostics
