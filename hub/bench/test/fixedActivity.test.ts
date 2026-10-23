@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {activityOracle,assertActivityOverlap,assertActivityOutside,assertActivityCancellation,FIXED_ACTIVITY_BUDGET,fixedActivityScript} from '../fixedActivity';
+import {activityOracle,assertActivityOverlap,assertActivityOutside,assertActivityCancellation,FIXED_ACTIVITY_BUDGET,fixedActivityScript,retainInterruptedActivity} from '../fixedActivity';
 import {packWork,type WorkTrace} from '../../server/domain/periodWork';
 import type {PeriodRequest} from '../../server/domain/periodRead';
 import {fixture,drawings,flush,NOW} from '../../ui/test/periodRuntimeFixture';
@@ -9,6 +9,35 @@ import {publishDataFilters} from '../../ui/lib/filterSelection';
 import {HistoryPool} from '../../ui/lib/historyPool';
 import {TILE_CELLS,MAX_READ_TILES} from '../../server/domain/history';
 import vm from 'node:vm';
+
+for(const mode of ['live','disposed','save-failed','no-evidence'])test('fixed Activity interrupt snapshot: '+mode,t=>{
+  const order:string[]=[],receipts:{name:string;value:unknown}[]=[];
+  const started=performance.now(),state={context:'fixed-activity/30d/cancelled A to B to A',socketState:1,
+    lastReply:{id:7,method:'Runtime.evaluate',at:started-1},lastEvent:null,terminal:null,failure:null,
+    pending:[{id:8,method:'Runtime.evaluate',started,deadline:started+30_000}]};
+  let snapshots=0;
+  const cdp={snapshot:()=>{snapshots++;return structuredClone(state);}};
+  const original=()=>{order.push('owner-abort');state.pending=[];};
+  process.on('SIGTERM',original);t.after(()=>process.off('SIGTERM',original));
+  const signals=['SIGINT','SIGTERM','SIGHUP'] as const,baseline=signals.map(signal=>process.listenerCount(signal));
+  const save=(name:string,value:unknown)=>{order.push('save');if(mode==='save-failed')throw Error('stand-in write failure');receipts.push({name,value});};
+  const dispose=retainInterruptedActivity(cdp,30,mode==='no-evidence'?undefined:{save});t.after(dispose);
+  if(mode==='disposed')dispose();
+  for(const [i,signal] of signals.entries())assert.equal(process.listenerCount(signal),baseline[i]+(mode==='disposed'||mode==='no-evidence'?0:1));
+  process.emit('SIGTERM');
+  assert.deepEqual(state.pending,[]);
+  assert.deepEqual(order,mode==='disposed'||mode==='no-evidence'?['owner-abort']:['save','owner-abort']);
+  assert.equal(snapshots,mode==='disposed'||mode==='no-evidence'?0:1);
+  if(mode==='live'){
+    assert.equal(receipts[0].name,'fixed-activity-command');
+    const saved=receipts[0].value as ReturnType<typeof cdp.snapshot>&{days:number;capturedAtMs:number;wallAt:number};
+    assert.equal(saved.days,30);assert.equal(saved.context,state.context);assert.equal(saved.pending[0].id,8);assert.equal(saved.lastReply.id,7);
+    assert.equal(saved.pending[0].deadline-saved.pending[0].started,30_000);
+    assert.ok(saved.capturedAtMs>=started&&saved.wallAt>0);
+    process.emit('SIGTERM');assert.equal(receipts.length,1);assert.equal(snapshots,1);
+  }else assert.equal(receipts.length,0);
+  dispose();for(const [i,signal] of signals.entries())assert.equal(process.listenerCount(signal),baseline[i]);
+});
 
 for(const period of ['24h','30d'])test(`the complete fixed Activity script installs before the page loads: ${period}`,async()=>{
   class Storage {values=new Map<string,string>();setItem(key:string,value:string){this.values.set(key,value);}getItem(key:string){return this.values.get(key)??null;}}

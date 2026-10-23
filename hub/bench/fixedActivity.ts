@@ -121,6 +121,19 @@ function traffic(cdp:Cdp){
   return {bodies,active,pending,errors};
 }
 
+/** Save pending metadata before the existing process signal handler aborts its owner. */
+export function retainInterruptedActivity(cdp:Pick<Cdp,'snapshot'>,days:number,evidence?:{save(name:string,value:unknown):void}){
+  const signals=['SIGINT','SIGTERM','SIGHUP'] as const;
+  let captured=false;
+  const capture=()=>{
+    if(captured)return;captured=true;
+    try{evidence?.save('fixed-activity-command',{days,capturedAtMs:performance.now(),wallAt:Date.now(),...cdp.snapshot()});}
+    catch{/* Preserve the existing cancellation handler. */}
+  };
+  if(evidence)for(const signal of signals)process.prependListener(signal,capture);
+  return()=>{for(const signal of signals)process.off(signal,capture);};
+}
+
 /** Actual mounted widget and shared work filters, including late work and retired responses. */
 export async function fixedActivity(browser:Browser,stand:Stand){
   const owner=stand.people.get(people(stand.set)[0].id)!,card=cards(stand.set).find(card=>card.id==='antigravity')!,reports:Record<string,unknown>[]=[];
@@ -130,6 +143,8 @@ export async function fixedActivity(browser:Browser,stand:Stand){
   for(const days of [1,30]){
     const actor=await ObservedWork.open(owner,card),tab=await openTab(browser),{cdp}=tab;
     const bodies=traffic(cdp),selection={mode:'range' as const,from:actor.floorAt+1000-days*DAY+123,to:actor.floorAt+1000};
+    const releaseInterrupted=retainInterruptedActivity(cdp,days,browser.owner?.evidence);
+    cdp.at(`fixed-activity/${days}d/setup`);
     try{
       await pause(Math.max(0,selection.to+10-Date.now()));
       await cdp.send('Network.enable');await cdp.send('Page.enable');await cdp.send('Performance.enable');
@@ -229,6 +244,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         return current;
       };
       const phase=async(name:string,run:()=>Promise<void>,expected:number|null)=>{
+        cdp.at(`fixed-activity/${days}d/${name}`);
         const start=bodies.bodies.length;await cdp.evaluate('window.__quotumFixedActivity.reset()');const at=Date.now();
         const deadline=at+30_000;
         referenceReceipt={requests:0,requestBytes:0,decodedBytes:0,encodedBytes:0};
@@ -327,7 +343,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       await phase('outside range',async()=>{await actor.through(selection.to+100);await waitFor(`window.__quotumFixedActivity.heardSince(${selection.to})`);},0);
       const receipt=await cdp.evaluate<{status:string;members:{kind:string}[];[key:string]:unknown}>(`(()=>{__quotumHistoryPoolReceipt.mark(2,3);return __quotumHistoryPoolReceipt.read();})()`);
       assert.equal(receipt.status,'complete',JSON.stringify(Object.fromEntries(['status','attached','registrationOrderQualified','omitted','errors','snapshotOmitted','summaryOmitted','nearOmitted','sendingUnknown','lastCheckpoint'].map(key=>[key,receipt[key]]))));assert.equal(receipt.members.length,4);assert.ok(!receipt.members.some(member=>member.kind==='activity'));
-    }finally{await tab.close();await actor.close();}
+    }finally{releaseInterrupted();await tab.close();await actor.close();}
   }
   return {reports,problems:[] as string[]};
 }

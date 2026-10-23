@@ -95,6 +95,9 @@ command failure. Package installation can affect the OS file cache; this does no
 qualify an untouched runner's cold debugger startup. Ordinary jobs do not install it.
 Page-evaluation exceptions retain their original command and scenario too, without
 page text or source. Later cleanup timeouts or crashes cannot replace the first failure.
+During fixed Activity, a handled process interrupt retains the pending command and
+last reply before cancellation clears them. This local snapshot sends no browser request;
+hard kills, a blocked Node process and an interrupted write can still leave it unknown.
 Gesture-completion frames follow each data plot's actual HTML or SVG animation,
 including a budget or funds plot that finishes after quota. The last input remains
 uncredited until every data plot has finished and its final geometry has committed.
