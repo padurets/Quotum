@@ -8,6 +8,7 @@ import {openTab, type Browser, type Cdp} from './cdp';
 import {HISTORY_COHORT_TAKES, historyCutInvalidation, historyIdentity, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
 import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from './historyProxy';
 import {observeReversal} from './reversalDiagnostic';
+import {rendererIdentity,type RendererIdentity} from './rendererIdentity';
 import {historyPoolReceiptScript} from './historyPoolReceipt';
 import {ScriptBinding} from './scriptBinding';
 import {clientIdentity} from './evidence';
@@ -200,6 +201,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
   const poolName=name.replace(/[^a-zA-Z0-9_-]/g,'-');
   const poolBinding=poolEvidence?new ScriptBinding(cdp,clientIdentity(),(file,value)=>poolEvidence.save('pool-'+poolName+'-'+file,value)):null;
   let poolCaptured=false;
+  let renderer:RendererIdentity|undefined;
   cdp.at(`${name}/seed`);
   const capturePool = async () => {
     if(!poolEvidence||poolCaptured)return;
@@ -222,7 +224,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
   };
   // Closing this owned target discards its observers and overrides. A stalled
   // renderer cannot acknowledge a cleanup evaluation before its target closes.
-  const close = async () => {cdp.at(`${name}/cleanup`); await tab.close();};
+  const close = async () => {cdp.at(`${name}/cleanup`); try{if(renderer)await renderer.dispose();}finally{await tab.close();}};
   try {
     const seedPhase = `${name}/seed`; bodies.phase = seedPhase; proxy.phase(seedPhase);
     await cdp.send('Network.enable'); await cdp.send('Page.enable'); await cdp.send('Performance.enable');
@@ -266,7 +268,12 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
       history.pushState=function(...args){p.pushes++;return originalPush.apply(this,args);};
       const frame=()=>{if(!p.running)return;if(root.dataset.panEnd){const token=root.dataset.panToken;if(p.tokens.at(-1)!==token)p.tokens.push(token);const end=Number(root.dataset.panEnd),origin=Number(root.dataset.panOrigin);if(p.poses.at(-1)?.end!==end)p.poses.push({end,origin});}p.raf=requestAnimationFrame(frame);};p.raf=requestAnimationFrame(frame);
     })()`);
-    return {cdp, bodies, settled, geometry, cell, seeds, close,capturePool};
+    if(process.env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL==='1'){
+      renderer=await rendererIdentity(cdp,browser);
+      evidence?.save('traffic-renderer-'+poolName,renderer.evidence());
+      assert.ok(renderer.valid(),`${name}: renderer identity unavailable`);
+    }
+    return {cdp, bodies, settled, geometry, cell, seeds, close,capturePool,renderer};
   } catch (error) {
     try{evidence?.save('traffic-seed-failure-'+poolName,{name,stage:bodies.stage,...bodies.diagnostic(`${name}/seed`)});}
     catch{browser.owner?.failures.push('history seed evidence failed');}
@@ -285,10 +292,10 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
       evidence?.save('traffic-stage', {name, stage: 'seed'});
       const poolTarget=length===DAY&&!future&&[100,400].includes(latency)&&fraction===.5&&take===1;
       const poolEvidence=process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL==='1'&&poolTarget?evidence:undefined;
-      const {cdp, bodies, settled, geometry, cell, seeds, close,capturePool} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence,evidence);
+      const {cdp, bodies, settled, geometry, cell, seeds, close,capturePool,renderer} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence,evidence);
       let observer:Awaited<ReturnType<typeof observeReversal>>|null=null, status='failed';
       try {
-        observer=await observeReversal(cdp,browser,{postmortem:true,closeTarget:close});
+        observer=await observeReversal(cdp,browser,{postmortem:true,closeTarget:close,renderer});
         const phase = `${name}/cold`; bodies.phase = phase; proxy.phase(phase, latency);
         const scroll = (distance: number,stage:string) => {
           bodies.stage=stage;
@@ -384,7 +391,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
       const name = `browser/${length / DAY}d/${mode}/take${take}`;
       evidence?.save('traffic-stage', {name,stage:'seed'});
       console.error(`bench: ${name}: opening seed page`);
-      const {cdp, bodies, settled, geometry, cell, seeds, close} = await historyPage(browser, proxy, cookie, name, length, DAY,undefined,evidence);
+      const {cdp, bodies, settled, geometry, cell, seeds, close,renderer} = await historyPage(browser, proxy, cookie, name, length, DAY,undefined,evidence);
       let observer:Awaited<ReturnType<typeof observeReversal>>|null=null,status='failed';
       console.error(`bench: ${name}: seed page ready`);
       const phase = `${name}/gesture`, reads = () => bodies.reads.filter(r => r.phase === phase);
@@ -399,7 +406,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
       const wheel = (pixels: number) => cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX: pixels, deltaY: 0, modifiers: 8});
       try {
         // The canonical failing page is observed without changing V8 before input.
-        observer=await observeReversal(cdp,browser,{mode:diagnostic?'diagnostic':'canonical',profileBeforeInput,postmortem:true,closeTarget:close});
+        observer=await observeReversal(cdp,browser,{mode:diagnostic?'diagnostic':'canonical',profileBeforeInput,postmortem:true,closeTarget:close,renderer});
         bodies.phase = phase; proxy.phase(phase, mode === 'after-delivery' ? 0 : 400);
         await step('shift down', () => key('keyDown', 'Shift', 16, 8));
         await step('first wheel', () => wheel(-geometry.width * .1));

@@ -15,7 +15,7 @@ test('history cleanup releases its owned target when the renderer cannot answer'
   assert.ok(start >= 0 && end > start);
   let closed = 0, evaluations = 0;
   const contexts: string[] = [];
-  const fixture = {name: 'fixture', cdp: {at: (value: string) => contexts.push(value),
+  const fixture = {name: 'fixture', renderer:undefined, cdp: {at: (value: string) => contexts.push(value),
     evaluate() {evaluations++; return new Promise(() => {});}},
   tab: {async close() {closed++;}}, close: null as unknown as () => Promise<void>};
   runInNewContext(ts.transpileModule(`${source.slice(start, end)}\nglobalThis.close=close;`, {
@@ -554,4 +554,29 @@ test('warm failure diagnostics distinguish exact reads and gesture stages withou
   assert.equal(JSON.stringify(observer.diagnostic('warm')).includes('private'),false);
   for(let n=0;n<70;n++)emit('Network.requestWillBeSent',{requestId:String(n),request:{url:'http://localhost/api/history?board=private-board&scope=budget&cell=1&from=0&to=60'}});
   assert.equal(observer.diagnostic('warm').reads.length,64);assert.equal(observer.diagnostic('warm').omitted,8);
+});
+
+test('history renderer binding is opt-in and unknown mapping stops before the first gesture',async()=>{
+  const source=readFileSync(new URL('../historyTrafficBrowser.ts',import.meta.url),'utf8');
+  const start=source.indexOf("    if(process.env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL==='1'){");
+  const end=source.indexOf('\n    return {cdp, bodies',start);assert.ok(start>0&&end>start);
+  for(const enabled of [false,true])for(const known of [false,true]){
+    let calls=0;const saved:unknown[]=[];
+    const renderer={valid:()=>known,evidence:()=>({status:known?'known':'unknown'})};
+    const fixture={process:{env:enabled?{QUOTUM_BENCH_HISTORY_SCROLL_CONTROL:'1'}:{}},renderer:undefined as unknown,
+      rendererIdentity:async()=>{calls++;return renderer;},cdp:{},browser:{},poolName:'fixture',name:'fixture',assert,
+      evidence:{save:(_name:string,value:unknown)=>saved.push(value)},run:null as unknown as ()=>Promise<void>};
+    runInNewContext(ts.transpileModule(`globalThis.run=async()=>{${source.slice(start,end)}}`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,fixture);
+    if(enabled&&!known)await assert.rejects(fixture.run(),/renderer identity unavailable/);else await fixture.run();
+    assert.equal(calls,enabled?1:0);assert.equal(saved.length,enabled?1:0);assert.equal(fixture.renderer,enabled?renderer:undefined);
+  }
+});
+
+test('history closes its owned target even when renderer binding disposal fails',async()=>{
+  const source=readFileSync(new URL('../historyTrafficBrowser.ts',import.meta.url),'utf8');
+  const start=source.indexOf('  const close = async () =>'),end=source.indexOf('\n  try {',start);
+  const error=new Error('dispose failure'),order:string[]=[];
+  const fixture={name:'fixture',cdp:{at(){}},renderer:{dispose:async()=>{order.push('dispose');throw error;}},tab:{close:async()=>{order.push('target');}},close:null as unknown as ()=>Promise<void>};
+  runInNewContext(ts.transpileModule(`${source.slice(start,end)}\nglobalThis.close=close;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,fixture);
+  await assert.rejects(fixture.close(),e=>e===error);assert.deepEqual(order,['dispose','target']);
 });

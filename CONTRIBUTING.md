@@ -64,8 +64,9 @@ not inspected. Matching process IDs and birth ticks permit counter differences,
 not page attribution, continuous responsiveness or a cause of the timeout.
 After an owned command has failed and its page probe does not respond, Linux may
 capture one native renderer snapshot using an already installed system GDB. The renderer
-with the largest cumulative CPU counter is selected; this does not bind it to the
-failed page. PID, birth, group, session, UID and tracing state are checked before
+with the largest cumulative CPU counter is selected when no target binding was supplied;
+this does not bind it to the failed page. A supplied binding limits capture to its PID
+and pinned process birth. PID, birth, group, session, UID and tracing state are checked before
 attach. Bounded thread identities and fixed wait classes are retained, never
 raw debugger text. Up to sixteen main-thread frames additionally retain a validated
 file-backed module build ID and file offset, or a fixed reason why that position is unknown.
@@ -681,7 +682,12 @@ It runs one owned benchmark process with the original controlled traffic prefix,
 24 native history cohorts and the six native cancellation cohorts, with every original
 assertion, reference-cut rule and deadline. The diagnostic prefix must complete without
 invalidations or budget failures. GDB is prepared before the run and first used only
-after an original failed command. This control also downloads the official debug archive
+after an original failed command. Each native page first binds its primary frame to an
+owned renderer through a completed metadata trace, before any gesture. Unknown identity
+stops that page before input; a later lost or ambiguous binding permits neither native
+attach nor a page-debugger fallback. Reports retain binding validity before and after
+capture. This preparation's performance effects are not qualified.
+This control also downloads the official debug archive
 for the installed Chrome version and installs only its unwind tables under the matching
 system build ID. Build IDs and the retained table bytes must agree; full symbol and
 source tables are discarded before Chrome starts. GDB still has its two-second limit,

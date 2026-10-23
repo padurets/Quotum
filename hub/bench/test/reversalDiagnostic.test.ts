@@ -5,6 +5,7 @@ import {Cdp, attachedChrome} from '../cdp.js';
 import type {ProcessIdentity} from '../browserProcess.js';
 import {nativePostmortem} from '../nativePostmortem.js';
 import {RunOwner} from '../runOwner.js';
+import type {RendererIdentity} from '../rendererIdentity.js';
 
 const flush = async () => {await new Promise<void>(resolve => setImmediate(resolve));};
 function pageFixture(send: (method: string, signal?: AbortSignal) => Promise<unknown> = async () => ({})) {
@@ -341,4 +342,33 @@ for(const owned of [false,true])test('a page probe cannot create another session
   let connections=0;t.mock.method(Cdp,'connect',async()=>{connections++;throw new Error('unexpected connection');});
   const observer=await observeReversal(page,{owned,endpoint:'fixture',close:async()=>{}}),original=new Error('original');
   await assert.rejects(observer.watch('failed',async()=>{throw original;}),error=>error===original);await observer.close();assert.equal(connections,0);
+});
+
+for(const mode of ['bound','invalidated','missing','duplicate','unknown','invalidated-during-capture'] as const)test('bound renderer native selection: '+mode,async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const logs:string[]=[];t.mock.method(console,'error',(line:string)=>logs.push(line));
+  t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({webSocketDebuggerUrl:'ws://fixture.invalid/browser'})));
+  const rows=[{type:'renderer',id:102,cpuTime:999},...(mode==='missing'?[]:[{type:'renderer',id:101,cpuTime:1}]),...(mode==='duplicate'?[{type:'renderer',id:101,cpuTime:2}]:[])];
+  t.mock.method(Cdp,'connect',async()=>({send:async()=>({processInfo:rows}),close(){}} as unknown as Cdp));
+  const {page,commands}=pageFixture(async(_method,signal)=>new Promise((_,reject)=>signal!.addEventListener('abort',()=>reject(signal!.reason),{once:true})));
+  let valid=mode!=='unknown',calls=0;
+  const renderer={get pid(){return valid?101:null;},get birth(){return valid?'42':null;},valid:()=>valid,dispose:async()=>{},evidence:()=>({status:valid?'known':'unknown',pid:valid?101:null,birth:valid?'42':null,frame:1,invalidations:valid?0:1})} as RendererIdentity;
+  const native=await nativePostmortem({root:100,live:()=>false,observe:async()=>[]},[],new AbortController().signal);
+  const observer=await observeReversal(page,{owned:true,endpoint:'fixture',close:async()=>{},nativePostmortem:async(candidates)=>{
+    calls++;assert.deepEqual(candidates,[{pid:101,cpuTime:1,birth:'42'}]);
+    if(mode==='invalidated-during-capture')valid=false;
+    return {...native,pid:101,birth:'42',status:'observed',intervened:true,released:true,reaped:true,pipesClosed:true};
+  }},{postmortem:true,renderer});
+  const original=new Error('original gesture timeout');let reject!:(error:Error)=>void;
+  if(mode==='unknown'){
+    let invoked=false;await assert.rejects(observer.watch('gesture',async()=>{invoked=true;}),/renderer identity/);assert.equal(invoked,false);assert.equal(calls,0);await observer.close();return;
+  }
+  const failed=assert.rejects(observer.watch('gesture',()=>new Promise<never>((_,fail)=>{reject=fail;})),error=>error===original);
+  if(mode==='invalidated')valid=false;
+  page.snapshot=()=>({failure:{id:196,method:'Input.synthesizeScrollGesture'}}) as ReturnType<Cdp['snapshot']>;
+  reject(original);await flush();t.mock.timers.tick(2000);await failed;await observer.close();
+  const accepted=mode==='bound'||mode==='invalidated-during-capture';assert.equal(calls,accepted?1:0);assert.deepEqual(commands,[]);
+  const report=JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));assert.equal(report.command.failure.id,196);
+  if(!accepted)assert.equal(report.nativeBinding,false);
+  else{assert.equal(report.rendererAtCapture.status,'known');assert.equal(report.rendererAfterCapture.status,mode==='bound'?'known':'unknown');assert.equal(report.nativeBinding,mode==='bound');}
 });

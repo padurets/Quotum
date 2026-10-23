@@ -2,10 +2,11 @@ import {Cdp, type Browser} from './cdp.js';
 import {deadline, devtoolsJson} from './deadline.js';
 import {safeEvidence} from './evidence.js';
 import type {ProcessIdentity} from './browserProcess.js';
+import type {RendererIdentity} from './rendererIdentity.js';
 
 type DocumentMark={atMs:number;frame?:string;loader?:string};
 export type DiagnosticOrigin={startedAt:number;navigation:()=>{requested?:DocumentMark;committed?:DocumentMark;loadAtMs:number|null}};
-type Options = {mode?: 'canonical' | 'diagnostic'; profileBeforeInput?: boolean; postmortem?:boolean; closeTarget?: () => Promise<void>;signal?:AbortSignal;origin?:DiagnosticOrigin};
+type Options = {renderer?:RendererIdentity; mode?: 'canonical' | 'diagnostic'; profileBeforeInput?: boolean; postmortem?:boolean; closeTarget?: () => Promise<void>;signal?:AbortSignal;origin?:DiagnosticOrigin};
 type Process = {type: string; id: number; cpuTime: number};
 type ProcessSample = {status: 'pending' | 'observed' | 'unavailable'; fromMs: number; toMs: number | null; processes?: ProcessIdentity[]; omitted?: number};
 const PAGE_LIVENESS = '({visibility:document.visibilityState,focus:document.hasFocus(),ready:document.readyState})';
@@ -149,8 +150,19 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
         let nativeIntervention=false;
         if(postmortem&&!diagnostic&&browser.nativePostmortem){
           report.postmortem=true;
-          nativeCapture=browser.nativePostmortem(renderers,pending);
+          let candidates=renderers;
+          if(options.renderer){
+            const identity=options.renderer;report.rendererAtCapture=identity.evidence();
+            const pid=identity.pid,birth=identity.birth,selected=renderers.filter(value=>value.pid===pid);
+            if(!identity.valid()||pid===null||birth===null||selected.length!==1){report.nativeBinding=false;return;}
+            candidates=[{...selected[0],birth}];
+          }
+          nativeCapture=browser.nativePostmortem(candidates,pending);
           const native=await nativeCapture;report.nativeWait=native;nativeIntervention=native.intervened;
+          if(options.renderer){
+            const after=options.renderer.evidence();report.rendererAfterCapture=after;
+            report.nativeBinding=after.status==='known'&&native.pid===after.pid&&native.birth===after.birth;
+          }
         }
         if (diagnostic||postmortem&&!nativeIntervention) {
           if(postmortem)report.postmortem=true;
@@ -171,6 +183,7 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
     async diagnose(label:string){signal?.throwIfAborted();capture??=collect(label);await capture;signal?.throwIfAborted();},
     async watch<T>(label: string, run: () => Promise<T>) {
       signal?.throwIfAborted();
+      if(options.renderer&&!options.renderer.valid())throw new Error('renderer identity invalidated before command');
       delete report.waiting; delete report.waitingProcesses;
       const passive = new AbortController(), pending = signal ? AbortSignal.any([signal, passive.signal]) : passive.signal;
       let waiting: {scenario: string; command: ReturnType<Cdp['snapshot']>; sample: ProcessSample} | undefined;
