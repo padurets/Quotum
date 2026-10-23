@@ -617,3 +617,39 @@ test('direct history releases its owned target even when document disposal throw
   runInNewContext(ts.transpileModule(`${source.slice(start,end)}\nglobalThis.close=close;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,fixture);
   await assert.rejects(fixture.close(),value=>value===error);assert.deepEqual(order,['document','target']);
 });
+
+const nativeFile=ts.createSourceFile('traffic.ts',readFileSync(new URL('../historyTrafficBrowser.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
+const nativeFunction=nativeFile.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='browserHistoryTraffic') as ts.FunctionDeclaration;
+const nativeCode=ts.transpileModule(nativeFunction.getText(nativeFile).replace('export async function','async function')+'\nglobalThis.run=browserHistoryTraffic;', {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+
+test('pool observation routes only the direct suffix Activity pages before any input',async()=>{
+  for(const enabled of [false,true])for(const suffix of [undefined,...Array.from({length:12},(_,i)=>({pair:i+1,cohort:'history'})),...Array.from({length:12},(_,i)=>({pair:i+1,cohort:'activity'}))]){
+    const primary=new Error('original seed failure'),evidence={save(){}},seen:unknown[][]=[];let tuple=0;
+    const context={DAY:86_400_000,process:{env:enabled?{QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:'1'}:{}},
+      // Skip unrelated baseline bodies; its 21st original tuple is 30d/activity/100ms/.5.
+      get HISTORY_COHORT_TAKES(){return ++tuple===21?1:0;},
+      historyPage:async(...args:unknown[])=>{seen.push(args);throw primary;},run:null as unknown as (...args:unknown[])=>Promise<unknown>};
+    runInNewContext(nativeCode,context);
+    await assert.rejects(context.run({}, {}, '', 'b',evidence,suffix),error=>error===primary);
+    assert.equal(seen.length,1);assert.equal(seen[0][6],enabled&&suffix?.cohort==='activity'?evidence:undefined);
+    assert.equal(seen[0][7],evidence);assert.equal(seen[0][4],suffix?.cohort==='history'?86_400_000:30*86_400_000);
+    assert.match(String(seen[0][3]),suffix?.cohort==='history'?/1d\/history\/0ms\/0.5\/take1$/:/30d\/activity\/100ms\/0.5\/take1$/);
+  }
+});
+
+test('an actual warm assertion retains cold movement and its first error when pool cleanup fails',async()=>{
+  const nodes:ts.Node[]=[];const visit=(node:ts.Node)=>{nodes.push(node);ts.forEachChild(node,visit);};visit(nativeFunction);
+  const attempt=nodes.find(node=>ts.isTryStatement(node)&&node.finallyBlock?.getText(nativeFile).includes('await capturePool()')) as ts.TryStatement;
+  const movement=attempt.tryBlock.statements.find(node=>node.getText(nativeFile).startsWith('movement='))!.getText(nativeFile);
+  const warm=attempt.tryBlock.statements.find(node=>node.getText(nativeFile).includes("'browser cached return/repeat started history'"))!.getText(nativeFile);
+  const pose={tokens:['one'],poses:[{end:90,origin:100},{end:80,origin:100}],pushes:1,from:50,to:80},saved=new Map<string,unknown>(),order:string[]=[];
+  const fixture={assert,pose,warm:[1,2,3],movement:undefined,primary:undefined as unknown,suffix:{pair:6,cohort:'activity'},status:'passed',name:'fixture',geometry:{width:1000},cell:1,
+    bodies:{reads:[],diagnostic:()=>({})},reports:[],proxy:{transfers:[]},cdp:{snapshot:()=>({})},trafficReadEvidence,browser:{owner:{failures:[] as string[]}},
+    evidence:{save:(name:string,value:unknown)=>saved.set(name,value)},capturePool:async()=>{order.push('pool');throw Error('secondary cleanup');},
+    observer:{close:async()=>{order.push('observer');}},close:async()=>{order.push('target');},run:null as unknown as ()=>Promise<void>};
+  const code=`globalThis.run=async()=>{${movement}try{${warm}}catch(error)${attempt.catchClause!.block.getText(nativeFile).replace('{','{primary=error;')}finally${attempt.finallyBlock!.getText(nativeFile)}};`;
+  runInNewContext(ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,fixture);
+  await assert.rejects(fixture.run(),error=>error===fixture.primary&&(error as Error).message.includes('browser cached return/repeat started history'));
+  assert.deepEqual(JSON.parse(JSON.stringify((saved.get('traffic-fixture') as {movement:unknown}).movement)),{...pose,tokens:1});
+  assert.deepEqual(order,['pool','observer','target']);assert.equal(fixture.status,'failed');assert.deepEqual(fixture.browser.owner.failures,['history pool cleanup failed']);
+});

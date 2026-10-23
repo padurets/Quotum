@@ -299,9 +299,11 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
       const name = (suffix?`suffix/${suffix.pair}/${suffix.cohort}/`:'')+`browser/${length / DAY}d/${future ? 'history' : 'activity'}/${latency}ms/${fraction}/take${take}`;
       evidence?.save(suffix?`suffix-stage-${suffix.pair}-${suffix.cohort}`:'traffic-stage', {name, stage: 'seed'});
       const poolTarget=length===DAY&&!future&&[100,400].includes(latency)&&fraction===.5&&take===1;
-      const poolEvidence=process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL==='1'&&poolTarget?evidence:undefined;
+      const suffixPool=process.env.QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX==='1'&&suffix?.cohort==='activity'&&length===30*DAY&&!future&&latency===100&&fraction===.5&&take===1;
+      const poolEvidence=(process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL==='1'&&poolTarget||suffixPool)?evidence:undefined;
       const {cdp, bodies, settled, geometry, cell, seeds, close,capturePool,renderer,lateRenderer} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence,evidence);
       let observer:Awaited<ReturnType<typeof observeReversal>>|null=null, status='failed';
+      let movement:unknown;
       try {
         observer=await observeReversal(cdp,browser,{postmortem:true,closeTarget:close,renderer,lateRenderer});
         const phase = `${name}/cold`; bodies.phase = phase; proxy.phase(phase, latency);
@@ -312,6 +314,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         };
         await scroll(geometry.width * fraction,'cold scroll'); await settled();
         const pose = await cdp.evaluate<{tokens: string[]; poses: {end: number; origin: number}[]; pushes: number; from: number; to: number}>('({tokens:__historyTraffic.tokens,poses:__historyTraffic.poses,pushes:__historyTraffic.pushes,from:Number(new URLSearchParams(location.search).get("from")),to:Number(new URLSearchParams(location.search).get("to"))})');
+        movement={...pose,tokens:pose.tokens.length};
         assert.equal(pose.tokens.length, 1); assert.equal(pose.pushes, 1); assert.ok(pose.poses.length > 1 && pose.from > 0);
         assert.ok(Math.abs(pose.to - pose.poses[0].origin + (length + future) * fraction) <= 3 * (length + future) / geometry.width, 'native gesture did not move by its named fraction');
         const physical=bodies.reads.filter(read=>read.phase===phase),cold = bodies.resources.filter(read => read.phase === phase);
@@ -378,7 +381,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         status='invalidated';
         invalidated.push({...cut,reads:bodies.reads.map(read=>({phase:read.phase,from:read.from,to:read.to,count:read.count}))});
       } finally {
-        evidence?.save('traffic-'+name.replace(/[^a-zA-Z0-9_-]/g,'-'), {name,status,geometry,cell,
+        evidence?.save('traffic-'+name.replace(/[^a-zA-Z0-9_-]/g,'-'), {name,status,geometry,cell,movement,
           reads:trafficReadEvidence(bodies.reads),cold:bodies.diagnostic(`${name}/cold`),reports:reports.filter(report=>report.name.startsWith(name+'/')),
           transfers:proxy.transfers.filter(transfer=>transfer.phase.startsWith(name+'/')),command:cdp.snapshot()});
         const cleanupErrors:unknown[]=[];

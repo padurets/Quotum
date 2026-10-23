@@ -2,6 +2,11 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {HistoryPool} from '../../ui/lib/historyPool';
+import {HistoryStore} from '../../ui/lib/history';
+import {HistoryTile} from '../../ui/lib/historyTiles';
+import {Preparations} from '../../ui/lib/prepare';
+import {PageClock} from '../../ui/lib/clock';
+import {tileOf,type Chunk,type HistoryAnswer} from '../../server/domain/history';
 import {PeriodTransport} from '../../ui/lib/periodTransport';
 import {safeEvidence} from '../evidence';
 import {historyPoolReceiptScript} from '../historyPoolReceipt';
@@ -232,4 +237,55 @@ test('current production PeriodTransport binds quota, wallet and subscription fu
  assert.deepEqual(JSON.parse(JSON.stringify(receipt.members.slice(1).map((m:{transportScope:string|null})=>m.transportScope))),['quota','budget','funds']);
  assert.equal(h.context.transport.queue.length,3);
  controller.abort();await settled;assert.equal(h.context.transport.queue.length,0);
+});
+
+
+/** The real COW generator is held between slices; HTTP and chart composition are outside this observer control. */
+function publicationFixture(plane:'all'|'native'|'activity') {
+  const pool=new HistoryPool(),jobs:(()=>void)[]=[];let now=0;
+  const preparer=new Preparations({now:()=>++now,post:run=>jobs.push(run)},-1);
+  const context=vm.createContext({Map,Set,WeakMap,WeakRef,Headers,Request,URL,location:{href:'http://fixture.invalid/'},performance:{now:()=>++now},fetch:()=>Promise.reject(Error('no HTTP in observer control'))});
+  vm.runInContext('window=globalThis;',context);vm.runInContext(historyPoolReceiptScript(),context);context.__quotumInspectHistoryPool(pool);
+  const clock=new PageClock({now:()=>1000,setTimeout:()=>0,clearTimeout:()=>{},visible:()=>false});
+  const reader=new HistoryStore({clock,preparations:preparer,now:()=>1000,schedule:()=>{},read:async()=>{throw Error('no read in observer control');},setTimeout:()=>0,clearTimeout:()=>{},dropTimeRange:()=>{throw Error('unexpected range loss');}},pool.budget,'quota',pool);
+  // Feed an already accepted response into the actual private merge/prepare/commit path.
+  const store=reader as any;store.run='run';store.board='synthetic';store.epoch=7;store.active=false;store.activityActive=plane!=='native';
+  const base=new HistoryTile(0,60);base.readTo=base.validTo=60;base.nativeTo=base.nativeValidTo=plane==='activity'?120:60;base.writeSeq=base.nativeSeq=1;
+  store.grids.set(60,new Map([[tileOf(0,60),base]]));
+  const flight={submitted:true,started:true,seq:2,epoch:7,target:'fixed',newsSeq:0,cell:60,from:0,to:120,touched:Infinity,startedAt:0,controller:new AbortController(),role:'visible',activityOnly:plane==='activity'};
+  const chunk:Chunk={from:0,to:120,series:Array.from({length:24},(_,i)=>({source:'synthetic-'+i,window:'w',hold:60,open:80,cells:[[0,80,0,60],[1,79,0,60]]})),activity:{sessions:[],devices:{},cells:[]},resets:[],grants:[]};
+  const answer:HistoryAnswer={run:'run',now:1000,historyStart:0,known:{work:0,sources:Object.fromEntries(chunk.series.map(s=>[s.source,0]))},chunks:[chunk]};
+  store.flights.add(flight);store.merge(flight,answer);
+  const events=()=>context.__quotumHistoryPoolReceipt.read().entries.filter((entry:any)=>entry.kind==='response-release');
+  const finish=()=>{for(let i=0;i<4096&&preparer.size;i++){const run=jobs.shift();assert.ok(run,'pending actual work has a slice');run();}assert.equal(preparer.size,0);};
+  const close=()=>{reader.close();preparer.dispose();assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);};
+  return {reader,store,base,flight,jobs,preparer,events,finish,close};
+}
+
+test('release entry observes an unpublished actual COW cancellation without inventing publication',()=>{
+  const h=publicationFixture('all');try{
+    assert.equal(h.store.responses.has(h.flight),true);assert.equal(h.events().length,0);
+    h.jobs.shift()!();assert.ok(h.preparer.size>0,'actual COW remains unfinished after one 16-step slice');
+    assert.equal(h.store.grids.get(60).get(0),h.base,'private staging has not replaced the published tile');
+    h.store.abort(h.flight);
+    const released=h.events().find((entry:any)=>entry.responsePresent);assert.ok(released);
+    assert.equal(released.seq,2);assert.equal(released.epoch,7);assert.equal(released.memberEpoch,7);assert.equal(released.activityOnly,false);
+    assert.equal(released.retained.length,1);assert.deepEqual(Array.from(released.retained[0].slice(12)),[0,60,60,1,1]);
+    assert.notEqual(released.retained[0][15],released.seq);assert.equal(h.flight.controller.signal.aborted,true);
+  }finally{h.close();}
+});
+
+for(const plane of ['all','native','activity'] as const)test(`release entry records atomic actual ${plane} publication with separate planes`,()=>{
+  const h=publicationFixture(plane);try{
+    assert.equal(h.store.grids.get(60).get(0),h.base);assert.equal(h.events().length,0);h.finish();
+    const events=h.events();assert.equal(events.length,1);const released=events[0],row=released.retained[0];
+    assert.equal(released.responsePresent,true);assert.equal(released.activityOnly,plane==='activity');assert.equal(released.seq,2);
+    assert.equal(released.retained.length,1);assert.equal(released.retainedOmitted,0);assert.equal(row.length,17);
+    assert.deepEqual(Array.from(row.slice(6,9)),plane==='native'?[0,60,60]:[0,120,120]);
+    assert.deepEqual(Array.from(row.slice(12)),plane==='activity'?[0,120,120,2,1]:[0,120,120,2,2]);
+    assert.notEqual(h.store.grids.get(60).get(0),h.base,'the real atomic callback has published a replacement');
+    assert.equal(h.store.grids.get(60).get(0).writeSeq,released.seq);
+    const saved=safeEvidence(released) as typeof released;assert.deepEqual(JSON.parse(JSON.stringify(saved)),JSON.parse(JSON.stringify(released)));
+    assert.ok(!JSON.stringify(released).includes('synthetic-'),'source identities and payload stay private');
+  }finally{h.close();}
 });

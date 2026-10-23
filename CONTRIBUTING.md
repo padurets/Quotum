@@ -712,6 +712,10 @@ in fresh tabs of the same Chrome, with separate evidence and the original gestur
 guards. The first failure, including a reference-cut change, stops without retry. The
 twenty-minute limit stays; an unfinished suffix remains inconclusive. Startup, compositor
 and ordinary checks omit this suffix; ordinary checks need no diagnostic preparation.
+Only the suffix's Activity pages also observe bounded history-pool operations. Their
+receipts retain tile coverage at response release and eviction; a completed HTTP body
+alone does not prove that its cells were published. Source binding runs after the
+traffic evidence is saved. This observation does not change retention or readiness.
 
 The manual `startup_io_control` input observes a fixed A1/B/A2 startup-only sequence
 on one runner before running the unchanged full history control once, within the same
