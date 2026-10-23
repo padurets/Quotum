@@ -52,12 +52,18 @@ on:
         type: boolean
         default: false
 
+      startup_io_control:
+        description: Compare an owned startup with and without in-budget ELF prereading
+        required: false
+        type: boolean
+        default: false
+
 permissions:
   contents: read
 
 jobs:
   dev-tooling:
-    if: ${{ !inputs.diagnostic_ref }}
+    if: ${{ !inputs.startup_io_control && !inputs.diagnostic_ref }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -82,7 +88,7 @@ jobs:
           if-no-files-found: warn
 
   hub:
-    if: ${{ !inputs.diagnostic_ref }}
+    if: ${{ !inputs.startup_io_control && !inputs.diagnostic_ref }}
     runs-on: ubuntu-latest
     # It takes about a minute; a test that hangs fails it instead of holding the runner.
     timeout-minutes: 15
@@ -106,7 +112,7 @@ jobs:
   # What an open dashboard costs, measured in Chrome on the built hub and page (hub/bench).
   # A release does not wait for it: the commit it tags already passed it.
   bench:
-    if: ${{ always() && !inputs.diagnostic_ref && !startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ !inputs.startup_io_control && always() && !inputs.diagnostic_ref && !startsWith(github.ref, 'refs/tags/') }}
     needs: [bench-history, bench-dashboard]
     runs-on: ubuntu-latest
     timeout-minutes: 1
@@ -122,7 +128,7 @@ jobs:
           fi
 
   bench-history:
-    if: ${{ !startsWith(github.ref, 'refs/tags/') && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && inputs.history_scroll_control)) }}
+    if: ${{ !inputs.startup_io_control && !startsWith(github.ref, 'refs/tags/') && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && inputs.history_scroll_control)) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -165,7 +171,7 @@ jobs:
           if-no-files-found: warn
 
   bench-dashboard:
-    if: ${{ !startsWith(github.ref, 'refs/tags/') && !inputs.native_postmortem_control && !inputs.history_scroll_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
+    if: ${{ !inputs.startup_io_control && !startsWith(github.ref, 'refs/tags/') && !inputs.native_postmortem_control && !inputs.history_scroll_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
     runs-on: ubuntu-latest
     # Independent traffic checks run on another runner; every dashboard phase stays here.
     timeout-minutes: 20
@@ -229,7 +235,7 @@ jobs:
           if-no-files-found: warn
 
   idle-cpu-control:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control }}
+    if: ${{ !inputs.startup_io_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -279,7 +285,7 @@ jobs:
           if-no-files-found: warn
 
   native-postmortem-control:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && inputs.native_postmortem_control }}
+    if: ${{ !inputs.startup_io_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && inputs.native_postmortem_control }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -353,8 +359,140 @@ jobs:
           path: ${{ runner.temp }}/quotum-native-postmortem-control/
           if-no-files-found: warn
 
+  startup-io-control:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.startup_io_control }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [OLD, NEW]
+    defaults:
+      run:
+        working-directory: hub
+    env:
+      QUOTUM_C1_ARM: ${{ matrix.arm }}
+      QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
+      QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ inputs.expected_client_sha256 }}
+      QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-startup-io-${{ matrix.arm }}
+      QUOTUM_C1_RECEIPT: ${{ runner.temp }}/quotum-startup-io-${{ matrix.arm }}/shim-first.json
+    steps:
+      - name: Require the isolated pinned startup control
+        working-directory: ${{ runner.temp }}
+        env:
+          CONFLICT: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control || inputs.history_scroll_control }}
+        run: |
+          [[ "$QUOTUM_BENCH_SOURCE_SHA" =~ ^[a-f0-9]{40}$ && "$QUOTUM_BENCH_EXPECTED_CLIENT_SHA256" =~ ^[a-f0-9]{64}$ && "$CONFLICT" != true ]]
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.diagnostic_ref }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Check the common source and compiled-client pins
+        run: |
+          node --import tsx --input-type=module <<'JS'
+          import assert from 'node:assert/strict';import {execFileSync} from 'node:child_process';
+          import {sourceIdentity} from './bench/idleCpuDiagnostic.ts';import {clientIdentity} from './bench/evidence.ts';
+          const source=sourceIdentity(),client=clientIdentity();
+          assert.equal(source.checkoutSha,source.sourceHead);assert.equal(client.status,'available');assert.equal(client.sha256,process.env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256);
+          assert.equal(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim(),'');
+          JS
+      - name: Prepare the identical owned launcher shim
+        run: |
+          mkdir -p "$QUOTUM_BENCH_DIAGNOSTICS_DIR"
+          printf 'QUOTUM_C1_REAL_CHROME=%s\nQUOTUM_CHROME=%s\n' "$(command -v google-chrome)" "$RUNNER_TEMP/quotum-c1-launcher.py" >> "$GITHUB_ENV"
+          cat > "$RUNNER_TEMP/quotum-c1-launcher.py" <<'PY'
+          #!/usr/bin/env python3
+          import json, os, stat, sys, time
+
+          arm = os.environ['QUOTUM_C1_ARM']
+          if arm not in ('OLD', 'NEW'):
+              raise RuntimeError('Expected OLD or NEW')
+          command = os.environ['QUOTUM_C1_REAL_CHROME']
+          image = os.path.join(os.path.dirname(os.path.realpath(command)), 'chrome')
+          started, count = time.monotonic_ns(), 0
+          if arm == 'NEW':
+              flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+              with os.fdopen(os.open(image, flags), 'rb', buffering=0) as source:
+                  if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                      raise RuntimeError('Expected regular image')
+                  while chunk := source.read(64 * 1024):
+                      count += len(chunk)
+          elapsed_ms = (time.monotonic_ns() - started) / 1_000_000
+          receipt = {'arm': arm, 'bytes': count, 'readMs': elapsed_ms, 'readClosed': True,
+                     'pid': os.getpid(), 'group': os.getpgrp(), 'session': os.getsid(0)}
+          flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+          with os.fdopen(os.open(os.environ['QUOTUM_C1_RECEIPT'], flags, 0o600), 'w') as target:
+              json.dump(receipt, target)
+          os.execv(command, [command, *sys.argv[1:]])
+          PY
+          chmod 0700 "$RUNNER_TEMP/quotum-c1-launcher.py"
+      - name: Run the unchanged complete history scroll control
+        id: startup
+        env:
+          QUOTUM_BENCH_HISTORY_SCROLL_CONTROL: '1'
+        run: npm run bench -- --ci --scope history
+      - name: Record metadata after the first startup outcome
+        if: ${{ always() && steps.startup.outcome != 'skipped' && steps.startup.outcome != '' }}
+        env:
+          BENCH_OUTCOME: ${{ steps.startup.outcome }}
+          CONTROL_WORKFLOW_REF: ${{ github.workflow_ref }}
+          CONTROL_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,math,os,pathlib,re,subprocess,time
+          root=pathlib.Path(os.environ['QUOTUM_BENCH_DIAGNOSTICS_DIR']);root.mkdir(parents=True,exist_ok=True)
+          out={'kind':'startup-io-control','arm':os.environ['QUOTUM_C1_ARM'],'benchmarkPass':False,'benchOutcome':os.environ['BENCH_OUTCOME'],'postStepStartedWallMs':int(time.time()*1000)}
+          out['checkoutWorkflowHash']=hashlib.sha256(pathlib.Path('../.github/workflows/ci.yml').read_bytes()).hexdigest()
+          out['workflowRef']=os.environ['CONTROL_WORKFLOW_REF'];out['workflowSha']=os.environ['CONTROL_WORKFLOW_SHA']
+          def save():
+              out['postStepFinishedWallMs']=int(time.time()*1000)
+              with (root/'startup-io-sidecar.json').open('x') as target:json.dump(out,target)
+          reports=list(root.glob('*/browser.json'))
+          if len(reports)!=1:
+              out['status']='no-unique-startup-outcome';save();raise SystemExit(0)
+          browser=json.loads(reports[0].read_text());manifest=json.loads((reports[0].parent/'manifest.json').read_text())
+          out.update(identity=manifest['identity'],startup={k:browser.get(k) for k in ['pid','stage','failure','elapsedMs','readyMs','version','cleanup']})
+          def startup_outcome(value,step):
+              if value.get('stage')=='ready':return 'ready'
+              cleanup=value.get('cleanup') or {};elapsed=cleanup.get('elapsedMs')
+              complete=cleanup.get('status') in ['closed','residual'] and all(type(cleanup.get(k)) is bool for k in ['term','kill','reaped','pipesClosed']) and type(elapsed) in [int,float] and math.isfinite(elapsed) and elapsed>=0
+              if not complete or value.get('failure') not in ['spawn-error','early-exit','no-port','invalid-port','endpoint-unreachable','invalid-reply','cancelled']:return None
+              return 'job-cancelled' if step=='cancelled' else 'startup-cancelled' if value['failure']=='cancelled' else 'startup-failed'
+          out['startupOutcome']=startup_outcome(browser,os.environ['BENCH_OUTCOME'])
+          if out['startupOutcome'] is None:
+              out['status']='startup-outcome-unconfirmed';save();raise SystemExit(0)
+          def pin(file):
+              before=file.stat();digest=hashlib.sha256()
+              with file.open('rb') as source:
+                  for chunk in iter(lambda:source.read(1024*1024),b''):digest.update(chunk)
+              after=file.stat();fields=lambda s:{k:getattr(s,k) for k in ['st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns']}
+              return {'sha256':digest.hexdigest(),'before':fields(before),'after':fields(after),'unchanged':fields(before)==fields(after)}
+          def command(args):return subprocess.check_output(args,text=True,timeout=5,stderr=subprocess.DEVNULL)
+          try:
+              launcher=pathlib.Path(os.environ['QUOTUM_C1_REAL_CHROME']).resolve();image=launcher.parent/'chrome'
+              out['launcher']=pin(launcher);out['image']=pin(image);out['shim']=pin(pathlib.Path(os.environ['QUOTUM_CHROME']))
+              out['packageVersion']=command(['dpkg-query','-W','-f=${Version}','google-chrome-stable']).strip()
+              ids=re.findall(r'Build ID: ([a-f0-9]{8,128})',command(['readelf','-n',str(image)]));out['buildId']=ids[0] if len(ids)==1 else None
+              receipt=pathlib.Path(os.environ['QUOTUM_C1_RECEIPT']);out['shimReceipt']=json.loads(receipt.read_text()) if receipt.exists() else None
+              out['status']='post-outcome-metadata';out['causalConclusion']='unknown'
+          except Exception as error:out.update(status='metadata-unknown',failure=type(error).__name__)
+          save()
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: startup-io-${{ matrix.arm }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quotum-startup-io-${{ matrix.arm }}/
+          if-no-files-found: warn
+
   managed-keys:
-    if: ${{ !inputs.diagnostic_ref }}
+    if: ${{ !inputs.startup_io_control && !inputs.diagnostic_ref }}
     strategy:
       fail-fast: false
       matrix:
@@ -378,7 +516,7 @@ jobs:
 
   # On every system the agent ships for: its process handling differs between them.
   agent:
-    if: ${{ !inputs.diagnostic_ref }}
+    if: ${{ !inputs.startup_io_control && !inputs.diagnostic_ref }}
     strategy:
       fail-fast: false
       matrix:
@@ -405,7 +543,7 @@ jobs:
   # The installers run on people's machines straight from a download: they must at least
   # be sound as scripts (shellcheck is on the runner; pwsh parses without running).
   installers:
-    if: ${{ !inputs.diagnostic_ref }}
+    if: ${{ !inputs.startup_io_control && !inputs.diagnostic_ref }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

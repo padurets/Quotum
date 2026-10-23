@@ -697,6 +697,15 @@ an observation, never a canonical benchmark pass or proof that a hang was repair
 Ordinary history checks
 retain the same full matrix without diagnostic package preparation.
 
+The manual `startup_io_control` input runs isolated OLD and NEW jobs on the pinned
+source and client, with the same full history workload and 20-minute job limit. Both
+use the same launcher shim; NEW alone reads the installed Chrome image before exec,
+within the original twenty-second startup window. These jobs prepare no debugger or
+unwind tables. Image and package metadata are read only after a confirmed startup
+outcome. Missing receipts remain unknown. This compares the extra read on fresh runners;
+it does not enable prereading in ordinary CI, establish an I/O cause, or replace the
+required benchmark jobs. Select it without any other diagnostic mode.
+
 ## Pull requests
 
 - **One task, one pull request.** A pull request takes one issue (or one fix) to `main`
