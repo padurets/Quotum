@@ -1,3 +1,4 @@
+import {seriesName} from '../lib/quota';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {crossingAt,forecastComparator,nextForecastSort,readForecastSort,sortValue,visibleForecastSort,SORT_COLUMNS,type ForecastSort,type SortRow} from '../lib/forecastSort';
@@ -60,4 +61,17 @@ test('sorting reads only needed work while preserving selected keys, fallback or
   sortValue(tracked,tracked.line,3*H,false);assert.ok(reads>0,'the full-key control reaches the work model');
   reads=0;sortValue(tracked,tracked.line,3*H,false,'name');assert.equal(reads,0,'default and name order need no work keys');
   sortValue(tracked,tracked.line,3*H,false,'workleft');assert.ok(reads>0,'work ordering still reads its full numeric or bounded key');
+});
+
+
+test('canonical scoped names remain distinct and sort naturally with stable identity ties in EN/RU',()=>{
+  for(const locale of ['en','ru']){
+    const second=row('second',10),tenth=row('tenth',10),tie=row('tie',10);
+    second.line.name=seriesName({provider:'claude',title:'Account · literal'},{kind:'weekly',label:'Gemini 2',minutes:10080});
+    tenth.line.name=seriesName({provider:'claude',title:'Account · literal'},{kind:'weekly',label:'Gemini 10',minutes:10080});
+    tie.line.name=second.line.name;second.line.key='identity-a';tie.line.key='identity-b';tenth.line.key='identity-c';
+    const values=[tenth,tie,second].map(r=>sortValue(r,r.line,3*H,false));
+    assert.deepEqual([...values].sort(forecastComparator({column:'name',descending:false},false,locale)).map(v=>v.row.line.key),['identity-a','identity-b','identity-c']);
+    assert.deepEqual([...values].sort(forecastComparator({column:'name',descending:true},false,locale)).map(v=>v.row.line.key),['identity-c','identity-a','identity-b']);
+  }
 });

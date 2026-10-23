@@ -129,6 +129,7 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
   if(previous.range!==navigation.range)previous.held=null;
   previous.range=navigation.range;
   const held=previous.held;
+  const incomingCellMs=strip?.cell??drawing?.cellMs??history?.cellMs??60_000;
   const prepared=usePrepared(function* () {
     const entries:MeterHistory[]=[],visible:MeterHistory[]=[];
     let low:bigint|null=null,high:bigint|null=null;
@@ -150,26 +151,26 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
       for(const point of series.points){points.push([point.at,scaled(point.value),point.segment,point.validUntil]);yield;}
       lines.push({sourceId:series.sourceId,windowId:series.meterId,key:moneyIdentity(series),name:nameOf(series,card?.title??series.sourceId,context,family),provider:card?.provider??'',kind:'other',label:series.semantics?.label??null,minutes:null,color:colorOf(arrange.view,series.sourceId,card?.provider??''),dash:series.kind==='cap'?'7 5':'',current:scaled(series.end??'0'),consumed:0,coveredMs:series.coveredMs,remainingAtStart:series.start===null?null:scaled(series.start),remainingAtEnd:series.end===null?null:scaled(series.end),pointMode:series.pointMode,staleAfterMs:86_400_000,points,work:null,...(series.kind==='cap'?{capCells:series.points.flatMap(p=>p.knownFrom!==undefined&&p.knownUntil!==undefined?[{at:p.at,from:p.knownFrom,to:p.knownUntil,value:scaled(p.value)}]:[])}:{})});yield;
     }
-    return {entries,lines,origin,span,pad,strip,domain:low===null||high===null?null:{low,high}};
-  },[drawing,strip,unit,sources,arrange.view,locale,context,held],modelContext);
-  const model=prepared.value,entries=model?.entries??[],lines=model?.lines??[];
+    return {entries,lines,origin,span,pad,strip,cellMs:incomingCellMs,domain:low===null||high===null?null:{low,high}};
+  },[drawing,strip,unit,sources,arrange.view,locale,context,held,incomingCellMs],modelContext);
+  const model=prepared.value,entries=model?.entries??[],lines=model?.lines??[],cellMs=model?.cellMs??incomingCellMs;
   const axis=useMemo(()=>{
     const origin=model?.origin??0n,span=model?.span??1_000_000n,pad=model?.pad??1n;
     const min=-Number(pad)/1_000_000,max=Number(span+pad)/1_000_000;
     return {min,max,ticks:Array.from({length:5},(_,i)=>min+(max-min)*i/4),label:t('money.balance')+' ('+symbol+')',
-      rawValue:(key:string,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return series&&pointAt(series,at,strip?.cell??history?.cellMs??60000)?.value;},
+      rawValue:(key:string,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return series&&pointAt(series,at,cellMs)?.value;},
       observation:(key:string,at:number)=>{
-        const series=entries.find(s=>moneyIdentity(s)===key),point=series&&pointAt(series,at,strip?.cell??history?.cellMs??60000);
+        const series=entries.find(s=>moneyIdentity(s)===key),point=series&&pointAt(series,at,cellMs);
         const observed=series?.pointMode==='observation'?point?.semantics?.conversion?.original.at:undefined;
         return Number.isSafeInteger(observed)&&point?{at:observed!,value:point.value}:undefined;
       },
       formatTick:(value:number)=>money((origin+BigInt(Math.round(value*1_000_000))).toString(),unit,false,context).slice(0,-symbol.length-1),
-      formatValue:(key:string,_value:number,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return money(series&&pointAt(series,at,strip?.cell??history?.cellMs??60000)?.value,unit,true,context);},
+      formatValue:(key:string,_value:number,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return money(series&&pointAt(series,at,cellMs)?.value,unit,true,context);},
       detail:(key:string,at:number)=>{
-        const series=entries.find(s=>moneyIdentity(s)===key),point=series&&pointAt(series,at,strip?.cell??history?.cellMs??60000);
+        const series=entries.find(s=>moneyIdentity(s)===key),point=series&&pointAt(series,at,cellMs);
         return <>{point?.semantics?.limit!==null&&point?.semantics?.limit!==undefined&&<div>{t('money.limitTotal')}: {money(point.semantics.limit,unit,true,context)}{point.semantics.resetAt!==null&&<div>{stamp(point.semantics.resetAt)}</div>}</div>}{point?.steps.map(step=><div key={step.from+':'+step.to}>{t('money.unlocated')}: {money(step.amount,unit,true,context)}<div>{stamp(step.from)} — {stamp(step.to)}</div></div>)}</>;
       }};
-  },[model,unit,locale,context,strip?.cell,history?.cellMs]);
+  },[model,unit,locale,context,cellMs]);
   previous.axes.set(axis,model?.domain??null);
   const onDrawing=useMemo(()=>(valueAxis:ValueAxis|undefined)=>{
     if(pose.current===previous)previous.domain=valueAxis?previous.axes.get(valueAxis)??null:null;
@@ -187,7 +188,7 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
     settings={<MoneyChartSettings arrange={arrange} widget={widget} family={family} sources={sources} series={history?.meterSeries??[]}/>}>
 
     <SeriesDetails focus={focus} entries={descriptions} panel={panel}/>
-    <Chart lines={lines} axis={axis} onDrawing={onDrawing} stepped from={frame.from} now={strip?now:measured} to={frame.to} cellMs={strip?.cell??history?.cellMs??60_000} strip={model?.strip??null} prepared={prepared.ready&&(panning!==null||answered||!!error||settledEmpty)} empty={error?null:noResources?t(funds?'analytics.noFunds':'analytics.noBudget'):noSelection?t('analytics.noSelection'):!history?null:t('money.unknown')} plot={plot} onBase={onBase} onSelect={setTimeRange} navigation={navigation} live={frame.live} clock={now} modelContext={modelContext}/>
+    <Chart lines={lines} axis={axis} onDrawing={onDrawing} stepped from={frame.from} now={strip?now:measured} to={frame.to} cellMs={cellMs} strip={model?.strip??null} prepared={prepared.ready&&(panning!==null||answered||!!error||settledEmpty)} empty={error?null:noResources?t(funds?'analytics.noFunds':'analytics.noBudget'):noSelection?t('analytics.noSelection'):!history?null:t('money.unknown')} plot={plot} onBase={onBase} onSelect={setTimeRange} navigation={navigation} live={frame.live} clock={now} modelContext={modelContext}/>
     {legend}
   </AnalyticsPanel>;
 }

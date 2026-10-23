@@ -180,6 +180,8 @@ export const SESSION_ACTIVITY_SCENES=[
  * wheel and Shift-drag with delayed history on all five charts. Cooperative preparation
  * and the held final pose are checked by ui/test/prepare.test.ts, history.test.ts and
  * timeAxisMotion.test.ts; they add no lasting demo state.
+ * Cross-period monetary grid handoff is held by ui/test/moneyPanDomain.test.ts:
+ * both preparation owners keep the prior curve until their replacement is ready.
  * Animated date clipping, glyph width and shared-clock replacements are held by
  * ui/test/axisTicks.test.ts and axisTickAnimation.test.ts, including reduced motion.
  * Calendar prefix reuse across fresh revisions, missing live-tail evidence and
@@ -609,6 +611,8 @@ const all: DemoSet = {
         'The table is 30 rows tall: room under it on a wide screen; on a narrow one, where it is a list, it is as tall as its rows',
         'The chart\'s tooltip has a row for every line in the legend\'s order, with what is left, the plan and the gap in columns up to now, and after it the plan and where each forecast leads; on a phone it stays whole on the screen',
         'The chart\'s settings switch the plan and the forecast on and off, under "On the chart"',
+        'At 3 days, all five chart axes retain date context on wide screens while intermediate ticks show the clock; narrow daily ticks keep their dates. Compare EN/RU, a historical range and the live forecast margin.',
+        'Scoped quota names separate their lead and quieter detail across cards, compact rows, Resources, legends and tables. Forecast captions keep their measured fit and full tooltip; owner punctuation stays literal.',
         'On a narrow window the labels past the chart\'s right edge stay within the plot, the soonest first: those with no room are said together as "and N more →", which tells each of them and its time when pointed at or tapped',
         'Agent activity → Settings → Manage projects: quotum once, on the laptop, though three agents work in three folders (the tray and quotum\'s agents in the list\'s dialog show it three times, with hub and quotum.feat-18-desktop-app under two of them)',
         'Renamed or merged in Manage projects, a project is shown under its new name in the tray and the list of agents too, merged ones as one group',

@@ -17,10 +17,12 @@ import {level,windowName} from '../lib/quota';
 import {num,stamp} from '../lib/format';
 import {t,setLocale} from '../i18n';
 import type {Win} from '../lib/types';
+import {nameRenderer} from './nameFixture';
 
 type Node={type:unknown;props:Record<string,unknown>};
 const jsx=(type:unknown,props:Record<string,unknown>):Node=>({type,props});
 const runtime={jsx,jsxs:jsx,Fragment:'fragment'};
+const Name=nameRenderer(runtime);
 const code=(file:string)=>readFileSync(new URL(file,import.meta.url),'utf8');
 function nodes(value:unknown):Node[] {
   if(Array.isArray(value))return value.flatMap(nodes);
@@ -48,7 +50,7 @@ test('multi-model cards keep the reported session and weekly pair visible throug
   const source={id:'native',provider:'antigravity',successAt:1,windows:[window('gemini:session','session','Gemini Pro'),window('gemini:weekly','weekly','Gemini'),window('claude:weekly','weekly','Claude')]};
   const hidden=new Set<string>();
   const context={exports:{} as Record<string,(props:unknown)=>Node>,draw:undefined as unknown as (props:unknown)=>Node,require:()=>runtime,
-    t,stamp,num,level,windowName,providerOf,quotaPeriods,primaryQuotaPeriods,hasSubscriptionCaps,budgetVisible,historicalCurrencyContext,
+    Name,t,stamp,num,level,windowName,providerOf,quotaPeriods,primaryQuotaPeriods,hasSubscriptionCaps,budgetVisible,historicalCurrencyContext,
     useDataFilters:()=>({current:null}),usePref:()=>({}),selectedAllowanceIds,usePeriodValues:()=>({value:null}),useTimeRange:()=>null,useCurrencyContext:()=>defaultCurrencyContext,
     isWindowHidden:(_view:unknown,_source:string,id:string)=>hidden.has(id),planOf:()=>null,MeasurementClock:{Provider:'clock'},PercentLimit:undefined as unknown,
     ResetLine:'reset',PlanNote:'plan-note',PlanMark:'plan-mark',Limit:undefined as unknown,
@@ -59,7 +61,8 @@ test('multi-model cards keep the reported session and weekly pair visible throug
   run(card.slice(limit,card.indexOf('\n/**',limit))+'\nglobalThis.Limit=Limit;');
   run(card.slice(measurements,card.indexOf('/** Historical funds',measurements))+'\nglobalThis.draw=CardMeasurements;');
   const render=()=>nodes(context.draw({source,arrange:{view:EMPTY_VIEW},boardId:'b'}));
-  const labels=(tree:Node[])=>tree.filter(node=>node.props.className==='limit-name').map(node=>node.props.children);
+  const text=(value:unknown):string=>Array.isArray(value)?value.map(text).join(''):typeof value==='string'||typeof value==='number'?String(value):value&&typeof value==='object'?text(typeof (value as Node).type==='function'?(value as any).type((value as Node).props):(value as Node).props.children):'';
+  const labels=(tree:Node[])=>tree.filter(node=>node.props.className==='limit-name').map(node=>text(node.props.children));
   const pair=[windowName(source.windows[0]),windowName(source.windows[1])];
   assert.deepEqual(labels(render()),pair,'a second model must not displace the first reported weekly limit');
   for(let i=1;i<=20;i++){
@@ -91,7 +94,7 @@ test('native historical values disclose their actual sample time while live valu
     const reading={value:read(selected.to),basis:{range:selected},loading:false,error:null};
     assert.equal(reading.value.windows[0].observedAt,at);assert.equal(reading.value.windows[0].stale,false);
     const context={useDataFilters:()=>({current:null}),usePref:()=>({}),selectedAllowanceIds,exports:{} as Record<string,(props:unknown)=>Node>,draw:undefined as unknown as (props:unknown)=>Node,require:()=>runtime,
-      t,stamp,num,level,windowName,providerOf,quotaPeriods,primaryQuotaPeriods,hasSubscriptionCaps,budgetVisible,historicalCurrencyContext,
+      Name,t,stamp,num,level,windowName,providerOf,quotaPeriods,primaryQuotaPeriods,hasSubscriptionCaps,budgetVisible,historicalCurrencyContext,
       usePeriodValues:()=>reading,useTimeRange:()=>selected,useCurrencyContext:()=>defaultCurrencyContext,
       isWindowHidden:()=>false,planOf:()=>null,MeasurementClock:{Provider:'clock'},PercentLimit:undefined as unknown,
       ResetLine:'reset',PlanNote:'plan-note',PlanMark:'plan-mark',PeriodStatus:'period-status',QuotaCard:'quota',Limit:undefined as unknown,AllHidden:'hidden',

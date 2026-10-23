@@ -6,6 +6,7 @@ import ts from 'typescript';
 import {announcementLayout, fitting, graphemes, labelRoom, shortName} from '../components/Chart';
 
 type Node={type:string;props:Record<string,any>};
+const content=(value:any):string=>Array.isArray(value)?value.map(content).join(''):typeof value==='string'||typeof value==='number'?String(value):value?.props?content(value.props.children):'';
 function fixture() {
   let index=0,dirty=false,font='12px',broken=false,overrun=false,mapping=false;
   const slots:any[]=[],effects:(()=>void)[]=[],insertions:(()=>void)[]=[];
@@ -25,10 +26,10 @@ export const boxes=new LabelBoxes();
 export ${region}`,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   const refs=(node:Node)=>{if(!node?.props)return;const {ref,children}=node.props;
     if(ref)ref.current={
-      getNumberOfChars:()=>String(children).length+(mapping?1:0),
+      getNumberOfChars:()=>content(children).length+(mapping?1:0),
       getSubStringLength:(_at:number,length:number)=>{calls.glyph++;if(broken)throw Error('font');return length*6;},
-      getComputedTextLength:()=>{calls.suffix++;if(broken)throw Error('font');return String(children).length*6;},
-      getBBox:()=>{calls.box++;if(broken)throw Error('font');const width=overrun?1000:String(children).length*6;return {x:Number(node.props.x)+(node.props.textAnchor==='end'?-width:0),width};},
+      getComputedTextLength:()=>{calls.suffix++;if(broken)throw Error('font');return content(children).length*6;},
+      getBBox:()=>{calls.box++;if(broken)throw Error('font');const width=overrun?1000:content(children).length*6;return {x:Number(node.props.x)+(node.props.textAnchor==='end'?-width:0),width};},
     };
     (Array.isArray(children)?children:[children]).forEach(child=>{if(Array.isArray(child))child.forEach(refs);else refs(child);});
   };
@@ -70,4 +71,23 @@ test('inside and outside narrow backings remain in the plot and under its width 
       assert.ok(start>=left&&stop<=right);assert.ok(room+12<=budget);
     }
   }
+});
+
+
+test('semantic forecast detail changes paint only after exact measured text and shortening are decided',()=>{
+  let whole=0,partial=0,omitted=0;
+  for(const room of [35,70,110,170,500]){
+    const name='Owner · literal Gemini scope',base=props(name,' 12h →',room),plain=fixture(),parts=fixture();
+    const old=plain.render(base),next=parts.render({...base,detailFrom:16});
+    const oldText=text(old),newText=text(next);
+    assert.equal(content(newText.props.children),content(oldText.props.children),'exact shown string must survive tspan segmentation');
+    const before=old.props.children.find((child:Node)=>child?.type==='rect'),after=next.props.children.find((child:Node)=>child?.type==='rect');
+    assert.deepEqual(JSON.parse(JSON.stringify(after.props)),JSON.parse(JSON.stringify(before.props)),'backing and fit remain exact');
+    assert.deepEqual(parts.calls,plain.calls,'segmentation adds no glyph or layout measurements');
+    const nodes=(value:any):Node[]=>Array.isArray(value)?value.flatMap(nodes):value?.props?[value,...nodes(value.props.children)]:[];
+    const detail=nodes(newText.props.children).find(node=>node.type==='tspan');
+    if(detail){assert.deepEqual(Object.keys(detail.props).sort(),['children','fill']);assert.equal(detail.props.fill,'var(--text-3)');if(content(detail.props.children).includes('…'))partial++;else whole++;}
+    else omitted++;
+  }
+  assert.ok(whole&&partial&&omitted,'full, shortened-detail and omitted-detail paths are exercised');
 });

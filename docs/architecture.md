@@ -2097,6 +2097,11 @@ zero, preserving unknown and unavailable evidence rather than borrowing the boar
 Monetary details and currency provenance appear in the shared glass tooltip
 anchored to the legend entry, using exact money presentation. They occupy no space
 at rest and do not constrain a widget's minimum height. Quota charts reserve no strip.
+Quota window and series names keep their source, scope and duration as semantic
+lines in plain text. Cards, compact rows, filters, legends and tables use the shared
+name renderer, with quieter details and the existing line allocation. Forecast SVG
+labels flatten those lines for their measured fit, then distinguish the detail by
+fill alone; their tooltip keeps the complete name. Owner punctuation stays literal.
 Recovery controls return keyboard focus before they disappear. A removed Retry
 returns to its surviving disclosure button; a retiring disclosure returns to an
 available control in the same widget, or its heading when no control remains.
@@ -2156,7 +2161,9 @@ Time labels share the moving HTML owner but sit outside the scaled SVG data grou
 Their translation and whole-label visibility use the data animation's easing and
 document timeline. Replacement labels join its original start; interruption freezes
 both at the sampled pose. Glyphs keep their width, and a date crossing an edge is
-shown only while it fits entirely inside the clip.
+shown only while it fits entirely inside the clip. At subdaily density, the first
+represented tick and each local day boundary name the date; the other ticks show
+the clock. Offscreen strip labels do not consume the visible interval's first date.
 One changed gesture creates one address entry; cancellation or returning to the exact
 origin creates none. A horizontal wheel ends after a 200 ms pause. An arriving event
 starts a new transaction only when both its capture and delivery gaps reach that
@@ -2201,6 +2208,11 @@ Replacing an overscan strip with exact cells cannot
 rescale unchanged balances. New values may expand the domain; an explicit range,
 currency, resource selection or authority establishes a new one. Its bounds stay in
 integer millionths independently of the prepared path's numeric offset.
+A compatible change of history cell size prepares a replacement while retaining
+the previous complete drawing. Both monetary preparation and the shared chart
+publish the cell size with their own model, so its paths, axis and exact readouts
+keep one grid until replacement. Authority, display context and geometry changes
+still retire an incompatible drawing immediately.
 Activity publishes a replacement only when its selected work and native drawing
 are both ready. A quota answer arriving first cannot publish its pending-work
 placeholder as an empty Activity chart. The previous complete work frame and its

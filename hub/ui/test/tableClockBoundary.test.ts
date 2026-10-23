@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {nodeOf,rendered,NODES} from '../../bench/probe';
+import {nameRenderer} from './nameFixture';
 
 const Fragment=Symbol('Fragment'),jsx=(type:any,props:any)=>({type,props:props??{}});
 let now=1000,clockReads=0;
@@ -19,7 +20,7 @@ const cells=load('../components/TableCell.tsx',{...runtime,'../lib/clock':{hubNo
   clockEnabled.push(enabled);if(enabled)clockReads++;else assert.equal(changesAt(now),null,'a static cell has no clock deadline');return now;
 }}});
 const previews=load('../components/TablePreview.tsx',{...runtime,'./Popover':popover,'../i18n':{t:(key:string)=>key}});
-const tables=load('../components/AnalyticsTable.tsx',{...runtime,'../lib/view':{},'../i18n':{t:(key:string)=>key},'./Popover':popover,'./TableWidget':{TableHeading:()=>null},'./TableCell':cells,'./TablePreview':previews});
+const tables=load('../components/AnalyticsTable.tsx',{...runtime,'./Kit':{Name:nameRenderer(runtime['react/jsx-runtime'])},'../lib/view':{},'../i18n':{t:(key:string)=>key},'./Popover':popover,'./TableWidget':{TableHeading:()=>null},'./TableCell':cells,'./TablePreview':previews});
 
 class Host {
   constructor(readonly tag:string,readonly props:any,readonly parent:Host|null){}

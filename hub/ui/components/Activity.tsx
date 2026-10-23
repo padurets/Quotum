@@ -1,11 +1,11 @@
 import {AnalyticsPanel} from './AnalyticsPanel';
 import {memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode} from 'react';
 import type {Activity as ActivityData, ActivityDimension, ActivityGroup} from '../lib/types';
-import {clock, num, shortDay, stamp, workHours} from '../lib/format';
+import {num, stamp, workHours} from '../lib/format';
 import {activityEmpty, activityScale, activityGroupName as groupName, atOnce, groupColors, activitySeriesKey} from '../lib/activity';
 import {ACTIVITY_BY, setPrefs, usePref} from '../lib/prefs';
 import {setTimeRange, timeRange, timeRangeKey, useTimeRange, type TimeRange} from '../lib/timeRange';
-import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks} from '../lib/periods';
+import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks, timeTickWords} from '../lib/periods';
 import {ACTIVITY, withHidden, type Arrange} from '../lib/view';
 import {useBoardId, useTitles,useProjectColorPins,useProjectColorsReady} from '../lib/board';
 import {hubNow,useClock} from '../lib/clock';
@@ -459,6 +459,7 @@ const Stacks = memo(function Stacks({
   const presentation = axis.presentation(coherent);
   const tickFrom = strip?.from ?? presentation.from, tickTo = strip?.to ?? presentation.to;
   const {ticks, daily} = niceTicks(tickFrom, tickTo, narrow ? 4 : 7, presentation);
+  const tickWords = timeTickWords(ticks,daily,presentation);
 
   const innerClip = `${clip}-inner`;
   const bandClip = useRef<HTMLDivElement>(null);
@@ -599,9 +600,9 @@ const Stacks = memo(function Stacks({
           </g>
         );})}</g>
       </svg>
-      <PlotLayer width={width} height={height} scale={scale} left={left} right={right} main ticks={ticks.map(tick => (
+      <PlotLayer width={width} height={height} scale={scale} left={left} right={right} main ticks={ticks.map((tick,index) => (
           <text key={tick} x={x(tick)} y={height - 8} textAnchor="middle" className="tick">
-            {daily ? shortDay(tick) : clock(tick)}
+            {tickWords[index]}
           </text>
         ))}>
 

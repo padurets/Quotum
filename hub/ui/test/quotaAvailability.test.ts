@@ -80,7 +80,7 @@ test('actual native chart generators never draw past an explicit bound or connec
     const context = {...hook,axis:{active:false,basis:{from:0,to:4000,end:4000}},
       incomingStrip:strip?{from:0,to:4000}:null,desiredFrom:0,desiredTo:4000,desiredNow:4000,requested:{from:0,to:4000,end:4000},incomingLines:[line],
       valueAxis:undefined,stepped:false,modelContext:'',navigation:undefined,desiredLive:false,incomingReady:true,incomingPlans:[],incomingForecasts:[],incomingMarkers:[],
-      cellMs:4000,width:4000,height:100,left:0,right:0,top:0,bottom:0,clipPrepared,plotPathPrepared,blockPaths:{current:new WeakMap()},NO_FORECASTS:[],
+      incomingCellMs:4000,width:4000,height:100,left:0,right:0,top:0,bottom:0,clipPrepared,plotPathPrepared,blockPaths:{current:new WeakMap()},NO_FORECASTS:[],
       draw:null as unknown as ()=>{value:{paths:{line:string;parts:{line:string}[]|null}[]}|null},
     };
     runInNewContext(ts.transpileModule(`function draw(){${region}\nreturn prepared;}\nglobalThis.draw=draw;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);

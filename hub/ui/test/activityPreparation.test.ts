@@ -18,7 +18,7 @@ import {plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../lib/histor
 import {StackPaths} from '../lib/stackPaths';
 import {groupRegistry} from '../lib/plotRegistry';
 import {cellStart} from '../../server/domain/history';
-import {niceTicks} from '../lib/periods';
+import {niceTicks,timeTickWords} from '../lib/periods';
 import {navigationAt,navigationKey} from '../lib/axisNavigation';
 import {preparationFixture} from './preparationFixture';
 
@@ -115,7 +115,7 @@ test('actual Activity composition resolves retained stacks and the new legend to
   type Row={group:ActivityGroup;color:string;name:string};
   type Frame={element:React.ReactElement<Record<string,unknown>>;legend:React.ReactNode;prepared:{value:unknown}};
   const context={...parent,React,numeric:null as any,loading:false,focus:{},Totals:()=>null,memo:(fn:unknown)=>fn,useEffect:()=>{},useId:()=> 'c',seriesFocusStyle:()=>({}),activitySeriesKey:(_by:string,key:string)=>key,boardPeriod,hubNow,useClock,usePanning,activityEmpty,
-    StackPaths:CountedPaths,stacksHeight:()=>160,activityScale,niceTicks,cellStart,navigationKey,MINUTE:60_000,CSS:{escape:(id:string)=>id},pan:{active:()=>null,subscribe:()=>()=>{},onStop:()=>()=>{}},
+    StackPaths:CountedPaths,stacksHeight:()=>160,activityScale,niceTicks,timeTickWords,cellStart,navigationKey,MINUTE:60_000,CSS:{escape:(id:string)=>id},pan:{active:()=>null,subscribe:()=>()=>{},onStop:()=>()=>{}},
     useLocale:()=> 'en',useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),PlotLayer:()=>null,PlotOverlay:()=>null,
     clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',t:(key:string)=>key,LegendItem:()=>null,groupName:(group:{name:string|null})=>group.name??'',
     EMPTY_CELLS:[],registry:{current:null},groups:[] as ActivityGroup[],colors:[] as string[],shown:[] as Row[],strip:null,by:'project',prefs:{},locale:'en',
@@ -190,7 +190,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
     EMPTY_CELLS: [], registry: {current: null}, groups: [], colors: [], shown: [], strip: buffer(0), by: 'project', prefs: {}, locale: 'en', history: {board: 'b'}, authority: 0, arrange: {view: {}}, titles: {},
     groupRegistry, groupName: (group: {key: string}) => group.key, activitySeriesKey: (_by: string, key: string) => key,
     plotGroupsPrepared: function* (...args: Parameters<typeof plotGroupsPrepared>) {aggregates++; return yield* plotGroupsPrepared(...args);},
-    StackPaths: CountedPaths, stacksHeight: () => 160, activityScale, niceTicks: (...args: Parameters<typeof niceTicks>) => {tickFrame = [args[0], args[1]]; return niceTicks(...args);}, cellStart,plotBar,plotTarget,targetOf, MINUTE: 60_000,
+    StackPaths: CountedPaths, stacksHeight: () => 160, activityScale, timeTickWords, niceTicks: (...args: Parameters<typeof niceTicks>) => {tickFrame = [args[0], args[1]]; return niceTicks(...args);}, cellStart,plotBar,plotTarget,targetOf, MINUTE: 60_000,
     CSS: {escape: (id: string) => id}, pan: {active: () => 1, subscribe: () => () => {},onStop:()=>()=>{}}, useLocale: () => 'en',
     useTimeAxis: () => axis,
     useTip: () => ({tip: {current: null}, style: {}}), PlotLayer: () => null, PlotOverlay: () => null, Tooltip: () => null,

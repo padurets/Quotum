@@ -71,7 +71,7 @@ test('the actual prepared money chart keeps its value axis, step geometry and ex
   const context={context:defaultCurrencyContext,...hook,axis:{active:false,basis:{from:0,to:120000,end:60000}},incomingLines:[{key:'money',points:[[0,0,1],[60000,10,1]]}],
     incomingPlans:[],incomingForecasts:[],incomingMarkers:[],incomingStrip:null,desiredFrom:0,desiredTo:120000,desiredNow:60000,
     desiredLive:true,incomingReady:true,modelContext:'money',navigation:undefined,valueAxis,stepped:true,
-    cellMs:60000,width:900,height:220,left:40,right:12,top:12,bottom:28,clipPrepared,plotPathPrepared,
+    incomingCellMs:60000,width:900,height:220,left:40,right:12,top:12,bottom:28,clipPrepared,plotPathPrepared,
     draw:null as unknown as ()=>{value:{valueAxis:typeof valueAxis;paths:{line:string;latest:string}[]}|null;ready:boolean}};
   const source=readFileSync(new URL('../components/Chart.tsx',import.meta.url),'utf8'),start=source.indexOf('  const inputs = ');
   const region=source.slice(start,source.indexOf('  const model = ',start));
@@ -114,7 +114,7 @@ for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'reso
     const component = {exports: {} as {MoneyHistory: (props: unknown) => ReactElement<{children: ReactElement[]}>}, require: (name: string) => modules[name] ?? {}};
     runInNewContext(ts.transpileModule(readFileSync(new URL('../components/MoneyAnalytics.tsx', import.meta.url), 'utf8'), {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX}}).outputText, component);
     const child = {...inner, axis: {active: false, basis: {from: 0, to: 120000, end: 60000}}, incomingPlans: [], incomingForecasts: [], incomingMarkers: [], incomingStrip: null,
-      desiredFrom: 0, desiredTo: 120000, desiredNow: 60000, desiredLive: true, navigation: undefined, stepped: true, cellMs: 60000,
+      desiredFrom: 0, desiredTo: 120000, desiredNow: 60000, desiredLive: true, navigation: undefined, stepped: true, incomingCellMs: 60000,
       width: 900, height: 220, left: 40, right: 12, top: 12, bottom: 28, clipPrepared, plotPathPrepared,
       draw: null as unknown as () => {value: {lines: {sourceId: string}[]; paths: {line: string; latest: string}[]; valueAxis: unknown} | null; ready: boolean}};
     const source = readFileSync(new URL('../components/Chart.tsx', import.meta.url), 'utf8'), start = source.indexOf('  const inputs = ');
@@ -124,7 +124,7 @@ for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'reso
       const tree = component.exports.MoneyHistory({arrange: {view, owner: false}});
       const chart = tree.props.children.find(node => node?.type === Chart)! as ReactElement<ComponentProps<typeof ChartComponent>>;
       outer.commit();
-      Object.assign(child, {incomingLines: chart.props.lines, incomingReady: chart.props.prepared, valueAxis: chart.props.axis, modelContext: chart.props.modelContext});
+      Object.assign(child, {incomingCellMs: chart.props.cellMs, incomingLines: chart.props.lines, incomingReady: chart.props.prepared, valueAxis: chart.props.axis, modelContext: chart.props.modelContext});
       inner.begin(); const result = child.draw(); inner.commit(); return result;
     };
     const settle = () => {for (let i = 0; i < 4; i++) {draw(); outer.finish(); inner.finish();} return draw();};

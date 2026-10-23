@@ -6,15 +6,15 @@ import {duration, durationUntilChangesAt} from './format';
 export {level, type Level} from '../../server/domain/attention';
 export {titled} from '../../server/domain/presentation';
 
-/** A kind inside a longer name: "Gemini · weekly". */
+/** A kind inside a longer name: "Gemini\nweekly". */
 const kindText = (kind: Exclude<Kind, 'other'>) => t(kind === 'session' ? 'kind.session' : 'kind.weekly');
 /** A kind on its own: "Weekly". */
 const kindTitle = (kind: Exclude<Kind, 'other'>) => t(kind === 'session' ? 'kind.title.session' : 'kind.title.weekly');
 
-/** "Weekly", "Gemini · weekly" or "1h" — how a window is named inside its own card. */
+/** "Weekly", "Gemini\nweekly" or "1h" — how a window is named inside its own card. */
 export function windowName(w: {kind: Kind; label: string | null; minutes: number | null}) {
-  if (w.kind === 'other') return [w.label, w.minutes ? duration(w.minutes * 60_000) : ''].filter(Boolean).join(' · ');
-  return w.label ? `${w.label} · ${kindText(w.kind)}` : kindTitle(w.kind);
+  if (w.kind === 'other') return [w.label, w.minutes ? duration(w.minutes * 60_000) : ''].filter(Boolean).join('\n');
+  return w.label ? `${w.label}\n${kindText(w.kind)}` : kindTitle(w.kind);
 }
 
 /** What a card says under a limit about its reset: in how long, that the time has passed, or that it is not known. */
@@ -37,7 +37,7 @@ export const sourceLabel = (source: {provider: string; title?: string}) =>
  * (Fable, Gemini). Whether the windows are weekly or 5-hour is said once, above them.
  */
 export const seriesName = (source: {provider: string; title?: string}, w: {kind: Kind; label: string | null; minutes: number | null}) =>
-  [sourceLabel(source), w.kind === 'other' ? windowName(w) : w.label].filter(Boolean).join(' · ');
+  [sourceLabel(source), w.kind === 'other' ? windowName(w) : w.label].filter(Boolean).join('\n');
 
 /** What a source's error code means, in the reader's language. */
 export function errorText(code: string) {

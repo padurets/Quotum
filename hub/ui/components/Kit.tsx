@@ -1,3 +1,4 @@
+/** @jsxRuntime automatic */
 import {chooseLocale} from '../lib/app';
 import {useLayoutEffect, useId, useRef, useState, type InputHTMLAttributes, type SelectHTMLAttributes, type MouseEventHandler, type ReactNode} from 'react';
 import {createPortal} from 'react-dom';
@@ -5,6 +6,14 @@ import {LOCALES, t, useLocale, type Locale} from '../i18n';
 import {messageOf} from '../lib/http';
 
 export const SERVICE = 'Quotum';
+
+/** Semantic name parts stay separate in both visible text and accessible wording. */
+export function Name({name}: {name: string}) {
+  return name.split('\n').flatMap((part,index)=>[
+    index>0?'\n':null,
+    <span key={index} className={index?'name-detail':undefined}>{part}</span>,
+  ]);
+}
 
 /** The dialogs open now, the last on top: only it answers Escape, and the page stays out of reach until none is left. */
 const dialogs: {panel: HTMLDivElement; overlay: HTMLElement}[] = [];

@@ -13,7 +13,7 @@ import {plotLayerFixture} from './plotLayerFixture';
 import {drain} from '../lib/prepare';
 import {Pan} from '../lib/pan';
 import {navigationKey} from '../lib/axisNavigation';
-import {niceTicks} from '../lib/periods';
+import {niceTicks,timeTickWords} from '../lib/periods';
 import {cellStart} from '../../server/domain/history';
 import type {History} from '../lib/types';
 import {defaultFilters} from '../../server/domain/dataFilters';
@@ -140,7 +140,7 @@ test('the actual empty activity result keeps its time axis and legend container 
   const x = (at: number) => 48 + (at - range.from) / DAY * 340;
   const authorities:number[]=[];
   const context = {paint:new Map(),AnalyticsPanel,quotaHistory:{retry:()=>{}},error:undefined as 'history_failed'|undefined,authority:3,
-    board:'b',geometry:{numeric:{history:{range:history.range,since:history.since,activity:history.activity},since:null},identities:[]},resolved:new Map(),focus:{},navigationKey, navigation: {context: 'test', range: 'range'}, React, ...React, CSS: {escape: (id: string) => id}, StackPaths, stacksHeight, activityScale, niceTicks, cellStart, activityEmpty, MINUTE: M, clipPlot, PlotLayer, PlotOverlay, usePreparationBasis: (basis: unknown,_inputs:unknown,_active:unknown,_ready:unknown,authority:number) => {authorities.push(authority);return basis;}, usePrepared: (work: () => Generator<void, unknown, void>) => ({value: drain(work()), ready: true}), EMPTY_ACTIVITY: history.activity,
+    board:'b',geometry:{numeric:{history:{range:history.range,since:history.since,activity:history.activity},since:null},identities:[]},resolved:new Map(),focus:{},navigationKey, navigation: {context: 'test', range: 'range'}, React, ...React, CSS: {escape: (id: string) => id}, StackPaths, stacksHeight, activityScale, niceTicks, timeTickWords, cellStart, activityEmpty, MINUTE: M, clipPlot, PlotLayer, PlotOverlay, usePreparationBasis: (basis: unknown,_inputs:unknown,_active:unknown,_ready:unknown,authority:number) => {authorities.push(authority);return basis;}, usePrepared: (work: () => Generator<void, unknown, void>) => ({value: drain(work()), ready: true}), EMPTY_ACTIVITY: history.activity,
     pan: new Pan({now: () => NOW, commit: () => {}, requestFrame: () => null, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}}),
     useLocale: () => locale, useActivityNumbers:(history:Pick<History,'activity'>|null)=>history?.activity??null, useTimeAxis: () => ({box: {current: null}, svg: {current: null}, width: 400, scale: 1, active:panning,panning, hover: null, drag: null, clip: 'c', handlers: {}, basis: {...range, end: range.to}, visualGeometry:()=>({...range,end:range.to}),presentation:()=>range,x, drawX: x, screenX: x, commitDrawing: () => {}}),
     hubNow:()=>NOW,clock: () => '', shortDay: () => '', workHours: () => '', stamp: () => '', t: (key:Key,params?:Record<string,string|number>) => t(key,params),

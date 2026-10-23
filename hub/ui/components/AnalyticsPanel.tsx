@@ -6,6 +6,7 @@ import {t} from '../i18n';
 import {usePref} from '../lib/prefs';
 import {timeRangeKey, useTimeRange} from '../lib/timeRange';
 import {seriesFocusStyle} from './seriesFocus';
+import {Name} from './Kit';
 
 /** The same heading and reader state for every analytics widget. */
 export function AnalyticsPanel({ref, className, title, controls, settings, history, loading, error, retry, chart, children,details}: {
@@ -32,6 +33,6 @@ export function SeriesLegendItem({seriesKey, name, description, color, dash, chi
   const id=useId();
   return <><button type="button" className="legend-item" data-series-legend data-series-key={seriesKey} style={seriesFocusStyle(seriesKey)} aria-describedby={description?id:undefined} aria-pressed={false}>
     <svg width="18" height="6" aria-hidden="true"><line x1="1" x2="17" y1="3" y2="3" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeDasharray={dash || undefined}/></svg>
-    <span>{name}</span>{children}
+    <span><Name name={name}/></span>{children}
   </button>{description&&<span id={id} className="sr-only">{description}</span>}</>;
 }

@@ -15,7 +15,7 @@ import {clientName} from '../../server/domain/clients';
 import {executableWorkFilters,fundsRule,matchesSelection,matchesSource,type DataFilters,type FamilyRef,type Selection} from '../../server/domain/dataFilters';
 import {moneyFamily,providerOf} from '../../server/domain/providers';
 import {FilterGroup,FilterOptions,FilterPopover,FilterRow,FilterSearch} from './Filters';
-import {ErrorLine} from './Kit';
+import {ErrorLine,Name} from './Kit';
 import {Popover} from './Popover';
 import {messageOf} from '../lib/http';
 import {KeyMoneySettings} from './MoneySettings';
@@ -50,7 +50,7 @@ function Resource({source,filters,wallets,fundsUnit,visible,series}:{source:Name
   const hasChildren=!!windows.length||funds||wallet,title=source.title??source.id;
   return <FilterGroup label={title} icon={<img src={logoOf(source.provider)} alt=""/>} on={enabled} onChange={on=>dataFilters.toggle('sources',{source:source.id},on)} hidden={!visible}>
     {hasChildren?expanded=><>
-      {windows.map(window=><FilterRow key={window.id} on={matchesSelection(filters.windows,[source.id,window.id])} onChange={on=>dataFilters.toggle('windows',[source.id,window.id],on)}>{windowName(window)}</FilterRow>)}
+      {windows.map(window=><FilterRow key={window.id} on={matchesSelection(filters.windows,[source.id,window.id])} onChange={on=>dataFilters.toggle('windows',[source.id,window.id],on)}><Name name={windowName(window)}/></FilterRow>)}
       {funds&&<FilterRow on={matchesSelection(fundsRule(filters,fundsUnit),source.id)} onChange={on=>dataFilters.toggle('funds',source.id,on,fundsUnit)}>{t('money.additionalFunds')}</FilterRow>}
       {wallet&&<KeyMoneySettings source={source} sources={wallets} hidden={[]} series={series} active={visible&&expanded}/>}
     </>:undefined}

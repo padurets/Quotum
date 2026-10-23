@@ -84,11 +84,11 @@ export function ResetLine({w, short = false}: {w: Win; short?: boolean}) {
 
 /** The same remaining-quota meter in a card and in the tray's compact rows. */
 export function LimitMeter({w, children}: {w: Win; children?: ReactNode}) {
-  return <MeterBar remaining={w.remaining} label={windowName(w).replaceAll(' · ', '\n')}>{children}</MeterBar>;
+  return <MeterBar remaining={w.remaining} label={windowName(w)}>{children}</MeterBar>;
 }
 
 function Limit({w, measuredAt, weekly,details=false}: {w: Win & {stale?:boolean;observedAt?:number}; measuredAt: number | null; weekly: WeeklyPlan | null;details?:boolean}) {
-  return <><PercentLimit name={details?windowName(w).replaceAll(' · ','\n'):windowName(w)} remaining={w.remaining} precise={details}
+  return <><PercentLimit name={windowName(w)} remaining={w.remaining} precise={details}
     valueTitle={w.observedAt===undefined?undefined:[t('source.measured',{at:stamp(w.observedAt)}),w.stale?t('money.stale'):null].filter(Boolean).join('\n')}
     status={w.observedAt!==undefined&&<small className="key-status" role="img" aria-hidden={!w.stale} title={w.stale?`${t('money.stale')}\n${stamp(w.observedAt)}`:undefined}/>}
     reset={details?<span>{w.resetAt===null?t('limit.resetUnknown'):stamp(w.resetAt)}</span>:<ResetLine w={w}/>} note={<PlanNote w={w} measuredAt={measuredAt} weekly={weekly}/>}
@@ -540,7 +540,7 @@ function MeasurementDetails({source,arrange}:{source:Card;arrange:Arrange}) {
     <div className="popover-pad measurement-details">
       {selected&&<PeriodStatus {...reading}/>}
       <MeasurementClock.Provider value={selected?reading.basis?.range.to??selected.to:null}>
-        {periods.map(period=>{const w=windows.find(w=>w.id===period.id);return w?<div key={w.id}><Limit w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={planOf(arrange.view,source.id)} details/></div>:hasSubscriptionCaps(source.provider)&&value?<QuotaCard key={period.id} source={value} ids={[period.id]} details/>:<div key={period.id}><PercentLimit name={windowName(period).replaceAll(' · ','\n')} remaining={null} status={<small className="key-status" role="img" title={t('quota.unavailable')} aria-label={t('quota.unavailable')}/>} reset={<span>—</span>} precise valueTitle={t('quota.unavailable')}/><small className="measurement-proof">{t('quota.unavailable')}</small></div>;})}
+        {periods.map(period=>{const w=windows.find(w=>w.id===period.id);return w?<div key={w.id}><Limit w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={planOf(arrange.view,source.id)} details/></div>:hasSubscriptionCaps(source.provider)&&value?<QuotaCard key={period.id} source={value} ids={[period.id]} details/>:<div key={period.id}><PercentLimit name={windowName(period)} remaining={null} status={<small className="key-status" role="img" title={t('quota.unavailable')} aria-label={t('quota.unavailable')}/>} reset={<span>—</span>} precise valueTitle={t('quota.unavailable')}/><small className="measurement-proof">{t('quota.unavailable')}</small></div>;})}
       </MeasurementClock.Provider>
       {empty&&!reading.loading&&!reading.error&&<p>{t('period.noEvidence')}</p>}
     </div>

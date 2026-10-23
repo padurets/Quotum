@@ -1,5 +1,5 @@
 import {t} from '../i18n';
-import {clock, day, stamp} from './format';
+import {clock, day, shortDay, stamp} from './format';
 import type {Horizon} from './prefs';
 import {timeRangeKey, type TimeRange} from './timeRange';
 
@@ -87,6 +87,17 @@ export function niceTicks(from: number, to: number, count: number, viewport?: {f
 }
 
 const sameDay = (a: number, b: number) => new Date(a).toDateString() === new Date(b).toDateString();
+
+/** Keep the first represented day and later local day boundaries readable at subdaily density. */
+export function timeTickWords(ticks: readonly number[], daily: boolean, presentation: {from:number;to:number}) {
+  let represented = false;
+  return ticks.map((at, index) => {
+    const inside = at >= presentation.from && at <= presentation.to;
+    const date = daily || index === 0 || !sameDay(ticks[index - 1], at) || inside && !represented;
+    if (inside) represented = true;
+    return date ? shortDay(at) : clock(at);
+  });
+}
 
 /**
  * A cell's times under its day. Cells are laid on UTC, so one may cross midnight here, and

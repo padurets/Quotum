@@ -6,7 +6,7 @@ import ts from 'typescript';
 import {plotPathPrepared} from '../lib/plotPath';
 import {clipPrepared} from '../lib/forecast';
 import {preparationFixture} from './preparationFixture';
-import {niceTicks} from '../lib/periods';
+import {niceTicks,timeTickWords} from '../lib/periods';
 
 test('actual quota generators prepare outside render and retain displayed paths through replacement and cancellation', () => {
   const cellMs = 60_000, end = 720 * cellMs;
@@ -18,7 +18,7 @@ test('actual quota generators prepare outside render and retain displayed paths 
   type Model = {paths: {line: string; last: [number, number] | null}[]};
   const context = {...hook, axis: {active: false}, incomingStrip: null as object | null,
     desiredFrom: 0, desiredTo: end, desiredNow: end, requested: {from: 0, to: end, end}, incomingLines: lines,
-    valueAxis: undefined, stepped: false, modelContext: '', navigation: undefined, desiredLive: true, incomingReady: true, incomingPlans: [], incomingForecasts: [], incomingMarkers: [], cellMs, width: 900, height: 220, left: 40, right: 12, top: 12, bottom: 28, clipPrepared,
+    valueAxis: undefined, stepped: false, modelContext: '', navigation: undefined, desiredLive: true, incomingReady: true, incomingPlans: [], incomingForecasts: [], incomingMarkers: [], incomingCellMs:cellMs, width: 900, height: 220, left: 40, right: 12, top: 12, bottom: 28, clipPrepared,
     plotPathPrepared: function* (...args: Parameters<typeof plotPathPrepared>) {calculations++; return yield* plotPathPrepared(...args);},
     formatLatest: (value: string) => {markerStrings++; return value;},
     draw: null as unknown as () => {value: Model | null; ready: boolean},
@@ -68,7 +68,7 @@ test('the shared chart labels its presentation independently of the saved numeri
   const start=source.indexOf('  const tickFrom = '),region=source.slice(start,source.indexOf('  useLayoutEffect(() => {axis.commitDrawing',start));
   assert.ok(start>=0&&region.includes('niceTicks'));
   const H=3_600_000,to=Date.UTC(2026,9,23,3,17,17),basis={from:to-72*H,to};
-  const context={niceTicks,strip:null as {from:number;to:number}|null,axis:{held:false},presentation:{...basis},basis,from:basis.from,to:basis.to,width:400,span:72*H,read:null as unknown as ()=>number[]};
+  const context={niceTicks,timeTickWords,strip:null as {from:number;to:number}|null,axis:{held:false},presentation:{...basis},basis,from:basis.from,to:basis.to,width:400,span:72*H,read:null as unknown as ()=>number[]};
   runInNewContext(ts.transpileModule(`globalThis.read=()=>{${region}\nreturn ticks;};`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
   const read=()=>[...context.read()],original=read();
   assert.equal(original.length,3);

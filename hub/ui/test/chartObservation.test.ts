@@ -22,7 +22,7 @@ test('a committed credit heartbeat retains its observation when the carried outl
   visit(parsed);assert.ok(axisDeclaration);
   const region=axisDeclaration.getText(parsed);
   type Axis={min:number;max:number;rawValue:(key:string,at:number)=>string|undefined;observation?:(key:string,at:number)=>{at:number;value:string}|undefined};
-  const money={moneyIdentity,moneyPointAt,meterPointIn,useMemo:(work:()=>unknown)=>work(),t:()=>'',symbol:'$',unit:'USD',locale:'en',context:{},strip:null,history:{cellMs:cell},settings:{view:'balance'},
+  const money={moneyIdentity,moneyPointAt,meterPointIn,useMemo:(work:()=>unknown)=>work(),t:()=>'',symbol:'$',unit:'USD',locale:'en',context:{},cellMs:cell,strip:null,history:{cellMs:cell},settings:{view:'balance'},
     makeAxis:null as unknown as (entries:ReturnType<typeof series>[])=>Axis};
   const pointStart=moneySource.indexOf('const pointAt='),pointEnd=moneySource.indexOf('\n',pointStart);
   runInNewContext(ts.transpileModule(`${moneySource.slice(pointStart,pointEnd)}
@@ -34,7 +34,7 @@ test('a committed credit heartbeat retains its observation when the carried outl
   type Model={paths:{line:string;last:[number,number]|null;latest:string;observation?:string}[]};
   const chart={...hook,axis:{active:false,basis:{from:now-86400000,to:now,end:now}},incomingLines:[line()],incomingPlans:[],incomingForecasts:[],incomingMarkers:[],incomingStrip:null,
     desiredFrom:now-86400000,desiredTo:now,desiredNow:now,desiredLive:true,incomingReady:true,modelContext:'funds',navigation:undefined,
-    valueAxis:money.makeAxis([series(firstAt)]),stepped:true,cellMs:cell,width:900,height:220,left:76,right:12,top:12,bottom:28,
+    valueAxis:money.makeAxis([series(firstAt)]),stepped:true,incomingCellMs:cell,width:900,height:220,left:76,right:12,top:12,bottom:28,
     clipPrepared,plotPathPrepared,observationRunsPrepared,draw:null as unknown as ()=>{value:Model|null;ready:boolean}};
   const source=readFileSync(new URL('../components/Chart.tsx',import.meta.url),'utf8'),chartStart=source.indexOf('  const inputs = ');
   const chartRegion=source.slice(chartStart,source.indexOf('  const model = ',chartStart));

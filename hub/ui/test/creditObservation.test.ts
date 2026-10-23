@@ -125,7 +125,7 @@ function drawing(h:Awaited<ReturnType<typeof creditHistory>>,initial:Update,page
   runInNewContext(ts.transpileModule(moneySource,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,component);
   const chartSource=readFileSync(new URL('../components/Chart.tsx',import.meta.url),'utf8'),start=chartSource.indexOf('  const inputs = '),region=chartSource.slice(start,chartSource.indexOf('  const model = ',start));
   const child={...inner,axis:{active:false,basis:{from:initial.now-DAY,to:initial.now,end:initial.now}},incomingLines:[] as Line[],incomingReady:false,valueAxis:undefined as ChartProps['axis'],modelContext:'',
-    incomingPlans:[],incomingForecasts:[],incomingMarkers:[],incomingStrip:null,desiredFrom:initial.now-DAY,desiredTo:initial.now,desiredNow:initial.now,desiredLive:true,navigation:undefined,stepped:true,cellMs:h.cell,
+    incomingPlans:[],incomingForecasts:[],incomingMarkers:[],incomingStrip:null,desiredFrom:initial.now-DAY,desiredTo:initial.now,desiredNow:initial.now,desiredLive:true,navigation:undefined,stepped:true,incomingCellMs:h.cell,
     width:1240,height:160,left:76,right:12,top:12,bottom:28,clipPrepared,plotPathPrepared,observationRunsPrepared,draw:null as unknown as ()=>Drawn};
   runInNewContext(ts.transpileModule(`function draw(){${region}\nreturn prepared;}\nglobalThis.draw=draw;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,child);
   const groupStart=chartSource.indexOf('  const seriesArtwork='),groupEnd=chartSource.indexOf('  const seriesEnds=',groupStart);
@@ -142,7 +142,7 @@ function drawing(h:Awaited<ReturnType<typeof creditHistory>>,initial:Update,page
   const render=()=>{
     outer.begin();const tree=component.exports.MoneyHistory({family:'funds',arrange:{view:EMPTY_VIEW,owner:false}});
     const chart=tree.props.children.find(node=>node?.type===Chart) as ReactElement<ChartProps>;assert.ok(chart);
-    outer.commit();Object.assign(child,{incomingLines:chart.props.lines,incomingReady:chart.props.prepared,valueAxis:chart.props.axis,modelContext:chart.props.modelContext,
+    outer.commit();Object.assign(child,{incomingCellMs:chart.props.cellMs,incomingLines:chart.props.lines,incomingReady:chart.props.prepared,valueAxis:chart.props.axis,modelContext:chart.props.modelContext,
       desiredFrom:chart.props.from,desiredTo:chart.props.to,desiredNow:chart.props.now});child.axis.basis={from:chart.props.from,to:chart.props.to,end:chart.props.now};
     inner.begin();const result=child.draw();commit(result.value);inner.commit();return result;
   };
