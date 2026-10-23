@@ -87,7 +87,8 @@ This preparation is diagnostic and does not run in ordinary benchmarks.
 After the command fails, the control also resolves identity on the original page
 connection using browser navigation evidence retained before the original navigation.
 It must match the pre-input PID and birth at both ends of native capture, within the
-existing collection limits. History controls continue to use their pre-input binding.
+existing collection limits. This independent pre-input oracle remains part of SDK
+qualification; it does not run in the direct history scroll control.
 It holds one synchronous HTTP request from its own fixture page until the original
 30-second command timeout, then requires native main-thread frames and confirmed
 cleanup, including the fixture's pending connection. This exercises native unwinding;
@@ -689,11 +690,15 @@ It runs one owned benchmark process with the original controlled traffic prefix,
 24 native history cohorts and the six native cancellation cohorts, with every original
 assertion, reference-cut rule and deadline. The diagnostic prefix must complete without
 invalidations or budget failures. GDB is prepared before the run and first used only
-after an original failed command. Each native page first binds its primary frame to an
-owned renderer through a completed metadata trace, before any gesture. Unknown identity
-stops that page before input; a later lost or ambiguous binding permits neither native
-attach nor a page-debugger fallback. Reports retain binding validity before and after
-capture. This preparation's performance effects are not qualified.
+after an original failed command. In the direct history scroll control, passive original
+navigation evidence must establish the document before input; this does not bind a PID.
+Only after an original failure does the same page connection resolve its owned renderer
+and birth through a completed metadata trace, within the existing collection limit.
+Unknown or lost document or renderer identity permits neither native attach nor a page
+debugger fallback. Reports retain actual binding bookends only when it is resolved.
+The first failure stops without a diagnostic replay. Startup, compositor and legacy
+controls retain their pre-input metadata binding and existing reversal replay.
+The effects of diagnostic preparation are not qualified.
 This control also downloads the official debug archive
 for the installed Chrome version and installs only its unwind tables under the matching
 system build ID. Build IDs and the retained table bytes must agree; full symbol and

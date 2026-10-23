@@ -6,7 +6,7 @@ import type {RendererIdentity} from './rendererIdentity.js';
 
 type DocumentMark={atMs:number;frame?:string;loader?:string};
 export type DiagnosticOrigin={startedAt:number;navigation:()=>{requested?:DocumentMark;committed?:DocumentMark;loadAtMs:number|null}};
-type Options = {renderer?:RendererIdentity; mode?: 'canonical' | 'diagnostic'; profileBeforeInput?: boolean; postmortem?:boolean; closeTarget?: () => Promise<void>;signal?:AbortSignal;origin?:DiagnosticOrigin};
+type Options = {lateRenderer?:{validDocument():boolean;resolve(signal:AbortSignal):Promise<RendererIdentity>};renderer?:RendererIdentity; mode?: 'canonical' | 'diagnostic'; profileBeforeInput?: boolean; postmortem?:boolean; closeTarget?: () => Promise<void>;signal?:AbortSignal;origin?:DiagnosticOrigin};
 type Process = {type: string; id: number; cpuTime: number};
 type ProcessSample = {status: 'pending' | 'observed' | 'unavailable'; fromMs: number; toMs: number | null; processes?: ProcessIdentity[]; omitted?: number};
 const PAGE_LIVENESS = '({visibility:document.visibilityState,focus:document.hasFocus(),ready:document.readyState})';
@@ -19,6 +19,7 @@ export const bounded = <T>(label: string, work: (signal: AbortSignal) => Promise
 /** Canonical observation is passive until the unchanged command deadline has failed. */
 export async function observeReversal(page: Cdp, browser: Browser, options: Options = {}) {
   const diagnostic = options.mode === 'diagnostic';
+  if(options.lateRenderer&&(options.renderer||diagnostic||options.profileBeforeInput))throw Error('Conflicting renderer identity options');
   const id = ++serial, signal = options.signal&&browser.owner?AbortSignal.any([options.signal,browser.owner.signal]):options.signal??browser.owner?.signal;
   let intervention = false, capture: Promise<void> | undefined, released = false;
   let nativeCapture:ReturnType<NonNullable<Browser['nativePostmortem']>>|undefined;
@@ -147,25 +148,33 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
         // A failed owned page can be inspected after its original deadline;
         // accepted commands and attached browsers remain passive.
         const postmortem=options.postmortem&&browser.owned&&page.snapshot().failure&&report.page==='unresponsive';
-        let nativeIntervention=false;
+        let nativeIntervention=false,renderer=options.renderer;
+        if(postmortem&&options.lateRenderer){
+          report.nativeBinding=false;
+          if(!options.lateRenderer.validDocument())return;
+          try{renderer=await options.lateRenderer.resolve(pending);}catch{return;}
+          report.rendererAtCapture=renderer.evidence();
+          const pid=renderer.pid,birth=renderer.birth;
+          if(!options.lateRenderer.validDocument()||!renderer.valid()||pid===null||birth===null||renderers.filter(value=>value.pid===pid).length!==1)return;
+        }
         if(postmortem&&!diagnostic&&browser.nativePostmortem){
           report.postmortem=true;
           let candidates=renderers;
-          if(options.renderer){
-            const identity=options.renderer;report.rendererAtCapture=identity.evidence();
+          if(renderer){
+            const identity=renderer;report.rendererAtCapture=identity.evidence();
             const pid=identity.pid,birth=identity.birth,selected=renderers.filter(value=>value.pid===pid);
             if(!identity.valid()||pid===null||birth===null||selected.length!==1){report.nativeBinding=false;return;}
             candidates=[{...selected[0],birth}];
           }
           nativeCapture=browser.nativePostmortem(candidates,pending);
           const native=await nativeCapture;report.nativeWait=native;nativeIntervention=native.intervened;
-          if(options.renderer){
-            const after=options.renderer.evidence();report.rendererAfterCapture=after;
+          if(renderer){
+            const after=renderer.evidence();report.rendererAfterCapture=after;
             report.nativeBinding=after.status==='known'&&native.pid===after.pid&&native.birth===after.birth;
           }
         }
         if (diagnostic||postmortem&&!nativeIntervention) {
-          if(options.renderer&&!options.renderer.valid()){report.nativeBinding=false;return;}
+          if(renderer&&!renderer.valid()||options.lateRenderer&&!options.lateRenderer.validDocument()){report.nativeBinding=false;return;}
           if(postmortem)report.postmortem=true;
           if (!intervention) await enable(pending);
           await send('Debugger.pause', pending);
@@ -184,7 +193,7 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
     async diagnose(label:string){signal?.throwIfAborted();capture??=collect(label);await capture;signal?.throwIfAborted();},
     async watch<T>(label: string, run: () => Promise<T>) {
       signal?.throwIfAborted();
-      if(options.renderer&&!options.renderer.valid())throw new Error('renderer identity invalidated before command');
+      if(options.renderer&&!options.renderer.valid()||options.lateRenderer&&!options.lateRenderer.validDocument())throw new Error('renderer identity invalidated before command');
       delete report.waiting; delete report.waitingProcesses;
       const passive = new AbortController(), pending = signal ? AbortSignal.any([signal, passive.signal]) : passive.signal;
       let waiting: {scenario: string; command: ReturnType<Cdp['snapshot']>; sample: ProcessSample} | undefined;

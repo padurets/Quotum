@@ -207,7 +207,7 @@ async function main() {
       const current = await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`);
       try{traffic=await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser, evidence,Boolean(scrollControl));}
       catch(error){
-        if(/browser\/(?:1|30)d\/reversal/.test(String(error))){
+        if(process.env.QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX!=='1'&&/browser\/(?:1|30)d\/reversal/.test(String(error))){
           say('replaying the failed reversal with page and browser diagnostics; the original failure remains');
           try{await diagnoseReversal(browser,address.base,ana.cookie);}catch(diagnostic){say('reversal replay failed: '+String(diagnostic));}
         }

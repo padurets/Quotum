@@ -24,7 +24,7 @@ const declarations=['parseArgs','main'].map(name=>{
 const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={main,parseArgs};',{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},
 }).outputText;
-type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'fixed-activity'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace'|'suffix-throw'|'suffix-budget'|'suffix-cancel'|'suffix-cleanup'|'suffix-error-cleanup'|'suffix-returned-problems';
+type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'fixed-activity'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace'|'suffix-throw'|'suffix-budget'|'suffix-cancel'|'suffix-cleanup'|'suffix-error-cleanup'|'suffix-returned-problems'|'reversal-throw';
 async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),diagnosticFiles=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
   const listeners=new Map<string,()=>void>(),waits:number[]=[];let now=startedAt,phaseStart=now,metricReads=0,retentionReads=0;
@@ -111,7 +111,8 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
       if(fault==='suffix-budget')throw suffixError;
       return{reports:[],invalidated:[],problems:fault==='suffix-returned-problems'?['returned-suffix-budget']:[]};
     },
-    historyTraffic:async(...args:unknown[])=>{mark('history');if(args[6])mark('scroll-control');if(fault==='throw')throw new Stop('history-original');
+    diagnoseReversal:async()=>{mark('reversal-replay');throw Error('secondary-replay-red');},
+    historyTraffic:async(...args:unknown[])=>{mark('history');if(args[6])mark('scroll-control');if(fault==='throw')throw new Stop('history-original');if(fault==='reversal-throw')throw Error('browser/1d/reversal original-first');
       if(fault==='cancel'){listeners.get('SIGTERM')!();await exited;}
       return{reports:[{name:'history-marker'}],problems:red('red')?['history-red']:[]};},
     probeScript:()=>'',sleep:async(ms:number)=>{waits.push(ms);now+=Math.max(0,ms);},say:(value:string)=>{logs.push(value);},
@@ -450,4 +451,14 @@ test('the internal suffix environment exists only on the direct history control 
   }
   assert.equal(workflow.match(/QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:/g)?.length,1);
   assert.ok(!job('startup-io-control').includes('QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX'));
+});
+
+for(const direct of [false,true])test('actual main preserves reversal failure and direct-only first-failure cleanup: '+direct,async()=>{
+  const {QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:_,...legacy}=suffixEnv;
+  const out=await run(['--scope','history'],'reversal-throw',direct?suffixEnv:legacy);
+  assert.equal(out.error,undefined);assert.deepEqual(out.exits,[1]);assert.deepEqual(out.statuses,['failed']);
+  assert.equal(out.calls.filter(name=>name==='reversal-replay').length,direct?0:1);
+  assert.ok(out.logs.some(line=>line.includes('browser/1d/reversal original-first')),'the original failure survives even when secondary replay fails');
+  assert.equal(out.saved.has('result'),false);assert.ok(!out.calls.includes('suffix-proxy'));
+  for(const name of ['stream-close','browser-close','demo-stop'])assert.equal(out.calls.filter(call=>call===name).length,1);
 });
