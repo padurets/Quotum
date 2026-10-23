@@ -49,6 +49,8 @@ test('late cache failures survive a full seed without changing pool or read resu
   h.run("for(const value of [quota,budget,funds])value.env.read('synthetic',60,0,60);flight.demands=[];flight.extras=true;pool.request(period.transport,flight,()=>{sameFetch=fetch('/api/boards/synthetic/period',{headers:{'x-quotum-bench-attempt':'b1:34'}})===reply;},()=>{});");
   await Promise.resolve();
   h.run(`
+    period.retiring=true;period.retirementPreparing=true;period.retirementAt=Infinity;period.selection={mode:'live'};
+    period.work={value:{refs:[{},{}],spans:[],packed:{blocks:[]}}};
     for(let i=0;i<9608;i++)if(pool.reserve(flight,i%8)!==true)throw Error('reserve result');
     refused=pool.reserve(flight,pool.budget+1);
     budget.grids.set(60,new Map([[0,{from:0,to:60,readFrom:0,readTo:60,validTo:60,bytes:100,shownAt:0}]]));
@@ -68,6 +70,7 @@ test('late cache failures survive a full seed without changing pool or read resu
   assert.equal(h.context.budget.badCalls,1);assert.equal(h.context.budget.readCalls,2);
   const refused=receipt.entries.find((entry:{kind:string;accepted?:boolean})=>entry.kind==='reserve-critical'&&entry.accepted===false);
   assert.equal(refused.owner.kind,'transport');
+  assert.deepEqual(JSON.parse(JSON.stringify(refused.period)),{memberId:1,mode:'live',currentBytes:0,retiring:true,retirementPreparing:true,retirementAt:null,retirementFinite:false,work:{fixed:false,packed:true,refs:2,spans:0}});
   const dropped=receipt.entries.find((entry:{kind:string})=>entry.kind==='drop-after');
   assert.equal(dropped.complete,true);assert.equal(dropped.removed.length,1);
   assert.equal(dropped.removed[0][9],100);assert.equal(dropped.removed[0][11],false);
@@ -77,6 +80,7 @@ test('late cache failures survive a full seed without changing pool or read resu
   const saved=safeEvidence(receipt) as typeof receipt;
   assert.equal(saved.status,'complete');
   assert.equal(saved.entries.find((entry:{kind:string})=>entry.kind==='http').attemptId,'b1:34');
+  assert.deepEqual(JSON.parse(JSON.stringify(saved.entries.find((entry:any)=>entry.kind==='reserve-critical').period)),JSON.parse(JSON.stringify(refused.period)));
   assert.ok(Buffer.byteLength(JSON.stringify(saved))<1024*1024);
 });
 
@@ -144,6 +148,8 @@ test('a retired period coordinator cannot qualify a later transport admission',a
   assert.match(http.attemptId,/^b\d+:\d+$/);assert.ok(http.flightId>0);
   assert.equal(receipt.status,'insufficient-evidence');assert.ok(receipt.sendingUnknown>0);
   assert.equal(http.sender,null);assert.equal(http.demands,null);assert.equal(receipt.members.length,4);
+  h.pool.reserve(h.context.flight,h.pool.budget+1);
+  assert.equal(h.read().entries.find((entry:any)=>entry.kind==='reserve-critical').period,null,'an unregistered period supplies no current preparation state');
   h.pool.release(h.context.flight);assert.equal(h.pool.activeFlights,0);
 });
 

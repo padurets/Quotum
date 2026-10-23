@@ -716,6 +716,8 @@ Only the suffix's Activity pages also observe bounded history-pool operations. T
 receipts retain tile coverage at response release and eviction; a completed HTTP body
 alone does not prove that its cells were published. Source binding runs after the
 traffic evidence is saved. This observation does not change retention or readiness.
+Pressure events also retain the period's current byte count and preparation flags.
+These flags describe simultaneous state, not the exclusive caller of a reservation.
 
 The manual `startup_io_control` input observes a fixed A1/B/A2 startup-only sequence
 on one runner before running the unchanged full history control once, within the same
