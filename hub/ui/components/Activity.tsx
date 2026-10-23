@@ -403,13 +403,13 @@ const Stacks = memo(function Stacks({
     const basis = {from: requested.from, to: requested.to, end: requested.end};
     const span = Math.max(MINUTE, basis.to - basis.from);
     const barMs = incomingStrip?.barMs ?? incomingActivity.barMs;
+    const draft=active?pan.get():null,visual=axis.visualGeometry();
+    const selected=incomingStrip?(draft?{from:visual.from,to:visual.from+draft.length}:{from,to}):visual;
     const heights = new Map<number, number>(), keys = new Set<string>();
     for (const {group} of incomingGroups) {
       keys.add(group.key);
       for (const [at, ms] of group.cells) {heights.set(at, (heights.get(at) ?? 0) + ms); yield;}
     }
-    const draft=active?pan.get():null,visual=draft?axis.visualGeometry():null;
-    const selected=draft&&visual?{from:visual.from,to:visual.from+draft.length}:{from,to};
     const target=incomingStrip?targetOf(selected.to-selected.from,draft?.now??to,'scale',selected):null;
     let maximum = 0;
     for (const [at,value] of heights) {
@@ -456,8 +456,9 @@ const Stacks = memo(function Stacks({
   const x = (at: number) => left + (at - basis.from) / span * (width - left - right);
   const y = (value: number) => top + (1 - value / vertical.max) * (height - top - bottom);
   const hover = incomingReady && prepared.ready ? axis.hover : null;
-  const tickFrom = strip?.from ?? (axis.held ? basis.from : from), tickTo = strip?.to ?? (axis.held ? basis.to : to);
-  const {ticks, daily} = niceTicks(tickFrom, tickTo, (narrow ? 4 : 7) * (tickTo - tickFrom) / span);
+  const presentation = axis.presentation(coherent);
+  const tickFrom = strip?.from ?? presentation.from, tickTo = strip?.to ?? presentation.to;
+  const {ticks, daily} = niceTicks(tickFrom, tickTo, narrow ? 4 : 7, presentation);
 
   const innerClip = `${clip}-inner`;
   const bandClip = useRef<HTMLDivElement>(null);
@@ -492,7 +493,7 @@ const Stacks = memo(function Stacks({
     if (!bandClip.current) return;
     const draft = pan.get();
     const visual = axis.visualGeometry();
-    const range = forced??(draft || axis.held ? {from: visual.from, to: visual.from + (draft?.length ?? strip?.length ?? basis.to-basis.from)} : {from, to});
+    const range = strip ? forced??(draft || axis.held ? {from: visual.from, to: visual.from + (draft?.length ?? strip.length)} : {from, to}) : visual;
     const target = strip ? targetOf(strip.length, draft?.now ?? to, 'edge', range) : null;
     let maximum=0;
     for(const [at,value] of heights)if(strip?at>=range.from&&at+barMs<=range.to:at<range.to&&at+barMs>range.from)maximum=Math.max(maximum,value);

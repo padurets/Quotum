@@ -165,7 +165,7 @@ import {cardId,isHidden} from '../lib/view';
 export function consumer(h: any, options:{now?:()=>number;focus?:{get:()=>string|null;subscribe:(run:()=>void)=>()=>void}}={}) {
   const parent=preparationFixture(),child=preparationFixture();
   const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
-  const axis={box:{current:null},svg:{current:null},width:400,scale:1,hover:null,drag:null,clip:'c',handlers:{},basis:{from:NOW-H,to:NOW,end:NOW},active:false,screenX:(at:number)=>48+(at-(NOW-H))/H*340,commitDrawing:()=>{}};
+  const axis={box:{current:null},svg:{current:null},width:400,scale:1,hover:null,drag:null,clip:'c',handlers:{},basis:{from:NOW-H,to:NOW,end:NOW},active:false,visualGeometry:()=>axis.basis,presentation:()=>axis.basis,screenX:(at:number)=>48+(at-(NOW-H))/H*340,commitDrawing:()=>{}};
   const EMPTY_ACTIVITY={since:0,known:null,barMs:60_000,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}};
   const titles=Object.fromEntries(Object.values(h.page.get().board!.cards).map((c:any)=>[c.id,{provider:c.provider,title:'Shared source'}]));
   let panning:number|null=null;

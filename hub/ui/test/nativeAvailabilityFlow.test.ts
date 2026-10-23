@@ -64,7 +64,7 @@ function pointed(line:PlotSeries, at:number) {
   const context = {React,seriesFocusStyle,...lineContract,onDrawing:undefined,prepared:{ready:true,value:{basis:{from:0,to},lines:[{...line,key:'s w'}],plans:[],forecasts:[],markers:[],paths:[],strip:null}},
     valueAxis:undefined,currentClock:to,desiredFrom:0,desiredNow:to,desiredTo:to,desiredLive:true,incomingReady:true,cellMs:cell,
     width:to,left:0,right:0,height:220,top:12,bottom:28,
-    axis:{hover:hover===null?null:Math.floor(hover/cell)*cell,hoverAt:hover,screenX:(time:number)=>time,commitDrawing:()=>{}},
+    axis:{hover:hover===null?null:Math.floor(hover/cell)*cell,hoverAt:hover,presentation:()=>({from:0,to}),screenX:(time:number)=>time,commitDrawing:()=>{}},
     useLayoutEffect:()=>{},niceTicks:()=>({ticks:[],daily:false}),readCell:readout,
     draw:null as unknown as ()=>{value:number|null;pointedAt:number;hoverX:number;rowAt:number;circles:(false|React.ReactElement<{cx:number}>)[]}};
   runInNewContext(readoutCode,context);

@@ -63,12 +63,12 @@ test('actual quota generators prepare outside render and retain displayed paths 
   assert.ok(!caption.show(),'reenabling series cannot keep the old all-muted caption while their paths prepare');
 });
 
-test('the shared chart keeps held time labels while ordinary navigation and strips use their own range',()=>{
+test('the shared chart labels its presentation independently of the saved numeric basis',()=>{
   const source=readFileSync(new URL('../components/Chart.tsx',import.meta.url),'utf8');
   const start=source.indexOf('  const tickFrom = '),region=source.slice(start,source.indexOf('  useLayoutEffect(() => {axis.commitDrawing',start));
   assert.ok(start>=0&&region.includes('niceTicks'));
   const H=3_600_000,to=Date.UTC(2026,9,23,3,17,17),basis={from:to-72*H,to};
-  const context={niceTicks,strip:null as {from:number;to:number}|null,axis:{held:false},basis,from:basis.from,to:basis.to,width:400,span:72*H,read:null as unknown as ()=>number[]};
+  const context={niceTicks,strip:null as {from:number;to:number}|null,axis:{held:false},presentation:{...basis},basis,from:basis.from,to:basis.to,width:400,span:72*H,read:null as unknown as ()=>number[]};
   runInNewContext(ts.transpileModule(`globalThis.read=()=>{${region}\nreturn ticks;};`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
   const read=()=>[...context.read()],original=read();
   assert.equal(original.length,3);
@@ -76,9 +76,14 @@ test('the shared chart keeps held time labels while ordinary navigation and stri
     context.axis.held=true;context.from=to+1000-period;context.to=to+1000;
     assert.deepEqual(read(),original,'the captured drawing owns pending timestamp labels');
     context.axis.held=false;
-    assert.deepEqual(read(),niceTicks(context.from,context.to,4*period/context.span).ticks,'explicit navigation uses the requested projection');
+    context.presentation={from:context.from,to:context.to};
+    const expected=period===H?[30,45,60,75].map(minute=>Date.UTC(2026,9,23,2,minute)):period===24*H?[6,12,18,24].map(hour=>Date.UTC(2026,9,22,hour)):original;
+    assert.deepEqual(read(),expected,'explicit navigation has its ordinary label density before numeric replacement');
     context.axis.held=true;context.strip={from:to-96*H,to:to+24*H};
-    assert.deepEqual(read(),niceTicks(context.strip.from,context.strip.to,4*120*H/context.span).ticks,'a prepared strip still supplies its complete tick inventory');
-    context.strip=null;
+    const interior=read().filter(at=>at>=context.presentation.from&&at<=context.presentation.to);
+    assert.deepEqual(interior,expected,'strip inventory preserves the presentation density');
+    context.strip=null;context.presentation={...basis};
   }
+  context.axis.held=true;context.presentation={from:basis.from-24*H,to:basis.to-24*H};context.from=context.presentation.from;context.to=context.presentation.to;
+  assert.deepEqual(read(),[20,21,22].map(day=>Date.UTC(2026,9,day)),'a held historical frame supplies its shifted days');
 });

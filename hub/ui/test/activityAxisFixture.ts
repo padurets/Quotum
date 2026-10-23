@@ -45,7 +45,8 @@ export function activityAxisFixture(live:boolean,scenario:{range?:{from:number;t
   getAttribute(name:string){return this.attrs.get(name)??null;}
   hasAttribute(name:string){return this.attrs.has(name);}
   removeAttribute(name:string){this.attrs.delete(name);}
-  addEventListener(){}removeEventListener(){}hasPointerCapture(){return false;}releasePointerCapture(){}getBoundingClientRect(){return {width:400,left:0,right:400};}getComputedTextLength(){return this.textContent.length*7;}getAnimations(){return [];}
+  pointers=new Set<number>();
+  addEventListener(){}removeEventListener(){}setPointerCapture(id:number){this.pointers.add(id);}hasPointerCapture(id:number){return this.pointers.has(id);}releasePointerCapture(id:number){this.pointers.delete(id);}getBoundingClientRect(){return {width:400,left:0,right:400};}getComputedTextLength(){return this.textContent.length*7;}getAnimations(){return [];}
   matches(selector:string):boolean{const match=selector.match(/^(\w+)?(?:\.([\w-]+))?$/);if(match)return (!match[1]||match[1]===this.tag)&&(!match[2]||this.classList.contains(match[2]));const attr=selector.match(/^\[([^\]]+)\]$/);return !!attr&&this.hasAttribute(attr[1]);}
   querySelectorAll(selector:string):Host[]{const parts=selector.split(' ');const all=this.children.flatMap(child=>[child,...child.querySelectorAll('*')]);if(selector==='*')return all;return all.filter(node=>{if(!node.matches(parts.at(-1)!))return false;let parent=node.parent;for(let i=parts.length-2;i>=0;i--){while(parent&&!parent.matches(parts[i]))parent=parent.parent;if(!parent)return false;parent=parent.parent;}return true;});}
   querySelector(selector:string){return this.querySelectorAll(selector)[0]??null;}
@@ -87,11 +88,19 @@ export function activityAxisFixture(live:boolean,scenario:{range?:{from:number;t
   const timeTicks=required<Host>(tree.querySelector('.time-ticks'),'time labels').children.map(node=>({at:Number(node.props.key),text:node.textContent,position:Number(node.getAttribute('x'))+Number(node.style.transform?.match(/translateX\(([-.\d]+)px\)/)?.[1]??0)+offset,visible:node.style.visibility!=='hidden'}));
   const unknown=tree.querySelector('.activity-unknown rect'),hatch=unknown?{x:Number(unknown.getAttribute('x')),width:Number(unknown.getAttribute('width'))}:null;
   const lowTop=Number([...path.matchAll(/M[^,]*,([-.\d]+)/g)][live?1:0]?.[1]??NaN);assert.ok(Number.isFinite(lowTop),'the measured stack has a real path landmark');
-  const lowBarY=272+(lowTop-272)*ratio;return {label,transform,ratio,labels:ys,landmarks,timeTicks,hatch,lowBarY,path,preparing:scheduler.size,tasks:tasks.length,panEnd:axis.dataset.panEnd,drawReady:axis.dataset.drawReady,renderCount,pendingRender:dirty,rafs:rafs.size,selected};
+  const inverse=(px:number)=>drawFrom+((px-offset-b)/a-48)/340*Math.max(M,drawTo-drawFrom);
+  const viewport={from:inverse(48),to:inverse(388)};
+  const originShift=Number(tree.querySelector('path.activity-stack')?.parent?.getAttribute('transform')?.match(/translate\(([-.\d]+)/)?.[1]??0);
+  const bars=[...path.matchAll(/M([-.\d]+),([-.\d]+)[HL]([-.\d]+)/g)].map(match=>({x:a*(originShift+(Number(match[1])+Number(match[3]))/2)+b+offset,y:272+(Number(match[2])-272)*ratio}));
+  const lowBarY=272+(lowTop-272)*ratio;return {label,transform,ratio,labels:ys,landmarks,timeTicks,hatch,viewport,bars,lowBarY,path,preparing:scheduler.size,tasks:tasks.length,panEnd:axis.dataset.panEnd,drawReady:axis.dataset.drawReady,renderCount,pendingRender:dirty,rafs:rafs.size,selected};
  }
  function runFrame(){flushCause='RAF';const callbacks=[...rafs.values()];rafs.clear();callbacks.forEach(run=>run());return snapshot('after-native-RAF-before-React');}
  function begin(){flushCause='begin';const length=selected?selected.to-selected.from:periodMs;return pan.begin({source:Symbol('input'),input:'pointer',selected,length,now,historyStart:0,span:length,width:340})!;}
+ const pointerEvent=(x:number)=>({shiftKey:true,pointerType:'mouse',button:0,clientX:x,pointerId:1,currentTarget:tree,target:tree,preventDefault(){}});
+ const pointerDown=(x=200)=>{tree.props.onPointerDown(pointerEvent(x));return required(pan.active(),'actual pointer gesture');};
+ const pointerMove=(x:number)=>tree.props.onPointerMove(pointerEvent(x));
+ const pointerUp=(x=200)=>tree.props.onPointerUp(pointerEvent(x));
  settle();
  if(!live&&scenario.warmup!==false){const token=begin();flush();pan.move(token,170);runFrame();settle();flushCause='finish';pan.finish(token);flush();runFrame();settle();assert.equal(selected.from,10*M);}
- return {pan,choose,begin,flush,settle,runFrame,snapshot,props,commits,trace,stageModel:()=>{props.groups=props.groups.map((row:any)=>({...row,group:{...row.group,cells:[...row.group.cells]}}));dirty=true;},parentUpdate:()=>{dirty=true;},setCause:(name:string)=>flushCause=name,pendingFrames:()=>[...rafs.values()]};
+ return {pan,choose,begin,pointerDown,pointerMove,pointerUp,flush,settle,runFrame,snapshot,props,commits,trace,stageModel:()=>{props.groups=props.groups.map((row:any)=>({...row,group:{...row.group,cells:[...row.group.cells]}}));dirty=true;},parentUpdate:()=>{dirty=true;},setCause:(name:string)=>flushCause=name,pendingFrames:()=>[...rafs.values()]};
 }

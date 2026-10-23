@@ -78,3 +78,63 @@ test('Activity keeps its fully known retained range until a partial replacement 
   assert.equal(replacement.drawReady,'true');
   assert.ok(replacement.hatch&&replacement.hatch.width>0,'the new model presents its actual unknown prefix');
 });
+
+const dateEnd=Date.UTC(2026,9,23,3,17,17);
+const dates=[Date.UTC(2026,9,21),Date.UTC(2026,9,22)];
+function retained72(periodMs:number){
+  const landmarks=[dateEnd-20*M,dateEnd-10*M];
+  const f=activityAxisFixture(false,{range:{from:dateEnd-72*H,to:dateEnd},periodMs,now:dateEnd+1000,cells:[dateEnd-4*H,dateEnd-3*H,...landmarks].map(at=>[at,H]),landmarks,warmup:false});
+  f.pointerDown();f.flush();f.pointerMove(198);f.runFrame();f.settle();
+  f.props.prepared=false;f.pointerUp();f.runFrame();f.flush();f.settle();
+  assert.equal(f.snapshot('pending live').selected,null);
+  return f;
+}
+const visibleDates=(value:ReturnType<ReturnType<typeof activityAxisFixture>['snapshot']>)=>value.timeTicks.filter(tick=>tick.visible).map(tick=>tick.at);
+
+for(const periodMs of [H,24*H,72*H])for(const cancel of [false,true])test(`Activity keeps the displayed 72-hour scale and dates through another actual gesture before its ${periodMs/H}-hour replacement (${cancel?'cancel':'release'})`,()=>{
+  const f=retained72(periodMs),before=f.snapshot('held'),token=f.pointerDown();
+  const check=(label:string)=>{
+    const value=f.snapshot(label);
+    assert.equal(value.path,before.path,'the saved artwork is still displayed');
+    assert.equal(value.drawReady,'false');
+    assert.equal(value.ratio,1,`${label}: semantic selection cannot change the visible value scale`);
+    assert.ok(value.lowBarY>=12&&value.lowBarY<272,'positive artwork stays inside the value clip');
+    assert.ok(value.bars.some(bar=>bar.x>48&&bar.x<388&&bar.y>=12&&bar.y<272),'a positive bar is visible inside both plot axes');
+    assert.ok(Math.abs(value.viewport.to-value.viewport.from-72*H)<1,'the native viewport retains its own duration');
+    assert.deepEqual(visibleDates(value),dates,`${label}: both interior dates remain readable`);
+  };
+  check('pointer down before React');f.flush();check('pointer down after React');
+  f.pointerMove(210);f.runFrame();check('move before React');f.flush();check('move after React');
+  if(cancel)f.pan.cancel(token);else f.pointerUp(210);
+  f.flush();check('stop before final RAF');f.runFrame();check('final RAF before React');f.flush();f.settle();check('settled stop');
+  if(cancel)assert.deepEqual(f.snapshot('restored').landmarks,before.landmarks,'cancel restores the actual capture');
+  else assert.ok(f.snapshot('committed').selected,'the actual release supplies semantic fixed bounds');
+});
+
+for(const periodMs of [H,24*H])test(`Activity labels an explicit ${periodMs/H}-hour projection while the saved numeric basis is still 72 hours`,()=>{
+  const f=retained72(periodMs),before=f.snapshot('held');
+  f.choose({from:dateEnd+1000-periodMs,to:dateEnd+1000});f.flush();
+  const pending=f.snapshot('new explicit projection');
+  const expected=periodMs===H?[Date.UTC(2026,9,23,2,30),Date.UTC(2026,9,23,2,45),Date.UTC(2026,9,23,3)]:[6,12,18,24].map(hour=>Date.UTC(2026,9,22,hour));
+  assert.equal(pending.path,before.path);
+  assert.ok(Math.abs(pending.viewport.to-pending.viewport.from-periodMs)<1);
+  assert.deepEqual(visibleDates(pending),expected,'labels describe the visible duration with its normal readable density');
+  f.props.prepared=true;f.stageModel();f.settle();
+  const ready=f.snapshot('ready');
+  assert.deepEqual(visibleDates(ready),expected);
+  ready.landmarks.forEach((x,i)=>assert.ok(Math.abs(x-pending.landmarks[i])<1e-8,'readiness keeps positive-bar X'));
+});
+
+test('Activity labels the leading interior day after a historical 72-hour move and pending release',()=>{
+  const landmarks=[dateEnd-24*H-20*M,dateEnd-24*H-10*M];
+  const f=activityAxisFixture(false,{range:{from:dateEnd-72*H,to:dateEnd},periodMs:24*H,now:dateEnd+1000,cells:landmarks.map(at=>[at,H]),landmarks,warmup:false});
+  f.pointerDown();f.flush();f.pointerMove(200+340/3);f.runFrame();f.settle();
+  f.props.prepared=false;f.pointerUp();f.runFrame();f.flush();f.settle();
+  const pending=f.snapshot('shifted historical viewport');
+  assert.deepEqual(visibleDates(pending),[Date.UTC(2026,9,20),Date.UTC(2026,9,21)]);
+  assert.equal(pending.ratio,1);
+  f.props.prepared=true;f.stageModel();f.settle();
+  const ready=f.snapshot('new numeric basis');
+  assert.deepEqual(visibleDates(ready),visibleDates(pending));
+  ready.landmarks.forEach((x,i)=>assert.ok(Math.abs(x-pending.landmarks[i])<1e-8));
+});

@@ -71,7 +71,9 @@ export const ANALYTICS_SCENES=[
  * and the late browser measurementDetails fixture. Native strip-to-exact value
  * poses are held by moneyPanDomain and activityAxisCancel. A retained fixed-period
  * drawing returning to a different live period, its dates and its known-data
- * boundary are held by activityAxisRetention; chartPreparation checks shared ticks.
+ * boundary, including another actual gesture before replacement, are held by
+ * activityAxisRetention. chartPreparation checks shared tick density; axisNavigation
+ * holds the presentation's navigation, cancellation-RAF and ready-handoff fences.
  */
 export const CHART_SERIES_SCENES=[
   {id:'board-cohort',expect:['board-summary','exact-union','distinct-sessions']},

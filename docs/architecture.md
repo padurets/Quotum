@@ -2369,9 +2369,19 @@ the historical projection. The SVG matrix and CSS offset compose to the same dis
 coordinates before and after adoption. Activity paints its value scale and clipped
 edges after the committed time pose in that same native frame, including cancellation;
 logical completion cannot pin a value scale from a pose that is still about to be
-restored. A retained drawing without a strip keeps its prepared period length when
-returning to a different live period. The pending replacement's bounds cannot rescale
-its old bars or replace the held frame's time labels. Its known-data boundary belongs
+restored. A retained drawing without a strip uses its actual visible viewport for
+Activity's value scale, including another gesture before replacement and a forced
+release. The selected period and the saved paths' numeric basis cannot substitute
+for that viewport. The axis also supplies each commit's intended presentation for
+time labels: its shifted bounds set their inventory, and its visible span sets their
+density. A borrowed strip's label inventory stays within one extra visible period
+on either side, including the visible interval even past unread data. Matching
+historical and default live projections keep the native strip's complete inventory.
+Explicit navigation
+supplies its new projection before layout; matching
+native captures and unpainted final frames retain the physical pose. A ready live
+handoff uses the live target, while a positioned historical viewport survives ready
+data. Its known-data boundary belongs
 to that same drawing, including a confirmed absence of an unknown prefix. A new
 gesture samples that actual presentation, including an interrupted fold, separately
 from its URL origin.

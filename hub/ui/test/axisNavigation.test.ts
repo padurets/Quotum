@@ -4,6 +4,7 @@ import {axisNavigation, navigationAt, navigationKey} from '../lib/axisNavigation
 import {axisPresentationFixture} from './axisPresentationFixture';
 import {historyProjection} from '../lib/historyProjection';
 import {frameOf} from '../lib/periods';
+import {activityAxisFixture} from './activityAxisFixture';
 
 const H = 3_600_000;
 const prefs = {range: '24h', kind: 'weekly' as const, horizon: 'auto' as const, showPlan: true, showForecast: true, activityBy: 'project' as const};
@@ -102,5 +103,76 @@ test('stationary overlay coordinates use the actual affine pose and stay finite 
       const x = h.context.screenX(at); assert.ok(Number.isFinite(x));
       near(x * h.context.scale, h.point(at));
     }
+  }
+});
+
+test('rendered presentation anticipates explicit navigation without mutating a superseded final owner',()=>{
+  const a=axisNavigation('board',A,prefs),b=axisNavigation('board',B,prefs),f=axisPresentationFixture(A,a);
+  f.context.finished.current={visual:A,navigation:a,stop:{range:A,canceled:false}};
+  f.context.finalFrame.current=7;f.context.pose.current.offset=50;
+  const before=f.context.visualGeometry(),held=f.context.finished.current;
+  f.context.from=B.from;f.context.to=B.to;f.context.end=B.end;f.context.requestedNavigation=b;
+  const view=f.context.presentation(false);
+  near(view.from,B.from);near(view.to,B.to);
+  assert.equal(f.context.finished.current,held);assert.equal(f.context.finalFrame.current,7);
+  assert.deepEqual(f.context.visualGeometry(),before,'the render calculation never changes the physical owner');
+  f.context.publish();f.context.commit(A,false);
+  near(f.context.visualGeometry().from,view.from);near(f.context.visualGeometry().to,view.to);
+});
+
+test('presentation respects actual capture and cancellation RAF before the ready live target',()=>{
+  const base={from:0,to:72*H,end:72*H},target={from:71*H,to:72*H,end:72*H},nav=axisNavigation('board',null,prefs);
+  const same=(actual:number,expected:number)=>assert.ok(Math.abs(actual-expected)<1e-6,'sub-microsecond affine inversion tolerance');
+  for(const [width,scale,left,right]of [[600,.5,40,20],[920,.73,48,12]]){
+    const f=axisPresentationFixture(base,nav,width,scale,left,right);
+    Object.assign(f.context,{from:target.from,to:target.to,end:target.end});
+    f.active.current=4;f.context.captured.current={token:4,navigation:nav};f.context.pose.current.offset=25;
+    const shown=f.context.visualGeometry();
+    for(const ready of [false,true]){
+      const view=f.context.presentation(ready);same(view.from,shown.from);same(view.to,shown.to);
+    }
+    f.active.current=null;f.context.captured.current=null;
+    f.context.finished.current={visual:base,navigation:nav,stop:{range:null,canceled:true}};
+    f.context.finalFrame.current=9;
+    const waiting=f.context.presentation(true);same(waiting.from,shown.from);same(waiting.to,shown.to);
+    f.context.commit(base,true);
+    assert.equal(f.context.finalFrame.current,9,'coherent readiness cannot consume an unpainted cancellation');
+    f.context.pose.current.offset=0;f.context.finalFrame.current=null;
+    const pending=f.context.presentation(false);same(pending.from,base.from);same(pending.to,base.to);
+    const ready=f.context.presentation(true);same(ready.from,target.from);same(ready.to,target.to);
+    assert.equal(f.context.finished.current?.stop.canceled,true,'presentation selection itself does not retire the hold');
+  }
+});
+
+test('presentation keeps a shifted historical viewport and follows an ordinary clock target',()=>{
+  const nav=axisNavigation('board',B,prefs),f=axisPresentationFixture(A,nav);
+  f.context.pose.current.offset=135;
+  const shifted=f.context.visualGeometry();
+  f.context.finished.current={visual:shifted,navigation:nav,stop:{range:B,canceled:false}};
+  for(const ready of [false,true]){
+    const view=f.context.presentation(ready);near(view.from,shifted.from);near(view.to,shifted.to);
+  }
+  const live=axisPresentationFixture(A,axisNavigation('board',null,prefs));
+  live.context.from+=60_000;live.context.to+=60_000;live.context.end+=60_000;
+  for(const ready of [false,true]){
+    const view=live.context.presentation(ready);near(view.from,A.from+60_000);near(view.to,A.to+60_000);
+  }
+});
+
+test('a ready live replacement supplies the next actual gesture with its new duration',()=>{
+  const M=60_000,to=Date.UTC(2026,9,23,3,17,17),now=to+1000;
+  for(const periodMs of [H,24*H]){
+    const landmarks=[to-20*M,to-10*M],f=activityAxisFixture(false,{range:{from:to-72*H,to},periodMs,now,cells:landmarks.map(at=>[at,H]),landmarks,warmup:false});
+    f.pointerDown();f.flush();f.pointerMove(198);f.runFrame();f.settle();
+    f.props.prepared=false;f.pointerUp();f.runFrame();f.flush();f.settle();
+    f.props.prepared=true;f.stageModel();f.settle();
+    const before=f.snapshot('ready replacement'),token=f.pointerDown();
+    assert.equal(before.drawReady,'true');
+    for(const value of [f.snapshot('before React'),(f.flush(),f.snapshot('after React'))]){
+      assert.equal(value.ratio,1);assert.ok(Math.abs(value.viewport.to-value.viewport.from-periodMs)<1);
+      assert.deepEqual(value.timeTicks,before.timeTicks);
+    }
+    f.pan.cancel(token);f.runFrame();f.flush();f.settle();
+    assert.deepEqual(f.snapshot('cancelled').landmarks,before.landmarks);
   }
 });

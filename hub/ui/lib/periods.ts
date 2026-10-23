@@ -67,8 +67,16 @@ export function measuredTo(frame: Frame, history: {range: string; to: number} | 
   return answered ? Math.max(frame.to, selected ? Math.min(answered.to, selected.to) : answered.to) : frame.to;
 }
 
-/** The times along a chart's axis from `from` to `to`, about `count` of them on round local times, and whether they fall on days. */
-export function niceTicks(from: number, to: number, count: number) {
+/** Round local times, about `count` across the visible viewport, or the supplied range. */
+export function niceTicks(from: number, to: number, count: number, viewport?: {from:number;to:number}) {
+  if(viewport){
+    const visible=Math.max(60_000,viewport.to-viewport.from);
+    // A borrowed strip can span a much longer previous period. Keep native pan
+    // room without shaping thousands of offscreen labels at the new density.
+    from=Math.min(viewport.from,Math.max(from,viewport.from-visible));
+    to=Math.max(viewport.to,Math.min(to,viewport.to+visible));
+    count*=(to-from)/visible;
+  }
   const span = to - from;
   const steps = [5, 10, 15, 30, 60, 120, 180, 360, 720, 1440, 2880, 10080].map(minutes => minutes * 60_000);
   const step = steps.find(candidate => span / candidate <= count) ?? steps.at(-1)!;

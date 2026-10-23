@@ -33,7 +33,7 @@ test('the actual activity edge painter advances clipped bars without preparing t
     currentActivity: {}, activity: {by: {source: [{key: 's', cells: [[0, 25_000], [60_000, 60_000], [120_000, 5_000]]}]}},
     strip: null, groups: [{group: {key: 's'}}], from: 15_000, to: 135_000, basis: {from: 15_000, to: 135_000}, by: 'source', barMs: 60_000, vertical: {max: 60_000}, height: 100, perMs: 0.001,
     left: 0, right: 0, width: 120, scale: 1, x: (at: number) => at / 1000, y: (ms: number) => 100 - ms / 1000,
-    axis: {held: false, visualGeometry: () => ({})}, pan: {get: () => draft}, painted: {current: ''}, clipPlot: (_node: unknown, ...bounds: number[]) => clips.push(bounds), cellStart,plotBar,targetOf,
+    axis: {held: false, visualGeometry: () => ({from:context.from,to:context.to,end:context.to})}, pan: {get: () => draft}, painted: {current: ''}, clipPlot: (_node: unknown, ...bounds: number[]) => clips.push(bounds), cellStart,plotBar,targetOf,
     paint: null as unknown as () => void,
   };
   runInNewContext(ts.transpileModule(region + '\nglobalThis.paint=paintEdges;', {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
@@ -111,7 +111,7 @@ test('actual Activity composition resolves retained stacks and the new legend to
   const numbers=source.slice(source.indexOf('function useActivityNumbers('),source.indexOf('function LegendAmount('));
   const empty=source.slice(source.indexOf('const EmptyState = memo('),source.indexOf('const StackArtwork = memo('));
   assert.ok(numbers.startsWith('function useActivityNumbers(')&&empty.startsWith('const EmptyState = memo('));
-  const axis={box:{current:null},svg:{current:null},width:400,scale:1,hover:null,drag:null,clip:'c',handlers:{},basis:{from:0,to:length,end:length},active:false,screenX:(at:number)=>at,commitDrawing:()=>{}};
+  const axis={box:{current:null},svg:{current:null},width:400,scale:1,hover:null,drag:null,clip:'c',handlers:{},basis:{from:0,to:length,end:length},active:false,visualGeometry:()=>axis.basis,presentation:()=>axis.basis,screenX:(at:number)=>at,commitDrawing:()=>{}};
   type Row={group:ActivityGroup;color:string;name:string};
   type Frame={element:React.ReactElement<Record<string,unknown>>;legend:React.ReactNode;prepared:{value:unknown}};
   const context={...parent,React,numeric:null as any,loading:false,focus:{},Totals:()=>null,memo:(fn:unknown)=>fn,useEffect:()=>{},useId:()=> 'c',seriesFocusStyle:()=>({}),activitySeriesKey:(_by:string,key:string)=>key,boardPeriod,hubNow,useClock,usePanning,activityEmpty,
@@ -185,7 +185,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
   assert.ok(stacksStart >= 0, 'the fixture includes the actual prepared stack artwork');
   type Model = {identities: {key: string; name: string | null}[]; shown: {group: PlotGroup; color: string; name: string}[]; strip: PlotBuffer};
   const navigation = {context: 'test', range: 'range'};
-  const axis = {box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {from: 0, to: length, end: length}, active: false, screenX: (at: number) => 48 + (at - axis.basis.from) / length * 340, commitDrawing: () => {}};
+  const axis = {box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {from: 0, to: length, end: length}, active: false, visualGeometry:()=>axis.basis,presentation:()=>axis.basis,screenX: (at: number) => 48 + (at - axis.basis.from) / length * 340, commitDrawing: () => {}};
   const context = {numeric:{history:null,since:null},panning:null,loading:false,error:null,resolveProjectColors,pins:[] as ProjectColorPins,paint:new Map<string,string>(),colorsReady:true,drawing:{range:undefined},navigationKey, React, ...parent, memo: (fn: unknown) => fn, useState: child.useState, useEffect: () => {}, seriesFocusStyle:()=>({}), useId: () => 'c',
     EMPTY_CELLS: [], registry: {current: null}, groups: [], colors: [], shown: [], strip: buffer(0), by: 'project', prefs: {}, locale: 'en', history: {board: 'b'}, authority: 0, arrange: {view: {}}, titles: {},
     groupRegistry, groupName: (group: {key: string}) => group.key, activitySeriesKey: (_by: string, key: string) => key,
@@ -258,7 +258,7 @@ test('native Activity value projection excludes a departed peak before release a
   let queries=0,draft:{length:number}|null=null,visualFrom=0,selected:{from:number;to:number}|null=null;
   const element=()=>{const attrs=new Map<string,string>();return {style:{display:''},textContent:'',getAttribute:(name:string)=>attrs.get(name)??null,setAttribute:(name:string,value:string)=>attrs.set(name,value),hasAttribute:(name:string)=>attrs.has(name),removeAttribute:(name:string)=>attrs.delete(name)};};
   const rows=Array.from({length:4},()=>{const line=element(),text=element();return {...element(),line,text,querySelector:(name:string)=>{queries++;return name==='line'?line:text;}};});
-  const band=element(),edges={...element(),querySelectorAll:()=>[]},axis={held:false,visualGeometry:()=>({from:visualFrom}),screenX:(at:number)=>at/M};
+  const band=element(),edges={...element(),querySelectorAll:()=>[]},axis={held:false,visualGeometry:()=>({from:visualFrom,to:visualFrom+2*M,end:visualFrom+2*M}),screenX:(at:number)=>at/M};
   const context={navigationAt,navigationKey,navigation:{context:'test',range:'live'},timeRange:()=>selected,valueContext:'',valuePin:{current:null as {context:string;range:string;maximum:number}|null},activityScale,workHours,valueBand:{current:band},valueAxis:{current:{children:rows}},paintedValue:{current:''},vertical:{max:12*H},height:300,top:12,bottom:28,
     heights:new Map([[0,12*H],[M,H],[-M,100*H]]),bandClip:{current:{}},mask:{current:element()},edges:{current:edges},pan:{get:()=>draft},axis,strip:null,
     groups:[{group:{key:'s'}}],activity:{by:{source:[]}},currentActivity:{},from:0,to:2*M,barMs:M,by:'source',left:0,right:0,width:120,scale:1,perMs:1/M,x:(at:number)=>at/M,y:(value:number)=>272-value/(12*H)*260,
@@ -278,6 +278,25 @@ test('native Activity value projection excludes a departed peak before release a
   assert.equal(band.getAttribute('transform'),null,'an exactly clipped replacement edge cannot shrink the positioned value scale');assert.deepEqual(rows.map(row=>row.text.textContent),labels);
   context.heights.set(M,3*H);context.paint();
   assert.match(band.getAttribute('transform')!,/scale\(1 0.3333333333333333\)/,'newly read higher work still fits instead of being clipped');
-  selected={from:2*M,to:4*M};context.from=2*M;context.to=4*M;context.paint();
+  selected={from:2*M,to:4*M};context.from=2*M;context.to=4*M;visualFrom=2*M;context.paint();
   assert.equal(context.valuePin.current,null,'explicit navigation retires the prior value projection');
+});
+
+test('Activity preparation captures the full displayed viewport before yielding its height scan',()=>{
+  const H=3_600_000,M=60_000,hooks=preparationFixture(),basis={from:0,to:72*H,end:72*H};
+  let visual={...basis},reads=0;
+  const cells=Array.from({length:200},(_,i):[number,number]=>[60*H+i*M,H]);
+  const groups=[{group:{key:'s',cells},color:'red',name:'S'}];
+  const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
+  const start=source.indexOf('  const inputs = [incomingGroups'),region=source.slice(start,source.indexOf('  const model = ',start));
+  assert.ok(start>=0&&region.includes('const prepared = usePrepared'));
+  const context={...hooks,incomingGroups:groups,incomingStrip:null,incomingActivity:{barMs:M},incomingOrigin:0,incomingUnknownTo:null,incomingRegistry:null,detailFrame:null,by:'source',width:400,height:300,left:48,right:12,authority:0,valueContext:'',active:true,incomingReady:true,from:0,to:24*H,navigation:{context:'test',range:'live'},navigationKey,MINUTE:M,activityScale,cellStart,plotBar,targetOf,
+    axis:{basis,visualGeometry:()=>{reads++;return {...visual};}},pan:{get:()=>({length:24*H,now:72*H})},cache:{current:{paths:new StackPaths()}},
+    render:null as unknown as ()=>{value:{maximum:number;vertical:{max:number}}|null;ready:boolean}};
+  runInNewContext(ts.transpileModule(`globalThis.render=()=>{${region}\nreturn prepared;};`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+  hooks.begin();assert.equal(context.render().value,null);assert.equal(reads,0,'render schedules without sampling the DOM presentation');
+  hooks.commit();hooks.tick();assert.equal(reads,1,'the generator samples its complete physical viewport before the first yield');
+  visual={from:0,to:24*H,end:24*H};hooks.finish();hooks.begin();
+  const ready=context.render();assert.equal(ready.ready,true);assert.equal(ready.value?.maximum,H,'a semantic 24-hour range cannot discard positive bars from the displayed 72-hour frame');
+  assert.equal(ready.value?.vertical.max,H);assert.equal(reads,1,'yielded work keeps one coherent initial viewport');
 });

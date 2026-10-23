@@ -500,7 +500,7 @@ export const Chart = memo(function Chart({
   const forecastRows = (desiredLive ? model?.forecasts ?? [] : []).map((forecast, index) => ({forecast, path: model!.forecastPaths[index]})).filter(row => currentClock < (row.forecast.until ?? Infinity));
   const plans = planRows.map(row => row.plan), forecasts = forecastRows.map(row => row.forecast);
   const markers = (model?.markers ?? []).filter(marker => currentClock < (marker.until ?? Infinity));
-  const strip = model?.strip ?? null, from = desiredFrom, now = desiredNow, to = desiredTo;
+  const strip = model?.strip ?? null, now = desiredNow, to = desiredTo;
   const paths = model?.paths ?? [], planPaths = planRows.map(row => row.path), forecastPaths = forecastRows.map(row => row.path);
   const span = Math.max(60_000, basis.to - basis.from);
   const x = (at: number) => left + (at - basis.from) / span * (width - left - right);
@@ -508,8 +508,9 @@ export const Chart = memo(function Chart({
   const bx = (at: number) => axis.screenX(Math.min(now, at + cellMs / 2));
   const hover = incomingReady && prepared.ready && axis.hover !== null && (!strip || axis.hover > now || covered(strip.coverage, axis.hover, axis.hover + cellMs)) ? axis.hover : null;
   const pointedAt = axis.hoverAt ?? axis.rawHover ?? hover;
-  const tickFrom = strip?.from ?? (axis.held ? basis.from : from), tickTo = strip?.to ?? (axis.held ? basis.to : to);
-  const {ticks, daily} = niceTicks(tickFrom, tickTo, (width < 560 ? 4 : 7) * (tickTo - tickFrom) / span);
+  const presentation = axis.presentation(incomingReady && prepared.ready);
+  const tickFrom = strip?.from ?? presentation.from, tickTo = strip?.to ?? presentation.to;
+  const {ticks, daily} = niceTicks(tickFrom, tickTo, width < 560 ? 4 : 7, presentation);
   useLayoutEffect(() => {axis.commitDrawing(basis, incomingReady && prepared.ready);});
 
   const none = {left: false, plan: false, gap: false, forecast: false};

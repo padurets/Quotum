@@ -22,7 +22,7 @@ test('current clock presentation keeps paired future paths, raw marker coordinat
     markers: [{key: 'entering', at: 2 * H + minute, until: 3 * H, label: 'reset', color: 'red'}, {key: 'expired', at: H, until: H}], paths: [], strip: null}},
     valueAxis: undefined, currentClock: H + minute, desiredFrom: minute, desiredNow: H + minute, desiredTo: 2 * H, desiredLive: true,
     incomingReady: true, cellMs: minute, left: 40, right: 12, width: 900, height: 220, top: 12, bottom: 28,
-    axis: {basis, hover: H, rawHover:H+minute/4, screenX: (at: number) => 40 + (at - context.desiredFrom) / (context.desiredTo - context.desiredFrom) * 848, commitDrawing: () => {}},
+    axis: {basis, hover: H, rawHover:H+minute/4, presentation:()=>({from:context.desiredFrom,to:context.desiredTo}),screenX: (at: number) => 40 + (at - context.desiredFrom) / (context.desiredTo - context.desiredFrom) * 848, commitDrawing: () => {}},
     niceTicks: () => ({ticks: [], daily: false}), useLayoutEffect: () => {}, cellLabel: () => '',
     draw: null as unknown as () => {plans: {key: string}[]; planPaths: string[]; forecasts: {key: string}[]; forecastPaths: string[]; now: number; to: number; hoverX: number; bandWidth: number; elements: React.ReactNode[]; x: (at: number) => number},
   };

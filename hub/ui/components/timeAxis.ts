@@ -494,17 +494,39 @@ export function useTimeAxis({
       if (foldTicket.current === ticket && !pan.active() && navigationKey(wanted.current.navigation) === key) {motion.current = null; setFolding(false);}
     });
   };
+  const wantedProjection = () => {
+    const key = navigationKey(requestedNavigation);
+    const previous = wanted.current;
+    const changed = navigationKey(previous.navigation) !== key;
+    const held = finished.current;
+    // History arriving after a gesture may have a different numeric extent. The
+    // reader's final time-to-pixel mapping outlives that replacement.
+    const positioned = !changed && previous.positioned || !!held?.stop.range && navigationKey(held.navigation) === key;
+    const projection = positioned ? held?.visual ?? previous.projection : {from, to, end};
+    return {navigation: requestedNavigation, projection, positioned};
+  };
+  /** The viewport this commit presents, independently of its paths' numeric basis. */
+  const presentation = (ready: boolean): {from: number; to: number} => {
+    const key = navigationKey(requestedNavigation), frame = pan.get();
+    const origin = captured.current, held = finished.current;
+    if (frame && origin?.token === frame.token && navigationKey(origin.navigation) === key ||
+      held && navigationKey(held.navigation) === key && (!ready || finalFrame.current !== null)) {
+      // These held/native poses have no animation. Cancellation's restored pose
+      // becomes visible only on its final RAF, even when data is already ready.
+      const {from, to} = visualGeometry();
+      return {from, to};
+    }
+    const {from, to} = wantedProjection().projection;
+    return {from, to};
+  };
   const publishWanted = () => {
     const key = navigationKey(requestedNavigation);
     const previous = wanted.current;
     const changed = navigationKey(previous.navigation) !== key;
     if (pan.active() && captured.current && navigationKey(captured.current.navigation) !== key) pan.cancel();
     const held = finished.current;
-    // History arriving after a gesture may have a different numeric extent. The
-    // reader's final time-to-pixel mapping outlives that replacement.
-    const positioned = !changed && previous.positioned || !!held?.stop.range && navigationKey(held.navigation) === key;
-    const projection = positioned ? held?.visual ?? previous.projection : {from, to, end};
-    wanted.current = {navigation: requestedNavigation, projection, positioned};
+    const next = wantedProjection(), projection = next.projection;
+    wanted.current = next;
     const superseded = !!held && navigationKey(held.navigation) !== key || !!motion.current && motion.current.key !== key;
     if (superseded) retirePresentation();
     if (!pan.active() && !finished.current && (changed || superseded || previous.projection.from !== projection.from || previous.projection.to !== projection.to)) {
@@ -605,5 +627,5 @@ export function useTimeAxis({
     if(motion.current)animateTicks.current(motion.current);
   });
 
-  return {box, svg, width, scale, commitDrawing, visualGeometry, screenX: (at: number) => {if (animations.current.size) {const visible = visualGeometry(); return left + (at - visible.from) / (visible.to - visible.from) * (width - left - right);} const base = drawing.current; return pose.current.a * (left + (at - base.from) / Math.max(60_000, base.to - base.from) * (width - left - right)) + pose.current.b + pose.current.offset / scale;}, get held() {return finished.current !== null;}, hover: shifting || panning || folding || finished.current !== null || hover === null ? null : Math.floor(hover / cellMs) * cellMs, hoverAt: hover,rawHover: hover, drag, x, drawX, timeAt, clip, handlers, basis, active: panning !== null, panning: shifting || panning !== null || folding || finished.current !== null};
+  return {box, svg, width, scale, commitDrawing, visualGeometry, presentation, screenX: (at: number) => {if (animations.current.size) {const visible = visualGeometry(); return left + (at - visible.from) / (visible.to - visible.from) * (width - left - right);} const base = drawing.current; return pose.current.a * (left + (at - base.from) / Math.max(60_000, base.to - base.from) * (width - left - right)) + pose.current.b + pose.current.offset / scale;}, get held() {return finished.current !== null;}, hover: shifting || panning || folding || finished.current !== null || hover === null ? null : Math.floor(hover / cellMs) * cellMs, hoverAt: hover,rawHover: hover, drag, x, drawX, timeAt, clip, handlers, basis, active: panning !== null, panning: shifting || panning !== null || folding || finished.current !== null};
 }

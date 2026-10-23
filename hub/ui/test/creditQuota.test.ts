@@ -182,7 +182,7 @@ test('actual pointer and chart tooltip retain time inside a cap cell through rea
     const fixture={React,preciseReadout,onDrawing:undefined,prepared:{ready:true,value:{basis:{from:0,to:60000},lines:[line],plans:[],forecasts:[],markers:[],paths:[],strip:null}},
       valueAxis:{formatValue:(_key:string,_value:number,at:number)=>{formatted.push(at);return meterPointIn(series,at,60000)?.value;}},
       currentClock:60000,desiredFrom:0,desiredNow:60000,desiredTo:60000,desiredLive:true,incomingReady:true,cellMs:60000,
-      width:60000,left:0,right:0,height:220,top:12,bottom:28,axis:{hover:0,hoverAt:55000,screenX:(at:number)=>at,commitDrawing:()=>{}},
+      width:60000,left:0,right:0,height:220,top:12,bottom:28,axis:{hover:0,hoverAt:55000,presentation:()=>({from:0,to:60000}),screenX:(at:number)=>at,commitDrawing:()=>{}},
       useLayoutEffect:()=>{},niceTicks:()=>({ticks:[],daily:false}),readCell:readout,
       present:null as unknown as ()=>{value:number|null;element:React.ReactNode;x:number}};
     runInNewContext(ts.transpileModule(`function present(){${head}\n${position}\nconst row=rows[0];return {value:row.value,element:${value},x:hoverX};}\nglobalThis.present=present;`,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React}}).outputText,fixture);

@@ -23,12 +23,12 @@ export function axisPresentationFixture(base: DrawingGeometry, navigation: AxisN
     box: {current: {querySelectorAll: () => slides}}, panLayers: {current: layers},
     finished: {current: null as {visual: DrawingGeometry; navigation: AxisNavigation; stop: {range: unknown; canceled: boolean}} | null},
     finishPresentation: {current: null as (() => void) | null},
-    captured: {current: null}, finalFrame: {current: null as number | null}, foldTicket: {current: 0},
+    captured: {current: null as {token:number;navigation:AxisNavigation}|null}, finalFrame: {current: null as number | null}, foldTicket: {current: 0},
     motion: {current: null as {key: string; until: number; fold: boolean} | null}, animations: {current: new Map<object, Moving>()},
     animationPoses: {current: new WeakMap<object, {from: {a: number; b: number; offset: number}; to: {a: number; b: number; offset: number}}>()},
     cancelAnimationFrame: (frame: number) => canceledFrames.push(frame),
     cancelSlides: () => {for (const animation of context.animations.current.values()) animation.cancel(); context.animations.current.clear();},
-    pan: {active: () => active.current, cancel: () => {active.current = null;}}, paintPan: {current: () => {}},
+    pan: {get:()=>active.current===null?null:{token:active.current},active: () => active.current, cancel: () => {active.current = null;}}, paintPan: {current: () => {}},
     performance: {now: () => now}, matchMedia: () => ({matches: false}), setFolding: (on: boolean) => {if (on) classes.add('is-panning'); else classes.delete('is-panning');},
     animateSlide: (layer: object, frames: Keyframe[], options: KeyframeAnimationOptions, owner = layer) => {
       let finish!: () => void;
@@ -40,7 +40,7 @@ export function axisPresentationFixture(base: DrawingGeometry, navigation: AxisN
       const inverse = (px: number) => drawing.current.from + (((px - pose.current.offset) / scale - pose.current.b) / pose.current.a - left) / inner * span;
       return {from: inverse(left * scale), to: inverse((width - right) * scale), end: drawing.current.end};
     },
-    useLayoutEffect: () => {}, publish: null as unknown as () => void, screenX: null as unknown as (at: number) => number,
+    useLayoutEffect: () => {}, publish: null as unknown as () => void, presentation:null as unknown as (ready:boolean)=>{from:number;to:number},screenX: null as unknown as (at: number) => number,
     commit: null as unknown as (next: DrawingGeometry, ready: boolean) => void,
   };
   const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
@@ -48,7 +48,7 @@ export function axisPresentationFixture(base: DrawingGeometry, navigation: AxisN
   const code = source.slice(start, source.indexOf('\n  return {box, svg', start));
   const screenX = source.slice(source.indexOf('screenX: (at: number) => ')).split(', get held')[0].replace('screenX: ', '');
   const duration = source.match(/const SLIDE_MS = \d+;/)![0];
-  runInNewContext(ts.transpileModule(`${duration}\n${code}\nglobalThis.publish=publishWanted;globalThis.commit=commitDrawing;globalThis.screenX=${screenX};`, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
+  runInNewContext(ts.transpileModule(`${duration}\n${code}\nglobalThis.publish=publishWanted;globalThis.commit=commitDrawing;globalThis.presentation=presentation;globalThis.screenX=${screenX};`, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
   const navigate = (next: DrawingGeometry, intent: AxisNavigation) => {context.from = next.from; context.to = next.to; context.end = next.end; context.requestedNavigation = intent; context.publish();};
   const point = (at: number) => scale * (pose.current.a * (left + (at - drawing.current.from) / Math.max(60_000, drawing.current.to - drawing.current.from) * (width - left - right)) + pose.current.b) + pose.current.offset;
   return {context, navigate, point, active, layers, slides, animations, classes, canceledFrames, advance: (ms: number) => {now += ms;}};
