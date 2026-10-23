@@ -133,7 +133,6 @@ jobs:
           path: ${{ runner.temp }}/quotum-bench-history
           if-no-files-found: warn
 
-
   bench-dashboard:
     if: ${{ !startsWith(github.ref, 'refs/tags/') && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
     runs-on: ubuntu-latest
@@ -196,37 +195,6 @@ jobs:
         with:
           name: bench-dashboard-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/quotum-bench-dashboard
-          if-no-files-found: warn
-
-  history-pool-diagnostic:
-    if: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark-history-pool-diagnostics') }}
-    runs-on: ubuntu-latest
-    # This observed full replay is separate from both required benchmark scopes.
-    timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: hub
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: hub/package-lock.json
-      - run: npm ci
-      - run: npm run build
-      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope all
-        env:
-          QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL: '1'
-          QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-history-pool-diagnostic
-      - name: Shared history pool diagnostic evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: history-pool-receipt-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            /tmp/quotum-bench-history-pool-*.json
-            ${{ runner.temp }}/quotum-history-pool-diagnostic
           if-no-files-found: warn
 
   idle-cpu-control:
