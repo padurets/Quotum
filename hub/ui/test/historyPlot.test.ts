@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {compose, targetOf, type Chunk, type HistoryMeta} from '../../server/domain/history';
-import {covered, plotBar, plotGroups, plotOf, type PlotGroup} from '../lib/historyPlot';
+import {covered, plotBar, plotTarget, plotGroups, plotOf, type PlotGroup} from '../lib/historyPlot';
 import {groupRegistry} from '../lib/plotRegistry';
 import {CATEGORY_COLORS} from '../lib/providers';
 import {OTHER_COLOR} from '../lib/activity';
@@ -45,6 +45,19 @@ test('a moving edge immediately changes 60 minutes to 55, using whole-cell compo
   assert.equal(actual.agentMs, compose([full], meta, moved, new Set(['s w'])).activity.cells[0][2]);
   assert.equal(plotBar({...buffer, coverage: [[5 * M, 2 * H]]}, 0, moved, 'project')!.agentMs, 55 * M, 'unknown outside the contributing cells is irrelevant');
   assert.equal(plotBar({...buffer, coverage: [[0, 5 * M], [10 * M, 2 * H]]}, 0, moved, 'project'), null, 'one unread contributing cell hides the whole bar');
+});
+
+test('a retained coarse strip keeps its own whole cells and measurement cutoff on a finer requested period',()=>{
+  const target=targetOf(72*H,NOW,'coarse',{from:0,to:3*H}),full=chunk(0,3*H,15*M);
+  const buffer=plotOf([full],meta,target,[[0,3*H]],new Set(['s w']),1,1,1);
+  const displayed={from:16*M+1234,to:80*M+1234,end:61*M+1234};
+  const admitted=plotTarget(buffer,displayed);
+  assert.equal(buffer.cell,15*M);
+  assert.equal(plotBar(buffer,0,admitted,'project')!.agentMs,45*M);
+  assert.equal(plotBar(buffer,H,admitted,'project')!.agentMs,15*M,'the end admits a whole saved cell without proportional scaling');
+  assert.equal(plotBar({...buffer,coverage:[[0,H],[75*M,3*H]]},H,admitted,'project'),null,'an unread contributing cell stays unknown');
+  assert.equal(plotBar(buffer,H,plotTarget(buffer,{...displayed,end:59*M+29_000}),'project'),null);
+  assert.equal(plotBar(buffer,H,plotTarget(buffer,{...displayed,end:59*M+45_000}),'project')!.agentMs,15*M,'the existing30s clock tolerance is retained');
 });
 
 test('plot metadata extends a seven-group seed through Nord Warm and neutral overflow without recolouring surviving groups', () => {

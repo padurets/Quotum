@@ -83,6 +83,20 @@ test('a new gesture before READY can freeze the borrowed frame without reading t
   assert.equal(navigationKey(h.context.wanted.current.navigation), navigationKey(axisNavigation('board', B, prefs)));
 });
 
+test('a coherent answer adopts its requested past endpoints when a retained duration or retention clamp differs',()=>{
+  for(const held of [{from:0,to:72*H,end:72*H},{from:47*H,to:71*H,end:71*H}]){
+    const range={from:48*H,to:72*H},target={...range,end:range.to},nav=axisNavigation('board',range,prefs);
+    const f=axisPresentationFixture(held,nav);
+    f.context.finished.current={visual:held,navigation:nav,stop:{range,canceled:false}};
+    f.context.from=target.from;f.context.to=target.to;f.context.end=target.end;
+    const pending=f.context.presentation(false);near(pending.from,held.from);near(pending.to,held.to);
+    const ready=f.context.presentation(true);near(ready.from,target.from);near(ready.to,target.to);
+    f.context.publish();f.context.commit(target,true);
+    assert.equal(f.context.wanted.current.positioned,false);
+    near(f.context.visualGeometry().from,target.from);near(f.context.visualGeometry().end,target.end);
+  }
+});
+
 test('ready future hints place the current preset/horizon independently of the saved data frame', () => {
   const now = 100 * H, hints = {plan: true, forecast: true, announced: null, zeros: [now + 10 * H]};
   const frame = frameOf(null, prefs, now, 0);

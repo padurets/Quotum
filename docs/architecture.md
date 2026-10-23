@@ -2369,10 +2369,11 @@ the historical projection. The SVG matrix and CSS offset compose to the same dis
 coordinates before and after adoption. Activity paints its value scale and clipped
 edges after the committed time pose in that same native frame, including cancellation;
 logical completion cannot pin a value scale from a pose that is still about to be
-restored. A retained drawing without a strip uses its actual visible viewport for
-Activity's value scale, including another gesture before replacement and a forced
-release. The selected period and the saved paths' numeric basis cannot substitute
-for that viewport. The axis also supplies each commit's intended presentation for
+restored. Every retained Activity drawing uses its actual visible viewport for its
+value scale and edge clipping, including another gesture before replacement and a
+forced release. A saved strip keeps its own cell grid, whole-cell accounting and
+coverage checks. The selected period and the saved paths' numeric basis cannot
+substitute for that viewport. The axis also supplies each commit's intended presentation for
 time labels: its shifted bounds set their inventory, and its visible span sets their
 density. A borrowed strip's label inventory stays within one extra visible period
 on either side, including the visible interval even past unread data. Matching
@@ -2380,8 +2381,12 @@ historical and default live projections keep the native strip's complete invento
 Explicit navigation
 supplies its new projection before layout; matching
 native captures and unpainted final frames retain the physical pose. A ready live
-handoff uses the live target, while a positioned historical viewport survives ready
-data. Its known-data boundary belongs
+handoff uses the live target. A historical viewport survives ready data when both
+of its measured endpoints match the committed interval; a different requested
+duration or a retention clamp adopts its own interval at the reached measurement
+end. That end moves with the presented artwork, including a sampled animation;
+an older, longer drawing cannot turn the duration difference into forecast space.
+Its known-data boundary belongs
 to that same drawing, including a confirmed absence of an unknown prefix. A new
 gesture samples that actual presentation, including an interrupted fold, separately
 from its URL origin.

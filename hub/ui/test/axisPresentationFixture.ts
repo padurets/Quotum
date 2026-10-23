@@ -20,10 +20,10 @@ export function axisPresentationFixture(base: DrawingGeometry, navigation: AxisN
   const context = {paintTicks:{current:()=>{}},animateTicks:{current:()=>[]},document:{timeline:{currentTime:0}},paintDrawing:{current:undefined},drawing, pose, wanted, navigationKey, slideOf, width, scale, left, right,
     from: base.from, to: base.to, end: base.end, requestedNavigation: navigation,
     svg: {current: {dataset: {} as Record<string, string>, classList: {toggle: (name: string, on: boolean) => {if (on) classes.add(name); else classes.delete(name);}}}},
-    box: {current: {querySelectorAll: () => slides}}, panLayers: {current: layers},
+    box: {current: {querySelector:()=>slides[0],querySelectorAll: () => slides}}, panLayers: {current: layers},
     finished: {current: null as {visual: DrawingGeometry; navigation: AxisNavigation; stop: {range: unknown; canceled: boolean}} | null},
     finishPresentation: {current: null as (() => void) | null},
-    captured: {current: null as {token:number;navigation:AxisNavigation}|null}, finalFrame: {current: null as number | null}, foldTicket: {current: 0},
+    captured: {current: null as {token:number;navigation:AxisNavigation;visual?:DrawingGeometry}|null}, finalFrame: {current: null as number | null}, foldTicket: {current: 0},
     motion: {current: null as {key: string; until: number; fold: boolean} | null}, animations: {current: new Map<object, Moving>()},
     animationPoses: {current: new WeakMap<object, {from: {a: number; b: number; offset: number}; to: {a: number; b: number; offset: number}}>()},
     cancelAnimationFrame: (frame: number) => canceledFrames.push(frame),
@@ -35,15 +35,13 @@ export function axisPresentationFixture(base: DrawingGeometry, navigation: AxisN
       const animation: Moving = {owner, frames, options, finished: new Promise(resolve => {finish = resolve;}), canceled: false, cancel() {this.canceled = true;}, finish: () => finish()};
       animations.push(animation); context.animations.current.set(layer, animation); return animation;
     },
-    visualGeometry: () => {
-      const span = Math.max(60_000, drawing.current.to - drawing.current.from), inner = width - left - right;
-      const inverse = (px: number) => drawing.current.from + (((px - pose.current.offset) / scale - pose.current.b) / pose.current.a - left) / inner * span;
-      return {from: inverse(left * scale), to: inverse((width - right) * scale), end: drawing.current.end};
-    },
+    readPose:()=>pose.current,visualGeometry:null as unknown as ()=>DrawingGeometry,
     useLayoutEffect: () => {}, publish: null as unknown as () => void, presentation:null as unknown as (ready:boolean)=>{from:number;to:number},screenX: null as unknown as (at: number) => number,
     commit: null as unknown as (next: DrawingGeometry, ready: boolean) => void,
   };
   const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
+  const geometry=source.slice(source.indexOf('  const visualGeometry = '),source.indexOf('  const freezeSlides = '));
+  runInNewContext(ts.transpileModule('{'+geometry+'\nglobalThis.visualGeometry=visualGeometry;}', {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
   const start = source.indexOf('  const projectionOf = ');
   const code = source.slice(start, source.indexOf('\n  return {box, svg', start));
   const screenX = source.slice(source.indexOf('screenX: (at: number) => ')).split(', get held')[0].replace('screenX: ', '');

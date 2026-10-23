@@ -12,7 +12,7 @@ import {hubNow,useClock} from '../lib/clock';
 import {quotaHistory, useActivityHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {boardPeriod,type ActivityProjection} from '../lib/period';
 import type {ActivityFrame as History} from '../lib/period';
-import {plotBar, plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
+import {plotTarget, plotBar, plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
 import {usePrepared, usePreparationBasis} from './prepared';
 import {axisNavigation, navigationAt, navigationKey, type AxisNavigation} from '../lib/axisNavigation';
 import {groupRegistry, type GroupIdentity} from '../lib/plotRegistry';
@@ -403,22 +403,22 @@ const Stacks = memo(function Stacks({
     const basis = {from: requested.from, to: requested.to, end: requested.end};
     const span = Math.max(MINUTE, basis.to - basis.from);
     const barMs = incomingStrip?.barMs ?? incomingActivity.barMs;
-    const draft=active?pan.get():null,visual=axis.visualGeometry();
-    const selected=incomingStrip?(draft?{from:visual.from,to:visual.from+draft.length}:{from,to}):visual;
+    const selected=axis.visualGeometry();
     const heights = new Map<number, number>(), keys = new Set<string>();
     for (const {group} of incomingGroups) {
       keys.add(group.key);
       for (const [at, ms] of group.cells) {heights.set(at, (heights.get(at) ?? 0) + ms); yield;}
     }
-    const target=incomingStrip?targetOf(selected.to-selected.from,draft?.now??to,'scale',selected):null;
+    const target=incomingStrip?plotTarget(incomingStrip,selected):null;
+    const start=target&&incomingStrip?target.k0*incomingStrip.cell:selected.from,end=target&&incomingStrip?(target.k1+1)*incomingStrip.cell:selected.to;
     let maximum = 0;
     for (const [at,value] of heights) {
       // Only complete drawn bars set the scale. Raw strip cells may be unread,
-      // or outside the selected period, and cannot supply a phantom maximum.
-      if(incomingStrip?at>=selected.from&&at+barMs<=selected.to:at<selected.to&&at+barMs>selected.from)maximum=Math.max(maximum,value);
+      // or outside the displayed interval, and cannot supply a phantom maximum.
+      if(incomingStrip?at>=start&&at+barMs<=end:at<end&&at+barMs>start)maximum=Math.max(maximum,value);
       yield;
     }
-    if(incomingStrip&&target)for(const at of new Set([cellStart(selected.from,barMs),cellStart(selected.to-1,barMs)])){
+    if(incomingStrip&&target)for(const at of new Set([cellStart(start,barMs),cellStart(end-1,barMs)])){
       const edge=plotBar(incomingStrip,at,target,by);
       if(edge)maximum=Math.max(maximum,[...edge.groups].reduce((sum,[key,part])=>sum+(keys.has(key)?part.ms:0),0));
       yield;
@@ -466,7 +466,7 @@ const Stacks = memo(function Stacks({
   const edges = useRef<SVGGElement>(null);
   const valueBand=useRef<SVGGElement>(null),valueAxis=useRef<SVGGElement>(null);
   const paintedValue=useRef('');
-  const valuePin=useRef<{context:string;range:string;maximum:number}|null>(null);
+  const valuePin=useRef<{context:string;range:string;maximum:number;period:number}|null>(null);
   const painted = useRef('');
   // The prepared paths own their numeric basis. The native painter owns the
   // visible value projection, just as timeAxis owns their horizontal projection.
@@ -493,18 +493,19 @@ const Stacks = memo(function Stacks({
     if (!bandClip.current) return;
     const draft = pan.get();
     const visual = axis.visualGeometry();
-    const range = strip ? forced??(draft || axis.held ? {from: visual.from, to: visual.from + (draft?.length ?? strip.length)} : {from, to}) : visual;
-    const target = strip ? targetOf(strip.length, draft?.now ?? to, 'edge', range) : null;
+    const range = visual;
+    const target = strip ? plotTarget(strip,range) : null;
+    const start=strip&&target?target.k0*strip.cell:range.from,end=strip&&target?(target.k1+1)*strip.cell:range.to;
     let maximum=0;
-    for(const [at,value] of heights)if(strip?at>=range.from&&at+barMs<=range.to:at<range.to&&at+barMs>range.from)maximum=Math.max(maximum,value);
-    if(strip&&target)for(const at of new Set([cellStart(range.from,barMs),cellStart(range.to-1,barMs)])){
+    for(const [at,value] of heights)if(strip?at>=start&&at+barMs<=end:at<end&&at+barMs>start)maximum=Math.max(maximum,value);
+    if(strip&&target)for(const at of new Set([cellStart(start,barMs),cellStart(end-1,barMs)])){
       const bar=plotBar(strip,at,target,by);
       if(bar)maximum=Math.max(maximum,[...bar.groups].reduce((sum,[key,part])=>sum+(groups.some(row=>row.group.key===key)?part.ms:0),0));
     }
     if(pin||!draft&&(!axis.held||!!forced)){
       const context=`${navigation.context}:${width}:${height}:${valueContext}`,projectionKey=navigationKey(navigationAt(navigation,forced??timeRange()));
-      if(pin)valuePin.current={context,range:projectionKey,maximum:activityScale(maximum).max};
-      if(valuePin.current?.context!==context||valuePin.current.range!==projectionKey)valuePin.current=null;
+      if(pin)valuePin.current={context,range:projectionKey,maximum:activityScale(maximum).max,period:range.end-range.from};
+      if(valuePin.current?.context!==context||valuePin.current.range!==projectionKey||coherent&&Math.abs(valuePin.current.period-(basis.end-basis.from))>1)valuePin.current=null;
       if(valuePin.current){valuePin.current.maximum=Math.max(activityScale(maximum).max,valuePin.current.maximum);maximum=valuePin.current.maximum;}
     }
     paintValue(maximum);
@@ -514,7 +515,6 @@ const Stacks = memo(function Stacks({
       clipPlot(bandClip.current, left * scale, (width - right) * scale, width * scale);
       return;
     }
-    const start = strip && target ? target.k0 * strip.cell : from, end = strip && target ? (target.k1 + 1) * strip.cell : to;
     const firstFull = Math.ceil(start / barMs) * barMs, lastFull = Math.floor(end / barMs) * barMs;
     if (draft || axis.held) {
       const a = Math.max(left, Math.min(width - right, axis.screenX(firstFull)));

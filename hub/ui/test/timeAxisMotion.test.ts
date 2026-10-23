@@ -141,6 +141,7 @@ test('starting from a settled axis avoids a style flush but samples an interrupt
   const layer = {getAnimations: () => {throw new Error('animation lookup must not flush styles');}};
   const animations = {current: new Map()};
   const context = {box: {current: {querySelector: () => layer}}, animations, animationPoses: {current: new WeakMap()},
+    captured:{current:null},finished:{current:null},motion:{current:null},wanted:{current:{projection:{from:0,to:1_000_000,end:800_000}}},
     drawing: {current: {from: 0, to: 1_000_000, end: 800_000}}, pose: {current: {a: 1, b: 0, offset: 0}}, scale: .5, left: 40, right: 12, width: 900,
     getComputedStyle: () => {reads++; return {transform: 'matrix'};},
     DOMMatrix: class {a = .5; e = 20;}, read: null as unknown as () => {from: number; to: number; end: number}};
@@ -151,7 +152,7 @@ test('starting from a settled axis avoids a style flush but samples an interrupt
   const sampled = context.read();
   assert.equal(reads, 1);
   assert.equal(sampled.to - sampled.from, 2_000_000, 'an interrupted fold retains its actual displayed scale');
-  assert.equal(sampled.end, 800_000);
+  assert.equal(sampled.end, sampled.to-200_000,'the sampled projection keeps its owned future extent');
 });
 
 test('the actual slide owner cancels replacements and releases only its own completed animation', async () => {
@@ -187,7 +188,7 @@ test('the actual drawing commit preserves two landmarks through pending, replace
   const old = {from: 0, to: 2 * H, end: H}, initial = {a: .7, b: 5, offset: 13};
   const inverse = (px: number) => (((px - initial.offset) / scale - initial.b) / initial.a - left) / inner * 2 * H;
   const delta = -.25 * H, visual = {from: inverse(left * scale) + delta, to: inverse((width - right) * scale) + delta, end: H + delta};
-  const selected = {from: visual.from, to: visual.from + H};
+  const selected = {from: visual.from, to: visual.end};
   const layers = [{style: {transform: 'held'}}], slides = [{style: {transform: 'frozen'}, closest: () => layers[0]}];
   const frames: Keyframe[][] = [];
   const pose = {current: {...initial, offset: initial.offset - delta / (visual.to - visual.from) * inner * scale}};
@@ -195,7 +196,7 @@ test('the actual drawing commit preserves two landmarks through pending, replace
   const before = known.map(at => scale * (pose.current.a * (left + at / (old.to - old.from) * inner) + pose.current.b) + pose.current.offset);
   const context = {document:{timeline:{currentTime:0}},animateTicks:{current:()=>[]},paintDrawing:{current:undefined},paintTicks:{current:()=>{}},shown: {current: old}, drawing: {current: old}, svg: {current: {dataset: {} as Record<string, string>}}, box: {current: {querySelectorAll: () => slides}},
     panLayers: {current: layers}, pose, pan: {active: () => null}, paintPan: {current: () => {}},
-    navigationKey, wanted: {current: {navigation: {context: 'test', range: 'range'}, projection: {from: selected.from, to: selected.to, end: selected.to}}}, requestedNavigation: {context: 'test', range: 'range'}, motion: {current: null}, captured: {current: null},
+    navigationKey, wanted: {current: {navigation: {context: 'test', range: 'range'}, projection: {from: selected.from, to: selected.to, end: selected.to},positioned:true}}, requestedNavigation: {context: 'test', range: 'range'}, motion: {current: null}, captured: {current: null},
     finished: {current: {navigation: {context: 'test', range: 'range'}, visual, stop: {range: selected, canceled: false}} as {navigation: {context: string; range: string}; visual: typeof visual; stop: {range: typeof selected; canceled: boolean}} | null},
     finishPresentation: {current: null}, finalFrame: {current: 1 as number | null}, timeRange: () => selected, left, right, width, scale, from: selected.from, to: selected.to,
     foldTicket: {current: 0}, animations: {current: new Map()}, animationPoses: {current: new WeakMap()}, matchMedia: () => ({matches: false}), setFolding: () => {},
@@ -244,7 +245,7 @@ test('an interrupted HTML fold composes its CSS matrix with the final SVG pose b
     let canceled = false;
     const animation = {effect: {target: owner}};
     const animations = {current: new Map([[layer, animation]])};
-    const context = {paintTicks:{current:()=>{}},drawing: {current: base}, box: {current: {querySelector: () => layer, querySelectorAll: () => [layer, other]}}, animations, pose, animationPoses: {current: new WeakMap()},
+    const context = {captured:{current:null},finished:{current:null},motion:{current:null},wanted:{current:{projection:base}},paintTicks:{current:()=>{}},drawing: {current: base}, box: {current: {querySelector: () => layer, querySelectorAll: () => [layer, other]}}, animations, pose, animationPoses: {current: new WeakMap()},
       scale, width: 600, left: 40, right: 20,
       getComputedStyle: (target: object) => {assert.equal(target, owner); return {transform: 'matrix(.63,0,0,1,27,0)'};},
       DOMMatrix: class {a = .63; e = 27;}, cancelSlides: () => {canceled = true; animations.current.clear();},

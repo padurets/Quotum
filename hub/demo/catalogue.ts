@@ -48,6 +48,8 @@ export {LINK_SCENES} from './links.js';
  * handoffs are held by moneyPanDomain, activityProjectorMemory and heatmapDrillFocus.
  * Split reconnect legends and resize preparation are held by periodContinuity and
  * chartPreparation; future-relative cache admission by periodEventAdmission.
+ * Retained strips across period changes, repeated gestures and producer recovery
+ * are held by activityPanProjection; measurement-end folds by axisAnimationPose.
  * Stable intermediate plot/table geometry is checked on the real demo in the browser.
  * Legend emphasis, table-only views and explicit empty Add are exercised on this set in
  * both languages. The shared range and all five charts use the native-input bench.

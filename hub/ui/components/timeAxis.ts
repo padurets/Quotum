@@ -17,7 +17,7 @@ const SLIDE_MS = 220;
 
 export type DrawingGeometry = {from: number; to: number; end: number};
 type Pose = {a: number; b: number; offset: number};
-type Motion = {key: string; until: number; fold: boolean; start: Pose; end: Pose; options: KeyframeAnimationOptions; started: Animation['startTime']};
+type Motion = {key: string; until: number; fold: boolean; start: Pose; end: Pose; boundary: {start: number; end: number}; options: KeyframeAnimationOptions; started: Animation['startTime']};
 type Tick = {element: SVGTextElement; x: number; length: number};
 
 /**
@@ -148,7 +148,7 @@ export function useTimeAxis({
     const now = Math.max(hubNow(), end);
     const visual = visualGeometry();
     const length = selected ? selected.to - selected.from : periodOf(prefs().range).ms;
-    return {source: source.current, input, selected, length, semanticEnd: Math.min(now, visual.from + length), now, historyStart, span: visual.to - visual.from, width: (width - left - right) * scale};
+    return {source: source.current, input, selected, length, semanticEnd: Math.min(now, visual.end), now, historyStart, span: visual.to - visual.from, width: (width - left - right) * scale};
   };
   const wheelPan = useRef<(event: WheelEvent) => boolean>(() => false);
   const wheelInput = (event: WheelEvent) => {
@@ -196,7 +196,18 @@ export function useTimeAxis({
     const span = Math.max(60_000, base.to - base.from);
     const inverse = (px: number) => base.from + (((px - offset) / scale - b) / a - left) / (width - left - right) * span;
     const start = inverse(left * scale), finish = inverse((width - right) * scale);
-    return {from: start, to: finish, end: Math.min(base.end, finish)};
+    const owner = captured.current?.visual ?? finished.current?.visual ?? wanted.current.projection;
+    let boundary = finish - Math.max(0, owner.to - owner.end);
+    const running = motion.current;
+    if (running) {
+      // The measurement boundary moves in the same affine plane as the artwork.
+      // Fractions avoid interpolating large epoch timestamps or reading a timer.
+      const da = running.end.a - running.start.a, db = running.end.b - running.start.b;
+      const progress = Math.max(0, Math.min(1, Math.abs(da) > 1e-9 ? (a - running.start.a) / da : Math.abs(db) > 1e-9 ? (b - running.start.b) / db : 1));
+      const at = running.boundary.start + (running.boundary.end - running.boundary.start) * progress;
+      boundary = start + at * (finish - start);
+    }
+    return {from: start, to: finish, end: Math.min(boundary, finish)};
   };
   const freezeSlides = () => {
     const layer = box.current?.querySelector<SVGGElement>('[data-plot-main] .slides');
@@ -207,7 +218,7 @@ export function useTimeAxis({
   };
   useLayoutEffect(() => pan.register(source.current, () => {
     const visual = visualGeometry();
-    return {end: wanted.current.projection.end, future: Math.max(0, visual.to - visual.from - (timeRange() ? timeRange()!.to - timeRange()!.from : periodOf(prefs().range).ms))};
+    return {end: wanted.current.projection.end, future: Math.max(0, visual.to - visual.end)};
   }), []);
   const paint = () => {
     const element = svg.current;
@@ -215,12 +226,12 @@ export function useTimeAxis({
     const frame = pan.get();
     if (frame && captured.current?.token !== frame.token) {
       if (!finished.current?.stop.canceled) finishPresentation.current?.();
+      const visual = visualGeometry();
       finishPresentation.current = null;
       if (finalFrame.current !== null) {cancelAnimationFrame(finalFrame.current); finalFrame.current = null;}
       finished.current = null;
       foldTicket.current++;
       motion.current = null;
-      const visual = visualGeometry();
       freezeSlides();
       captured.current = {token: frame.token, ...drawing.current, visual, pose: {...pose.current}, pixelsPerMs: (width - left - right) * scale / (visual.to - visual.from), navigation: navigationAt(wanted.current.navigation,frame.origin), innerWidth: width - left - right, cssScale: scale, left};
       element.dataset.panToken = String(frame.token);
@@ -272,7 +283,7 @@ export function useTimeAxis({
     const origin = captured.current;
     if (!origin || origin.token !== stop.draft.token) return;
     const delta = stop.canceled ? 0 : stop.draft.to - stop.draft.originEnd;
-    finished.current = {visual: {...origin.visual, from: origin.visual.from + delta, to: origin.visual.to + delta}, stop, navigation: navigationAt(origin.navigation, stop.range)};
+    finished.current = {visual: {from: origin.visual.from + delta, to: origin.visual.to + delta, end: origin.visual.end + delta}, stop, navigation: navigationAt(origin.navigation, stop.range)};
     setFolding(true);
     // A new gesture can consume this final pose before its scheduled RAF.
     const finish = () => {
@@ -465,7 +476,8 @@ export function useTimeAxis({
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (!reduced && duration > 0 && (Math.abs(start.a - end.a) > 1e-9 || Math.abs(start.b - end.b) > 1e-9)) {
       const options = {duration, easing: fold ? 'ease-out' : 'cubic-bezier(.2, .7, .3, 1)'};
-      const running: Motion = {key, until: performance.now() + duration, fold, start, end, options, started: document.timeline.currentTime};
+      const boundary = {start: (visual.end - visual.from) / Math.max(60_000, visual.to - visual.from), end: (target.end - target.from) / Math.max(60_000, target.to - target.from)};
+      const running: Motion = {key, until: performance.now() + duration, fold, start, end, boundary, options, started: document.timeline.currentTime};
       for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) {
         // Dates animate independently of the drawing so their glyphs never scale.
         const owner = fold && !layer.parentElement?.querySelector('.time-ticks') ? layer.closest<HTMLElement>('.plot-move') : null;
@@ -498,10 +510,11 @@ export function useTimeAxis({
     const key = navigationKey(requestedNavigation);
     const previous = wanted.current;
     const changed = navigationKey(previous.navigation) !== key;
-    const held = finished.current;
+    const held = finished.current && navigationKey(finished.current.navigation) === key ? finished.current : null;
     // History arriving after a gesture may have a different numeric extent. The
     // reader's final time-to-pixel mapping outlives that replacement.
-    const positioned = !changed && previous.positioned || !!held?.stop.range && navigationKey(held.navigation) === key;
+    const range = held?.stop.range;
+    const positioned = held ? !!range && Math.abs(held.visual.from - range.from) <= 1 && Math.abs(held.visual.end - range.to) <= 1 : !changed && previous.positioned;
     const projection = positioned ? held?.visual ?? previous.projection : {from, to, end};
     return {navigation: requestedNavigation, projection, positioned};
   };
@@ -559,8 +572,9 @@ export function useTimeAxis({
     const previous = finished.current;
     if (previous) {
       if (!ready || finalFrame.current !== null) {if (visual) projectTo(visual); return;}
+      const positioned = wantedProjection().positioned;
       finished.current = null;
-      if (previous.stop.range) {
+      if (previous.stop.range && positioned) {
         wanted.current = {...wanted.current, projection: previous.visual, positioned: true};
         cancelSlides(); motion.current = null; foldTicket.current++;
         projectTo(previous.visual); setFolding(false);

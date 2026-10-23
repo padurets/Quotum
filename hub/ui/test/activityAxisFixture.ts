@@ -9,7 +9,7 @@ import {activityScale} from '../lib/activity';
 import {StackPaths} from '../lib/stackPaths';
 import {clock,shortDay,workHours} from '../lib/format';
 import {cellStart,targetOf} from '../../server/domain/history';
-import {plotBar} from '../lib/historyPlot';
+import {plotTarget, plotBar} from '../lib/historyPlot';
 import {tickKeyframes,tickVisible,tickPresentation} from '../lib/axisTicks';
 import {niceTicks} from '../lib/periods';
 const M=60000,H=3600000;
@@ -64,7 +64,7 @@ export function activityAxisFixture(live:boolean,scenario:{range?:{from:number;t
   host.children=commitHost(p.children,path+'.children',host);host.props=p;if(p.ref){if(typeof p.ref==='function')p.ref(host);else p.ref.current=host;}return [host];
  }
  const hooks={useRef,useState,useLayoutEffect,useEffect:useLayoutEffect,useMemo,useSyncExternalStore};
- const context:any={...hooks,React:{createElement,Fragment},memo:(fn:any)=>fn,useId:()=>useRef('id').current,pan,usePanning:()=>useSyncExternalStore(pan.onPhase,pan.active),useShifting:()=>useSyncExternalStore(pan.onPhase,pan.shifting),hubNow:()=>now,timeRange:()=>selected,periodOf:()=>({ms:periodMs}),prefs:()=>({range:'2m'}),useHistoryBegins:()=>0,useSizing:()=>({width:'400'}),axisNavigation,navigationAt,navigationKey,tickKeyframes,tickVisible,tickPresentation,requestAnimationFrame:frame,cancelAnimationFrame:(id:number)=>rafs.delete(id),ResizeObserver:class{observe(){}disconnect(){}},document:{timeline:{currentTime:0},fonts:{addEventListener(){},removeEventListener(){}}},window:{},matchMedia:()=>({matches:true}),performance:{now:()=>0},useLocale:()=> 'en',useTip:()=>({tip:{current:null},style:{}}),activityScale,stacksHeight:()=>160,StackPaths,niceTicks,MINUTE:M,cellStart,plotBar,targetOf,seriesFocusStyle:()=>({}),activitySeriesKey:(_by:string,key:string)=>key,workHours,clock,shortDay,stamp:()=>'',t:(key:string)=>key,CSS:{escape:(s:string)=>s},getComputedStyle:()=>({transform:'none'}),slideOf:null};
+ const context:any={...hooks,React:{createElement,Fragment},memo:(fn:any)=>fn,useId:()=>useRef('id').current,pan,usePanning:()=>useSyncExternalStore(pan.onPhase,pan.active),useShifting:()=>useSyncExternalStore(pan.onPhase,pan.shifting),hubNow:()=>now,timeRange:()=>selected,periodOf:()=>({ms:periodMs}),prefs:()=>({range:'2m'}),useHistoryBegins:()=>0,useSizing:()=>({width:'400'}),axisNavigation,navigationAt,navigationKey,tickKeyframes,tickVisible,tickPresentation,requestAnimationFrame:frame,cancelAnimationFrame:(id:number)=>rafs.delete(id),ResizeObserver:class{observe(){}disconnect(){}},document:{timeline:{currentTime:0},fonts:{addEventListener(){},removeEventListener(){}}},window:{},matchMedia:()=>({matches:true}),performance:{now:()=>0},useLocale:()=> 'en',useTip:()=>({tip:{current:null},style:{}}),activityScale,stacksHeight:()=>160,StackPaths,niceTicks,MINUTE:M,cellStart,plotBar,plotTarget,targetOf,seriesFocusStyle:()=>({}),activitySeriesKey:(_by:string,key:string)=>key,workHours,clock,shortDay,stamp:()=>'',t:(key:string)=>key,CSS:{escape:(s:string)=>s},getComputedStyle:()=>({transform:'none'}),slideOf:null};
  const compile=(code:string)=>ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React,module:ts.ModuleKind.CommonJS}}).outputText;
  context.exports={};context.require=(name:string)=>name==='react'?hooks:{prepare:(owner:any,work:any,valid:any,ready:any)=>prepare(owner,work,valid,ready,scheduler),preparations:()=>scheduler};
  runInNewContext(compile(source('ui/components/prepared.ts')),context);Object.assign(context,context.exports);
@@ -87,12 +87,17 @@ export function activityAxisFixture(live:boolean,scenario:{range?:{from:number;t
   const landmarks=(scenario.landmarks??[live?98*M:10*M,live?99*M:11*M]).map(at=>a*(48+(at-drawFrom)/Math.max(M,drawTo-drawFrom)*340)+b+offset);
   const timeTicks=required<Host>(tree.querySelector('.time-ticks'),'time labels').children.map(node=>({at:Number(node.props.key),text:node.textContent,position:Number(node.getAttribute('x'))+Number(node.style.transform?.match(/translateX\(([-.\d]+)px\)/)?.[1]??0)+offset,visible:node.style.visibility!=='hidden'}));
   const unknown=tree.querySelector('.activity-unknown rect'),hatch=unknown?{x:Number(unknown.getAttribute('x')),width:Number(unknown.getAttribute('width'))}:null;
+  const mask=tree.querySelector('clipPath rect'),maskBounds=mask?{from:a*Number(mask.getAttribute('x'))+b+offset,to:a*(Number(mask.getAttribute('x'))+Number(mask.getAttribute('width')))+b+offset}:null;
+  const clip=required<Host>(tree.querySelector('.is-band'),'stationary band clip'),crop=clip.firstElementChild!,next=crop.firstElementChild!;
+  const shift=(node:Host)=>Number(node.style.transform?.match(/translateX\(([-.\d]+)px\)/)?.[1]??0),inset=parseFloat(clip.style.left),clipSpan=400-inset-parseFloat(clip.style.right);
+  const bandBounds={from:inset+shift(crop),to:inset+shift(crop)+shift(next)+clipSpan,visible:clip.style.visibility!=='hidden'};
   const lowTop=Number([...path.matchAll(/M[^,]*,([-.\d]+)/g)][live?1:0]?.[1]??NaN);assert.ok(Number.isFinite(lowTop),'the measured stack has a real path landmark');
   const inverse=(px:number)=>drawFrom+((px-offset-b)/a-48)/340*Math.max(M,drawTo-drawFrom);
   const viewport={from:inverse(48),to:inverse(388)};
   const originShift=Number(tree.querySelector('path.activity-stack')?.parent?.getAttribute('transform')?.match(/translate\(([-.\d]+)/)?.[1]??0);
-  const bars=[...path.matchAll(/M([-.\d]+),([-.\d]+)[HL]([-.\d]+)/g)].map(match=>({x:a*(originShift+(Number(match[1])+Number(match[3]))/2)+b+offset,y:272+(Number(match[2])-272)*ratio}));
-  const lowBarY=272+(lowTop-272)*ratio;return {label,transform,ratio,labels:ys,landmarks,timeTicks,hatch,viewport,bars,lowBarY,path,preparing:scheduler.size,tasks:tasks.length,panEnd:axis.dataset.panEnd,drawReady:axis.dataset.drawReady,renderCount,pendingRender:dirty,rafs:rafs.size,selected};
+  const bars=[...path.matchAll(/M([-.\d]+),([-.\d]+)[HL]([-.\d]+)/g)].map(match=>({from:a*(originShift+Number(match[1]))+b+offset,to:a*(originShift+Number(match[3]))+b+offset,x:a*(originShift+(Number(match[1])+Number(match[3]))/2)+b+offset,y:272+(Number(match[2])-272)*ratio}));
+  const edgePaths=tree.querySelectorAll('path.activity-stack').slice(1).map((node:Host)=>node.getAttribute('d')??'');
+  const lowBarY=272+(lowTop-272)*ratio;return {label,transform,ratio,labels:ys,landmarks,timeTicks,hatch,viewport,bars,bandBounds,maskBounds,edgePaths,lowBarY,path,preparing:scheduler.size,tasks:tasks.length,panEnd:axis.dataset.panEnd,drawReady:axis.dataset.drawReady,renderCount,pendingRender:dirty,rafs:rafs.size,selected};
  }
  function runFrame(){flushCause='RAF';const callbacks=[...rafs.values()];rafs.clear();callbacks.forEach(run=>run());return snapshot('after-native-RAF-before-React');}
  function begin(){flushCause='begin';const length=selected?selected.to-selected.from:periodMs;return pan.begin({source:Symbol('input'),input:'pointer',selected,length,now,historyStart:0,span:length,width:340})!;}
