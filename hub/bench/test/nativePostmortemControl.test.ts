@@ -17,7 +17,8 @@ type Fault='early rejection'|'changed error'|'wrong saved id'|'native unavailabl
 /** Leaf IO is synthetic; this tests that qualification refuses false positives and drains its owner. */
 async function run(fault?:Fault){
   const source='1'.repeat(40),hash='2'.repeat(64),logs:string[]=[],listeners=new Map<string,()=>void>();
-  const failure={id:196,method:'Runtime.evaluate',started:0,deadline:30_000,elapsedMs:fault==='early rejection'?1:30_000,
+  const started=8727.003492;
+  const failure={id:196,method:'Runtime.evaluate',started,deadline:started+30_000,elapsedMs:fault==='early rejection'?1:30_000,
     reason:fault==='early rejection'?'rejected':undefined};
   const original=new Error('control: Runtime.evaluate: no browser response in 30 s');
   let browserClosed=0,launched=0,owner:RunOwner|undefined;

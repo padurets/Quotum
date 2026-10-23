@@ -45,7 +45,7 @@ export async function nativePostmortemControl(source:string,expectedClient:strin
     }catch(error){assert.ok(primary);assert.equal(error,primary);result.originalErrorPreserved=true;}
     result.collectionMs=performance.now()-primaryAt;
     const failure=page.snapshot().failure;
-    assert.ok(failure);assert.equal(failure.method,'Runtime.evaluate');assert.equal(failure.deadline-failure.started,30_000);
+    assert.ok(failure);assert.equal(failure.method,'Runtime.evaluate');assert.equal(failure.deadline,failure.started+30_000);
     assert.equal(failure.reason,undefined);assert.ok(failure.elapsedMs>=29_900);
     assert.ok(primary instanceof Error&&primary.message.endsWith('no browser response in 30 s'));
     assert.ok(Number(result.collectionMs)<=7000);assert.equal(calls,1);

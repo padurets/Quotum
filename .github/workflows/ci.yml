@@ -303,13 +303,17 @@ jobs:
           printf 'unavailable\n' > "$receipt/debugger-first.txt"
           node --import tsx --input-type=module <<'JS' > "$receipt/debugger-first.txt" 2>&1
           import {nativeDebugger} from './bench/nativePostmortem.ts';
-          import {execFileSync} from 'node:child_process';
+          import {execFileSync,spawnSync} from 'node:child_process';
           import {createHash} from 'node:crypto';
           import {readFileSync} from 'node:fs';
           const file=await nativeDebugger();
           if(!file){console.log('unavailable');process.exit(0);}
           console.log(createHash('sha256').update(readFileSync(file)).digest('hex')+'  '+file);
           console.log(execFileSync(file,['--version'],{encoding:'utf8',timeout:2000}));
+          const started=performance.now();
+          const probe=spawnSync('/usr/bin/sudo',['-n','--','/usr/bin/timeout','--signal=TERM','--kill-after=0.2s','2s',file,'--no-lldbinit','--batch','-o','quit'],{encoding:'utf8',timeout:2500,maxBuffer:65536});
+          console.log(JSON.stringify({kind:'debugger-startup-after-capture',cold:false,elapsedMs:performance.now()-started,exit:probe.status,signal:probe.signal,
+            outputBytes:Buffer.byteLength(probe.stdout??''),diagnosticBytes:Buffer.byteLength(probe.stderr??'')}));
           JS
       - uses: actions/upload-artifact@v7
         if: always()

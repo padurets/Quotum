@@ -1,6 +1,7 @@
 import {spawn} from 'node:child_process';
 import {access, readFile, readdir} from 'node:fs/promises';
 import {constants} from 'node:fs';
+import {setTimeout as wait} from 'node:timers/promises';
 import {browserProcess, processIdentity, type ProcessIdentity} from './browserProcess.js';
 import {deadline} from './deadline.js';
 
@@ -8,7 +9,6 @@ export type NativeCandidate = {pid:number;cpuTime:number};
 export type NativeScope = {root:number;live():boolean;observe(signal:AbortSignal):Promise<ProcessIdentity[]>;
   resource?(close:()=>Promise<void>):()=>Promise<void>};
 const MAX_OUTPUT = 64 * 1024;
-const wait = (ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
 
 /** Distribution packages may expose only versioned names, without an lldb alias. */
 export async function nativeDebugger(){
@@ -85,6 +85,9 @@ export async function nativePostmortem(scope:NativeScope,candidates:NativeCandid
     fromMs,toMs:null as number|null,intervened:false,released:false,reaped:false,pipesClosed:false,
     candidateCount:0,omittedCandidates:0,pid:0,birth:'',outputBytes:0,diagnosticBytes:0,outputLimited:false,
     progress:nativeProgress(''),
+    sampling:{reads:0,firstTrace:null as {fromMs:number;toMs:number;tracerId:number}|null,
+      firstStop:null as {fromMs:number;toMs:number;state:string}|null},
+    helperSample:null as {fromMs:number;toMs:number;processes:ProcessIdentity[];omitted:number}|null,
     exit:null as number|null,cleanup:{term:false,kill:false,killExit:null as number|null},
     threads:[] as ReturnType<typeof nativeFrames>['threads'],omitted:0};
   try {
@@ -185,7 +188,28 @@ export async function nativePostmortem(scope:NativeScope,candidates:NativeCandid
         ||!['R','S'].includes(attach.state)||attach.tracer!==0||attach.uid!==process.getuid?.())throw new Error('renderer identity changed');
       signal.throwIfAborted();
       child.stdin.end('capture\n');
-      await deadline(2400,()=>closed,signal);
+      await deadline(2400,async pending=>{
+        void (async()=>{
+          await wait(1000,undefined,{signal:pending});
+          const fromMs=performance.now(),rows=await deadline(150,signal=>helperOwner.observe(signal),pending);
+          pending.throwIfAborted();
+          report.helperSample={fromMs,toMs:performance.now(),processes:rows.slice(0,16),omitted:Math.max(0,rows.length-16)};
+        })().catch(()=>{});
+        // These bracketed points cannot establish continuous tracing or absence
+        // between reads. The existing helper wait owns their cancellation.
+        void (async()=>{
+          while(!pending.aborted){
+            const fromMs=performance.now(),row=await current(now.pid,pending),toMs=performance.now();
+            pending.throwIfAborted();
+            if(!row||row.birth!==now.birth)return;
+            report.sampling.reads++;
+            if(row.tracer&&!report.sampling.firstTrace)report.sampling.firstTrace={fromMs,toMs,tracerId:row.tracer};
+            if(['T','t'].includes(row.state)&&!report.sampling.firstStop)report.sampling.firstStop={fromMs,toMs,state:row.state};
+            await wait(25,undefined,{signal:pending});
+          }
+        })().catch(()=>{});
+        await closed;
+      },signal);
     }
     catch { /* The bounded release below owns cancellation and escalation. */ }
     finally {
