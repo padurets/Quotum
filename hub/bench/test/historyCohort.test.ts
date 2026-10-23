@@ -98,7 +98,7 @@ const coldCode=ts.transpileModule(source.slice(coldStart,coldEnd).replace('expor
   {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 
 /** Stand in browser IO while running the complete production traffic cohort. */
-async function coldReplay(mode:'stable'|'cross-only'|'bad-first'|'bad-second'|'physical-only-body'|'later-run'|'later-known'|'optional'|'attempts'|'fresh-closed'|'fresh-open'|'fresh-open-stable'|'mixed-seed'|'cdp-timeout',firstCohort=false) {
+async function coldReplay(mode:'stable'|'cross-only'|'bad-first'|'bad-second'|'physical-only-body'|'later-run'|'later-known'|'optional'|'attempts'|'fresh-closed'|'fresh-open'|'fresh-open-stable'|'mixed-seed'|'cdp-timeout') {
   let pages=0,closed=0,observersClosed=0;
   const primary=new Error('original CDP timeout');
   const proxy={transfers:[] as any[],phase(){},async settled(){}};
@@ -150,23 +150,14 @@ async function coldReplay(mode:'stable'|'cross-only'|'bad-first'|'bad-second'|'p
       return {cdp,bodies,settled:async()=>{},geometry,cell,seeds,capturePool:async()=>{},close:async()=>{closed++;}};
     },execute:null as any};
   runInNewContext(coldCode,context);
-  try{return {result:await context.execute({},proxy,'cookie','b',undefined,firstCohort),pages,closed,observersClosed,primary,error:null};}
+  try{return {result:await context.execute({},proxy,'cookie','b'),pages,closed,observersClosed,primary,error:null};}
   catch(error){return {error,pages,closed,observersClosed,primary};}
 }
 
-test('the actual scroll control cohort preserves the first CDP error through cleanup',async()=>{
-  const controlled=await coldReplay('cdp-timeout',true);
-  assert.equal(controlled.error,controlled.primary);assert.equal(controlled.pages,1);assert.equal(controlled.closed,1);assert.equal(controlled.observersClosed,1);
+test('native history preserves the original CDP failure as its cause without retrying the cohort',async()=>{
   const ordinary=await coldReplay('cdp-timeout');
   assert.notEqual(ordinary.error,ordinary.primary);assert.equal((ordinary.error as Error).cause,ordinary.primary);
-});
-
-test('scroll control uses the original first cohort once and never retries a cutoff',async()=>{
-  const first=await coldReplay('stable',true);
-  assert.equal(first.error,null);assert.equal(first.pages,1);assert.equal(first.closed,1);assert.equal(first.observersClosed,1);
-  assert.equal(first.result.reports[0].name,'browser/1d/history/0ms/0.5/take1/all-accounting');
-  const cut=await coldReplay('cross-only',true);assert.equal(cut.pages,1);assert.equal(cut.result.invalidated.length,1);
-  const bad=await coldReplay('bad-first',true);assert.ok(bad.error);assert.equal(bad.pages,1);
+  assert.equal(ordinary.pages,1);assert.equal(ordinary.closed,1);assert.equal(ordinary.observersClosed,1);
 });
 
 test('cold traffic retries only a changed reference after validating every resource and physical attempt',async()=>{

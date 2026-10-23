@@ -215,7 +215,7 @@ async function main() {
     }
     if(options.scope==='history'){
       if(!traffic)throw new Stop('canonical history traffic readings unavailable');
-      const result={mode:scrollControl?'diagnostic':options.scope,...(scrollControl?{kind:'history-scroll-control',status:traffic.problems.length?'failed':'observations-completed',reusesBrowser:false}:{}),historyTraffic:traffic,problems:traffic.problems};
+      const result={mode:scrollControl?'diagnostic':options.scope,...(scrollControl?{kind:'history-scroll-control',status:traffic.problems.length?'failed':'observations-completed'}:{}),historyTraffic:traffic,problems:traffic.problems};
       console.log(JSON.stringify(result,null,2));evidence.save('result',result);
       await finish(traffic.problems.length?1:0);return;
     }

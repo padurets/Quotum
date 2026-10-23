@@ -669,15 +669,13 @@ close before the benchmark stops its own demo.
 
 The manual CI input `history_scroll_control` requires `diagnostic_ref` and
 `expected_client_sha256`, and selects only the existing 20-minute history job.
-It runs three separate benchmark processes, each with its own demo hub, Chrome and
-fresh browser profile. Each process runs the original controlled traffic and cancellation
-prefix, then the first native history cohort: cold scroll, cached return and cached
-repeat, with every original assertion and deadline. Evidence is kept under `instance-1`
-through `instance-3`. Each process must finish its cleanup before the next starts;
-any failure or invalidated cohort stops the job. All three share the original 20-minute
-job limit. The OS file cache can be reused; these are not cold-runner measurements.
-Completed instances are diagnostic observations, never a canonical benchmark pass
-or proof that a hang was repaired. Ordinary history checks still run the full matrix.
+It runs one owned benchmark process with the original controlled traffic prefix, all
+24 native history cohorts and the six native cancellation cohorts, with every original
+assertion, reference-cut rule and deadline. The diagnostic prefix must complete without
+invalidations or budget failures. GDB is prepared before the run and first used only
+after an original failed command. A completed diagnostic is an observation, never a
+canonical benchmark pass or proof that a hang was repaired. Ordinary history checks
+retain the same full matrix without diagnostic package preparation.
 
 ## Pull requests
 

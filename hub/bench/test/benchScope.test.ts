@@ -1,9 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
+import {readFileSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import path from 'node:path';
-import os from 'node:os';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {RunOwner} from '../runOwner.js';
@@ -321,33 +320,6 @@ test('the pinned history scroll control is diagnostic and fails before startup o
     [['--scope','history'],{QUOTUM_BENCH_DIAGNOSE_NATIVE:'1'},true],[['--scope','history'],{QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'1'},true]] as [string[],Record<string,string>,boolean][]){
     const bad=await run(args,undefined,{...env,...patch},ci);assert.match(String(bad.error),/conflicting/);assert.ok(!bad.calls.includes('prepare'));
   }
-});
-
-test('the Linux history job runs three independent commands and preserves the first failure', {skip:process.platform!=='linux'},()=>{
-  const workflow=readFileSync(new URL('../../../.github/workflows/ci.yml',import.meta.url),'utf8');
-  const job=workflow.split('  bench-history:\n')[1].split(/\n  [\w-]+:/)[0];
-  const script=job.split('      - name: Run history traffic\n        run: |\n')[1].split('        env:')[0].replace(/^          /gm,'');
-  const directory=mkdtempSync(path.join(os.tmpdir(),'quotum-history-job-'));
-  try{
-    writeFileSync(path.join(directory,'google-chrome'),'#!/bin/sh\nexit 1\n',{mode:0o755});
-    writeFileSync(path.join(directory,'npm'),`#!/bin/sh
-printf '%s|%s\\n' "$QUOTUM_BENCH_DIAGNOSTICS_DIR" "$*" >> "$CONTROL_CALLS"
-count=$(wc -l < "$CONTROL_CALLS")
-[ "$count" != "$CONTROL_FAIL_AT" ] || exit 7
-`,{mode:0o755});
-    for(const diagnostic of [false,true])for(const failAt of [0,1,2,3]){
-      const calls=path.join(directory,`calls-${diagnostic}-${failAt}`);
-      const result=spawnSync('/bin/bash',['-e','-o','pipefail','-c',script],{encoding:'utf8',timeout:2000,
-        env:{PATH:directory+path.delimiter+process.env.PATH,QUOTUM_BENCH_DIAGNOSTICS_DIR:'/synthetic-evidence',
-          QUOTUM_BENCH_HISTORY_SCROLL_CONTROL:diagnostic?'1':'',CONTROL_CALLS:calls,CONTROL_FAIL_AT:String(failAt)}});
-      assert.equal(result.error,undefined);assert.equal(result.signal,null);
-      const failure=failAt>0&&(diagnostic||failAt===1);
-      assert.equal(result.status,failure?7:0,result.stderr);
-      const count=diagnostic?(failure?failAt:3):1;
-      const lines=readFileSync(calls,'utf8').trim().split('\n');
-      assert.deepEqual(lines,Array.from({length:count},(_,i)=>`/synthetic-evidence${diagnostic?'/instance-'+(i+1):''}|run bench -- --ci --scope history`));
-    }
-  }finally{rmSync(directory,{recursive:true,force:true});}
 });
 
 test('manual native tracing uses only the existing dashboard job and rejects mismatched evidence',()=>{

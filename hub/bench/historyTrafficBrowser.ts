@@ -5,7 +5,7 @@ import {createHash} from 'node:crypto';
 import type {Evidence} from './evidence';
 import {cellStart, expandHistory, type HistoryAnswer, type HistoryBasis, type HistoryReply} from '../server/domain/history';
 import {openTab, type Browser, type Cdp} from './cdp';
-import {HISTORY_COHORT_TAKES, HistoryCutChanged, historyCutInvalidation, historyIdentity, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
+import {HISTORY_COHORT_TAKES, historyCutInvalidation, historyIdentity, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
 import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from './historyProxy';
 import {observeReversal} from './reversalDiagnostic';
 import {historyPoolReceiptScript} from './historyPoolReceipt';
@@ -277,10 +277,10 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
 }
 
 /** Separate tabs use the fixed-codec proxy; this never changes the native perf route. */
-export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProxy, cookie: string, board: string, evidence?: Pick<Evidence, 'save'>, firstCohort=false) {
+export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProxy, cookie: string, board: string, evidence?: Pick<Evidence, 'save'>) {
   const reports = [], invalidated = [], problems: string[] = [];
-  for (const length of firstCohort?[DAY]:[DAY, 30 * DAY]) for (const future of firstCohort?[DAY]:[DAY, 0]) for (const latency of firstCohort?[0]:[0, 100, 400]) for (const fraction of firstCohort?[.5]:[.5, .04]) {
-    for (let take = 1; take <= (firstCohort?1:HISTORY_COHORT_TAKES); take++) {
+  for (const length of [DAY, 30 * DAY]) for (const future of [DAY, 0]) for (const latency of [0, 100, 400]) for (const fraction of [.5, .04]) {
+    for (let take = 1; take <= HISTORY_COHORT_TAKES; take++) {
       const name = `browser/${length / DAY}d/${future ? 'history' : 'activity'}/${latency}ms/${fraction}/take${take}`;
       evidence?.save('traffic-stage', {name, stage: 'seed'});
       const poolTarget=length===DAY&&!future&&[100,400].includes(latency)&&fraction===.5&&take===1;
@@ -357,7 +357,6 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         status=reports.filter(report=>report.name.startsWith(name+'/')).some(report=>trafficProblems(report).length)?'over-budget':'passed';
         break;
       } catch (error) {
-        if(firstCohort&&!(error instanceof HistoryCutChanged))throw error;
         const cut=historyCutInvalidation(error,name,take);
         status='invalidated';
         invalidated.push({...cut,reads:bodies.reads.map(read=>({phase:read.phase,from:read.from,to:read.to,count:read.count}))});
@@ -461,15 +460,4 @@ export async function diagnoseReversal(browser:Browser,upstream:string,cookie:st
   const proxy=await historyProxy(upstream, browser.owner);
   try{for(let take=0;take<repeats;take++){const profileBeforeInput=take%2===0;console.error(`reversal diagnostic replay ${take+1}/${repeats}, profiler ${profileBeforeInput?'before input':'after stall'}`);await browserCancellationTraffic(browser,proxy,cookie,true,profileBeforeInput);}}
   finally{await proxy.close();}
-}
-
-/** One first cohort per process; CI owns the finite sequence of independent browsers. */
-export async function historyScrollControl(browser:Browser,proxy:TrafficProxy,cookie:string,board:string,evidence?:Pick<Evidence,'save'>){
-  evidence?.save('scroll-control',{mode:'diagnostic',completed:0,total:1});
-  const reading=await browserHistoryTraffic(browser,proxy,cookie,board,evidence,true);
-  evidence?.save('scroll-result',reading);
-  if(reading.invalidated.length)throw new Error('History scroll control cohort invalidated; no retry');
-  if(!reading.reports.some(report=>report.name==='browser/1d/history/0ms/0.5/take1/all-accounting'))throw new Error('History scroll control cohort missing');
-  if(!reading.problems.length)evidence?.save('scroll-control',{mode:'diagnostic',completed:1,total:1});
-  return reading;
 }

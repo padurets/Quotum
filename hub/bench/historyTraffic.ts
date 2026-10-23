@@ -5,7 +5,7 @@ import {Pan} from '../ui/lib/pan';
 import type {HistoryTile} from '../ui/lib/historyTiles';
 import {HISTORY_COHORT_TAKES, historyCutInvalidation, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
 import {HISTORY_CODEC, historyBody, historyProxy, type BodyCount} from './historyProxy';
-import {browserCancellationTraffic, browserHistoryTraffic, historyScrollControl} from './historyTrafficBrowser';
+import {browserCancellationTraffic, browserHistoryTraffic} from './historyTrafficBrowser';
 import type {Browser} from './cdp';
 import type {Evidence} from './evidence';
 import {cancellationTraffic} from './historyCancellation';
@@ -141,8 +141,8 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
     }
     const cancellations = await cancellationTraffic(proxy, cookie, board, windows);
     if(scrollControl&&(problems.length||invalidated.length||cancellations.invalidated.length))throw new Error('History scroll control prefix incomplete or over budget');
-    const native=browser ? await (scrollControl?historyScrollControl:browserHistoryTraffic)(browser,proxy,cookie,board,evidence) : null;
-    const nativeCancellations = browser&&!scrollControl ? await browserCancellationTraffic(browser, proxy, cookie, false, false, evidence) : null;
+    const native=browser ? await browserHistoryTraffic(browser,proxy,cookie,board,evidence) : null;
+    const nativeCancellations = browser ? await browserCancellationTraffic(browser, proxy, cookie, false, false, evidence) : null;
     if (native) problems.push(...native.problems);
     return {codec: HISTORY_CODEC, reports, invalidated, cancellations, native, nativeCancellations, problems};
   } finally {await proxy.close();}
