@@ -312,6 +312,15 @@ test('manual native tracing uses only the existing dashboard job and rejects mis
   }
   assert.equal(selected('bench-dashboard',{},'pull_request'),true);
   assert.equal(selected('bench-dashboard',{},'workflow_call','refs/tags/v1.0.0'),false);
+  for(const conflicting of [{},{trace_only:true},{native_trace:true},{native_profile:true},{caption_control:true}]){
+    const inputs={diagnostic_ref:'1'.repeat(40),native_postmortem_control:true,...conflicting};
+    assert.equal(selected('native-postmortem-control',inputs),true);
+    for(const job of ['bench-dashboard','bench-history','idle-cpu-control','bench'])assert.equal(selected(job,inputs),false);
+  }
+  assert.equal(selected('native-postmortem-control',{},'pull_request'),false);
+  const nativeGuard=job('native-postmortem-control').match(/run: node -e '([^']+)'/)![1];
+  assert.doesNotThrow(()=>runInNewContext(nativeGuard,{process:{env:{}}}));
+  for(const key of ['TRACE','PROFILE','NATIVE_TRACE','NATIVE_PROFILE','CAPTION'])assert.throws(()=>runInNewContext(nativeGuard,{process:{env:{[key]:'true'}}}),/Choose only/);
   const script=job('bench-dashboard').split("          node --import tsx --input-type=module <<'JS'\n")[1].split('\n          JS')[0]
     .replace(/^\s*import .+;\n/gm,'');
   const source='1'.repeat(40),hash='2'.repeat(64);

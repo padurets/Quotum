@@ -41,6 +41,11 @@ on:
         required: false
         type: boolean
         default: false
+      native_postmortem_control:
+        description: Qualify native capture after an injected owned-Chrome timeout
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -134,7 +139,7 @@ jobs:
           if-no-files-found: warn
 
   bench-dashboard:
-    if: ${{ !startsWith(github.ref, 'refs/tags/') && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
+    if: ${{ !startsWith(github.ref, 'refs/tags/') && !inputs.native_postmortem_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
     runs-on: ubuntu-latest
     # Independent traffic checks run on another runner; every dashboard phase stays here.
     timeout-minutes: 20
@@ -198,7 +203,7 @@ jobs:
           if-no-files-found: warn
 
   idle-cpu-control:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -245,6 +250,66 @@ jobs:
             /tmp/quotum-idle-cpu-diagnostic/
             ${{ runner.temp }}/quotum-idle-control/
             hub/dist/client/assets/index-*.js
+          if-no-files-found: warn
+
+  native-postmortem-control:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && inputs.native_postmortem_control }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.diagnostic_ref }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - name: Require the isolated native control
+        env:
+          TRACE: ${{ inputs.trace_only }}
+          PROFILE: ${{ inputs.original_timing }}
+          NATIVE_TRACE: ${{ inputs.native_trace }}
+          NATIVE_PROFILE: ${{ inputs.native_profile }}
+          CAPTION: ${{ inputs.caption_control }}
+        run: node -e 'if(["TRACE","PROFILE","NATIVE_TRACE","NATIVE_PROFILE","CAPTION"].some(k=>process.env[k]==="true"))throw Error("Choose only the native postmortem control")'
+      - run: npm ci
+      - run: npm run build
+      - name: Run the owned native control under a separate UID
+        env:
+          SOURCE_SHA: ${{ inputs.diagnostic_ref }}
+          CLIENT_SHA256: ${{ inputs.expected_client_sha256 }}
+        run: |
+          node_binary="$(command -v node)"
+          chrome_binary="$(command -v google-chrome)"
+          receipt="$RUNNER_TEMP/quotum-native-postmortem-control"
+          mkdir -p "$receipt"
+          sudo test ! -e /etc/sudoers.d/quotum-native-control
+          trap 'sudo rm -f /etc/sudoers.d/quotum-native-control' EXIT
+          printf 'nobody ALL=(root) NOPASSWD: /bin/sh, %s\n' "$node_binary" | sudo tee /etc/sudoers.d/quotum-native-control >/dev/null
+          sudo chmod 0440 /etc/sudoers.d/quotum-native-control
+          set -o pipefail
+          sudo -n -u nobody -g "$(id -gn)" -- "$node_binary" --import tsx bench/nativePostmortemControl.ts "$SOURCE_SHA" "$CLIENT_SHA256" "$chrome_binary" 2>&1 | tee "$receipt/control-first.jsonl"
+      - name: Native debugger identity
+        if: always()
+        run: |
+          receipt="$RUNNER_TEMP/quotum-native-postmortem-control"
+          mkdir -p "$receipt"
+          printf 'unavailable\n' > "$receipt/debugger-first.txt"
+          for debugger in /usr/share/swift/usr/bin/lldb /usr/bin/lldb; do
+            if [ -x "$debugger" ]; then
+              { sha256sum "$debugger"; "$debugger" --version; } > "$receipt/debugger-first.txt" 2>&1
+              break
+            fi
+          done
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: native-postmortem-control
+          path: ${{ runner.temp }}/quotum-native-postmortem-control/
           if-no-files-found: warn
 
   managed-keys:
