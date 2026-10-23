@@ -31,7 +31,7 @@ test('the actual activity edge painter advances clipped bars without preparing t
   const node = (values: Map<string, string>) => ({getAttribute: (name: string) => values.get(name), setAttribute: (name: string, value: string) => values.set(name, value)});
   const context = {navigationAt,navigationKey,navigation:{context:'test',range:'live'},timeRange:()=>null,valueContext:'',valuePin:{current:null},activityScale,heights:new Map(),paintValue:()=>{},bandClip: {current: {}}, mask: {current: node(attributes)}, edges: {current: {querySelectorAll: () => [node(path)]}},
     currentActivity: {}, activity: {by: {source: [{key: 's', cells: [[0, 25_000], [60_000, 60_000], [120_000, 5_000]]}]}},
-    strip: null, groups: [{group: {key: 's'}}], from: 15_000, to: 135_000, by: 'source', barMs: 60_000, vertical: {max: 60_000}, height: 100, perMs: 0.001,
+    strip: null, groups: [{group: {key: 's'}}], from: 15_000, to: 135_000, basis: {from: 15_000, to: 135_000}, by: 'source', barMs: 60_000, vertical: {max: 60_000}, height: 100, perMs: 0.001,
     left: 0, right: 0, width: 120, scale: 1, x: (at: number) => at / 1000, y: (ms: number) => 100 - ms / 1000,
     axis: {held: false, visualGeometry: () => ({})}, pan: {get: () => draft}, painted: {current: ''}, clipPlot: (_node: unknown, ...bounds: number[]) => clips.push(bounds), cellStart,plotBar,targetOf,
     paint: null as unknown as () => void,
