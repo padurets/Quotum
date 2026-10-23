@@ -20,6 +20,8 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
   const diagnostic = options.mode === 'diagnostic';
   const id = ++serial, signal = options.signal&&browser.owner?AbortSignal.any([options.signal,browser.owner.signal]):options.signal??browser.owner?.signal;
   let intervention = false, capture: Promise<void> | undefined, released = false;
+  let nativeCapture:ReturnType<NonNullable<Browser['nativePostmortem']>>|undefined;
+  let renderers:import('./nativePostmortem.js').NativeCandidate[]=[];
   let cancelPassive: (() => void) | undefined;
   const report: Record<string, unknown> = {id, mode: diagnostic ? 'diagnostic' : 'canonical', ownedBrowser: Boolean(browser.owned)};
   if(diagnostic||options.postmortem&&browser.owned){
@@ -49,6 +51,20 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
     } catch {return {status: 'unavailable', fromMs, toMs: performance.now()};}
   };
   const release = async () => {
+    if(nativeCapture){
+      const captured=nativeCapture;nativeCapture=undefined;
+      try {
+        const native=await bounded('release native diagnostic',()=>captured,2000);
+        report.nativeWait=native;
+        if(native.intervened&&(!native.released||!native.reaped||!native.pipesClosed))throw new Error('native release unconfirmed');
+      }catch{
+        report.nativeCleanup='release incomplete';
+        browser.owner?.failures.push('native diagnostic release unconfirmed');
+        // The run owner already owns browser shutdown. A second target-close wait
+        // here would extend the existing two-second diagnostic release budget.
+        page.close();
+      }
+    }
     if (!intervention || released) return;
     released = true;
     // Sending pause may have taken effect even if its reply never arrived.
@@ -86,6 +102,7 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
         control=connected;
         const processes = await control.send<{processInfo: Process[]}>('SystemInfo.getProcessInfo', {}, alive);
         report.processes = processes.processInfo.map(({type, id, cpuTime}) => ({type, id, cpuTime}));
+        renderers=processes.processInfo.filter(value=>value.type==='renderer').map(value=>({pid:value.id,cpuTime:value.cpuTime}));
         if (browser.diagnostics) report.native = await browser.diagnostics(processes.processInfo.map(value => value.id), undefined, alive);
       }, 2000, pending);
     } catch {report.livenessStatus = 'unavailable';}
@@ -129,7 +146,13 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
         // A failed owned page can be inspected after its original deadline;
         // accepted commands and attached browsers remain passive.
         const postmortem=options.postmortem&&browser.owned&&page.snapshot().failure&&report.page==='unresponsive';
-        if (diagnostic||postmortem) {
+        let nativeIntervention=false;
+        if(postmortem&&!diagnostic&&browser.nativePostmortem){
+          report.postmortem=true;
+          nativeCapture=browser.nativePostmortem(renderers,pending);
+          const native=await nativeCapture;report.nativeWait=native;nativeIntervention=native.intervened;
+        }
+        if (diagnostic||postmortem&&!nativeIntervention) {
           if(postmortem)report.postmortem=true;
           if (!intervention) await enable(pending);
           await send('Debugger.pause', pending);

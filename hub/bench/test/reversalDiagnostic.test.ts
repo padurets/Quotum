@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {bounded, observeReversal} from '../reversalDiagnostic.js';
 import {Cdp, attachedChrome} from '../cdp.js';
 import type {ProcessIdentity} from '../browserProcess.js';
+import {nativePostmortem} from '../nativePostmortem.js';
+import {RunOwner} from '../runOwner.js';
 
 const flush = async () => {await new Promise<void>(resolve => setImmediate(resolve));};
 function pageFixture(send: (method: string, signal?: AbortSignal) => Promise<unknown> = async () => ({})) {
@@ -177,6 +179,52 @@ test('failed canonical input retains its error and bounds probes without debugge
   assert.deepEqual(commands, []);
   assert.ok(logs.some(line => line.includes('"browserAlive":true')));
   assert.ok(logs.some(line => line.includes('unavailable for attached browser')));
+});
+
+for(const released of [true,false])test('native postmortem follows the original failure and confirms release: '+released,async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const logs:string[]=[];t.mock.method(console,'error',(line:string)=>logs.push(line));
+  t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({webSocketDebuggerUrl:'ws://fixture.invalid/browser'})));
+  t.mock.method(Cdp,'connect',async()=>({send:async()=>({processInfo:[{type:'renderer',id:101,cpuTime:1}]}),close(){}} as unknown as Cdp));
+  const {page,commands}=pageFixture(async(_method,signal)=>new Promise((_,reject)=>signal!.addEventListener('abort',()=>reject(signal!.reason),{once:true})));
+  const owner=new RunOwner();let calls=0,closes=0,reject!:(error:Error)=>void;
+  const native=await nativePostmortem({root:100,live:()=>false,observe:async()=>[]},[],new AbortController().signal);
+  const observer=await observeReversal(page,{owned:true,owner,endpoint:'fixture',close:async()=>{},nativePostmortem:async(candidates,signal)=>{
+    calls++;assert.deepEqual(candidates,[{pid:101,cpuTime:1}]);assert.equal(signal.aborted,false);
+    return {...native,status:'observed',intervened:true,released,reaped:true,pipesClosed:true};
+  }},{postmortem:true,closeTarget:async()=>{closes++;await new Promise(()=>{});}});
+  const original=new Error('original30s input failure');
+  const failed=assert.rejects(observer.watch('warm return',()=>new Promise<never>((_,fail)=>{reject=fail;})),error=>error===original);
+  t.mock.timers.tick(5000);await flush();assert.equal(calls,0);
+  t.mock.timers.tick(25000);page.snapshot=()=>({failure:{id:196,method:'Input.synthesizeScrollGesture'}}) as ReturnType<Cdp['snapshot']>;
+  reject(original);await flush();t.mock.timers.tick(2000);await failed;await observer.close();
+  assert.equal(calls,1);assert.deepEqual(commands,[]);
+  assert.equal(closes,0);
+  assert.deepEqual(owner.failures,released?[]:['native diagnostic release unconfirmed']);
+  const report=JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));
+  assert.equal(report.command.failure.id,196);assert.equal(report.nativeWait.released,released);
+});
+
+test('an unfinished native collector retains the original failure within collection plus release budgets',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  t.mock.method(console,'error',()=>{});
+  t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({webSocketDebuggerUrl:'ws://fixture.invalid/browser'})));
+  t.mock.method(Cdp,'connect',async()=>({send:async()=>({processInfo:[]}),close(){}} as unknown as Cdp));
+  const {page,commands}=pageFixture(async(_method,signal)=>new Promise((_,reject)=>signal!.addEventListener('abort',()=>reject(signal!.reason),{once:true})));
+  page.snapshot=()=>({failure:{id:196}}) as ReturnType<Cdp['snapshot']>;
+  let closed=0,targetCloses=0,nativeSignal:AbortSignal|undefined;
+  page.close=()=>{closed++;};
+  const owner=new RunOwner();
+  const observer=await observeReversal(page,{owned:true,owner,endpoint:'fixture',close:async()=>{},nativePostmortem:async(_candidates,signal)=>{
+    nativeSignal=signal;return new Promise(()=>{});
+  }},{postmortem:true,closeTarget:async()=>{targetCloses++;await new Promise(()=>{});}});
+  const original=new Error('original input30s failure');let settled=false;
+  const result=assert.rejects(observer.watch('warm return',async()=>{throw original;}),error=>error===original).then(()=>{settled=true;});
+  await flush();t.mock.timers.tick(2000);await flush();assert.ok(nativeSignal);
+  t.mock.timers.tick(3000);await flush();assert.equal(nativeSignal.aborted,true);assert.equal(settled,false);
+  t.mock.timers.tick(2000);await result;await observer.close();
+  assert.equal(closed,1);assert.equal(targetCloses,0);assert.deepEqual(commands,[]);
+  assert.deepEqual(owner.failures,['native diagnostic release unconfirmed']);
 });
 
 test('a diagnostic pause with a lost reply still resumes and uses one collection deadline', async t => {

@@ -57,6 +57,15 @@ the existing observation/collection windows. Host monotonic timestamps bracket t
 reads; missing processes and capped entries remain unknown. Attached browsers are
 not inspected. Matching process IDs and birth ticks permit counter differences,
 not page attribution, continuous responsiveness or a cause of the timeout.
+After an owned command has failed and its page probe does not respond, Linux may
+capture one native renderer snapshot using an already installed LLDB. The renderer
+with the largest cumulative CPU counter is selected; this does not bind it to the
+failed page. PID, birth, group, session, UID and tracing state are checked before
+attach. Only bounded thread identities and fixed wait classes are retained, never
+raw debugger text. Capture and helper cleanup use the existing five-second
+collection and two-second release windows. An unconfirmed detach, helper exit or
+pipe closure fails cleanup. Missing LLDB falls back to the existing page debugger;
+attached browsers and successful commands receive no native intervention.
 Page-evaluation exceptions retain their original command and scenario too, without
 page text or source. Later cleanup timeouts or crashes cannot replace the first failure.
 Gesture-completion frames follow each data plot's actual HTML or SVG animation,

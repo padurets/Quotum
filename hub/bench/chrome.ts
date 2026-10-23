@@ -5,6 +5,7 @@ import path from 'node:path';
 import {browserProcess, type ProcessCleanup, type ProcessIdentity} from './browserProcess.js';
 import {deadline, devtoolsJson} from './deadline.js';
 import {nativeProcesses, type Browser} from './cdp.js';
+import {nativePostmortem} from './nativePostmortem.js';
 
 const FLAGS = [
   '--headless=new',
@@ -285,9 +286,13 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
     signal?.removeEventListener('abort', cancel);
     state.startupSpans = spans.freeze();
     console.error('bench: Chrome ready ' + JSON.stringify(snapshot()));
-    return {endpoint, owned: true, close, launchReport: snapshot,
-      ...(group && process.platform === 'linux' ? {observeProcesses: processOwner.observe} : {}),
+    const browser:Browser={endpoint, owned: true, close, launchReport: snapshot,
+      ...(group && process.platform === 'linux' ? {observeProcesses: processOwner.observe,
+        nativePostmortem:(candidates:import('./nativePostmortem.js').NativeCandidate[],signal:AbortSignal)=>nativePostmortem({root:child.pid!,
+          live:()=>child.exitCode===null&&child.signalCode===null,observe:processOwner.observe,
+          resource:browser.owner?(cleanup)=>browser.owner!.resource(cleanup):undefined},candidates,signal)} : {}),
       diagnostics: async (pids, _candidate, signal) => ({processes: child.pid && child.exitCode === null && child.signalCode === null ? await nativeProcesses(child.pid, pids, signal) : []})};
+    return browser;
   } catch (error) {
     state.startupSpans = spans.freeze();
     const original = snapshot();
