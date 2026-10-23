@@ -227,7 +227,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
   };
   // Closing this owned target discards its observers and overrides. A stalled
   // renderer cannot acknowledge a cleanup evaluation before its target closes.
-  const close = async () => {cdp.at(`${name}/cleanup`); try{if(binding)await binding;if(renderer)await renderer.dispose();}finally{document?.dispose();await tab.close();}};
+  const close = async () => {cdp.at(`${name}/cleanup`); try{if(binding)await binding;if(renderer)await renderer.dispose();}finally{try{document?.dispose();}finally{await tab.close();}}};
   try {
     const seedPhase = `${name}/seed`; bodies.phase = seedPhase; proxy.phase(seedPhase);
     await cdp.send('Network.enable'); await cdp.send('Page.enable'); await cdp.send('Performance.enable');
