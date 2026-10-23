@@ -46,6 +46,11 @@ on:
         required: false
         type: boolean
         default: false
+      history_scroll_control:
+        description: Observe up to 24 first history-scroll cohorts, stopping at the first failure
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -63,7 +68,7 @@ jobs:
       - name: Require a pinned source for diagnostic modes
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
-          HAS_DIAGNOSTIC_MODE: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control }}
+          HAS_DIAGNOSTIC_MODE: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control || inputs.history_scroll_control }}
         run: node -e 'if(process.env.HAS_DIAGNOSTIC_MODE==="true")throw Error("Diagnostic modes require diagnostic_ref")'
       - run: make dev-test
         env:
@@ -117,7 +122,7 @@ jobs:
           fi
 
   bench-history:
-    if: ${{ !inputs.diagnostic_ref && !startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ !startsWith(github.ref, 'refs/tags/') && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && inputs.history_scroll_control)) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -125,6 +130,8 @@ jobs:
         working-directory: hub
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.diagnostic_ref || github.sha }}
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -132,8 +139,16 @@ jobs:
           cache-dependency-path: hub/package-lock.json
       - run: npm ci
       - run: npm run build
+      - name: Require the isolated history scroll control
+        if: ${{ inputs.history_scroll_control }}
+        env:
+          CONFLICTING_MODE: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control }}
+        run: node -e 'if(process.env.CONFLICTING_MODE==="true")throw Error("Choose only the history scroll control")'
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope history
         env:
+          QUOTUM_BENCH_HISTORY_SCROLL_CONTROL: ${{ inputs.history_scroll_control && '1' || '' }}
+          QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.history_scroll_control && inputs.diagnostic_ref || '' }}
+          QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ inputs.history_scroll_control && inputs.expected_client_sha256 || '' }}
           QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-bench-history
       - name: History benchmark evidence
         if: always()
@@ -144,7 +159,7 @@ jobs:
           if-no-files-found: warn
 
   bench-dashboard:
-    if: ${{ !startsWith(github.ref, 'refs/tags/') && !inputs.native_postmortem_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
+    if: ${{ !startsWith(github.ref, 'refs/tags/') && !inputs.native_postmortem_control && !inputs.history_scroll_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
     runs-on: ubuntu-latest
     # Independent traffic checks run on another runner; every dashboard phase stays here.
     timeout-minutes: 20
@@ -208,7 +223,7 @@ jobs:
           if-no-files-found: warn
 
   idle-cpu-control:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -280,7 +295,8 @@ jobs:
           NATIVE_TRACE: ${{ inputs.native_trace }}
           NATIVE_PROFILE: ${{ inputs.native_profile }}
           CAPTION: ${{ inputs.caption_control }}
-        run: node -e 'if(["TRACE","PROFILE","NATIVE_TRACE","NATIVE_PROFILE","CAPTION"].some(k=>process.env[k]==="true"))throw Error("Choose only the native postmortem control")'
+          HISTORY_SCROLL: ${{ inputs.history_scroll_control }}
+        run: node -e 'if(["TRACE","PROFILE","NATIVE_TRACE","NATIVE_PROFILE","CAPTION","HISTORY_SCROLL"].some(k=>process.env[k]==="true"))throw Error("Choose only the native postmortem control")'
       - run: npm ci
       - run: npm run build
       - name: Run the owned native control under a separate UID

@@ -90,13 +90,15 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   const context={exports:{},process:{argv:['node','index.ts',...(ci?['--ci']:[]),...args],env:{CI:'1',...env},pid:1,platform:'linux',
       on:(name:string,fn:()=>void)=>{listeners.set(name,fn);},exit:(code:number)=>{exits.push(code);terminal();}},
     Date:class extends Date {static now(){return now;}},console:{log:()=>{},error:(value:unknown)=>{logs.push(String(value));}},path,Buffer,RunOwner,Demo,Evidence,Requests,Stop,ChromeLaunchError,IdleCpuDiagnostic,
-    mkdirSync:()=>{},writeFileSync:(file:string,body:string)=>diagnosticFiles.set(path.basename(file,'.json'),JSON.parse(body)),sourceIdentity:()=>({checkoutSha:'fixture'}),
+    mkdirSync:()=>{},writeFileSync:(file:string,body:string)=>diagnosticFiles.set(path.basename(file,'.json'),JSON.parse(body)),
+    sourceIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL?{sourceHead:env.QUOTUM_BENCH_SOURCE_SHA??null,checkoutSha:'1'.repeat(40)}:{checkoutSha:'fixture'},
+    execFileSync:()=>env.TEST_CONTROL_DIRTY??'',
     USAGE:'fixture usage',IDLE:{ci:120,full:300},SHOWN_MS:30_000,MEASURED:'fixture',HISTORY_BYTES_PER_MEASUREMENT,
     SETS:[set],fixtureTiming,panningSet:(value:unknown)=>value,people:()=>[{id:'ana'}],freePort:async()=>{mark('freePort');return 1234;},
     addressOf:()=>({base:'http://127.0.0.1:1234'}),prepare:async()=>{mark('prepare');},findChrome:()=>'/unused/chrome',
     seedPanningBudgets:()=>{mark('seed');},hear:async()=>({close:()=>{mark('stream-close');},reset:(window?:{from:number;to:number})=>{events.reset(window);for(let i=0;i<5;i++)events.push('event: ping\ndata: {}\n\n');},counts:()=>events.counts(),boardCounts:()=>events.boardCounts(),calendar:()=>events.calendar(),contacts:()=>events.contacts(),hints:()=>events.hints()}),
     launchChrome:async()=>{mark('launch');return browser;},openTab:async()=>{mark('openTab');return{cdp};},
-    historyTraffic:async()=>{mark('history');if(fault==='throw')throw new Stop('history-original');
+    historyTraffic:async(...args:unknown[])=>{mark('history');if(args[6])mark('scroll-control');if(fault==='throw')throw new Stop('history-original');
       if(fault==='cancel'){listeners.get('SIGTERM')!();await exited;}
       return{reports:[{name:'history-marker'}],problems:red('red')?['history-red']:[]};},
     probeScript:()=>'',sleep:async(ms:number)=>{waits.push(ms);now+=Math.max(0,ms);},say:(value:string)=>{logs.push(value);},
@@ -114,7 +116,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     creditPhase:async()=>{mark('credits');if(fault==='credits-throw')throw new Stop('credits-original');return{updates:[],problems:problems('credits')};},
     moneyPhase:async()=>{mark('money');return{problems:problems('money')};},
     fixedActivity:async()=>{mark('fixed-activity');return{reports:[],problems:problems('fixed-activity')};},
-    clientIdentity:()=>({status:'unavailable'}),
+    clientIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL?{status:'available',sha256:'2'.repeat(64)}:{status:'unavailable'},
   };
   runInNewContext(code,context);
   const selected=(context as unknown as {selected:{main():Promise<void>;parseArgs(args:string[]):unknown}}).selected;
@@ -296,6 +298,30 @@ for(const mode of ['native-trace','native-profile','trace','profile'])test(mode+
   }
 });
 
+test('the pinned history scroll control is diagnostic and fails before startup on invalid provenance or modes',async()=>{
+  const env={QUOTUM_BENCH_HISTORY_SCROLL_CONTROL:'1',QUOTUM_BENCH_SOURCE_SHA:'1'.repeat(40),QUOTUM_BENCH_EXPECTED_CLIENT_SHA256:'2'.repeat(64)};
+  const ok=await run(['--scope','history'],undefined,env);
+  assert.equal(ok.error,undefined);assert.deepEqual(ok.exits,[0]);assert.deepEqual(ok.statuses,['diagnostic']);
+  assert.ok(ok.calls.includes('scroll-control'));assert.ok(!ok.calls.includes('openTab'));assert.ok(!ok.calls.includes('panning'));
+  assert.equal((ok.saved.get('result') as {status:string}).status,'observations-completed');
+  assert.equal((ok.saved.get('scroll-control-disposition') as {status:string}).status,'noC3Observed');
+  const provenance=safeEvidence(ok.saved.get('history-scroll-source')) as {sha:string;checkoutHash:string;clientHash:string;expectedClientHash:string};
+  assert.equal(provenance.sha,env.QUOTUM_BENCH_SOURCE_SHA);assert.equal(provenance.checkoutHash,env.QUOTUM_BENCH_SOURCE_SHA);
+  assert.equal(provenance.clientHash,env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256);assert.equal(provenance.expectedClientHash,env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256);
+  for(const fault of ['red','throw','browser-close','demo-stop'] as const){
+    const failed=await run(['--scope','history'],fault,env);assert.equal(failed.exits.length,1);assert.notEqual(failed.exits[0],0);assert.deepEqual(failed.statuses,['failed']);
+    assert.equal((failed.saved.get('scroll-control-disposition') as {status:string}).status,'inconclusive');
+  }
+  for(const patch of [{QUOTUM_BENCH_SOURCE_SHA:''},{QUOTUM_BENCH_SOURCE_SHA:'3'.repeat(40)},{QUOTUM_BENCH_EXPECTED_CLIENT_SHA256:'3'.repeat(64)},{TEST_CONTROL_DIRTY:' M tracked.ts'}] as Record<string,string>[]){
+    const bad=await run(['--scope','history'],undefined,{...env,...patch});assert.match(String(bad.error),/mismatch/);assert.ok(!bad.calls.includes('prepare'));
+  }
+  for(const [args,patch,ci] of [[[],{},true],[['--scope','dashboard'],{},true],[['--scope','history'],{},false],
+    [['--scope','history','--cdp','http://fixture'],{},true],[['--scope','history'],{QUOTUM_BENCH_HISTORY_SCROLL_CONTROL:'2'},true],
+    [['--scope','history'],{QUOTUM_BENCH_DIAGNOSE_NATIVE:'1'},true],[['--scope','history'],{QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'1'},true]] as [string[],Record<string,string>,boolean][]){
+    const bad=await run(args,undefined,{...env,...patch},ci);assert.match(String(bad.error),/conflicting/);assert.ok(!bad.calls.includes('prepare'));
+  }
+});
+
 test('manual native tracing uses only the existing dashboard job and rejects mismatched evidence',()=>{
   const workflow=readFileSync(new URL('../../../.github/workflows/ci.yml',import.meta.url),'utf8');
   const job=(name:string)=>workflow.split('  '+name+':\n')[1].split(/\n  [\w-]+:/)[0];
@@ -318,6 +344,13 @@ test('manual native tracing uses only the existing dashboard job and rejects mis
     for(const job of ['bench-dashboard','bench-history','idle-cpu-control','bench'])assert.equal(selected(job,inputs),false);
   }
   assert.equal(selected('native-postmortem-control',{},'pull_request'),false);
+  const scroll={diagnostic_ref:'1'.repeat(40),history_scroll_control:true};
+  assert.equal(selected('bench-history',scroll),true);
+  for(const name of ['bench-dashboard','idle-cpu-control','native-postmortem-control','bench','hub','dev-tooling'])assert.equal(selected(name,scroll),false);
+  assert.equal(job('bench-history').match(/timeout-minutes: (\d+)/)![1],'20');
+  const scrollGuard=job('bench-history').match(/run: node -e '([^']+)'/)![1];
+  assert.doesNotThrow(()=>runInNewContext(scrollGuard,{process:{env:{CONFLICTING_MODE:'false'}}}));
+  assert.throws(()=>runInNewContext(scrollGuard,{process:{env:{CONFLICTING_MODE:'true'}}}),/Choose only/);
   assert.equal(selected('bench-history',{}),true);
   assert.equal(selected('bench',{}),true);
   assert.equal(selected('dev-tooling',{}),true);
@@ -326,7 +359,7 @@ test('manual native tracing uses only the existing dashboard job and rejects mis
   assert.throws(()=>runInNewContext(ordinaryGuard,{process:{env:{HAS_DIAGNOSTIC_MODE:'true'}}}),/require diagnostic_ref/);
   const nativeGuard=job('native-postmortem-control').match(/run: node -e '([^']+)'/)![1];
   assert.doesNotThrow(()=>runInNewContext(nativeGuard,{process:{env:{}}}));
-  for(const key of ['TRACE','PROFILE','NATIVE_TRACE','NATIVE_PROFILE','CAPTION'])assert.throws(()=>runInNewContext(nativeGuard,{process:{env:{[key]:'true'}}}),/Choose only/);
+  for(const key of ['TRACE','PROFILE','NATIVE_TRACE','NATIVE_PROFILE','CAPTION','HISTORY_SCROLL'])assert.throws(()=>runInNewContext(nativeGuard,{process:{env:{[key]:'true'}}}),/Choose only/);
   const script=job('bench-dashboard').split("          node --import tsx --input-type=module <<'JS'\n")[1].split('\n          JS')[0]
     .replace(/^\s*import .+;\n/gm,'');
   const source='1'.repeat(40),hash='2'.repeat(64);

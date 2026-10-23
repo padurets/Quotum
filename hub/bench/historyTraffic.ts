@@ -5,7 +5,7 @@ import {Pan} from '../ui/lib/pan';
 import type {HistoryTile} from '../ui/lib/historyTiles';
 import {HISTORY_COHORT_TAKES, historyCutInvalidation, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
 import {HISTORY_CODEC, historyBody, historyProxy, type BodyCount} from './historyProxy';
-import {browserCancellationTraffic, browserHistoryTraffic} from './historyTrafficBrowser';
+import {browserCancellationTraffic, browserHistoryTraffic, historyScrollControl} from './historyTrafficBrowser';
 import type {Browser} from './cdp';
 import type {Evidence} from './evidence';
 import {cancellationTraffic} from './historyCancellation';
@@ -18,7 +18,7 @@ const gridsOf = (store: HistoryStore) => (store as unknown as {grids: Map<number
 
 /** Controlled traffic uses the production gesture, loader and actual HTTP parser;
  * native presentation is measured separately on the unchanged browser route. */
-export async function historyTraffic(upstream: string, cookie: string, board: string, windows: string[], browser?: Browser, evidence?: Pick<Evidence, 'save'>) {
+export async function historyTraffic(upstream: string, cookie: string, board: string, windows: string[], browser?: Browser, evidence?: Pick<Evidence, 'save'>, scrollControl=false) {
   const proxy = await historyProxy(upstream, browser?.owner), reports = [], invalidated = [], problems: string[] = [];
   try {
     for (const length of [DAY, 30 * DAY]) for (const future of [DAY, 0]) for (const latency of [0, 100, 400]) for (const fraction of [.5, .04]) {
@@ -140,8 +140,9 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
       }
     }
     const cancellations = await cancellationTraffic(proxy, cookie, board, windows);
-    const native = browser ? await browserHistoryTraffic(browser, proxy, cookie, board, evidence) : null;
-    const nativeCancellations = browser ? await browserCancellationTraffic(browser, proxy, cookie, false, false, evidence) : null;
+    if(scrollControl&&(problems.length||invalidated.length||cancellations.invalidated.length))throw new Error('History scroll control prefix incomplete or over budget');
+    const native=browser ? await (scrollControl?historyScrollControl:browserHistoryTraffic)(browser,proxy,cookie,board,evidence) : null;
+    const nativeCancellations = browser&&!scrollControl ? await browserCancellationTraffic(browser, proxy, cookie, false, false, evidence) : null;
     if (native) problems.push(...native.problems);
     return {codec: HISTORY_CODEC, reports, invalidated, cancellations, native, nativeCancellations, problems};
   } finally {await proxy.close();}

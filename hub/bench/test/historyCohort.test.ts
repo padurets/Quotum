@@ -98,8 +98,9 @@ const coldCode=ts.transpileModule(source.slice(coldStart,coldEnd).replace('expor
   {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 
 /** Stand in browser IO while running the complete production traffic cohort. */
-async function coldReplay(mode:'stable'|'cross-only'|'bad-first'|'bad-second'|'physical-only-body'|'later-run'|'later-known'|'optional'|'attempts'|'fresh-closed'|'fresh-open'|'fresh-open-stable'|'mixed-seed') {
+async function coldReplay(mode:'stable'|'cross-only'|'bad-first'|'bad-second'|'physical-only-body'|'later-run'|'later-known'|'optional'|'attempts'|'fresh-closed'|'fresh-open'|'fresh-open-stable'|'mixed-seed'|'cdp-timeout',controlIteration?:number) {
   let pages=0,closed=0,observersClosed=0;
+  const primary=new Error('original CDP timeout');
   const proxy={transfers:[] as any[],phase(){},async settled(){}};
   const context={DAY:86_400_000,assert,...budget,cellStart,historyScroll,stableHistoryReads,URLSearchParams,
     process:{env:{}},console:{error(){}},writeFileSync(){},
@@ -118,6 +119,7 @@ async function coldReplay(mode:'stable'|'cross-only'|'bad-first'|'bad-second'|'p
       const bodies={phase:'',reads,get resources(){return reads.filter(read=>read.selection);},diagnostic(){return {};}};
       let distance=0;
       const cdp={at(){},snapshot(){return {};},async send(method:string,args:any){
+        if(method==='Input.synthesizeScrollGesture'&&mode==='cdp-timeout')throw primary;
         if(method==='Performance.getMetrics')return {metrics:[]};
         if(method==='Input.synthesizeScrollGesture'&&bodies.phase.endsWith('/cold')){
           distance=args.xDistance;
@@ -148,9 +150,25 @@ async function coldReplay(mode:'stable'|'cross-only'|'bad-first'|'bad-second'|'p
       return {cdp,bodies,settled:async()=>{},geometry,cell,seeds,capturePool:async()=>{},close:async()=>{closed++;}};
     },execute:null as any};
   runInNewContext(coldCode,context);
-  try{return {result:await context.execute({},proxy,'cookie','b'),pages,closed,observersClosed,error:null};}
-  catch(error){return {error,pages,closed,observersClosed};}
+  try{return {result:await context.execute({},proxy,'cookie','b',undefined,controlIteration),pages,closed,observersClosed,primary,error:null};}
+  catch(error){return {error,pages,closed,observersClosed,primary};}
 }
+
+test('the actual scroll control cohort preserves the first CDP error through cleanup',async()=>{
+  const controlled=await coldReplay('cdp-timeout',1);
+  assert.equal(controlled.error,controlled.primary);assert.equal(controlled.pages,1);assert.equal(controlled.closed,1);assert.equal(controlled.observersClosed,1);
+  const ordinary=await coldReplay('cdp-timeout');
+  assert.notEqual(ordinary.error,ordinary.primary);assert.equal((ordinary.error as Error).cause,ordinary.primary);
+});
+
+test('scroll control uses the original first cohort once, retains unique phases, and never retries a cutoff',async()=>{
+  const first=await coldReplay('stable',1),second=await coldReplay('stable',2);
+  for(const run of [first,second]){assert.equal(run.error,null);assert.equal(run.pages,1);assert.equal(run.closed,1);assert.equal(run.observersClosed,1);}
+  assert.equal(first.result.reports[0].name,'browser/1d/history/0ms/0.5/take1/all-accounting');
+  assert.equal(second.result.reports[0].name,'control2/browser/1d/history/0ms/0.5/take1/all-accounting');
+  const cut=await coldReplay('cross-only',1);assert.equal(cut.pages,1);assert.equal(cut.result.invalidated.length,1);
+  const bad=await coldReplay('bad-first',1);assert.ok(bad.error);assert.equal(bad.pages,1);
+});
 
 test('cold traffic retries only a changed reference after validating every resource and physical attempt',async()=>{
   const stable=await coldReplay('stable');assert.equal(stable.error,null);assert.equal(stable.pages,24);

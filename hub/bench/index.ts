@@ -3,6 +3,7 @@ import {createServer} from 'node:net';
 import {randomUUID} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {createHash} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
 import {mkdirSync,realpathSync,writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {MONEY_KEY} from '../demo/money.js';
@@ -117,6 +118,7 @@ async function main() {
   const captionMode = process.env.QUOTUM_BENCH_CAPTION_CONTROL;
   const nativeFrameMode=idleCpuMode==='native-trace'||idleCpuMode==='native-profile';
   const poolDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL;
+  const scrollControl=process.env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL;
   evidence.save('scope', {mode: options.scope});
   let idleCpu:IdleCpuDiagnostic|undefined;
   const diagnosticDirectory=path.join('/tmp/quotum-idle-cpu-diagnostic',`${process.env.GITHUB_RUN_ID??'local'}-${process.env.GITHUB_RUN_ATTEMPT??'1'}-${process.pid}`);
@@ -129,6 +131,12 @@ async function main() {
   const bind = process.env.QUOTUM_BIND || '127.0.0.1';
   let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
   try {
+    if(scrollControl){
+      if(scrollControl!=='1'||!options.ci||options.scope!=='history'||options.cdp||idleCpuMode||captionMode||poolDiagnostic||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE||process.env.QUOTUM_BENCH_REVERSAL_PROBE)throw new Stop('Unknown or conflicting history scroll control');
+      const source=sourceIdentity(),client=clientIdentity(),expected=process.env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256;
+      if(!source.sourceHead||source.checkoutSha!==source.sourceHead||!/^[a-f0-9]{64}$/.test(expected??'')||client.status!=='available'||client.sha256!==expected||execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim())throw new Stop('History scroll control source or client mismatch');
+      evidence.save('history-scroll-source',{mode:'diagnostic',sha:source.sourceHead,checkoutHash:source.checkoutSha,eventHash:source.eventSha,clientHash:client.sha256,expectedClientHash:expected});
+    }
     if (['PANNING', 'IDLE', 'IDLE_TIMING', 'STARTUP_WAITS'].some(mode => process.env['QUOTUM_BENCH_DIAGNOSE_' + mode])) throw new Stop('Removed benchmark diagnostic mode');
     if (captionMode && (captionMode !== '1' || !options.ci || options.scope !== 'dashboard' || options.cdp || idleCpuMode || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting caption control mode');
     const diagnostics = [idleCpuMode&&options.scope==='dashboard'?undefined:idleCpuMode, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE];
@@ -160,7 +168,8 @@ async function main() {
     }
     try {await owner.close();} catch (error) {code = 1; say(String(error));}
     try {await demo.stop();} catch {code = 1; say('demo cleanup failed');}
-    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || idleCpuMode || poolDiagnostic || captionMode) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
+    if(scrollControl)evidence.save('scroll-control-disposition',{mode:'diagnostic',status:cancelled?'cancelled':code?'inconclusive':'noC3Observed'});
+    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || idleCpuMode || poolDiagnostic || captionMode || scrollControl) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
     process.exit(code);
   })();
   const set = panningSet(SETS[0]);
@@ -193,7 +202,7 @@ async function main() {
       say('checking controlled pan traffic over fixed Brotli HTTP, separately from native performance');
       evidence.begin('history-traffic');
       const current = await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`);
-      try{traffic=await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser, evidence);}
+      try{traffic=await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser, evidence,Boolean(scrollControl));}
       catch(error){
         if(/browser\/(?:1|30)d\/reversal/.test(String(error))){
           say('replaying the failed reversal with page and browser diagnostics; the original failure remains');
@@ -206,7 +215,7 @@ async function main() {
     }
     if(options.scope==='history'){
       if(!traffic)throw new Stop('canonical history traffic readings unavailable');
-      const result={mode:options.scope,historyTraffic:traffic,problems:traffic.problems};
+      const result={mode:scrollControl?'diagnostic':options.scope,...(scrollControl?{kind:'history-scroll-control',status:traffic.problems.length?'failed':'observations-completed',reusesBrowser:true}:{}),historyTraffic:traffic,problems:traffic.problems};
       console.log(JSON.stringify(result,null,2));evidence.save('result',result);
       await finish(traffic.problems.length?1:0);return;
     }

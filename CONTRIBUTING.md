@@ -658,6 +658,15 @@ Reports retain attempted/completed/failed/aborted counts and uncertain body boun
 Proxy sockets and traffic tabs
 close before the benchmark stops its own demo.
 
+The manual CI input `history_scroll_control` requires `diagnostic_ref` and
+`expected_client_sha256`, and selects only the existing 20-minute history job.
+It runs the original controlled traffic prefix, then at most 24 copies of the first
+native history cohort: cold scroll, cached return and cached repeat, with every
+original assertion and deadline. Each copy opens a new tab and keeps separate
+proxy phases and evidence; the browser, its caches and JIT can be reused. Any
+failure or invalidated cohort stops the control. Completed copies are diagnostic
+observations, never a canonical benchmark pass or proof that a hang was repaired.
+
 ## Pull requests
 
 - **One task, one pull request.** A pull request takes one issue (or one fix) to `main`
