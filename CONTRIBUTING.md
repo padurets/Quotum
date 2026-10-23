@@ -84,6 +84,10 @@ Before the forced command, a completed metadata trace binds the page's primary f
 to an owned renderer and its process birth. Missing or invalidated identity fails the
 control; capture receives only that pinned process and rechecks its birth before attach.
 This preparation is diagnostic and does not run in ordinary benchmarks.
+After the command fails, the control also resolves identity on the original page
+connection using browser navigation evidence retained before the original navigation.
+It must match the pre-input PID and birth at both ends of native capture, within the
+existing collection limits. History controls continue to use their pre-input binding.
 It holds one synchronous HTTP request from its own fixture page until the original
 30-second command timeout, then requires native main-thread frames and confirmed
 cleanup, including the fixture's pending connection. This exercises native unwinding;

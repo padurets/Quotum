@@ -13,8 +13,33 @@ type TraceEvent={name?:unknown;args?:{data?:{frames?:unknown}}};
 type TraceBatch={value?:unknown}|null|undefined;
 type Mapping={pid:unknown;outer:unknown;primary:unknown};
 
+export type RendererDocument={pin(reply:{frameId?:unknown;loaderId?:unknown;errorText?:unknown}|null|undefined):void;read(page:RendererPage):Frame|undefined;valid():boolean;dispose():void};
+
+/** Install before the existing Page.enable/navigation; retain no URL or page text. */
+export function rendererDocument(page:RendererPage):RendererDocument{
+  let first:Frame|undefined,pinned=false,committed=false,invalid=false,disposed=false;
+  const invalidate=()=>{invalid=true;};
+  const started=(event:{frameId?:unknown;loaderId?:unknown;navigationType?:unknown}|null|undefined)=>{
+    const type=event?.navigationType,same=type==='sameDocument'||type==='historySameDocument';
+    if(typeof event?.frameId!=='string'||!event.frameId||typeof event.loaderId!=='string'||!event.loaderId||
+      !['reload','reloadBypassingCache','restore','restoreWithPost','historyDifferentDocument','differentDocument','sameDocument','historySameDocument'].includes(type as string)){invalidate();return;}
+    if(!first){if(same){invalidate();return;}first={id:event.frameId,loaderId:event.loaderId};return;}
+    invalidate();
+  };
+  const navigated=(event:{frame?:Frame}|null|undefined)=>{
+    const frame=event?.frame;
+    if(!first||committed||!frame||frame.parentId!==undefined||frame.id!==first.id||frame.loaderId!==first.loaderId)invalidate();else committed=true;
+  };
+  const life=['Page.frameDetached','Inspector.targetCrashed','Inspector.detached'];
+  page.on('Page.frameStartedNavigating',started);page.on('Page.frameNavigated',navigated);for(const event of life)page.on(event,invalidate);
+  const valid=()=>pinned&&committed&&!invalid&&!disposed;
+  return{valid,pin(reply){if(pinned||!first||reply?.errorText!==undefined||reply?.frameId!==first.id||reply?.loaderId!==first.loaderId)invalidate();pinned=true;},
+    read(cdp){return cdp===page&&valid()?{...first}:undefined;},
+    dispose(){disposed=true;page.off('Page.frameStartedNavigating',started);page.off('Page.frameNavigated',navigated);for(const event of life)page.off(event,invalidate);}};
+}
+
 /** UNKNOWN requires the existing owner cleanup; it never licenses a max-CPU fallback. */
-export async function rendererIdentity(cdp:RendererPage,browser:RendererBrowser,parent?:AbortSignal):Promise<RendererIdentity>{
+export async function rendererIdentity(cdp:RendererPage,browser:RendererBrowser,parent?:AbortSignal,document?:RendererDocument):Promise<RendererIdentity>{
   const owner:RunOwner|undefined=browser.owner,until=performance.now()+2000;
   if(browser.owned!==true||!owner||!browser.observeProcesses)throw Error('Owned browser required');
   const signal=AbortSignal.any([owner.signal,...(parent?[parent]:[])]);
@@ -24,7 +49,7 @@ export async function rendererIdentity(cdp:RendererPage,browser:RendererBrowser,
   const life=['Page.frameNavigated','Page.frameDetached','Inspector.targetCrashed','Inspector.detached'];
   const invalidate=()=>{state.invalidations++;};
   const cancel=()=>{invalidate();void release();};
-  const valid=()=>state.status==='known'&&!disposed&&!signal.aborted&&!state.invalidations;
+  const valid=()=>state.status==='known'&&!disposed&&!signal.aborted&&!state.invalidations&&(!document||document.valid());
   const within=<T>(work:(signal:AbortSignal)=>Promise<T>,cleanup=false):Promise<T>=>{
     const left=until-performance.now();if(left<=0)return Promise.reject(Error('Preflight deadline'));
     return deadline(left,async pending=>{if(!cleanup&&disposed)throw Error('Disposed');const value=await work(pending);pending.throwIfAborted();return value;},cleanup?undefined:signal);
@@ -54,16 +79,16 @@ export async function rendererIdentity(cdp:RendererPage,browser:RendererBrowser,
     }catch{state.cleanup='unknown';}
     finally{
       if(attempted&&(!started||completed!==1)){state.cleanup='unknown';state.mustCloseOwner=true;}
-      removeTrace();for(const name of life)cdp.off(name,invalidate);signal.removeEventListener('abort',cancel);
+      removeTrace();for(const name of life)cdp.off(name,invalidate);signal.removeEventListener('abort',cancel);document?.dispose();
       if(state.mustCloseOwner)owner.failures.push('renderer identity tracing outcome unknown');
     }
   });
   const handle:RendererIdentity={get pid(){return valid()?bound!.pid:null;},get birth(){return valid()?bound!.birth:null;},valid,dispose:release,
     evidence:()=>({...state,status:valid()?'known':'unknown',pid:valid()?bound!.pid:null,birth:valid()?bound!.birth:null,frame:1})};
   try{
-    await within(s=>cdp.send('Page.enable',{},s));await within(s=>cdp.send('Inspector.enable',{},s));
+    if(!document)await within(s=>cdp.send('Page.enable',{},s));await within(s=>cdp.send('Inspector.enable',{},s));
     for(const name of life)cdp.on(name,invalidate);signal.addEventListener('abort',cancel,{once:true});
-    const readFrame=async(s:AbortSignal)=>(await cdp.send<{frameTree?:{frame?:Frame}}>('Page.getFrameTree',{},s))?.frameTree?.frame;
+    const readFrame=async(s:AbortSignal)=>document?document.read(cdp):(await cdp.send<{frameTree?:{frame?:Frame}}>('Page.getFrameTree',{},s))?.frameTree?.frame;
     const first=await within(readFrame);frame=first?.id;loader=first?.loaderId;
     if(typeof frame!=='string'||!frame||typeof loader!=='string'||!loader||first!.parentId)throw Error('Frame unavailable');
     const before=await within(s=>browser.observeProcesses!(s));
