@@ -76,9 +76,11 @@ collection and two-second release windows. An unconfirmed detach, helper exit or
 pipe closure fails cleanup. Missing GDB falls back to the existing page debugger;
 attached browsers and successful commands receive no native intervention.
 The manual CI `native_postmortem_control` qualifies this collector on the requested
-source and built-client hash using a separate runtime UID. It deliberately blocks
-an owned blank page until the original 30-second command timeout, then requires
-native main-thread frames and confirmed cleanup. It does not execute the app client,
+source and built-client hash using a separate runtime UID and matching unwind tables.
+It holds one synchronous HTTP request from its own fixture page until the original
+30-second command timeout, then requires native main-thread frames and confirmed
+cleanup, including the fixture's pending connection. This exercises native unwinding;
+JIT frame unwinding is not qualified. It does not execute the app client,
 reproduce the original intermittent hang, qualify forced helper failures or replace
 either required benchmark job. Select it without any other diagnostic mode.
 Diagnostic CI controls install GDB during setup and first start it after the original
