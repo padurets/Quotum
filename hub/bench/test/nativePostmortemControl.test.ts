@@ -50,6 +50,7 @@ async function run(fault?:Fault){
 test('native qualification accepts preserved timeout evidence and closes its owned browser',async()=>{
   const r=await run();assert.equal(r.error,undefined);assert.equal(r.result,true);
   assert.equal(r.report.status,'qualified');assert.equal(r.report.originalErrorPreserved,true);
+  assert.equal(r.report.client.clientHash,'2'.repeat(64));
   assert.equal(r.browserClosed,1);assert.equal(r.listeners.size,0);
 });
 for(const fault of ['early rejection','changed error','wrong saved id','native unavailable','still traced','unreaped','open pipes','wrong main tid','observer close','browser close'] as const)test('native qualification refuses '+fault+' and drains the browser',async()=>{

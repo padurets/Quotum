@@ -21,7 +21,8 @@ export async function nativePostmortemControl(source:string,expectedClient:strin
   const cancel=()=>{void owner.close().catch(()=>{});};
   process.once('SIGINT',cancel);process.once('SIGTERM',cancel);
   const result:{[key:string]:unknown}={kind:'native-postmortem-control',mode:'diagnostic',status:'failed',
-    source:{sha:source,tree:git(['rev-parse','HEAD^{tree}'])},client,uid:process.getuid?.(),
+    source:{sha:source,tree:git(['rev-parse','HEAD^{tree}'])},
+    client:{status:client.status,name:client.name,bytes:client.bytes,clientHash:client.sha256},uid:process.getuid?.(),
     limits:{reproducesC3:false,executesAppClient:false,qualifiesForcedHelperFailures:false},phase:'startup'};
   let browser:Browser|undefined,observer:Awaited<ReturnType<typeof observeReversal>>|undefined;
   let native:Awaited<ReturnType<NonNullable<Browser['nativePostmortem']>>>|undefined;
@@ -56,7 +57,7 @@ export async function nativePostmortemControl(source:string,expectedClient:strin
     const captured=native;
     assert.ok(captured.threads.some(thread=>thread.tid===captured.pid&&thread.frames.some(frame=>frame.symbol)));
     passed=true;result.phase='cleanup';
-  }catch(error){result.errorKind=error instanceof Error?error.name:'unknown';}
+  }catch(error){result.failure=error instanceof Error?error.name:'unknown';}
   finally{
     result.native=native;result.nativeCalls=calls;result.receipts=[...receipts].map(([name,value])=>({name,value}));
     try{await observer?.close();}
@@ -79,7 +80,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===path.resolve(process.argv[1
     if(!source||!client||!chrome)throw new Error('Missing control arguments');
     if(!await nativePostmortemControl(source,client,chrome))process.exitCode=1;
   }catch(error){
-    console.log(JSON.stringify({kind:'native-postmortem-control',mode:'diagnostic',status:'failed',phase:'preflight',errorKind:error instanceof Error?error.name:'unknown'}));
+    console.log(JSON.stringify({kind:'native-postmortem-control',mode:'diagnostic',status:'failed',phase:'preflight',failure:error instanceof Error?error.name:'unknown'}));
     process.exitCode=1;
   }
 }

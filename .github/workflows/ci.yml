@@ -288,11 +288,13 @@ jobs:
           receipt="$RUNNER_TEMP/quotum-native-postmortem-control"
           mkdir -p "$receipt"
           sudo test ! -e /etc/sudoers.d/quotum-native-control
-          trap 'sudo rm -f /etc/sudoers.d/quotum-native-control' EXIT
+          runtime_home="$(mktemp -d /tmp/quotum-native-control-home-XXXXXX)"
+          trap 'sudo rm -f /etc/sudoers.d/quotum-native-control; sudo rm -rf "$runtime_home"' EXIT
+          sudo chown nobody:"$(id -gn)" "$runtime_home"
           printf 'nobody ALL=(root) NOPASSWD: /bin/sh, %s\n' "$node_binary" | sudo tee /etc/sudoers.d/quotum-native-control >/dev/null
           sudo chmod 0440 /etc/sudoers.d/quotum-native-control
           set -o pipefail
-          sudo -n -- /usr/bin/sudo -n -u nobody -g "$(id -gn)" -- "$node_binary" --import tsx bench/nativePostmortemControl.ts "$SOURCE_SHA" "$CLIENT_SHA256" "$chrome_binary" 2>&1 | tee "$receipt/control-first.jsonl"
+          sudo -n -- /usr/bin/sudo -n -u nobody -g "$(id -gn)" -- /usr/bin/env HOME="$runtime_home" XDG_CONFIG_HOME="$runtime_home/config" XDG_CACHE_HOME="$runtime_home/cache" "$node_binary" --import tsx bench/nativePostmortemControl.ts "$SOURCE_SHA" "$CLIENT_SHA256" "$chrome_binary" 2>&1 | tee "$receipt/control-first.jsonl"
       - name: Native debugger identity
         if: always()
         run: |
