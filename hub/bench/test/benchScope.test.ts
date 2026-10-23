@@ -463,6 +463,7 @@ for(const direct of [false,true])test('actual main preserves reversal failure an
   assert.ok(out.logs.some(line=>line.includes('browser/1d/reversal original-first')),'the original failure survives even when secondary replay fails');
   assert.equal(out.saved.has('result'),false);assert.ok(!out.calls.includes('suffix-proxy'));
   for(const name of ['stream-close','browser-close','demo-stop'])assert.equal(out.calls.filter(call=>call===name).length,1);
+});
 
 for(const mode of ['native-trace','native-profile'])test('native target routes session30d through actual main with every original phase and owned cleanup '+mode,async()=>{
   const result=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,QUOTUM_BENCH_NATIVE_TARGET:'session/30d'});
