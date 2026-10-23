@@ -700,14 +700,17 @@ an observation, never a canonical benchmark pass or proof that a hang was repair
 Ordinary history checks
 retain the same full matrix without diagnostic package preparation.
 
-The manual `startup_io_control` input runs isolated OLD and NEW jobs on the pinned
-source and client, with the same full history workload and 20-minute job limit. Both
-use the same launcher shim; NEW alone reads the installed Chrome image before exec,
-within the original twenty-second startup window. These jobs prepare no debugger or
-unwind tables. Image and package metadata are read only after a confirmed startup
-outcome. Missing receipts remain unknown. This compares the extra read on fresh runners;
-it does not enable prereading in ordinary CI, establish an I/O cause, or replace the
-required benchmark jobs. Select it without any other diagnostic mode.
+The manual `startup_io_control` input observes a fixed A1/B/A2 startup-only sequence
+on one runner before running the unchanged full history control once, within the same
+20-minute job limit. Each startup owns a fresh profile and must confirm cleanup before
+the next. Its shim advises `DONTNEED` only on the installed Chrome ELF through a
+read-only descriptor; B additionally reads it before exec. Advice, read and exec share
+the original twenty-second startup window. The advice does not guarantee eviction.
+No privileged or global cache reset is used. Source and file-stat pins bracket the
+probe; image content hashes are read only after its outcomes. This is a mechanism
+observation without the demo prefix, not an exact reproduction or repair of an earlier
+startup failure, and does not replace the required benchmark jobs. Missing receipts
+remain unknown. Select it without any other diagnostic mode.
 
 ## Pull requests
 
