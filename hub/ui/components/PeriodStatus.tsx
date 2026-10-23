@@ -2,13 +2,15 @@ import type {PeriodBasis} from '../../server/domain/period';
 import {timeRangeLabel} from '../lib/timeRange';
 import {boardPeriod} from '../lib/period';
 import {t} from '../i18n';
+import {useRemovalFocus} from './focusReturn';
 
 /** Retained numbers keep their own label until the requested interval is complete. */
 export function PeriodStatus({basis,loading,error}:{basis:PeriodBasis|null;loading:boolean;error:string|null}) {
+  const scope=useRemovalFocus<HTMLDivElement>(),action=useRemovalFocus<HTMLButtonElement>();
   if(!loading&&!error)return null;
-  return <div className="period-status" role="status">
+  return <div className="period-status" role="status" ref={scope}>
     {basis&&<span>{timeRangeLabel(basis.range)}</span>}
     <span>{t(error==='filters_limit'?'api.filters_limit':error==='history_limit'?'period.limit':error?'period.failed':'period.loading')}</span>
-    {error&&error!=='filters_limit'&&<button type="button" className="link-button" onClick={boardPeriod.retry}>{t('period.retry')}</button>}
+    {error&&error!=='filters_limit'&&<button ref={action} type="button" className="link-button" onClick={boardPeriod.retry}>{t('period.retry')}</button>}
   </div>;
 }

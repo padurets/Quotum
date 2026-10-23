@@ -1,7 +1,15 @@
 import {percentile} from './budget.js';
 import type {PanTransactions} from './panEvidence.js';
 
+export type NativePanTarget='activity/24h'|'session/30d';
+export type PanningSample={index:number;sampleId:number;rafId:number;token:number|null;at:number;stamp:number;ms:number;segment:string;inputSegment:string;pending:number;requests:number};
+export type NativePanReceipt={status:'complete'|'insufficient-evidence';initiator:string;period:string;timeOrigin:number;startedAt:number;stoppedAt:number;limit:number;count:number;omitted:number;preparationAttached:boolean;preparationRestored:boolean;preparationJobsAtAttach:number|null;preparationPendingAtAttach:boolean|null;
+  frames:PanningSample[];inputs:{id:number;sampleId:number;rafId:number;token:number|null;at:number;delivered:number;reached:number;ms:number;queued:number;processed:number;segment:string;requests:number}[];
+  callbacks:{id:number;stamp:number;at:number;to:number;sampleFrom:number;sampleTo:number}[];
+  preparations:{at:number;to:number;jobsBefore:number;jobsAfter:number}[]};
+
 export type PanReading = {
+  nativeDiagnostic?:NativePanReceipt;
   initiator: 'quota' | 'session' | 'activity' | 'budget' | 'funds'; period: string; series: number; budgetSeries: number; fundsSeries: number; sessionSeries:number; charts: number; rate: number;
   transactions?: PanTransactions;
   cost?: {valid: boolean; scriptMs: number; taskMs: number; seconds: number};

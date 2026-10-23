@@ -7,7 +7,8 @@ import {panTransactionsScript, panPartialScript, type PanTransactions} from '../
 import {deadline} from '../deadline.js';
 import {panningSettlement} from '../panningFailure.js';
 import {safeEvidence} from '../evidence.js';
-import {panningProblems, type PanReading} from '../panningBudget';
+import {panningProblems, type PanReading,type NativePanReceipt} from '../panningBudget';
+import {Preparations} from '../../ui/lib/prepare';
 const edgeSeries=():PanReading['edgeSeries']=>['wheel','drag'].map(stage=>({stage:stage as 'wheel'|'drag',series:12,sessionSeries:12,budgetSeries:12,fundsSeries:12}));
 
 // Run the production browser probe with the browser's ordered RAF queue.
@@ -36,8 +37,8 @@ test('native diagnostics restore CPU after the frozen report and bind even when 
   });
 });
 
-function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quota', typed = false, diagnostic = false) {
-  let time = 0;
+function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quota', typed = false, diagnostic = false,detailed=false,scheduler?:unknown) {
+  let time = 0;const reads={rect:0,style:0,fetch:0};
   let observe:(records:unknown[])=>void=()=>{};
   const callbacks: ((stamp: number) => void)[] = [], listeners = new Map<string, (event: object) => void>(), bubble = new Map<string, (event: object) => void>();
   let nextHandle=0;
@@ -53,7 +54,7 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quo
     isConnected: true, dataset: {drawReady: 'true', drawFrom: '0', drawTo: (slides === historyLayer||slides===sessionLayer) ? '424' : (slides === budgetLayer || slides === fundsLayer) ? '406' : '720'} as Record<string, string>, style: {height: '200px'},
     classList: {contains: () => false}, getAttribute: () => '0 0 900 200', closest: () => null,
     querySelector: () => (slides === historyLayer||slides===sessionLayer) ? hiddenHistory : hiddenActivity,
-    getBoundingClientRect: () => ({width: 450}), viewBox: {baseVal: {width: 900}},
+    getBoundingClientRect: () => {reads.rect++;return {width:450};}, viewBox: {baseVal: {width: 900}},
     parentElement: {
       dataset: {axisEnd: '0'},
       querySelector: (selector: string) => (slides === budgetLayer || slides === fundsLayer||slides===historyLayer||slides===sessionLayer) ? slides : selector === '.plot-clip.is-band' ? activityClip : selector === '.plot-clip.is-band .plot-move' ? activityLayer : activityTicks,
@@ -71,13 +72,13 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quo
     performance: {now: () => time, timeOrigin: 0}, URL, URLSearchParams, location: {href: 'https://example.test/', search: ''},
     document: {body: {}, querySelector: (selector: string) => selector.includes('quota-session-history')?sessionSvg:selector.includes('quota-history')?historySvg:selector.includes('budget-history')?budgetSvg:selector.includes('subscription-funds')?fundsSvg:activitySvg},
     history: {pushState: (..._args: unknown[]) => {}}, getComputedStyle: (node: {style: {transform: string}}) => {
-      if (typed && 'getAnimations' in node) throw new Error('used-value transform read');
+      reads.style++;if (typed && 'getAnimations' in node) throw new Error('used-value transform read');
       return {opacity: '1', transform: node.style.transform};
     },
     requestAnimationFrame: schedule, cancelAnimationFrame: () => {},
     MutationObserver: class {constructor(read:(records:unknown[])=>void){observe=read;}observe() {} disconnect() {}},
     DOMMatrix: class {a: number; e: number; constructor(value: string | undefined) {this.a = Number(value?.match(/scaleX\(([-.\d]+)\)/)?.[1] ?? 1);this.e = Number(value?.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0);if(value?.startsWith('scaleX'))this.e*=this.a;}},
-    window: {fetch: async () => ({}), requestAnimationFrame: schedule, addEventListener: (type: string, callback: (event: object) => void) => bubble.set(type, callback), removeEventListener: (type:string,callback:(event:object)=>void) => {if(bubble.get(type)===callback)bubble.delete(type);}},
+    window: {__quotumPanPreparations:scheduler,fetch: async () => {reads.fetch++;return{};}, requestAnimationFrame: schedule, addEventListener: (type: string, callback: (event: object) => void) => bubble.set(type, callback), removeEventListener: (type:string,callback:(event:object)=>void) => {if(bubble.get(type)===callback)bubble.delete(type);}},
   };
   const computed = new Map<object,string>();
   if (typed) for (const layer of [historyLayer,activityLayer,budgetLayer,fundsLayer,sessionLayer]) for (const owner of [layer,layer.slides]) {
@@ -85,9 +86,9 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quo
     Object.assign(owner,{computedStyleMap:()=>new Map([['transform',computed.get(owner)==='none'?{value:'none'}:{toMatrix:()=>new context.DOMMatrix(computed.get(owner))}]])});
   }
   const paintFold = (owner:{style:{transform:string}},transform:string) => {if (typed) computed.set(owner,transform);else owner.style.transform=transform;};
-  const script = runInNewContext('`' + probe + '`', {initiator, period: '24h', panTransactionsScript, evidence: diagnostic ? {selection: 'quota24'} : undefined});
+  const script = runInNewContext('`' + probe + '`', {initiator, period: detailed?'30d':'24h', panTransactionsScript, detailed, evidence: diagnostic ? {selection: 'quota24'} : undefined});
   runInNewContext(script, context);
-  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {running:boolean; feeding: boolean; cleanup(): void; readTransactions(): PanTransactions; pending: object[]; samples: NonNullable<PanReading['outliers']>}}).__quotumPan;
+  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {running:boolean; feeding: boolean; cleanup(): void; readTransactions(): PanTransactions; pending: object[]; readDiagnostic?():NativePanReceipt;samples: NonNullable<PanReading['outliers']>}}).__quotumPan;
   for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg, sessionSvg]) Object.assign(svg.dataset, {panMinEnd: '-1000000000', panMaxEnd: '1000000000'});
   const limits = (min: number, max: number) => {for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg, sessionSvg]) Object.assign(svg.dataset, {panMinEnd: String(min), panMaxEnd: String(max)});};
   const wheel = (stamp: number, delivered: number, deltaMode = 0, handled = () => {}, deltaX = initiator==='activity'?7:12) => {
@@ -107,9 +108,18 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quo
     if (edgeMoves) activityEdge.style.transform = `translateX(${-(proportional ? 7 : 14) * i}px)`;
     hiddenHistory.style.transform = `translateX(${-12 * i}px)`; hiddenActivity.style.transform = `translateX(${-7 * i}px)`;
   };
+  const commit=(end:number)=>{
+    for(const svg of [historySvg,activitySvg,budgetSvg,fundsSvg,sessionSvg]){
+      const shift=end-Number(svg.dataset.drawFrom);
+      svg.dataset.drawFrom=String(Number(svg.dataset.drawFrom)+shift);svg.dataset.drawTo=String(Number(svg.dataset.drawTo)+shift);
+      svg.parentElement.dataset.axisEnd=String(end);
+    }
+    for(const layer of [historyLayer,activityLayer,budgetLayer,fundsLayer,sessionLayer]){layer.style.transform='none';layer.slides.style.transform='none';}
+  };
   const frame = (at: number) => {time = at; return callbacks.splice(0);};
   const runFrame = (at: number) => frame(at).forEach(callback => callback(at));
-  return {reading, wheel, limits, listeners, bubble, update, frame, runFrame,paintFold,observe:(records:unknown[])=>observe(records), requestFrame: context.window.requestAnimationFrame, context,sessionSvg,sessionLayer,historySvg, activitySvg, budgetSvg, fundsSvg, fundsLayer, budgetLayer, historyLayer, activityLayer, activityClip};
+  const freeze=():PanReading=>{const template=source.match(/const report = await cdp.evaluate<PanReading>\(`([\s\S]+?)`\);/)![1];return runInNewContext(runInNewContext('`'+template+'`',{detailed}),context);};
+  return {reading,freeze,reads,now:()=>time,setTime:(at:number)=>{time=at;}, wheel, limits, commit, listeners, bubble, update, frame, runFrame,paintFold,observe:(records:unknown[])=>observe(records), requestFrame: context.window.requestAnimationFrame, context,sessionSvg,sessionLayer,historySvg, activitySvg, budgetSvg, fundsSvg, fundsLayer, budgetLayer, historyLayer, activityLayer, activityClip};
 }
 
 test('caption diagnostics retain exact input clocks without adding fields to the canonical probe', () => {
@@ -201,7 +211,7 @@ test('actual postconditions preserve failure and cleanup after motion sampling s
     const evidence=fail?{save:(name:string,value:unknown)=>files.set(name,value)}:undefined;
     const reports:PanReading[]=[],traceCalls:string[]=[];
     const traced=native?{stop:async()=>{assert.equal(reports.length,1);assert.equal(f.reading.running,false);traceCalls.push('stop');},bindAndClose:async()=>{assert.deepEqual(traceCalls,['stop']);traceCalls.push('bind');}}:undefined;
-    const sandbox={...globals,cdp,evidence,traced,deadline,panPartialScript,panningSettlement,selector:'[data-widget="quota-history"]',initiator:'quota',period:'24h',geometry:{x:0,y:0,series:12,sessionSeries:12,budgetSeries:12,fundsSeries:12,charts:5},edgeSeries:[],costStart:undefined,costEnd:undefined,reports,scenario:{initiator:'quota',period:'24h'},failed:false,stage:'controlled',interception:false,originalHorizon:'auto',click:async()=>{},at:(value:string)=>{context=value;},progress:(value:string)=>{
+    const sandbox={...globals,cdp,evidence,traced,detailed:false,deadline,panPartialScript,panningSettlement,selector:'[data-widget="quota-history"]',initiator:'quota',period:'24h',geometry:{x:0,y:0,series:12,sessionSeries:12,budgetSeries:12,fundsSeries:12,charts:5},edgeSeries:[],costStart:undefined,costEnd:undefined,reports,scenario:{initiator:'quota',period:'24h'},failed:false,stage:'controlled',interception:false,originalHorizon:'auto',click:async()=>{},at:(value:string)=>{context=value;},progress:(value:string)=>{
       if(value.endsWith('/complete'))complete=true;
     }};
     runInNewContext(ts.transpileModule(script,{compilerOptions:{target:ts.ScriptTarget.ES2023}}).outputText,sandbox);
@@ -244,7 +254,7 @@ test('a released clamped input still waits for every final drawing and animation
   f.fundsSvg.dataset.drawReady = 'false'; f.runFrame(20); assert.equal(f.reading.latency.length, 0);
   f.fundsSvg.dataset.drawReady = 'true'; f.fundsLayer.getAnimations = () => [{playState: 'running'}]; f.runFrame(30);
   assert.equal(f.reading.latency.length, 0, 'a retained boundary input cannot bypass a running follower fold');
-  f.fundsLayer.getAnimations = () => []; f.runFrame(40);
+  f.fundsLayer.getAnimations = () => []; f.commit(18); f.runFrame(40);
   assert.deepEqual(Array.from(f.reading.latency), [40, 39]); assert.equal(f.reading.inputs, 2);
   assert.equal(f.reading.updated, 0, 'final metadata creates no moving samples');
 });
@@ -415,6 +425,9 @@ test('unpainted final input is credited only after its geometry commits', () => 
   f.runFrame(33.4);
   assert.equal(f.reading.latency.length, 0, 'all five charts must publish the final geometry');
   f.sessionSvg.parentElement.dataset.axisEnd=f.activitySvg.parentElement.dataset.axisEnd = f.budgetSvg.parentElement.dataset.axisEnd = f.fundsSvg.parentElement.dataset.axisEnd = '12'; f.runFrame(50.1);
+  assert.equal(f.reading.latency.length,0,'matching endpoints without painted data still cannot credit input');
+  f.sessionLayer.slides.style.transform=f.historyLayer.slides.style.transform=f.budgetLayer.slides.style.transform=f.fundsLayer.slides.style.transform='translateX(-24px)';
+  f.activityLayer.slides.style.transform='translateX(-14px)';f.runFrame(50.1);
   assert.equal(f.reading.latency[0], 50.1);
   assert.equal(f.reading.updated, 0, 'final metadata cannot manufacture moving frames');
 });
@@ -449,7 +462,7 @@ test('the probe measures a delayed HTML or SVG fold and cannot credit final inpu
     assert.equal(saved.at,110);assert.equal(saved.stamp,110);assert.equal(saved.inputSegment,inputSegment);
     assert.equal(saved.foldMask,1);assert.equal(saved.svgFoldMask,html?0:1);assert.equal(saved.movedMask,1);
     assert.equal(f.reading.latency.length, 0, 'final geometry alone cannot credit an unfinished animation');
-    moving.getAnimations = () => []; f.paintFold(moving,'none'); f.runFrame(120);
+    moving.getAnimations = () => []; f.paintFold(moving,'none'); f.commit(12); f.runFrame(120);
     assert.deepEqual(Array.from(f.reading.latency), [120]);
   }
 });
@@ -522,7 +535,7 @@ test('each follower fold cannot be skipped or credited early by an idle initiato
     f.paintFold(moving,'translateX(10px) scaleX(.9)'); f.runFrame(110);
     assert.deepEqual(Array.from(f.reading.frames), [80], 'the resource fold keeps its full delayed movement interval');
     assert.equal(f.reading.latency.length, 0);
-    moving.getAnimations = () => []; f.paintFold(moving,'none'); f.runFrame(120);
+    moving.getAnimations = () => []; f.paintFold(moving,'none'); f.commit(12); f.runFrame(120);
     assert.deepEqual(Array.from(f.reading.latency), [120]);
   }
 });
@@ -535,7 +548,7 @@ test('a computed none transform does not finish a running fold or credit final i
   f.historyLayer.getAnimations=()=>[{playState:'running'}];
   f.runFrame(10);f.runFrame(30);
   assert.equal(f.reading.updated,0);assert.equal(f.reading.latency.length,0);
-  f.historyLayer.getAnimations=()=>[];f.runFrame(120);
+  f.historyLayer.getAnimations=()=>[];f.commit(12);f.runFrame(120);
   assert.deepEqual(Array.from(f.reading.latency),[120]);
 });
 
@@ -576,7 +589,7 @@ test('the fold interval remains open until the last data plot finishes its anima
   f.fundsLayer.style.transform = 'translateX(20px)'; f.runFrame(60);
   f.fundsLayer.style.transform = 'translateX(10px)'; f.runFrame(140);
   assert.ok(f.reading.frames.includes(80), 'the delayed tail belongs to the moving-frame budget');
-  f.fundsLayer.getAnimations = () => []; f.fundsLayer.style.transform = 'none'; f.runFrame(150);
+  f.fundsLayer.getAnimations = () => []; f.fundsLayer.style.transform = 'none'; f.commit(12); f.runFrame(150);
   assert.deepEqual(Array.from(f.reading.latency), [150]);
 });
 
@@ -640,8 +653,20 @@ test('a pending drawing model cannot credit the final input from the URL or axis
   f.historySvg.parentElement.dataset.axisEnd = f.sessionSvg.parentElement.dataset.axisEnd=f.activitySvg.parentElement.dataset.axisEnd = f.budgetSvg.parentElement.dataset.axisEnd = f.fundsSvg.parentElement.dataset.axisEnd = '12';
   f.activitySvg.dataset.drawReady = 'false'; f.runFrame(16.7);
   assert.equal(f.reading.latency.length, 0);
+  f.sessionLayer.slides.style.transform=f.historyLayer.slides.style.transform=f.budgetLayer.slides.style.transform=f.fundsLayer.slides.style.transform='translateX(-24px)';
+  f.activityLayer.slides.style.transform='translateX(-14px)';
   f.activitySvg.dataset.drawReady = 'true'; f.runFrame(33.4);
   assert.equal(f.reading.latency[0], 33.4);
+});
+
+test('final credit rejects a ready zoom around a matching endpoint until both time landmarks match',()=>{
+  const f=fixture();f.wheel(0,0);f.context.location.search='?from=0&to=12';
+  for(const svg of [f.historySvg,f.sessionSvg,f.activitySvg,f.budgetSvg,f.fundsSvg]){delete svg.dataset.panEnd;svg.parentElement.dataset.axisEnd='12';}
+  for(const layer of [f.historyLayer,f.sessionLayer,f.budgetLayer,f.fundsLayer])layer.slides.style.transform='translateX(-24px)';
+  f.activityLayer.slides.style.transform='translateX(-14px)';
+  f.historyLayer.slides.style.transform='translateX(-16px) scaleX(0.8)';
+  f.runFrame(16.7);assert.equal(f.reading.latency.length,0,'the origin agrees, but a second timestamp exposes the zoom');
+  f.historyLayer.slides.style.transform='translateX(-24px)';f.runFrame(33.4);assert.equal(f.reading.latency[0],33.4);
 });
 
 test('the actual probe rejects a wrong frozen SVG scale or a changed domain behind matching HTML movement', () => {
@@ -707,4 +732,111 @@ test('coalesced input is credited only when its own position has reached the dat
   assert.equal(f.reading.latency.length,2);
   assert.equal(f.reading.pending.length,0);
   assert.equal(f.reading.latency[1],40);
+});
+
+
+/** These tests execute the shipped sampler, report export and preparation queue. */
+const nativeFixture=()=>fixture('session',true,false,true,new Preparations({now:()=>0,post:()=>{}}));
+const receipt=(f:ReturnType<typeof fixture>)=>{assert.equal(typeof f.reading.readDiagnostic,'function','selected native receipt is installed');return f.reading.readDiagnostic!();};
+const canonical=(f:ReturnType<typeof fixture>)=>JSON.parse(JSON.stringify({frames:f.reading.frames,latency:f.reading.latency,inputs:f.reading.inputs,updated:f.reading.updated,chartUpdates:f.reading.chartUpdates,pending:f.reading.pending.length,reads:f.reads,geometry:[f.historySvg,f.sessionSvg,f.activitySvg,f.budgetSvg,f.fundsSvg].map(svg=>({...svg.dataset,height:svg.style.height})),poses:[f.historyLayer,f.sessionLayer,f.activityLayer,f.budgetLayer,f.fundsLayer].map(layer=>[layer.style.transform,layer.slides.style.transform]),clip:f.activityClip.style}));
+
+test('selected native receipt keeps sub-50ms frames and exact input/RAF joins without changing the probe',()=>{
+  const off=fixture('session',true),on=nativeFixture();
+  for(const f of [off,on]){f.wheel(10,15);f.requestFrame(()=>f.update(1,30));f.runFrame(30);f.wheel(40,44);f.requestFrame(()=>f.update(2,64.2));f.runFrame(64.2);}
+  assert.deepEqual(canonical(on),canonical(off));assert.equal(off.reading.readDiagnostic,undefined);
+  assert.equal(receipt(on).status,'insufficient-evidence','sampling is still active');
+  const report=on.freeze(),d=report.nativeDiagnostic;assert.ok(d);assert.equal(d.status,'complete');
+  assert.equal(d.initiator,'session');assert.equal(d.period,'30d');assert.equal(d.frames.length,1);assert.ok(Math.abs(d.frames[0].ms-34.2)<1e-10);
+  const frame=d.frames[0],input=d.inputs.find(row=>row.id===2)!;assert.equal(frame.at,64.2);assert.equal(frame.stamp,64.2);assert.equal(frame.index,0);
+  assert.equal(input.sampleId,frame.sampleId);assert.equal(input.rafId,frame.rafId);assert.equal(input.token,frame.token);assert.equal(input.reached,frame.at);
+  assert.deepEqual([input.at,input.delivered,input.reached,input.ms,input.queued,input.processed],[40,44,64.2,24.200000000000003,4,20.200000000000003]);
+  const callback=d.callbacks.find(row=>row.id===frame.rafId)!;assert.ok(callback.at<=frame.at&&callback.to>=frame.at);assert.ok(callback.sampleFrom<frame.sampleId&&callback.sampleTo>=frame.sampleId);
+  assert.equal(report.outliers?.length,0,'the original >50ms outlier view is unchanged');assert.deepEqual(Array.from(report.frames),Array.from(off.reading.frames));
+});
+
+test('selected native receipt retains stationary clamps, reversal and the final unpainted input',()=>{
+  const f=nativeFixture();f.limits(0,18);
+  f.wheel(0,0);f.requestFrame(()=>f.update(1,16));f.runFrame(16);f.wheel(20,20);f.requestFrame(()=>f.update(1.5,32));f.runFrame(32);
+  const frames=f.reading.frames.length;f.wheel(40,40);f.runFrame(48);assert.equal(f.reading.frames.length,frames);
+  f.wheel(50,50,0,()=>{},-12);f.requestFrame(()=>f.update(.5,64));f.runFrame(64);
+  const d=f.freeze().nativeDiagnostic!;assert.equal(d.status,'complete');assert.equal(d.inputs.length,4);assert.equal(d.inputs[2].id,3);assert.equal(d.inputs[2].reached,48);assert.equal(d.inputs[2].rafId,0);
+  assert.ok(!d.frames.some(row=>row.sampleId===d.inputs[2].sampleId),'a stationary clamp has no manufactured movement');
+  const final=nativeFixture();final.limits(0,18);final.wheel(0,0);final.wheel(1,1);
+  for(const svg of [final.historySvg,final.activitySvg,final.budgetSvg,final.fundsSvg,final.sessionSvg])delete svg.dataset.panEnd;
+  final.context.location.search='?from=0&to=18';final.runFrame(10);assert.equal(receipt(final).inputs.length,0);
+  final.fundsSvg.dataset.drawReady='false';final.commit(18);final.runFrame(20);assert.equal(receipt(final).inputs.length,0);
+  final.fundsSvg.dataset.drawReady='true';final.runFrame(40);const frozen=final.freeze().nativeDiagnostic!;
+  assert.equal(frozen.status,'complete');assert.deepEqual(Array.from(frozen.inputs,row=>row.reached),[40,40]);assert.equal(frozen.frames.length,0);
+});
+
+test('selected native receipt retains a sub-50ms compositor fold with its actual phase',()=>{
+  const f=nativeFixture();
+  for(const svg of [f.historySvg,f.activitySvg,f.budgetSvg,f.fundsSvg,f.sessionSvg])delete svg.dataset.panEnd;
+  f.historyLayer.getAnimations=()=>[{playState:'running'}];
+  f.paintFold(f.historyLayer,'translateX(40px) scaleX(.6)');f.runFrame(10);
+  f.paintFold(f.historyLayer,'translateX(30px) scaleX(.7)');f.runFrame(20);
+  f.paintFold(f.historyLayer,'translateX(10px) scaleX(.9)');f.runFrame(54.2);
+  const d=f.freeze().nativeDiagnostic!;assert.ok(d);assert.equal(d.status,'complete');assert.equal(d.frames.length,1);
+  assert.ok(Math.abs(d.frames[0].ms-34.2)<1e-10);assert.equal(d.frames[0].segment,'fold');assert.equal(d.frames[0].inputSegment,'wheel');assert.equal(d.frames[0].rafId,0);assert.equal(d.frames[0].token,1);assert.equal(d.inputs.length,0);
+});
+
+test('selected native receipt observes actual preparation slices and preserves post this/return/errors and restoration',()=>{
+  let f!:ReturnType<typeof fixture>;const tasks:(()=>unknown)[]=[],env={now:()=>f.now(),post(this:unknown,run:()=>unknown){assert.equal(this,env);tasks.push(run);return tasks.length;}};
+  const post=env.post,scheduler=new Preparations(env);f=fixture('session',true,false,true,scheduler);let advances=0,ready=0;
+  scheduler.replace({},(function*(){for(let i=0;i<20;i++){advances++;f.setTime(f.now()+2);yield;}return 7;})(),()=>true,value=>{ready=value;});
+  assert.equal(tasks.length,1);tasks.shift()!();assert.equal(advances,16);assert.equal(tasks.length,1);tasks.shift()!();assert.equal(ready,7);
+  assert.equal(receipt(f).preparations.length,2,'one observation per actual slice, not generator advance');
+  assert.equal(env.post(()=>41),1);assert.equal(tasks.shift()!(),41);const error=new Error('original callback');env.post(()=>{throw error;});assert.throws(()=>tasks.shift()!(),value=>value===error);
+  env.post(()=>99);f.reading.cleanup();assert.equal(env.post,post);assert.equal(tasks.shift()!(),99,'a queued wrapper still calls the original callback after cleanup');
+  const d=receipt(f);assert.equal(d.status,'complete');assert.equal(d.preparationAttached,true);assert.equal(d.preparationRestored,true);assert.equal(d.preparations.length,4);assert.deepEqual(Array.from(d.preparations.slice(0,2),row=>[row.jobsBefore,row.jobsAfter]),[[1,1],[1,0]]);
+});
+
+test('selected native receipt caps retained observations while preserving canonical arrays and refusal counts',()=>{
+  const tasks:(()=>unknown)[]=[],env={now:()=>0,post:(run:()=>unknown)=>{tasks.push(run);}},scheduler=new Preparations(env),f=fixture('session',true,false,true,scheduler);
+  for(let i=0;i<4096;i++){env.post(()=>{});tasks.shift()!();}let d=receipt(f);assert.equal(d.count,4096);assert.equal(d.omitted,0);assert.equal(d.preparations.length,4096);
+  env.post(()=>{});tasks.shift()!();d=f.freeze().nativeDiagnostic!;assert.equal(d.count,4096);assert.equal(d.omitted,1);assert.equal(d.status,'insufficient-evidence');assert.equal(d.preparations.length,4096);
+  assert.equal(f.reading.frames.length,0);assert.equal(f.reading.latency.length,0);assert.equal(f.reading.inputs,0);
+});
+
+test('selected native receipt leaves busy/missing scheduler coverage explicit and never overwrites a newer post',()=>{
+  const tasks:(()=>unknown)[]=[],env={now:()=>0,post:(run:()=>unknown)=>{tasks.push(run);}},scheduler=new Preparations(env),owner={};
+  scheduler.replace(owner,(function*(){yield;})(),()=>true,()=>{});const busy=fixture('session',true,false,true,scheduler);assert.equal(tasks.length,1);
+  const d=busy.freeze().nativeDiagnostic!;assert.equal(d.status,'insufficient-evidence');assert.equal(d.preparationJobsAtAttach,1);assert.equal(d.preparationPendingAtAttach,true);assert.equal(tasks.length,1,'the observer never drains pending preparation');scheduler.dispose();
+  for(const missing of [undefined,{size:0,pending:false,env:{}},{size:0,env:{post:()=>{}}}]){const f=fixture('session',true,false,true,missing);assert.equal(f.freeze().nativeDiagnostic!.status,'insufficient-evidence');}
+  const empty=new Preparations({now:()=>0,post:()=>{}}),f=fixture('session',true,false,true,empty);assert.equal(f.freeze().nativeDiagnostic!.status,'complete');
+  const nextEnv={now:()=>0,post:(_run:()=>void)=>{}},next=new Preparations(nextEnv),changed=fixture('session',true,false,true,next),newer=()=>{};nextEnv.post=newer;
+  const lost=changed.freeze().nativeDiagnostic!;assert.equal(lost.status,'insufficient-evidence');assert.equal(lost.preparationRestored,false);assert.equal(nextEnv.post,newer);
+});
+
+test('selected native receipt exports after freeze separately from ordinary reports before trace cleanup',async()=>{
+  const f=nativeFixture();f.wheel(0,0);f.requestFrame(()=>f.update(1,16));f.runFrame(16);const report=f.freeze();assert.ok(report.nativeDiagnostic);
+  const finish=source.split('reports.push(report);')[1].split("at('postconditions');")[0],calls:string[]=[],ordinary:unknown[]=[],detailed:unknown[]=[];
+  await runInNewContext(ts.transpileModule(`(async()=>{${finish}})()`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,{
+    report,initiator:'session',period:'30d',Buffer,
+    evidence:{save:(_name:string,value:unknown)=>{assert.equal(f.reading.running,false);assert.equal((value as PanReading).nativeDiagnostic,undefined);calls.push('ordinary');ordinary.push(JSON.parse(JSON.stringify(value)));},saveTrace:(name:string,value:NativePanReceipt)=>{assert.equal(name,'native-panning-receipt');assert.equal(f.reading.running,false);assert.equal(value.status,'complete');calls.push('diagnostic');detailed.push(value);}},
+    cdp:{send:async()=>{calls.push('restore');}},traced:{stop:async()=>{calls.push('stop');},bindAndClose:async()=>{calls.push('bind');}},
+  });
+  assert.deepEqual(calls,['ordinary','diagnostic','restore','stop','bind']);assert.equal(detailed.length,1);assert.equal(ordinary.length,1);assert.equal(report.nativeDiagnostic,undefined);
+});
+
+// Execute the actual selector statements rather than reproducing their branch formula.
+test('selected native trace targets exactly its original cell and keeps the default cell',()=>{
+  const ast=ts.createSourceFile('panning.ts',source,ts.ScriptTarget.Latest,true),selected=new Map<string,string>();
+  const loops=new Map<string,string>();
+  const walk=(node:ts.Node)=>{if(ts.isForOfStatement(node)&&['const initiator','const [period, index]'].includes(node.initializer.getText(ast)))loops.set(node.initializer.getText(ast),node.expression.getText(ast));if(ts.isVariableDeclaration(node)&&['familyTrace','traced','detailed'].includes(node.name.getText(ast)))selected.set(node.name.getText(ast),node.getText(ast));ts.forEachChild(node,walk);};walk(ast);
+  const evaluateLoop=(name:string)=>runInNewContext(ts.transpileModule('('+loops.get(name)+')',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,{evidence:undefined});
+  const initiators=Array.from(evaluateLoop('const initiator') as string[]),periods=Array.from(evaluateLoop('const [period, index]') as [string,number][]);
+  assert.equal(initiators.length*periods.length,10,'the actual loop expressions retain the full original workload');
+  assert.deepEqual(initiators,['quota','session','activity','budget','funds']);assert.deepEqual(periods.map(row=>row[0]),['24h','30d']);
+  assert.ok(selected.get('familyTrace'));assert.ok(selected.get('traced'));
+  assert.ok(source.indexOf('const familyTrace=')<source.indexOf('await panningReload('),'source binding begins before the selected family reload');
+  for(const target of ['activity/24h','session/30d']){
+    const observed:string[]=[],created:string[]=[];
+    for(const initiator of initiators){
+      const context={initiator,nativeTarget:target,nativeTrace:()=>{created.push(initiator);return{};}};
+      runInNewContext(`const ${selected.get('familyTrace')};globalThis.family=familyTrace;`,context);
+      for(const [period] of periods){const cell={period,nativeTarget:target,familyTrace:(context as typeof context&{family:unknown}).family};runInNewContext(`const ${selected.get('traced')};globalThis.active=!!traced;`,cell);if((cell as typeof cell&{active:boolean}).active)observed.push(initiator+'/'+period);}
+    }
+    assert.deepEqual(created,[target.split('/')[0]]);assert.deepEqual(observed,[target]);
+  }
 });

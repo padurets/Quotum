@@ -11,6 +11,7 @@ import {plotOf} from '../lib/historyPlot';
 import * as lineContract from '../lib/lines';
 import type {PlotSeries} from '../lib/lines';
 import {readout} from '../lib/readout';
+import {timeTickWords} from '../lib/periods';
 import {drain} from '../lib/prepare';
 import {plotPathPrepared} from '../lib/plotPath';
 import {clipPrepared} from '../lib/forecast';
@@ -54,18 +55,18 @@ const drawingCode = javascript('function draw(){'+chart.slice(chart.indexOf('  c
 function pointed(line:PlotSeries, at:number) {
   let precise = false, hover:number|null = null;
   runInNewContext(axisCall,{...lineContract,useTimeAxis:(input:{precise:boolean})=>{precise=input.precise;return {};},
-    desiredFrom:0,desiredTo:to,desiredNow:to,cellMs:cell,left:0,right:0,onSelect:undefined,incomingReady:true,incomingLines:[line],navigation:undefined});
+    desiredFrom:0,desiredTo:to,desiredNow:to,incomingCellMs:cell,left:0,right:0,onSelect:undefined,incomingReady:true,incomingLines:[line],navigation:undefined});
   const pointer = {from:0,to,width:to,left:0,right:0,cellMs:cell,precise,visualGeometry:()=>({from:0,to}),
     setHover:(value:number|null)=>{hover=value;},useEffect:()=>{},pointer:{current:null},panPointer:{current:null},
     svg:{current:{getBoundingClientRect:()=>({left:0,width:to})}},panning:null,folding:false,shifting:false,drag:null,holding:{current:null},
     move:null as unknown as (event:{clientX:number;pointerId:number;pointerType:string})=>void};
   runInNewContext(pointerCode,pointer);
   pointer.move({clientX:at,pointerId:1,pointerType:'mouse'});
-  const context = {React,seriesFocusStyle,...lineContract,prepared:{ready:true,value:{basis:{from:0,to},lines:[{...line,key:'s w'}],plans:[],forecasts:[],markers:[],paths:[],strip:null}},
-    valueAxis:undefined,currentClock:to,desiredFrom:0,desiredNow:to,desiredTo:to,desiredLive:true,incomingReady:true,cellMs:cell,
+  const context = {React,seriesFocusStyle,...lineContract,onDrawing:undefined,prepared:{ready:true,value:{basis:{from:0,to},lines:[{...line,key:'s w'}],plans:[],forecasts:[],markers:[],paths:[],strip:null}},
+    valueAxis:undefined,currentClock:to,desiredFrom:0,desiredNow:to,desiredTo:to,desiredLive:true,incomingReady:true,incomingCellMs:cell,
     width:to,left:0,right:0,height:220,top:12,bottom:28,
-    axis:{hover:hover===null?null:Math.floor(hover/cell)*cell,hoverAt:hover,screenX:(time:number)=>time,commitDrawing:()=>{}},
-    useLayoutEffect:()=>{},niceTicks:()=>({ticks:[],daily:false}),readCell:readout,
+    axis:{hover:hover===null?null:Math.floor(hover/cell)*cell,hoverAt:hover,presentation:()=>({from:0,to}),screenX:(time:number)=>time,commitDrawing:()=>{}},
+    timeTickWords,useLayoutEffect:()=>{},niceTicks:()=>({ticks:[],daily:false}),readCell:readout,
     draw:null as unknown as ()=>{value:number|null;pointedAt:number;hoverX:number;rowAt:number;circles:(false|React.ReactElement<{cx:number}>)[]}};
   runInNewContext(readoutCode,context);
   const {circles,rowAt,...result} = context.draw();
@@ -79,7 +80,7 @@ function drawn(line:PlotSeries) {
   const context = {...hooks,axis:{active:false,basis:{from:0,to,end:to}},incomingStrip:line.blocks?{from:0,to}:null,
     desiredFrom:0,desiredTo:to,desiredNow:to,incomingLines:[line],valueAxis:undefined,stepped:false,modelContext:'',navigation:undefined,
     desiredLive:false,incomingReady:true,incomingPlans:[],incomingForecasts:[],incomingMarkers:[],
-    cellMs:cell,width:to,height:100,left:0,right:0,top:0,bottom:0,clipPrepared,plotPathPrepared,NO_FORECASTS:[],
+    incomingCellMs:cell,width:to,height:100,left:0,right:0,top:0,bottom:0,clipPrepared,plotPathPrepared,NO_FORECASTS:[],
     draw:null as unknown as ()=>{value:{paths:{line:string;parts:{line:string}[]|null}[]}|null}};
   runInNewContext(drawingCode,context);
   hooks.begin();context.draw();hooks.commit();hooks.finish();hooks.begin();

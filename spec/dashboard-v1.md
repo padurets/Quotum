@@ -478,7 +478,7 @@ Neither the key nor unavailable names enter responses, conflicts or events.
 
 `GET /api/boards/:board/project-colors/choices?query=...&cursor=...` returns
 `{projects, nextCursor?, authority}`. It pages fifty admitted live/retained corrected
-names in the same order, independently of range, filters, legend mutes, funding and
+names in the same order, independently of range, filters, legend emphasis, funding and
 card visibility. Search is a literal substring of at most 120 codepoints. The
 signed cursor binds board, query and authority; changed context returns the same
 sanitized context conflict. There is no snapshot total or background catalogue poll.
@@ -514,7 +514,7 @@ work-authority changes, geometry preparation, time navigation or notification ne
 For each chart registry, present manual groups reserve their distinct colours first.
 Surviving Auto groups keep their slots, including neutral overflow. A new reservation
 moves only conflicting Auto groups to the first free slot or neutral; new groups use
-remaining slots in existing order. Absent pins reserve nothing; muted and offscreen
+remaining slots in existing order. Absent pins reserve nothing; emphasized and offscreen
 registry groups retain their slots. Releasing a slot does not promote survivors.
 Every Activity paint layer, legend and readout uses the same resolution.
 
@@ -561,11 +561,15 @@ The board's `view` includes `layout: {columns: 6, places: {<widget id>: {x, y, w
 `x` is a column starting at zero, `y` a row starting at zero used for reading order.
 Widths are 2, 3, 4 or 6 columns and starts are 0, 2, 3 or 4, with `x + w <= 6`. `h`, when
 present, is the height in rows the owner chose for the widget, a whole number from 1 to
-200 (`MAX_ROWS`); without it the widget is as tall as its content. The page measures the
-content: a widget never takes fewer rows than the least its content can show (all of a card
-or the table, a chart as tall as it draws by itself, the first agent of the list and how
-many more), so `h` is what the owner asked for, not what shows, and the hub does not check
-it against the content. A place has exactly `x`, `y`, `w` and, optionally, `h`; anything
+200 (`MAX_ROWS`); without it the widget uses its structural natural height. The page
+measures that shell for the viewport and display configuration, rounding its height to
+whole rows and clamping an owner's `h` to the structural minimum. Data, filters, period
+navigation, loading, errors and empty results change neither those dimensions nor the
+plot or table viewport and neighbouring placement. Tables page whole rows within their
+allocated area; oversized rows expose complete details through bounded previews. Only
+layout edits, display configuration and viewport reflow establish new geometry. `h`
+therefore records the owner's requested height, which the hub does not check against
+the shell. A place has exactly `x`, `y`, `w` and, optionally, `h`; anything
 else is refused. The hub migrates stored pre-grid views and split analytics IDs before
 serving the view with its revision. Saves require the compact version 5 codec and
 its writer header, with an 80 KiB UTF-8 body limit. The page uses keepalive only within its
@@ -1194,6 +1198,11 @@ without `changes`, have the same meaning. A top-level workSince:0 retires work e
 with no sources on a shared or personal board. Budget-only and
 unselected-source changes do not retire the work index. Positive work cutoffs refresh
 credited work while retaining the last complete frame under the same authority.
+An unchanged `hello.epoch` preserves compatible work. A changed known epoch retires
+the session index, calendar evidence and every Activity presentation, including
+its shared-filter totals and prepared stacks. Independent native financial observations remain
+valid under their own authority. Replacement work confirms the current run before
+adoption; delayed replies from an earlier run cannot restore its presentation.
 Consumers coalesce affected sections into one foreground read. All accounting endpoint
 requests and bytes, including aborted attempts, count toward the same benchmark budget.
 
@@ -1402,7 +1411,7 @@ cacheable. The page tracks each tile's read interval, so its omitted head stays 
 Ordinary discrete navigation fills that head once for subsequent frames. A `history` event makes
 cells from `since` stale and reads only what the frame needs. Reconnect, a changed lineup or `since: 0` makes all
 tiles stale. Answers of another `run` are discarded. The shown frame stays undimmed
-while its own cells refresh; an ordinary change of period keeps the previous one dimmed
+while its own cells refresh; an ordinary change of period keeps the previous one undimmed
 until all of its cells have been read. Continuous panning has a separate partial plot:
 read cells stay visible, unread intervals are empty, and an activity bar is drawn only
 when all its contributing whole cells have been read. The previous complete answer
@@ -1428,6 +1437,16 @@ committed. Active partial plots still progress; final drawing readiness requires
 complete answer for the requested range. A newer user navigation supersedes that held pose immediately and projects
 the retained data in the requested frame while preparation continues. The retained
 data keeps its own coverage; a ready replacement cannot revive the old navigation.
+After a historical gesture, completion adopts its final time-to-pixel projection
+without refitting the range or removing the carried future margin. Two fixed times
+therefore keep their screen positions through pending and complete states. Presets,
+Back, horizon changes and authority changes explicitly establish a new projection.
+Activity also keeps its final value scale through an exact boundary replacement;
+newly read higher work can expand it. A new navigation, shared data selection, authority
+or explicit geometry change establishes its next value projection. Native quota
+readiness alone cannot publish an empty pending-work Activity replacement.
+Readiness, errors, empty results and filters never change a widget's shell, plot,
+table viewport or neighbouring placement; evidence and retry use existing disclosures.
 Ordinary clock movement reprojects that ready drawing without rebuilding unchanged
 numeric series. Crossing its bounded overscan margin rebases geometry in slices;
 clipped future outlines retain their complete facts. Its factual data cutoff stays

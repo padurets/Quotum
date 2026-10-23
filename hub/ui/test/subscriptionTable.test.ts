@@ -1,3 +1,5 @@
+import {TablePreview} from '../components/TablePreview';
+import {nameRenderer} from './nameFixture';
 import * as panel from '../components/AnalyticsPanel';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -35,7 +37,7 @@ const meters=cap.meters!.flatMap(m=>meterCells({source:cap.id,meter:m.id,reading
 const base:History={range:'24h',live:true,since:0,to:M,cellMs:M,historyStart:0,events:[],series:native.windows.map(w=>({sourceId:native.id,windowId:w.id,points:[[0,70,1]],consumed:2,coveredMs:M,remainingAtStart:72,remainingAtEnd:70,staleAfterMs:10*M,work:null})),meterSeries:composeMeters([{from:0,meterSeries:meters}],M,0,M),activity:{since:0,known:null,barMs:M,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
 let history:History|null=base,kind:Kind='weekly',sources=[cap,native],error:'history_limit'|null=null;
 let layout:'table'|'list'='table';
-const modules:Record<string,unknown>={'../../server/domain/resources':resources,react:React,'react/jsx-runtime':jsxRuntime,'../lib/format':format,'../lib/quota':quota,'../lib/forecast':forecast,'../lib/forecastSort':forecastSort,'../lib/plan':plan,'../lib/work':work,'../lib/view':view,'../lib/subscription':subscription,'../lib/timeRange':timeRange,'../i18n':i18n,
+const modules:Record<string,unknown>={'./Kit':{Name:nameRenderer()},'./TablePreview':{TablePreview},'../../server/domain/resources':resources,react:React,'react/jsx-runtime':jsxRuntime,'../lib/format':format,'../lib/quota':quota,'../lib/forecast':forecast,'../lib/forecastSort':forecastSort,'../lib/plan':plan,'../lib/work':work,'../lib/view':view,'../lib/subscription':subscription,'../lib/timeRange':timeRange,'../i18n':i18n,
   '../lib/dataFilters':{useQuotaPresentation:quotaPresentationKey},
   '../lib/period':{boardPeriod:{quotaAt:(line:unknown)=>line,quotaSpendingAt:(line:unknown)=>line,quotaOrderAt:()=>({slope:0,next:Infinity}),rangeAt:()=>history?{from:history.since,to:history.to}:null,cellBasis:()=>undefined,cellChangesAt:()=>null}},
   '../lib/prefs':{usePref:()=>null},'../lib/board':{useNamed:()=>sources,useLineup:()=>sources.map(s=>s.id),useForecastsOf:()=>[{},{}],useResetNews:()=>null},'../lib/clock':{hubNow:()=>M,useClock:()=>M,clock:new PageClock({now:()=>M,visible:()=>false,setTimeout:()=>null,clearTimeout:()=>{}})},'../lib/history':{quotaHistory:{retry:()=>{}},useHistory:()=>({history,loading:false,error})},'./AnalyticsPanel':panel,'./Popover':{Popover:()=>null},'./MoneyAnalytics':{MoneyTable:()=>{throw new Error('a subscription reached the money table');}}};
@@ -93,7 +95,7 @@ test('the shared table explains a bounded-history refusal instead of leaving a l
   try {
     for(const locale of ['en','ru'] as const) {
       i18n.setLocale(locale);const html=render();
-      assert.ok(html.includes(i18n.t('money.historyLimit')));
+    assert.ok(html.includes(i18n.t('period.limit')));
       assert.ok(!html.includes(i18n.t('history.loading')));
     }
   }finally{i18n.setLocale('en');history=base;error=null;}

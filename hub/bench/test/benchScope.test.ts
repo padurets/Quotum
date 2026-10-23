@@ -24,7 +24,7 @@ const declarations=['parseArgs','main'].map(name=>{
 const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={main,parseArgs};',{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},
 }).outputText;
-type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'fixed-activity'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace'|'suffix-throw'|'suffix-budget'|'suffix-cancel'|'suffix-cleanup'|'suffix-error-cleanup'|'suffix-returned-problems'|'reversal-throw';
+type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'fixed-activity'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace'|'suffix-throw'|'suffix-budget'|'suffix-cancel'|'suffix-cleanup'|'suffix-error-cleanup'|'suffix-returned-problems'|'reversal-throw'|'measurement-details-throw';
 async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),diagnosticFiles=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
   const listeners=new Map<string,()=>void>(),waits:number[]=[];let now=startedAt,phaseStart=now,metricReads=0,retentionReads=0;
@@ -84,7 +84,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     traceReceipt(from:number,to:number,cellMs:number){assert.equal(to-from,120000);assert.equal(cellMs,300000);mark('idle-trace-receipt');return{status:fault==='idle-trace'?'insufficient-evidence':'complete'};}
     async close(){if(this.mode.startsWith('native-')){assert.equal(this.signal?.aborted,true);mark('native-trace-close');}else mark('idle-trace-close');}
   }
-  const panning=async(_cdp?:unknown,_pace?:unknown,_output?:unknown,_reload?:unknown,trace?:()=>IdleCpuDiagnostic)=>{mark('panning');trace?.();if(fault==='panning-throw')throw Error('panning-original');
+  const panning=async(_cdp?:unknown,_pace?:unknown,_output?:unknown,_reload?:unknown,trace?:()=>IdleCpuDiagnostic,target?:string)=>{mark('panning');if(target)mark('native-target:'+target);trace?.();if(fault==='panning-throw')throw Error('panning-original');
     if(fault==='cancel'){listeners.get('SIGTERM')!();await exited;throw Error('cancelled-panning');}
     return{problems:problems('panning'),reports:['quota','session','activity','budget','funds'].flatMap(initiator=>['24h','30d'].map(period=>({initiator,period,frames:[16],latency:[16]})))};
   };
@@ -130,6 +130,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     creditPhase:async()=>{mark('credits');if(fault==='credits-throw')throw new Stop('credits-original');return{updates:[],problems:problems('credits')};},
     moneyPhase:async()=>{mark('money');return{problems:problems('money')};},
     fixedActivity:async()=>{mark('fixed-activity');return{reports:[],problems:problems('fixed-activity')};},
+    measurementDetails:async(actualBrowser:unknown,actualOwner:unknown)=>{assert.equal(actualBrowser,browser);assert.equal(actualOwner,person);mark('measurement-details');if(fault==='measurement-details-throw')throw new Error('measurement-details-original');return Array.from({length:16},(_,index)=>({index}));},
     clientIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL?{status:'available',sha256:'2'.repeat(64)}:{status:'unavailable'},
   };
   runInNewContext(code,context);
@@ -138,13 +139,13 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   if(cancellationStarted)await exited;
   return{calls,saved,diagnosticFiles,exits,statuses,logs,error,waits,fixtureStart:stand.start,parse:selected.parseArgs};
 }
-const tail=['measure','work','observed-work','private-work','frequency','panning','credits','money','fixed-activity'];
+const tail=['measure','work','observed-work','private-work','frequency','panning','credits','money','fixed-activity','measurement-details'];
 const order=(calls:string[])=>calls.filter(call=>call==='history'||call==='openTab'||tail.includes(call));
 test('actual main passes the aligned fixture anchor and keeps the legacy warm wait',async()=>{
   const cell=300_000,minute=60_000,base=Date.parse('2026-10-15T12:00:10Z');
   for(let phase=0;phase<5;phase++){
     const at=base+phase*minute,result=await run(['--scope','dashboard'],undefined,{},true,at);
-    assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);
+    assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0],JSON.stringify({logs:result.logs}));
     assert.equal(result.fixtureStart,Math.floor((at+50_000)/cell)*cell-50_000);
     assert.equal(result.waits[0],Math.floor(at/minute)*minute+DOT_STILL_AFTER-at);
     assert.deepEqual(result.saved.get('fixture-timing'),{start:result.fixtureStart,warmAt:Math.floor(at/minute)*minute+DOT_STILL_AFTER});
@@ -170,6 +171,7 @@ for(const args of [[],['--scope','all'],['--scope','dashboard']])test('actual ma
   assert.equal((result.saved.get('panning') as {reports:unknown[]}).reports.length,10);
   assert.ok(result.saved.has('fixed-activity'));
   assert.ok((result.saved.get('result') as {selectedActivity:unknown}).selectedActivity);
+  assert.equal((result.saved.get('result') as {measurementDisclosures:unknown[]}).measurementDisclosures.length,16);
   const idle=result.saved.get('idle') as {counterFrom:number;counterTo:number;performance:unknown};
   assert.deepEqual(safeEvidence(idle.performance),{before:{Timestamp:idle.counterFrom/1000,ScriptDuration:0,ThreadTime:.4},after:{Timestamp:idle.counterTo/1000,ScriptDuration:0,ThreadTime:.45},instrumentMs:0});
 });
@@ -247,12 +249,12 @@ for(const mode of ['PANNING','IDLE','IDLE_TIMING','STARTUP_WAITS'])test('removed
   const result=await run([],undefined,{['QUOTUM_BENCH_DIAGNOSE_'+mode]:'1'});
   assert.match(String(result.error),/Removed benchmark diagnostic mode/);assert.deepEqual(result.calls,[]);
 });
-for(const fault of ['panning-throw','credits-throw','cancel','browser-close','demo-stop'] as const)test('dashboard preserves its failure and cleanup: '+fault,async()=>{
+for(const fault of ['panning-throw','credits-throw','measurement-details-throw','cancel','browser-close','demo-stop'] as const)test('dashboard preserves its failure and cleanup: '+fault,async()=>{
   const result=await run(['--scope','dashboard'],fault);
   assert.equal(result.error,undefined);assert.deepEqual(result.exits,[fault==='credits-throw'?2:1]);
   assert.deepEqual(result.statuses,[fault==='cancel'?'cancelled':'failed']);
   for(const name of ['stream-close','browser-close','demo-stop'])assert.equal(result.calls.filter(call=>call===name).length,1);
-  if(fault.endsWith('-throw'))assert.ok(result.logs.some(line=>line.includes(fault==='credits-throw'?'credits-original':'panning-original')));
+  if(fault.endsWith('-throw'))assert.ok(result.logs.some(line=>line.includes(fault.replace('-throw','')+'-original')));
 });
 test('actual parser rejects unknown, missing and repeated scope',async()=>{
   const {parse}=await run(['--scope','history']);
@@ -461,4 +463,23 @@ for(const direct of [false,true])test('actual main preserves reversal failure an
   assert.ok(out.logs.some(line=>line.includes('browser/1d/reversal original-first')),'the original failure survives even when secondary replay fails');
   assert.equal(out.saved.has('result'),false);assert.ok(!out.calls.includes('suffix-proxy'));
   for(const name of ['stream-close','browser-close','demo-stop'])assert.equal(out.calls.filter(call=>call===name).length,1);
+
+for(const mode of ['native-trace','native-profile'])test('native target routes session30d through actual main with every original phase and owned cleanup '+mode,async()=>{
+  const result=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,QUOTUM_BENCH_NATIVE_TARGET:'session/30d'});
+  assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);assert.deepEqual(result.statuses,['diagnostic']);
+  assert.equal(result.calls.filter(call=>call==='native-target:session/30d').length,1);assert.equal(result.calls.filter(call=>call==='native-trace-created').length,1);
+  for(const phase of tail)assert.equal(result.calls.filter(call=>call===phase).length,1);
+  const panned=result.saved.get('panning') as {reports:unknown[]};assert.equal(panned.reports.length,10);
+  for(const action of ['stream-close','native-trace-close','browser-close','demo-stop'])assert.equal(result.calls.filter(call=>call===action).length,1);
+  const failed=await run(['--scope','dashboard'],'panning',{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,QUOTUM_BENCH_NATIVE_TARGET:'session/30d'});
+  assert.deepEqual(failed.exits,[1]);assert.deepEqual(failed.statuses,['failed']);assert.ok((failed.saved.get('result') as {problems:string[]}).problems.includes('panning-red'));
+  for(const action of ['native-trace-close','browser-close','demo-stop'])assert.equal(failed.calls.filter(call=>call===action).length,1);
+});
+
+test('native target refuses unknown or non-native selection before preparation and preserves the default',async()=>{
+  for(const [mode,target] of [['native-trace','session/24h'],['native-profile','activity/30d'],['trace','session/30d'],['','session/30d']]){
+    const result=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,QUOTUM_BENCH_NATIVE_TARGET:target});
+    assert.match(String(result.error),/native trace target/i);assert.ok(!result.calls.includes('prepare'));assert.ok(!result.calls.includes('launch'));
+  }
+  for(const mode of ['native-trace','native-profile']){const result=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode});assert.equal(result.error,undefined);assert.ok(result.calls.includes('native-target:activity/24h'));}
 });

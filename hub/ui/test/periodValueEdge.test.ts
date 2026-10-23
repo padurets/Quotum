@@ -21,6 +21,8 @@ import {expandPeriod,type PeriodWireReply} from '../../server/domain/periodWire.
 import {periodValueAt} from '../../server/domain/periodValues.js';
 import {shifted} from '../../server/domain/periodShift.js';
 import type {Meter} from '../../server/domain/meters.js';
+import {nameRenderer} from './nameFixture';
+const Name=nameRenderer();
 
 const M=60_000,H=60*M,now=1_800_000_025_000;
 async function fixture(t:TestContext) {
@@ -54,7 +56,7 @@ const meterCode=readFileSync(new URL('../components/Meter.tsx',import.meta.url),
 const sourceCode=readFileSync(new URL('../components/SourceCard.tsx',import.meta.url),'utf8');
 const start=sourceCode.indexOf('function Limit({');
 const limitCode=sourceCode.slice(start,sourceCode.indexOf('\n}',start)+2);
-const consumerContext={exports:{} as any,require:reactRequire,t:translate,num,stamp,level,windowName:()=> 'Weekly',ResetLine:()=>null,PlanNote:()=>null,PlanMark:()=>null};
+const consumerContext={Name,exports:{} as any,require:reactRequire,t:translate,num,stamp,level,windowName:()=> 'Weekly',ResetLine:()=>null,PlanNote:()=>null,PlanMark:()=>null};
 runInNewContext(ts.transpileModule(meterCode+limitCode+'\nexports.Limit=Limit;',{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,consumerContext);
 const cardHTML=(w:any)=>renderToStaticMarkup(React.createElement(consumerContext.exports.Limit,{w,measuredAt:w.observedAt,weekly:null}));
 

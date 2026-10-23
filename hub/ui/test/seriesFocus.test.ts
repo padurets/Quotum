@@ -53,7 +53,7 @@ test('pointer wins over keyboard; Escape, pan/fold and touch dismiss previews wh
   controller.dismiss();h.send('pointerup',c,null,'touch');h.click(c);assert.equal(c.pressed,'true');assert.equal(controller.get(),c.dataset.seriesKey);
   h.globalEvents.get('pointerdown')!({target:a});assert.equal(controller.get(),null);assert.deepEqual(h.matrix(),[1,1,1]);
   h.send('pointerup',b,null,'touch');h.click(b);assert.equal(b.pressed,'false');assert.deepEqual(h.matrix(),[.65,1,.65]);
-  h.timers.get(1)!();assert.equal(controller.get(),null);assert.deepEqual(h.matrix(),[1,.4,1]);h.cleanup();assert.equal(h.timers.size,0);
+  [...h.timers.values()][0]();assert.equal(controller.get(),null);assert.deepEqual(h.matrix(),[1,.4,1]);h.cleanup();assert.equal(h.timers.size,0);
 });
 
 test('dormant explicit identities survive range responses; only an explicit reset prevents their return',()=>{
@@ -90,4 +90,19 @@ test('actual crosshair markers follow click choices and previews without changin
   assert.deepEqual(matrix(),[1,1,1]);h.click(h.a);h.click(h.b);assert.deepEqual(matrix(),[1,1,.4]);
   h.hover(h.c);assert.deepEqual(matrix(),[.65,.65,1]);h.leave();assert.deepEqual(matrix(),[1,1,.4]);
   assert.deepEqual(geometry(),before,'paint changes neither the sampled values nor their point coordinates');h.cleanup();
+});
+
+
+test('a bounded detail preview keeps its owner through the pointer gap, keyboard scroll and touch without changing choices',()=>{
+  const h=arbiter(),{a,b,controller}=h,detail=h.detail(b);
+  h.click(a);h.hover(b);h.send('pointerout',b);assert.equal(controller.get(),b.dataset.seriesKey,'crossing the small tooltip gap retains H');
+  assert.equal(h.timers.size,1);h.hover(detail);assert.equal(controller.get(),b.dataset.seriesKey);assert.equal(h.timers.size,0,'entering the detail cancels the gap deadline');
+  let prevented=false;h.events.get('keydown')!({target:b,key:'PageDown',preventDefault(){prevented=true;},stopPropagation(){}});
+  assert.equal(prevented,true);assert.equal(detail.scrollTop,20,'the legend keyboard scrolls its complete details');
+  h.click(detail);assert.equal(a.pressed,'true');assert.equal(b.pressed,'false','a click inside details is not a legend toggle');
+  controller.dismiss();h.send('pointerup',b,null,'touch');h.click(b);assert.equal(b.pressed,'true');
+  h.globalEvents.get('pointerdown')!({target:detail});h.send('pointerup',detail,null,'touch');h.click(detail);
+  assert.equal(controller.get(),b.dataset.seriesKey,'touching the owned detail keeps its H pin');assert.equal(a.pressed,'true');assert.equal(b.pressed,'true','touching details leaves S unchanged');
+  h.globalEvents.get('keydown')!({key:'Escape'});assert.equal(controller.get(),null);assert.equal(h.timers.size,0);assert.deepEqual(h.matrix(),[1,1,.4],'Escape dismisses only H');
+  h.cleanup();assert.equal(h.properties.size,0);assert.equal(h.events.size,0);assert.equal(h.globalEvents.size,0);
 });

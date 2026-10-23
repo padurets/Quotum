@@ -1,5 +1,5 @@
 import {useEffect,useState,useSyncExternalStore} from 'react';
-import {Save,RotateCcw,Unlink} from 'lucide-react';
+import {Save,RotateCcw,Unlink,TriangleAlert} from 'lucide-react';
 import {dataFilters,useDataFilters} from '../lib/dataFilters';
 import {useBoardId,useNamed,useRole,type Named} from '../lib/board';
 import {setPrefs,usePref} from '../lib/prefs';
@@ -15,9 +15,12 @@ import {clientName} from '../../server/domain/clients';
 import {executableWorkFilters,fundsRule,matchesSelection,matchesSource,type DataFilters,type FamilyRef,type Selection} from '../../server/domain/dataFilters';
 import {moneyFamily,providerOf} from '../../server/domain/providers';
 import {FilterGroup,FilterOptions,FilterPopover,FilterRow,FilterSearch} from './Filters';
-import {ErrorLine} from './Kit';
+import {ErrorLine,Name} from './Kit';
+import {Popover} from './Popover';
+import {messageOf} from '../lib/http';
 import {KeyMoneySettings} from './MoneySettings';
 import {logoOf} from './logos';
+import {useRemovalFocus} from './focusReturn';
 
 let requested=false;
 export function openDataFilters(){requested=true;setPrefs({filtersVisible:true});window.dispatchEvent(new Event('quotum:open-filters'));}
@@ -47,7 +50,7 @@ function Resource({source,filters,wallets,fundsUnit,visible,series}:{source:Name
   const hasChildren=!!windows.length||funds||wallet,title=source.title??source.id;
   return <FilterGroup label={title} icon={<img src={logoOf(source.provider)} alt=""/>} on={enabled} onChange={on=>dataFilters.toggle('sources',{source:source.id},on)} hidden={!visible}>
     {hasChildren?expanded=><>
-      {windows.map(window=><FilterRow key={window.id} on={matchesSelection(filters.windows,[source.id,window.id])} onChange={on=>dataFilters.toggle('windows',[source.id,window.id],on)}>{windowName(window)}</FilterRow>)}
+      {windows.map(window=><FilterRow key={window.id} on={matchesSelection(filters.windows,[source.id,window.id])} onChange={on=>dataFilters.toggle('windows',[source.id,window.id],on)}><Name name={windowName(window)}/></FilterRow>)}
       {funds&&<FilterRow on={matchesSelection(fundsRule(filters,fundsUnit),source.id)} onChange={on=>dataFilters.toggle('funds',source.id,on,fundsUnit)}>{t('money.additionalFunds')}</FilterRow>}
       {wallet&&<KeyMoneySettings source={source} sources={wallets} hidden={[]} series={series} active={visible&&expanded}/>}
     </>:undefined}
@@ -78,8 +81,10 @@ export function DataFilterControls(){
 }
 export function FilterSaveActions(){
   const state=useDataFilters(),owner=useRole()==='owner';
-  return <><div className="filter-save-actions">
+  const scope=useRemovalFocus<HTMLSpanElement>(),action=useRemovalFocus<HTMLButtonElement>();
+  return <div className="filter-save-actions">
     <button className="icon-button" title={t('filters.restore')} aria-label={t('filters.restore')} disabled={!state.saved||!state.dirty} onClick={()=>dataFilters.restore()}><RotateCcw size={16}/></button>
     {owner&&<button className="icon-button" title={t(state.saving?'filters.saving':'filters.save')} aria-label={t(state.saving?'filters.saving':'filters.save')} aria-busy={state.saving} disabled={!state.saved||!state.current||!executableWorkFilters(state.current)||state.saving||!state.dirty&&state.saved.revision>0} onClick={()=>void dataFilters.save()}>{state.saving?<span className="spinner" aria-hidden="true"/>:<Save size={16}/>}</button>}
-  </div><ErrorLine error={state.error}/></>;
+    {!!state.error&&<span className="reader-state is-warn" ref={scope}><Popover label={messageOf(state.error)} icon={<TriangleAlert size={16}/>}><div className="popover-body"><ErrorLine error={state.error}/>{owner&&<button ref={action} type="button" className="button" disabled={!state.saved||!state.current||!executableWorkFilters(state.current)||state.saving} onClick={()=>void dataFilters.save()}>{t('filters.save')}</button>}</div></Popover></span>}
+  </div>;
 }

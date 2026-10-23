@@ -32,6 +32,7 @@ export function preparationFixture() {
     unmount: () => {for(const slot of slots){const cleanup=(slot as {cleanup?:()=>void}|null)?.cleanup;cleanup?.();}slots.length=0;},
     tick: () => tasks.shift()?.(),
     finish: () => {for (let i = 0; tasks.length && i < 100_000; i++) tasks.shift()!(); if (tasks.length) throw new Error('preparation did not quiesce');},
+    dispose:()=>{for(const slot of slots)if(slot&&typeof slot==='object'&&'cleanup' in slot&&typeof slot.cleanup==='function')slot.cleanup();scheduler.dispose();},
     scheduler,
   };
 }

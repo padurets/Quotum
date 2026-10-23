@@ -30,6 +30,9 @@ funds history without waking quota or wallet analytics. A separate fixed Activit
 shared-filter totals and bar values, clean-cell reuse, coalesced late work, cancelled
 responses and all transport/preparation costs under the existing pool limits.
 Emphasis owns no reader and receives no extra-read allowance.
+Each fixed Activity period saves its bounded pool journal before checking completeness.
+Its larger diagnostic capacity retains the monthly ownership snapshots; omitted entries
+still fail the check, and the product's memory and transport limits stay the same.
 No browser means the check was not run.
 UTC calendar-only card events must match the stream's unchanged observation
 baseline and the exact new period. Raw traffic remains reported; missing, repeated or
@@ -176,6 +179,15 @@ within the existing two-second window. A reply records responsiveness through th
 it does not identify the cause of the original timeout.
 An explicit diagnostic replay may also intervene. Neither can provide a passing
 canonical result.
+`native-trace` and `native-profile` observe `activity/24h` by default. With either
+mode, `QUOTUM_BENCH_NATIVE_TARGET=session/30d` selects the five-hour limits chart at
+30d; the manual CI input `native_target` chooses the same cell. All dashboard
+scenarios keep their workloads, budgets and deadlines. The `session/30d` selection
+also writes `native-panning-receipt.json` after its measured report freezes. Movement
+intervals, consumed inputs, wrapped RAF callbacks and preparation slices share a
+4096-entry journal and a 4 MiB artifact bound. Missing coverage or overflow is
+insufficient evidence; trace overlap does not establish causal ownership, and
+instrumented runs cannot satisfy the required benchmark.
 The optional native trace retains fixed raster, tile preparation and activation scopes
 from its existing `cc` category, with numeric preparation IDs and task counts. These
 IDs are local to a tile manager; completed CPU tasks do not prove GPU readiness or
@@ -183,7 +195,7 @@ identify the owner of a blocked commit.
 The observer credits input after its coalesced position reaches the actual data layers
 in the production RAF. Stationary input-free gaps are excluded; delayed pending input
 remains measurable. A last input committed on release waits for the final geometry and
-fold. These RAF proxies do not establish physical presentation.
+any active fold. These RAF proxies do not establish physical presentation.
 The expected position respects the transaction's captured history and live bounds,
 discarding overscroll on each delta as the gesture does. Every input remains measured,
 including one that reaches an already displayed boundary without scheduling a new RAF;
@@ -437,7 +449,7 @@ on a separate line above the pager and row count. Wide totals reuse the table's 
 and headings; narrow totals use a fixed grid. The current working count is a subtitle.
 Grouping uses shared segments; None comes first while Project stays the default.
 Increasing the height fits more rows without a fifty-row page cap or another API read;
-when every row fits, the pager disappears. Wide tables sort through their headers, with the
+when every row fits, its disabled 1/1 pager keeps the same footer slot. Wide tables sort through their headers, with the
 third click clearing the selected sort; only narrow lists show a sort menu.
 Atlas's 67-context disclosure has two pages.
 Recent overlapping work, 64 retained Atlas contexts absent from the live

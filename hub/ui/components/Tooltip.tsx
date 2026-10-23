@@ -4,9 +4,11 @@ import {coverOf, placeOf, roomOf, shiftOf, sideOf} from '../lib/place';
 /** Keep a bubble inside the viewport; with an anchor, stay wholly on one side of its button. */
 export function useBubble(active: boolean, anchor?: RefObject<HTMLElement | null>, container?: HTMLElement | null) {
   const tip = useRef<HTMLSpanElement>(null);
-  const place = () => {
+  const place = (event?:Event) => {
     const element = tip.current;
     if (!active || !element) return;
+    if(event?.type==='scroll'&&event.target===element)return;
+    const scrollTop=element.scrollTop;
     element.style.translate = '';
     element.style.maxHeight = '';
     element.style.overflow = '';
@@ -23,6 +25,7 @@ export function useBubble(active: boolean, anchor?: RefObject<HTMLElement | null
       if (cap !== null) {
         element.style.maxHeight = `${cap}px`;
         element.style.overflow = 'auto';
+        element.style.pointerEvents = 'auto';
       }
       if (container) {
         // A scrolling legend clips its descendants; its panel owns the bubble.
@@ -35,6 +38,7 @@ export function useBubble(active: boolean, anchor?: RefObject<HTMLElement | null
       }
       const rect = element.getBoundingClientRect();
       element.style.translate = `${shiftOf(rect.left, rect.right, document.documentElement.clientWidth)}px 0`;
+      element.scrollTop=scrollTop;
       return;
     }
     const rect = element.getBoundingClientRect();
@@ -49,6 +53,7 @@ export function useBubble(active: boolean, anchor?: RefObject<HTMLElement | null
       element.style.overflow = 'auto';
       element.style.pointerEvents = 'auto';
     }
+    element.scrollTop=scrollTop;
   };
   useLayoutEffect(place);
   useEffect(() => {

@@ -152,7 +152,7 @@ function ViewingControls({widgets}: {widgets: string[]}) {
   const charts = [ACTIVITY,...QUOTA_WIDGETS.filter(id=>id.endsWith('history')),...BUDGET_WIDGETS.filter(id=>id.endsWith('history')),SUBSCRIPTION_FUNDS].some(id=>widgets.includes(id));
   const horizonName = (value: typeof horizon) => value === 'auto' ? t('history.horizonAuto') : t('history.daysShort', {count: parseInt(value)});
   return (
-    <div className="analytics-head-inner">
+    <div className={`analytics-head-inner${charts?' has-horizon':''}`}>
       <DataFilterControls/>
       {charts && <FilterPopover label="history.horizon" width={128} changed={horizon!=='auto'} onReset={()=>setPrefs({horizon:'auto'})} open={horizonOpen} onOpenChange={setHorizonOpen}>
         {HORIZONS.map(value=><FilterChoice key={value} selected={horizon===value} onSelect={()=>{setPrefs({horizon:value});setHorizonOpen(false);}}>{horizonName(value)}</FilterChoice>)}

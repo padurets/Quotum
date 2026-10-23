@@ -3,6 +3,7 @@ import {displayMeter,convertedRemaining} from '../../server/domain/currencyPrese
 import {monetaryOf,providerOf,supportsBudget} from '../../server/domain/providers';
 import type {Card} from './types';
 import type {Meter,KeyPart} from '../../server/domain/meters';
+export {compareKeys} from '../../server/domain/meters';
 import type {SourceAccess} from '../../server/secrets/credentials';
 import {observationDeadline} from '../../server/domain/resources';
 import {countdownChangesAt} from './format';

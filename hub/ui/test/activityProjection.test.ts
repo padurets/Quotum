@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {fixture,drawings,consumer,NOW} from './periodRuntimeFixture';
+import {fixture,drawings,consumer,flush,NOW} from './periodRuntimeFixture';
 
 const common=(history:any)=>{
   if(!history)return history;
@@ -52,4 +52,27 @@ for(const fixed of [false,true])test(`actual Activity ${fixed?'cold fixed sharin
     accounting.project=originalProject;activity.project=originalActivity;
     try{d.close();}finally{await h.close();}
   }
+});
+
+
+test('fixed Activity without a native consumer skips accounting and reuses a later complete frame',async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const h=await fixture({fixed:true,activityOnly:true}),d=await drawings(h);
+  try{
+    const raw=d.loader.get().history;assert.ok(raw);
+    const accounting=h.period.tapes.get('quota').accounting,project=accounting.project.bind(accounting);let calls=0;
+    t.mock.method(accounting,'project',(...args:Parameters<typeof project>)=>{calls++;return project(...args);});
+    const activity=d.renderActivity().history;assert.ok(activity);
+    assert.equal(calls,0,'Activity alone never prepares unused native accounting');
+    assert.ok(activity.activity.agentMs>0,'the isolated path still carries exact selected work');
+    const board=h.page.get().board!;
+    h.event({type:'view',data:{revision:(board.viewRevision??0)+1,view:{...board.view,shown:[...(board.view.shown??[]),'quota-history'],hidden:(board.view.hidden??[]).filter(id=>id!=='quota-history')}}});
+    await flush();
+    const history=d.loader.get().history;assert.ok(history);
+    const full=h.period.project(history,'quota',NOW);
+    assert.equal(calls,1,'the newly demanded native reader prepares one full frame');
+    assert.equal(h.period.project(history,'quota',NOW+1,true),full,'Activity reuses the complete weak-cache entry');
+    assert.equal(calls,1);
+    exact(activity.activity,full.activity,'both paths keep one numerical cohort');
+  }finally{d.close();await h.close();}
 });

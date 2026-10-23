@@ -1,3 +1,4 @@
+import {TablePreview} from '../components/TablePreview';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -48,7 +49,7 @@ function renderer(input:WorkTrace=trace){
     '../i18n':i18n,'../lib/prefs':{setPrefs:(change:{agentsSort?:agents.AgentsSort})=>{if('agentsSort' in change)savedSort=change.agentsSort!;},usePref:(key:string)=>key==='agentsBy'?by:key==='agentsSort'?savedSort:'1h'},
     '../lib/board':{useLineup:()=>['s'],useTitles:()=>({s:{provider:'codex',title:'Subscription'}})},'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>now,hubNow:()=>now},
     '../lib/period':{boardPeriod:period,usePeriodSessions:()=>({rows:model().rows,basis:{range},loading:false,error:null})},'./sizing':{useSizing:()=>null},'./PeriodStatus':{PeriodStatus:()=>null},
-    './Popover':{Popover:()=>null},'./Kit':{Modal:({children}:{children:React.ReactNode})=>React.createElement('div',null,children)}};
+    './TablePreview':{TablePreview},'./ReadState':{ReadState:()=>null},'./Popover':{Popover:()=>null},'./Kit':{Modal:({children}:{children:React.ReactNode})=>React.createElement('div',null,children)}};
   const compile=(file:string)=>{const context={exports:{} as Record<string,React.ComponentType<any>>,require:(name:string)=>modules[name]??{}};runInNewContext(ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);return context.exports;};
   modules['./TableCell']=compile('../components/TableCell.tsx');
   modules['./Time']=compile('../components/Time.tsx');
@@ -96,7 +97,7 @@ test('the actual sessions table renders union metrics and separate whole-period 
       assert.ok(footer.includes(i18n.t('table.summary'))&&footer.includes(format.workHours(150_000))&&footer.includes(format.workHours(100_000))&&footer.includes(activity.atOnce(150_000,100_000)));
       assert.ok(!html.includes('aria-sort='));
       r.set({hidden:['active','concurrency']});html=r.render();assert.ok(!html.includes('data-table-metric="active"')&&!html.includes('data-time="session-activity"'));
-      r.set({hidden:[],by:'none'});html=r.render();assert.ok(!html.includes('data-time="session-activity"'));
+      r.set({hidden:[],by:'none'});html=r.render();assert.ok(!html.slice(0,html.indexOf('<footer')).includes('data-time="session-activity"'),'individual rows have no group union metric');
       r.set({by:'machine',range:{from:160_000,to:170_000},knownFrom:175_000});html=r.render();assert.ok(html.includes(i18n.t('activity.knownFrom',{time:format.stamp(175_000)})));
       for(const id of ['sessions','worked','active','concurrency'])assert.match(html,new RegExp('<dd[^>]*data-table-metric="'+id+'"[^>]*>—</dd>'));
       assert.ok(html.includes(i18n.t('agents.machineSummary',{working:'—',count:'—'})));
@@ -123,6 +124,27 @@ test('one sessions table fits a bounded page while its footer counts the complet
   assert.ok(html.includes('1 / 6'));
   const pages=footer.match(/<div class="table-footer-pages">(.*?)<\/nav><\/div>/)![1];
   assert.ok(pages.includes(i18n.t('table.rows',{count:57}))&&pages.includes('1 / 6'));
+});
+
+test('displayed whole-period totals stay the same through every session grouping',()=>{
+  const r=renderer(),columns=['agents','worked','active','concurrency'],ids=['sessions','worked','active','concurrency'];
+  try{
+    for(const locale of ['en','ru'] as const)for(const narrow of [false,true])for(let mask=0;mask<16;mask++){
+      i18n.setLocale(locale);
+      const expected=ids.filter((_,i)=>mask&(1<<i));
+      let original:string[]|undefined;
+      for(const by of ['project','none','machine','subscription'] as const){
+        r.set({by,narrow,hidden:columns.filter((_,i)=>!(mask&(1<<i)))});
+        const html=r.render(),footer=html.match(/<footer[^>]*class="table-footer(?: is-list)?"[^>]*>(.*?)<\/footer>/)![1];
+        const metrics=[...footer.matchAll(/<dd[^>]*data-table-metric="([^"]+)"[^>]*>(.*?)<\/dd>/g)];
+        assert.deepEqual(metrics.map(([,id])=>id),expected,`${locale}/${narrow}/${mask}/${by}: grouping cannot change the displayed totals`);
+        const values=metrics.map(([,id,value])=>id+':'+value);
+        if(original)assert.deepEqual(values,original,'the complete-period facts do not depend on row grouping');else original=values;
+        assert.equal(footer.includes('class="table-summary'),expected.length>0,'disabled totals reserve no empty summary');
+        if(!narrow&&expected.length&&by==='none'&&expected.some(id=>id!=='worked'))assert.ok(!footer.includes('class="sr-only"'),'totals without row columns keep their visible labels');
+      }
+    }
+  }finally{i18n.setLocale('en');}
 });
 
 test('every grouped header uses the existing ascending, descending, reset cycle',()=>{
@@ -214,7 +236,7 @@ test('the shared table summary keeps its old complete basis through delayed rang
   }finally{await h.close();}
 });
 
-test('hiding Recorded sessions removes grouped footer metrics in both layouts while keeping row count, paging and None totals',()=>{
+test('hiding Recorded sessions removes its footer metric in every grouping while keeping row count and paging',()=>{
  const r=renderer();try{
   for(const locale of ['en','ru'] as const)for(const narrow of [false,true])for(const by of ['project','machine','subscription'] as const){
    i18n.setLocale(locale);r.set({by,owner:true,narrow,hidden:[]});let html=r.render();assert.ok(html.includes('data-table-metric="sessions"'));
@@ -222,6 +244,6 @@ test('hiding Recorded sessions removes grouped footer metrics in both layouts wh
    assert.ok(html.includes('data-table-metric="worked"'));assert.ok(html.includes(i18n.t('table.rows',{count:by==='machine'?2:1})));assert.ok(html.includes('class="table-pages"'));
    r.set({hidden:[]});assert.ok(r.render().includes('data-table-metric="sessions"'));
   }
-  r.set({by:'none',narrow:true,hidden:['agents']});assert.ok(r.render().includes('data-table-metric="sessions"'),'None keeps its deliberate complete-context summary without a grouped count column');
+  r.set({by:'none',narrow:true,hidden:['agents']});assert.ok(!r.render().includes('data-table-metric="sessions"'),'None respects the same display setting as the grouped summaries');
  }finally{i18n.setLocale('en');}
 });

@@ -161,6 +161,39 @@ and platform smoke checks still apply.
 
 ## Dashboard UI
 
+- **Do not narrate routine loading on the board.** Brief reads and background refreshes
+  never add loading sentences, retained-date paragraphs or explanatory banners. Keep
+  valid data visible; a user-requested pending read may use a small indicator in existing
+  chrome. Evidence dates, loading details and retry belong in an existing disclosure
+  when needed. Do not add a status row, reserve an empty row for it, add a healthy-state
+  badge or take space from the plot just to describe a transient read. A useful empty
+  state or actionable error uses the existing content area without resizing it.
+  A routine refresh must not blank, dim or pulse already valid content.
+- **Widget geometry is stable across data states.** At a given viewport and display
+  configuration, a placed widget keeps its outer size and its plot or table area through
+  loading, refresh, retained results, errors, recovery, empty results and changes to data
+  filters or the analytical period. These transitions must not move neighbouring widgets.
+  A conditional message, a different number or a new status line is never a reason to
+  grow or shrink a widget, including one with automatic height. Define the stable shell
+  before adding a state: keep status indicators in reserved heading or tray slots, put
+  details and retry in the shared Popover, and show initial, empty and unavailable states
+  inside the existing content area. Keep valid same-context data visible during refresh;
+  retire unauthorized or incompatible data without collapsing the shell. Do not add
+  loading/date/error paragraphs above a plot or table, a permanent blank status row,
+  clipped content or an inner page scroller to compensate. Explicit layout edits, display
+  configuration changes and viewport reflow can change geometry; asynchronous data and
+  filter results cannot. Filters, legend emphasis, grouping, sorting, paging and time
+  navigation are data operations, not layout edits. Changing which widgets are shown can
+  reflow the board; a surviving widget must not resize because its result changed.
+  Verify intermediate as well as settled states: widget bounds, plot or table bounds
+  and neighbouring positions must remain stable. A test that only
+  finds the right message or checks the final screenshot does not establish this rule.
+- **Stable geometry must not waste space.** Do not reserve layout height for details
+  shown only on hover, focus or touch preview. Such details use the shared glass tooltip
+  or Popover beside their trigger; hidden text variants must not set a widget's minimum
+  height or reduce its plot. Permanent information areas need useful visible content in
+  the ordinary view, such as Activity's summary. A blank preview strip is not a solution
+  to layout shifts and must not prevent the owner from making a widget shorter.
 - **Look at a change on the demo board** (`npm run build && npm run demo` in `hub/`), in
   both languages, not only through tests. A state the board did not show before gets an
   entry in `hub/demo/catalogue.ts` with the codes it shows; `npm test` checks them. One

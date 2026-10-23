@@ -2,6 +2,7 @@ import type {ReactNode} from 'react';
 import {level,resetLine} from '../lib/quota';
 import {num,duration,stamp} from '../lib/format';
 import {t} from '../i18n';
+import {Name} from './Kit';
 
 /** Subscription windows and money caps use the same segmented meter. */
 export function MeterBar({remaining,label,children}:{remaining:number|null;label:string;children?:ReactNode}) {
@@ -23,13 +24,13 @@ export function ResetText({resetAt,now,short=false}:{resetAt:number|null;now:num
 }
 
 /** Every subscription uses the same remaining-percent row in both board views. */
-export function PercentLimit({name,remaining,reset,note,status,valueTitle,compact=false,children}:{name:string;remaining:number|null;reset:ReactNode;note?:ReactNode;status?:ReactNode;valueTitle?:string;compact?:boolean;children?:ReactNode}) {
-  const label=status?<span className="cap-label"><span>{name}</span>{status}</span>:name;
-  const value=remaining===null?'—':num(remaining),tone=remaining===null?'ok':level(remaining);
-  const bar=<MeterBar remaining={remaining} label={name.replaceAll(' · ','\n')}>{children}</MeterBar>;
+export function PercentLimit({name,remaining,reset,note,status,valueTitle,compact=false,precise=false,children}:{name:string;remaining:number|null;reset:ReactNode;note?:ReactNode;status?:ReactNode;valueTitle?:string;compact?:boolean;precise?:boolean;children?:ReactNode}) {
+  const label=status?<span className="cap-label"><span><Name name={name}/></span>{status}</span>:<Name name={name}/>;
+  const value=remaining===null?'—':num(remaining,precise?2:0),tone=remaining===null?'ok':level(remaining);
+  const bar=<MeterBar remaining={remaining} label={name}>{children}</MeterBar>;
   if(compact)return <div className="compact-limit">
-    <div className="compact-window-name"><span title={name.replaceAll(' · ','\n')}>
-      {status?label:name.split(' · ').map((part,i)=><span key={i}>{part}</span>)}
+    <div className="compact-window-name"><span title={name}>
+      {label}
     </span></div>
     <small className="compact-reset">{reset}</small>{bar}
     <strong className={`v-${tone}`} title={valueTitle}>{value}{remaining!==null&&'%'}</strong>

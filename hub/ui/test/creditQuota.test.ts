@@ -11,10 +11,12 @@ import type {QuotaCard as QuotaComponent,CapReset as ResetComponent,KeyMetrics a
 import * as money from '../lib/money';
 import * as format from '../lib/format';
 import * as quota from '../lib/quota';
+import * as focusReturn from '../components/focusReturn';
 import {MeterBar,PercentLimit,ResetText} from '../components/Meter';
 import {QUOTA_IDS} from '../../server/domain/meters';
 import {t} from '../i18n';
 import {readout} from '../lib/readout';
+import {timeTickWords} from '../lib/periods';
 import {meterPointIn,moneyTotal} from '../lib/moneyView';
 import {subscriptionSelection} from '../lib/subscription';
 import {EMPTY_VIEW} from '../../server/domain/view';
@@ -38,6 +40,7 @@ const context={exports:{} as {QuotaCard:typeof QuotaComponent;CapReset:typeof Re
   if(name.endsWith('/clock'))return {useClock:()=>now};
   if(name.endsWith('/measurementClock'))return {useMeasurementClock:()=>now,useMeasurementTime:()=>null};
   if(name.endsWith('/i18n'))return {t};
+  if(name==='./focusReturn')return focusReturn;
   if(name==='./Meter')return {MeterBar,PercentLimit,ResetText};
   if(name.endsWith('/quota'))return quota;
   return {};
@@ -177,11 +180,11 @@ test('actual pointer and chart tooltip retain time inside a cap cell through rea
     const series=composeMeters([{from:0,meterSeries:meterCells({source:card.id,meter:row.id,readings:[row],spans:[{from,to:from,staleAfterMs:204000,holdUntil:until}]},row.unit,0,60000,60000)}],60000,0,60000)[0];
     const line={key:'cap',points:[],staleAfterMs:86400000,capCells:series.points.map(p=>({at:p.at,from:p.knownFrom!,to:p.knownUntil!,value:Number(p.value)/1e6}))};
     const formatted:number[]=[];
-    const fixture={React,preciseReadout,prepared:{ready:true,value:{basis:{from:0,to:60000},lines:[line],plans:[],forecasts:[],markers:[],paths:[],strip:null}},
+    const fixture={React,preciseReadout,onDrawing:undefined,prepared:{ready:true,value:{basis:{from:0,to:60000},lines:[line],plans:[],forecasts:[],markers:[],paths:[],strip:null}},
       valueAxis:{formatValue:(_key:string,_value:number,at:number)=>{formatted.push(at);return meterPointIn(series,at,60000)?.value;}},
-      currentClock:60000,desiredFrom:0,desiredNow:60000,desiredTo:60000,desiredLive:true,incomingReady:true,cellMs:60000,
-      width:60000,left:0,right:0,height:220,top:12,bottom:28,axis:{hover:0,hoverAt:55000,screenX:(at:number)=>at,commitDrawing:()=>{}},
-      useLayoutEffect:()=>{},niceTicks:()=>({ticks:[],daily:false}),readCell:readout,
+      currentClock:60000,desiredFrom:0,desiredNow:60000,desiredTo:60000,desiredLive:true,incomingReady:true,incomingCellMs:60000,
+      width:60000,left:0,right:0,height:220,top:12,bottom:28,axis:{hover:0,hoverAt:55000,presentation:()=>({from:0,to:60000}),screenX:(at:number)=>at,commitDrawing:()=>{}},
+      timeTickWords,useLayoutEffect:()=>{},niceTicks:()=>({ticks:[],daily:false}),readCell:readout,
       present:null as unknown as ()=>{value:number|null;element:React.ReactNode;x:number}};
     runInNewContext(ts.transpileModule(`function present(){${head}\n${position}\nconst row=rows[0];return {value:row.value,element:${value},x:hoverX};}\nglobalThis.present=present;`,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React}}).outputText,fixture);
     const result=fixture.present();

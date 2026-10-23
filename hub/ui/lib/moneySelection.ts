@@ -10,7 +10,8 @@ import type {Card} from './types';
 import type {MeterHistory} from './moneyView';
 import {referenceBalance,budgetVisible} from './money';
 import {providerOf, budgetMeter, moneyFamily, type MoneyFamily} from '../../server/domain/providers';
-import {fundsRule,matchesSelection,matchesSource,matchesWallet,walletRule,type MoneyRef} from '../../server/domain/dataFilters';
+import {fundsRule,matchesSelection,matchesSource,matchesWallet,walletRule,type MoneyRef,type DataFilters} from '../../server/domain/dataFilters';
+import {keyShown as legacyKeyShown} from '../../server/domain/presentation';
 import {effectiveFilters} from './filterSelection';
 
 export type MoneyPrefs={version:1;unit:string|null;selected:Record<string,[string,string][]>;legacySelected?:Record<string,[string,string][]>;removed?:number};
@@ -52,6 +53,25 @@ export function toggleMoneyChoice(selected:readonly [string,string][],source:str
   const next=on?[...remaining,...meters.map(meter=>[source,meter] as [string,string])]:remaining;
   return next.length<=MAX_METERS?next:[...selected];
 }
+/** The logical wallet scope does not depend on which selected readings arrived. */
+export function walletChoices(cards:readonly Card[],rule:ReturnType<typeof walletRule>,unit:string,context:CurrencyContext=defaultCurrencyContext):MoneyRef[] {
+  const balance=(card:Card)=>unit===DEFAULT_CURRENCY?referenceBalance(card,context.target.id!==DEFAULT_CURRENCY||card.provider==='codex')?.total:card.meters?.find(m=>m.kind==='balance'&&m.unit===unit&&balanceDescriptor(card.provider,m.id)?.role==='total');
+  const preview=cards.flatMap(card=>(card.keys??[]).slice(0,5).filter(key=>card.meters?.some(m=>m.id===`key:${key.id}:cap`&&m.kind==='cap')).map(key=>({source:card.id,kind:'keyCap' as const,key:key.id})));
+  const automatic:MoneyRef[]=[...cards.filter(card=>balance(card)).map(card=>({source:card.id,kind:'balance' as const})),...preview];
+  const candidates=rule.mode==='only'?rule.values:[...rule.include,...automatic];
+  return [...new Map(candidates.filter(ref=>matchesWallet(rule,ref,automatic.some(other=>JSON.stringify(ref)===JSON.stringify(other)))).map(ref=>[JSON.stringify(ref),ref])).values()];
+}
+
+/** Current choices also describe a historical card whose endpoint has no such key. */
+export function selectedAllowanceIds(source:Card,view?:View,unit=DEFAULT_CURRENCY,filters:DataFilters|null|undefined=effectiveFilters()):string[] {
+  if(!providerOf(source.provider)?.meterKinds.some(kind=>kind==='cap')||filters&&!matchesSource(filters,source.id))return [];
+  if(filters)return walletChoices([source],walletRule(filters,unit),unit).flatMap(ref=>ref.source===source.id&&ref.kind==='keyCap'?[ref.key]:[]);
+  const keys=(source.keys??[]).slice(0,5).filter(key=>source.meters?.some(m=>m.id===`key:${key.id}:cap`&&m.kind==='cap')).map(key=>key.id);
+  const prefix=source.id+'/key:';
+  const explicit=view?.shown.filter(id=>id.startsWith(prefix)).map(id=>id.slice(prefix.length))??[];
+  return [...new Set([...keys,...explicit])].filter(id=>!view||legacyKeyShown(view,source.id,id,source.keys??[]));
+}
+
 export function moneySelection(cards:readonly Card[],_hidden:readonly string[],settings:MoneyPrefs,context:CurrencyContext=defaultCurrencyContext,family:MoneyFamily='budget'):{selection:MeterSelection|undefined;omitted:number;removed:number;limited?:boolean} {
   const unit=settings.unit??DEFAULT_CURRENCY;
   const filters=effectiveFilters();
@@ -64,10 +84,7 @@ export function moneySelection(cards:readonly Card[],_hidden:readonly string[],s
     if(ref.kind==='balance'){const total=balance(card);return total?[[ref.source,total.id]]:[];}
     return [[ref.source,`key:${ref.key}:cap`]];
   };
-  const preview=shown.flatMap(card=>(card.keys??[]).slice(0,5).filter(key=>card.meters?.some(m=>m.id===`key:${key.id}:cap`&&m.kind==='cap')).map(key=>({source:card.id,kind:'keyCap' as const,key:key.id})));
-  const automatic:MoneyRef[]=[...shown.filter(card=>balance(card)).map(card=>({source:card.id,kind:'balance' as const})),...preview];
-  const candidates=rule?.mode==='only'?rule.values:rule?.mode==='auto'?[...rule.include,...automatic]:[];
-  const filtered=rule&&candidates.filter(ref=>matchesWallet(rule,ref,automatic.some(other=>JSON.stringify(ref)===JSON.stringify(other)))).flatMap(resolve);
+  const filtered=rule&&walletChoices(shown,rule,unit,context).flatMap(resolve);
   const explicit=filters?family==='budget'?filtered:undefined:settings.selected[unit];
   let ids=explicit??shown.flatMap(card=>{
     const balance=unit===DEFAULT_CURRENCY?(referenceBalance(card,context.target.id!==DEFAULT_CURRENCY||card.provider==='codex')?.total):card.meters?.find(m=>m.kind==='balance'&&m.unit===unit&&balanceDescriptor(card.provider,m.id)?.role==='total');

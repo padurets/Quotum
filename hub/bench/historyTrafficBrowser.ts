@@ -1,3 +1,4 @@
+import {writeFileSync} from 'node:fs';
 import {accountingPath} from './accountingTraffic';
 import {PERIOD_SCOPES,type PeriodScope,type PeriodReply,type PeriodRequest} from '../server/domain/periodRead';
 import assert from 'node:assert/strict';
@@ -183,6 +184,19 @@ export function historyScroll(geometry: {x: number; y: number; width: number}, f
   return {x: geometry.x, y: geometry.y, xDistance: distance, yDistance: 0, speed: Math.max(1, Math.round(geometry.width * fraction / .75)), gestureSourceType: 'mouse', preventFling: true};
 }
 
+/** Diagnostic boundaries keep exact selections beside the readers that still own work. */
+export function historyCheckpointScript(length:number,label:string) {
+  return `(() => {
+    const params=new URLSearchParams(location.search),traffic=window.__historyTraffic;
+    const selection=params.has('from')&&params.has('to')?{mode:'range',from:Number(params.get('from')),to:Number(params.get('to'))}:{mode:'live',periodMs:${length}};
+    const drawings=[...document.querySelectorAll('.history,.activity,.budget-history,.subscription-funds')].map((panel,index)=>{
+      const svg=panel.querySelector('.chart>svg'),fields=['panEnd','panOrigin','panToken','panScale','panBase','drawFrom','drawTo','drawReady'];
+      return {index,family:['history','activity','budget-history','subscription-funds'].find(name=>panel.classList.contains(name)),range:panel.dataset.historyRange??null,loading:panel.classList.contains('is-loading'),svg:!!svg,...Object.fromEntries(fields.map(key=>[key,svg?.dataset[key]??null]))};
+    });
+    return {label:${JSON.stringify(label)},at:performance.now(),wallAt:Date.now(),selection,drawings,movement:traffic?{tokens:[...traffic.tokens],poses:traffic.poses.map(pose=>({...pose})),pushes:traffic.pushes}:null,pool:window.__quotumHistoryPoolReceipt?.checkpoint?.(${JSON.stringify(label)})??{status:'unavailable'}};
+  })()`;
+}
+
 /** A hovered legend bubble can cover a ready plot without belonging to its input handler. */
 export async function prepareHistoryTarget(cdp: Pick<Cdp, 'send' | 'evaluate'>, selector: string, point: {x: number; y: number}) {
   await cdp.send('Input.dispatchKeyEvent', {type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, modifiers: 0});
@@ -196,8 +210,18 @@ export async function prepareHistoryTarget(cdp: Pick<Cdp, 'send' | 'evaluate'>, 
 
 type TrafficProxy = {url: string; transfers: Transfer[]; phase(value: string, latency?: number): void; settled(value: string): Promise<void>};
 
-async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number, poolEvidence?:Pick<Evidence, 'save'>,evidence?:Pick<Evidence,'save'>) {
+async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number, poolEvidence?:Pick<Evidence, 'save'>,evidence?:Pick<Evidence,'save'>,receiptScenario?:{latency:number;fraction:number}) {
   const tab = await openTab(browser), cdp = tab.cdp, bodies = new HistoryBodies(cdp);
+  const checkpoints:unknown[]=[];
+  const poolScenario:{length:number;future:number;latency?:number;fraction?:number;cell:number|null;geometry:unknown}={length,future,...receiptScenario,cell:null,geometry:null};
+  const checkpoint=async(label:string)=>{
+    if(!poolEvidence)return;
+    const boundary={label,phase:bodies.phase,stage:bodies.stage,at:Date.now(),http:{active:bodies.activeCount,pending:bodies.pending.size,attempts:bodies.reads.length}};
+    const command=cdp.snapshot();
+    if(command.socketState!==1||command.terminal||command.failure||command.pending.length){checkpoints.push({...boundary,status:'insufficient-evidence',reason:'original renderer unavailable'});return;}
+    try{checkpoints.push({...boundary,page:await deadline(2000,signal=>cdp.evaluate(historyCheckpointScript(length,label),signal))});}
+    catch{checkpoints.push({...boundary,status:'insufficient-evidence',reason:'checkpoint unavailable'});}
+  };
   const poolName=name.replace(/[^a-zA-Z0-9_-]/g,'-');
   const poolBinding=poolEvidence?new ScriptBinding(cdp,clientIdentity(),(file,value)=>poolEvidence.save('pool-'+poolName+'-'+file,value)):null;
   let poolCaptured=false;
@@ -213,13 +237,23 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
       // A failed or pending original command must release its target without another renderer wait.
       const command=cdp.snapshot(),available=command.socketState===1&&!command.terminal&&!command.failure&&!command.pending.length;
       poolEvidence.save('pool-original-'+poolName,{name,status:'partial',reads:trafficReadEvidence(bodies.reads),command});
-      let receipt:unknown={status:'insufficient-evidence',reason:'original renderer unavailable'};
+      let receipt:unknown={status:'insufficient-evidence',reason:'original renderer unavailable'},calendar:unknown={status:'insufficient-evidence',reason:'original renderer unavailable'};
       if(available){
-        try{receipt=await deadline(2000,signal=>cdp.evaluate('window.__quotumHistoryPoolReceipt?.read()??({status:"unavailable"})',signal));}
-        catch{receipt={status:'insufficient-evidence',reason:'pool receipt unavailable'};}
+        try{
+          const details=await deadline(2000,signal=>cdp.evaluate<{receipt:unknown;calendar:unknown;page:unknown}>(`(()=>{const page=${historyCheckpointScript(length,'cohort/before-cleanup')};return {receipt:window.__quotumHistoryPoolReceipt?.read()??({status:'unavailable'}),calendar:window.__quotumCalendarReceipt?.read()??({status:'unavailable'}),page};})()`,signal));
+          receipt=details.receipt;calendar=details.calendar;
+          checkpoints.push({label:'cohort/before-cleanup',phase:bodies.phase,stage:bodies.stage,page:details.page});
+        }catch{receipt={status:'insufficient-evidence',reason:'pool receipt unavailable'};calendar={status:'insufficient-evidence',reason:'calendar receipt unavailable'};}
       }
+      // Cached checkpoints survive even when the renderer cannot supply its final receipt.
+      const report={name,mode:'diagnostic',scenario:poolScenario,checkpoints,seed:bodies.diagnostic(`${name}/seed`),cold:bodies.diagnostic(`${name}/cold`),reads:bodies.diagnostic(`${name}/warm`),transfers:proxy.transfers.filter(transfer=>transfer.phase.startsWith(name+'/')),receipt,calendar};
+      try{writeFileSync(`/tmp/quotum-bench-history-pool-${name.replaceAll('/','-')}.json`,JSON.stringify(report));}
+      catch{poolEvidence.save('pool-raw-'+poolName,{status:'insufficient-evidence',reason:'raw receipt unavailable'});}
+      poolEvidence.save('pool-checkpoints-'+poolName,{name,mode:'diagnostic',checkpoints});
+      poolEvidence.save('pool-calendar-'+poolName,{name,mode:'diagnostic',calendar});
       poolEvidence.save('pool-receipt-'+poolName,{name,mode:'diagnostic',receipt});
-      if(available){
+      const after=cdp.snapshot();
+      if(available&&after.socketState===1&&!after.terminal&&!after.failure&&!after.pending.length){
         try{await poolBinding!.afterFamily([1]);}
         catch{poolEvidence.save('pool-binding-'+poolName,{status:'insufficient-evidence',reason:'source binding cleanup unconfirmed'});}
       }
@@ -243,7 +277,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
         if (bodies.errors.length) throw bodies.errors[0];
         if ((!seed||hasSeededHistory(bodies.reads,seedPhase))&&!bodies.activeCount && !bodies.pending.size && await cdp.evaluate<boolean>(poolEvidence?`(()=>{window.__quotumHistoryPoolReceipt?.mark(${seed?0:bodies.phase.endsWith('/warm')?2:1},${bodies.stage==='cold scroll'?1:bodies.stage==='cached return'?2:bodies.stage==='cached repeat'?3:0});return ['[data-widget="quota-history"]','[data-widget="quota-session-history"]','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))&&!!document.querySelector('[data-widget="quota-history"] .series[d]:not([d=""])')&&!document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-pan-end],.chart>svg[data-draw-ready="false"],.chart>svg.is-panning');})()`:`['[data-widget="quota-history"]','[data-widget="quota-session-history"]','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))&&!!document.querySelector('[data-widget="quota-history"] .series[d]:not([d=""])')&&!document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-pan-end],.chart>svg[data-draw-ready="false"],.chart>svg.is-panning')`)) {
           await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,250))');
-          if (!bodies.activeCount && !bodies.pending.size) return;
+          if (!bodies.activeCount && !bodies.pending.size) {if(poolEvidence)await checkpoint(`${bodies.stage}/settled${seed?'/seed':''}`);return;}
         }
         if (Date.now() > deadline) throw new Error(`${name}: full drawings or terminal HTTP did not settle: ${JSON.stringify({reads:bodies.reads.map(read=>({id:read.attemptId,phase:read.phase,resources:read.sections?.map(section=>section.scope),complete:read.count?.complete,canceled:read.canceled})),attempts:await cdp.evaluate('window.__quotumHistoryAttempts'),transfers:proxy.transfers.filter(t=>t.phase===seedPhase)})}`);
         await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,20))');
@@ -253,10 +287,11 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
     await cdp.evaluate(`(() => {const style=document.createElement('style');style.textContent='.widgets{display:flex!important;flex-direction:column!important}.widget{height:auto!important;--fill:0px!important}.widget:not(:has(.history,.activity)){display:none!important}.widget-body{height:auto!important}.widget-body>.panel{--fill:0px!important}.history .chart>svg{height:260px!important}.activity .chart>svg{height:180px!important}.legend{max-height:40px;overflow:auto}';document.head.append(style);document.querySelector('.analytics-head').scrollIntoView();})()`);
     await settled();
     const geometry = await cdp.evaluate<{x: number; y: number; width: number; series: number}>(`(() => {const svg=document.querySelector(${JSON.stringify(future ? '[data-widget="quota-history"] .chart>svg' : '.activity .chart>svg')});svg.scrollIntoView({block:'center'});const r=svg.getBoundingClientRect(),left=${future ? 40 : 48};return {x:r.left+r.width*.5,y:r.top+80,width:r.width*(svg.viewBox.baseVal.width-left-12)/svg.viewBox.baseVal.width,series:document.querySelectorAll('[data-widget="quota-history"] .series[d]:not([d=""])').length};})()`);
+    if(poolEvidence)poolScenario.geometry=geometry;
     assert.ok(geometry.series >= 12, `${name}: fewer than twelve actual series`);
     await prepareHistoryTarget(cdp, future ? '[data-widget="quota-history"] .chart' : '.activity .chart', geometry);
     const seedReads = bodies.resources.filter(read => read.phase === seedPhase && read.count?.complete);
-    assert.ok(seedReads.length,`${name}: no complete seed resources: ${JSON.stringify(bodies.reads.map(read=>({phase:read.phase,resources:read.sections?.length,cell:read.cell,complete:read.count?.complete,canceled:read.canceled})))}`); const cell = seedReads[0].cell;
+    assert.ok(seedReads.length,`${name}: no complete seed resources: ${JSON.stringify(bodies.reads.map(read=>({phase:read.phase,resources:read.sections?.length,cell:read.cell,complete:read.count?.complete,canceled:read.canceled})))}`); const cell = seedReads[0].cell;if(poolEvidence)poolScenario.cell=cell;
     const seeds = new Map<string, {answer: NonNullable<Read['answer']>; initial: Set<number>; closedBefore: number}>();
     for (const read of seedReads) {
       let group = seeds.get(read.selection);
@@ -279,7 +314,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
       evidence?.save('traffic-renderer-'+poolName,renderer.evidence());
       assert.ok(renderer.valid(),`${name}: renderer identity unavailable`);
     }
-    return {cdp, bodies, settled, geometry, cell, seeds, close,capturePool,renderer,lateRenderer};
+    return {cdp, bodies, settled, geometry, cell, seeds, close,capturePool,renderer,lateRenderer,checkpoint};
   } catch (error) {
     try{evidence?.save('traffic-seed-failure-'+poolName,{name,stage:bodies.stage,...bodies.diagnostic(`${name}/seed`)});}
     catch{browser.owner?.failures.push('history seed evidence failed');}
@@ -298,10 +333,10 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
     for (let take = 1; take <= (suffix?1:HISTORY_COHORT_TAKES); take++) {
       const name = (suffix?`suffix/${suffix.pair}/${suffix.cohort}/`:'')+`browser/${length / DAY}d/${future ? 'history' : 'activity'}/${latency}ms/${fraction}/take${take}`;
       evidence?.save(suffix?`suffix-stage-${suffix.pair}-${suffix.cohort}`:'traffic-stage', {name, stage: 'seed'});
-      const poolTarget=length===DAY&&!future&&[100,400].includes(latency)&&fraction===.5&&take===1;
+      const poolTarget=length===DAY&&!future&&[100,400].includes(latency)&&fraction===.5&&take===1||length===30*DAY&&future===DAY||name==='browser/30d/activity/0ms/0.5/take1';
       const suffixPool=process.env.QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX==='1'&&suffix?.cohort==='activity'&&length===30*DAY&&!future&&latency===100&&fraction===.5&&take===1;
       const poolEvidence=(process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL==='1'&&poolTarget||suffixPool)?evidence:undefined;
-      const {cdp, bodies, settled, geometry, cell, seeds, close,capturePool,renderer,lateRenderer} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence,evidence);
+      const {cdp, bodies, settled, geometry, cell, seeds, close,capturePool,renderer,lateRenderer,checkpoint} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence,evidence,{latency,fraction});
       let observer:Awaited<ReturnType<typeof observeReversal>>|null=null, status='failed';
       let movement:unknown;
       try {
@@ -310,7 +345,9 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         const scroll = (distance: number,stage:string) => {
           bodies.stage=stage;
           cdp.at(`${bodies.phase}/${stage}`);
-          return observer!.watch(`${bodies.phase}/${stage}`,()=>cdp.send('Input.synthesizeScrollGesture', historyScroll(geometry, fraction, distance)));
+          const input=()=>observer!.watch(`${bodies.phase}/${stage}`,()=>cdp.send('Input.synthesizeScrollGesture', historyScroll(geometry, fraction, distance)));
+          if(!poolEvidence)return input();
+          return (async()=>{await checkpoint(`${stage}/before-input`);const result=await input();await checkpoint(`${stage}/input-returned`);return result;})();
         };
         await scroll(geometry.width * fraction,'cold scroll'); await settled();
         const pose = await cdp.evaluate<{tokens: string[]; poses: {end: number; origin: number}[]; pushes: number; from: number; to: number}>('({tokens:__historyTraffic.tokens,poses:__historyTraffic.poses,pushes:__historyTraffic.pushes,from:Number(new URLSearchParams(location.search).get("from")),to:Number(new URLSearchParams(location.search).get("to"))})');

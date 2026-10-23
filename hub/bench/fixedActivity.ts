@@ -12,6 +12,7 @@ import {openTab,type Browser,type Cdp} from './cdp.js';
 import {historyPoolReceiptScript} from './historyPoolReceipt.js';
 import {historyIdentityScript} from './historyTrafficBrowser.js';
 import {probeScript,type Reading} from './probe.js';
+import type {Evidence} from './evidence.js';
 
 /** The supported shared-filter path keeps the existing combined transport/preparation
  * ceilings. Emphasis owns no reader and receives no extra-read allowance. */
@@ -82,7 +83,8 @@ export function activityOracle(trace:WorkTrace,from:number,to:number):Numbers {
   return {agentMs,activeMs,agents:identities.size};
 }
 
-export function fixedActivityScript(period:string){return historyPoolReceiptScript()+';'+historyIdentityScript()+`;(() => {
+// Monthly shared-filter updates retain more ownership snapshots in the bounded journal.
+export function fixedActivityScript(period:string){return historyPoolReceiptScript(512*1024)+';'+historyIdentityScript()+`;(() => {
   localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d',activityBy:'project',filtersVisible:true}));
   const original=window.__quotumInspectHistoryPool,ids=new WeakMap(),news=new Set();let serial=0,pool,scheduler,stats;
   const reset=()=>stats={bytes:0,flights:0,advances:0,jobsStarted:0,fetches:0,preparationMs:0,failedReservations:0,preferenceWrites:0};reset();
@@ -94,14 +96,128 @@ export function fixedActivityScript(period:string){return historyPoolReceiptScri
     const reserve=p.reserve;p.reserve=function(...args){const result=reserve.apply(this,args);stats.bytes=Math.max(stats.bytes,this.estimatedBytes);if(!result)stats.failedReservations++;return result;};
     const request=p.request;p.request=function(owner,flight,start,cancel){return request.call(this,owner,flight,()=>{stats.flights=Math.max(stats.flights,this.active.size);start();},cancel);};
   };
-  window.__quotumInspectPreparations=value=>{scheduler=value;const replace=scheduler.replace;scheduler.replace=function(owner,work,...rest){stats.jobsStarted++;const next=work.next;work.next=function(...args){const start=performance.now();try{stats.advances++;return next.apply(this,args);}finally{stats.preparationMs+=performance.now()-start;}};return replace.call(this,owner,work,...rest);};};
+  const inspectPreparations=window.__quotumInspectPreparations;
+  window.__quotumInspectPreparations=value=>{if(typeof inspectPreparations==='function')inspectPreparations(value);scheduler=value;const replace=scheduler.replace;scheduler.replace=function(owner,work,...rest){stats.jobsStarted++;const next=work.next;work.next=function(...args){const start=performance.now();try{stats.advances++;return next.apply(this,args);}finally{stats.preparationMs+=performance.now()-start;}};return replace.call(this,owner,work,...rest);};};
   const status=()=>{const p=reader(),h=chart()?.get().history,s=p?.activityProjectionState(h),t=p?.transport;return {registered:!!p,error:s?.error,loading:p?.get().loading,ready:s?.ready,calendarPending:!!p?.calendar.demand(),transportPending:!!(t?.scheduled||t?.queue.length||t?.flights.size),preparing:scheduler?.size,flights:pool.activeFlights,bytes:pool.estimatedBytes,members:pool.members.size};};
   window.__quotumFixedActivity={reset,reader,status,observeNews:()=>{const p=reader(),changed=p.changed;p.changed=function(event,...args){if(event?.type==='hub'&&event.event.type==='history')news.add(event.event.data.workSince);return changed.call(this,event,...args);};},heardSince:at=>news.has(at),holdDispatch:()=>{const t=reader().transport,schedule=t.schedule;t.schedule=()=>{};return window.__quotumFixedActivity.resumeDispatch=()=>{t.schedule=schedule;schedule.call(t);};},sample:()=>{
     const p=reader(),c=chart(),h=c?.get().history;if(!h||!p.activityProjectionState(h).ready)return null;
-    const a=p.project(h,'quota',Date.now()).activity;
+    const a=p.project(h,'quota',Date.now(),true).activity;
     return {...stats,numbers:{agentMs:a.agentMs,activeMs:a.activeMs,agents:a.agents},activity:a,tiles:[...c.grids.values()].flatMap(grid=>[...grid.values()].map(tile=>{if(!ids.has(tile))ids.set(tile,++serial);return[tile.from,tile.to,ids.get(tile)];}))};
   },ready:()=>{const s=status();return !!s.ready&&!s.calendarPending&&!s.transportPending&&s.flights===0&&s.preparing===0&&!document.querySelector('.chart>svg[data-draw-ready="false"],.activity.is-loading,.history.is-loading,.budget-history.is-loading,.subscription-funds.is-loading');}};
 })();`;}
+
+export function assertActivityGestureRange(actual:{from:number;to:number},selection:{from:number;to:number}){
+  assert.deepEqual(actual,{from:selection.from,to:selection.to},'gesture setup must preserve its requested historical range');
+}
+
+/** Gesture diagnostics precede measured phases. Only time coordinates and DOM ownership
+ * are retained; account labels, full URLs and event targets never leave the page. */
+export function fixedActivityGestureScript(){return `(() => {
+  const chart=document.querySelector('.activity .chart'),svg=chart?.querySelector(':scope > svg');
+  const events=[],types=['pointerdown','pointermove','pointerup','pointercancel','lostpointercapture'];
+  let omitted=0,errors=0,stopped=false,setup='pending',point=null;
+  const number=value=>value!==undefined&&value!==null&&value!==''&&Number.isFinite(Number(value))?Number(value):null;
+  const owner=element=>{
+    const plot=element?.closest?.('.chart');if(!plot)return null;if(plot===chart)return 'activity';
+    const panel=plot.closest('.panel');return ['history','budget-history','subscription-funds'].find(name=>panel?.classList.contains(name))??'other';
+  };
+  const pan=element=>({panning:element.classList.contains('is-panning'),token:number(element.dataset.panToken),end:number(element.dataset.panEnd),origin:number(element.dataset.panOrigin),scale:number(element.dataset.panScale),base:number(element.dataset.panBase),from:number(element.dataset.drawFrom),to:number(element.dataset.drawTo),ready:element.dataset.drawReady==='true'});
+  const snapshot=()=>{
+    const params=new URLSearchParams(location.search),plots=[...document.querySelectorAll('.panel[data-time="chart"] .chart>svg')];
+    if(plots.length>5)omitted+=plots.length-5;
+    return {url:{historical:params.has('from')&&params.has('to'),from:number(params.get('from')),to:number(params.get('to'))},plots:plots.slice(0,5).map(element=>({owner:owner(element),width:number(element.getBoundingClientRect().width),viewWidth:number(element.viewBox.baseVal.width),...pan(element)}))};
+  };
+  let before=null;
+  const record=event=>{
+    if(events.length===32){omitted++;return;}
+    try{
+      const row={type:event.type,trusted:event.isTrusted===true,x:number(event.clientX),y:number(event.clientY),shift:event.shiftKey===true,button:number(event.button),buttons:number(event.buttons),pointer:number(event.pointerId),pointerType:['mouse','touch','pen'].includes(event.pointerType)?event.pointerType:'other',target:owner(event.target),hit:owner(document.elementFromPoint(event.clientX,event.clientY)),capturedBefore:chart.hasPointerCapture(event.pointerId),panBefore:pan(svg)};
+      events.push(row);
+      queueMicrotask(()=>{try{row.prevented=event.defaultPrevented;row.capturedAfter=chart.hasPointerCapture(event.pointerId);row.panAfter=pan(svg);}catch{errors++;}});
+    }catch{errors++;}
+  };
+  window.__quotumFixedActivityGesture={finish:()=>{
+    if(!stopped){stopped=true;for(const type of types)document.removeEventListener(type,record,true);}
+    let after=null;try{after=snapshot();}catch{errors++;}
+    return {version:1,setup,complete:errors===0&&omitted===0&&before!==null&&after!==null,errors,omitted,point,before,after,events};
+  }};
+  before=snapshot();
+  if(!chart||!svg){setup='missing-plot';throw Error('fixed Activity gesture needs its mounted plot');}
+  for(const type of types)document.addEventListener(type,record,{capture:true,passive:true});
+  const box=svg.getBoundingClientRect(),view=svg.viewBox.baseVal,mask=svg.querySelector('clipPath rect');
+  if(!mask||!(box.width>0&&box.height>0&&view.width>0&&view.height>0)){setup='invalid-plot';throw Error('fixed Activity gesture needs a measurable inner plot');}
+  const sx=box.width/view.width,sy=box.height/view.height;
+  const left=Math.max(0,box.left+(mask.x.baseVal.value-view.x)*sx),right=Math.min(document.documentElement.clientWidth,box.left+(mask.x.baseVal.value+mask.width.baseVal.value-view.x)*sx);
+  const top=Math.max(0,box.top+(mask.y.baseVal.value-view.y)*sy),bottom=Math.min(document.documentElement.clientHeight,box.top+(mask.y.baseVal.value+mask.height.baseVal.value-view.y)*sy);
+  if(!(right-left>56&&bottom-top>8)){setup='invisible-plot';throw Error('fixed Activity gesture needs a visible 48px inner plot segment');}
+  point={x:(left+right-48)/2,y:(top+bottom)/2,width:box.width,visible:{left,right,top,bottom}};
+  if(owner(document.elementFromPoint(point.x,point.y))!=='activity'||owner(document.elementFromPoint(point.x+48,point.y))!=='activity'){setup='blocked-plot';throw Error('fixed Activity gesture must hit its actual plot owner');}
+  setup='ready';return point;
+})()`;}
+
+type GestureReceipt={complete:boolean;events?:{type:string;trusted:boolean;shift:boolean;target:string|null}[]};
+
+/** A failed native command cannot wait for another renderer command during cleanup. */
+export async function fixedActivityGestureReceipt(cdp:Pick<Cdp,'snapshot'|'evaluate'>):Promise<GestureReceipt|null>{
+  const command=cdp.snapshot();
+  if(command.socketState!==1||command.terminal||command.failure||command.pending.length)return null;
+  return cdp.evaluate<GestureReceipt>('window.__quotumFixedActivityGesture?.finish()??{complete:false,unavailable:true}').catch(()=>null);
+}
+
+/** Native focus scrolls must not carry the preceding gesture's pointer cleanup into emphasis. */
+export function fixedActivityPointerParkScript(origin:{x:number;y:number}){return `(() => {
+  if(window.__quotumFixedActivityPointerPark)throw Error('fixed Activity pointer setup is already owned');
+  const origin=${JSON.stringify(origin)},chart=document.querySelector('.activity .chart');
+  const excluded='.chart,.legend,.legend-item,[data-series-legend],[data-series-details],.series-tip,[role="tooltip"],button,input,select,textarea,a,summary,[role="button"],[contenteditable],[tabindex]';
+  const outside=hit=>!!hit&&!hit.closest(excluded);
+  if(!chart||!Number.isFinite(origin.x)||!Number.isFinite(origin.y)||!chart.contains(document.elementFromPoint(origin.x,origin.y)))throw Error('fixed Activity pointer must start over its released plot');
+  let point=null,heading=null;
+  for(const bar of document.querySelectorAll('header.topbar,.analytics-head,.board-bar')){
+    if(getComputedStyle(bar).position!=='sticky')continue;
+    const box=bar.getBoundingClientRect();
+    if(!(box.width>0&&box.height>0))continue;
+    for(const fraction of [.95,.75,.55,.35]){
+      const x=Math.min(innerWidth-4,Math.max(4,box.left+box.width*fraction)),y=Math.min(innerHeight-4,Math.max(4,box.top+box.height/2)),hit=document.elementFromPoint(x,y);
+      if(outside(hit)&&bar.contains(hit)){point={x,y};heading=bar;break;}
+    }
+    if(point)break;
+  }
+  if(!point)throw Error('fixed Activity pointer needs a blank existing sticky heading');
+  const snapshot=()=>{
+    const params=new URLSearchParams(location.search);
+    return {historical:params.has('from')&&params.has('to'),from:Number(params.get('from')),to:Number(params.get('to')),plots:[...document.querySelectorAll('.panel[data-time="chart"] .chart>svg')].map(svg=>({from:Number(svg.dataset.drawFrom),to:Number(svg.dataset.drawTo),ready:svg.dataset.drawReady==='true',panning:svg.classList.contains('is-panning'),token:svg.dataset.panToken??null,end:svg.dataset.panEnd??null}))};
+  };
+  const before=snapshot(),coherent=state=>state.historical&&state.to>state.from&&state.plots.length===5&&state.plots.every(plot=>plot.from===state.from&&plot.to===state.to&&plot.ready&&!plot.panning&&plot.token===null&&plot.end===null);
+  if(!coherent(before))throw Error('fixed Activity pointer setup needs five settled historical projections');
+  let trustedExit=false,stopped=false;
+  const record=event=>{if(event.isTrusted&&event.pointerType==='mouse'&&event.buttons===0&&chart.contains(event.target)&&!chart.contains(event.relatedTarget))trustedExit=true;};
+  document.addEventListener('pointerout',record,{capture:true,passive:true});
+  window.__quotumFixedActivityPointerPark={finish:()=>{
+    if(!stopped){stopped=true;document.removeEventListener('pointerout',record,true);delete window.__quotumFixedActivityPointerPark;}
+    const after=snapshot(),hit=document.elementFromPoint(point.x,point.y),finalOutside=outside(hit)&&heading.contains(hit)&&getComputedStyle(heading).position==='sticky';
+    return {version:1,complete:trustedExit&&finalOutside&&coherent(after)&&JSON.stringify(before)===JSON.stringify(after),trustedExit,finalOutside,point,before,after};
+  }};
+  return point;
+})()`;}
+
+type PointerParkReceipt={version:number;complete:boolean;trustedExit:boolean;finalOutside:boolean;point:{x:number;y:number}};
+
+export async function fixedActivityPointerPark(cdp:Pick<Cdp,'snapshot'|'evaluate'|'send'>,origin:{x:number;y:number},settled:()=>Promise<void>):Promise<PointerParkReceipt>{
+  const point=await cdp.evaluate<{x:number;y:number}>(fixedActivityPointerParkScript(origin));
+  let finished=false;
+  try{
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:point.x,y:point.y,modifiers:0,button:'none',buttons:0});
+    await settled();
+    const receipt=await cdp.evaluate<PointerParkReceipt>('window.__quotumFixedActivityPointerPark.finish()');finished=true;
+    assert.ok(receipt.complete,'pointer setup must observe a trusted Activity exit onto a blank heading without changing five historical projections');
+    return receipt;
+  }finally{
+    if(!finished){
+      const command=cdp.snapshot();
+      if(command.socketState===1&&!command.terminal&&!command.failure&&!command.pending.length)await cdp.evaluate('window.__quotumFixedActivityPointerPark?.finish()').catch(()=>null);
+    }
+  }
+}
 
 /** Physical requests are retained through cancellation and their final response-body accounting. */
 function traffic(cdp:Cdp){
@@ -135,7 +251,7 @@ export function retainInterruptedActivity(cdp:Pick<Cdp,'snapshot'>,days:number,e
 }
 
 /** Actual mounted widget and shared work filters, including late work and retired responses. */
-export async function fixedActivity(browser:Browser,stand:Stand){
+export async function fixedActivity(browser:Browser,stand:Stand,evidence?:Pick<Evidence,'save'>){
   const owner=stand.people.get(people(stand.set)[0].id)!,card=cards(stand.set).find(card=>card.id==='antigravity')!,reports:Record<string,unknown>[]=[];
   // Earlier money scenarios save a one-account selection. This scenario needs
   // the stand's full resource cohort before applying its own project filter.
@@ -166,30 +282,76 @@ export async function fixedActivity(browser:Browser,stand:Stand){
         await cdp.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
         await waitFor(`window.__quotumFixedActivity?.ready()===true`,deadline);
       };
+      await cdp.evaluate(`document.querySelector('.activity .chart>svg').scrollIntoView({block:'center'})`);
       await settled();
+      const poseStart=bodies.bodies.length;
+      const shownRange=()=>cdp.evaluate<{from:number;to:number}>(`(()=>{const p=new URLSearchParams(location.search);if(!p.has('from')||!p.has('to'))throw Error('the gesture must remain historical');return {from:Number(p.get('from')),to:Number(p.get('to'))};})()`);
+      // Establish the real release-owned value domains before exercising S/H.
+      const gestureStart=await shownRange();assertActivityGestureRange(gestureStart,selection);
+      let gestureReceipt:GestureReceipt|null=null,gesturePoint:{x:number;y:number}|null=null;
+      try{
+        const point=gesturePoint=await cdp.evaluate<{x:number;y:number}>(fixedActivityGestureScript());
+        // Held moves retain the left button so Chromium keeps pointer capture.
+        const mouse=(type:string,x:number)=>cdp.send('Input.dispatchMouseEvent',{type,x,y:point.y,modifiers:8,button:'left',buttons:type==='mouseReleased'?0:1});
+        await mouse('mousePressed',point.x);
+        for(const distance of [16,32,48]){
+          await mouse('mouseMoved',point.x+distance);
+          await cdp.evaluate('new Promise(resolve=>requestAnimationFrame(resolve))');
+        }
+        await mouse('mouseReleased',point.x+48);await settled();
+        await waitFor(`!document.querySelector('.chart>svg[data-pan-end],.chart>svg.is-panning')`);await settled();
+      }finally{
+        gestureReceipt=await fixedActivityGestureReceipt(cdp);
+        console.error(`bench: fixed Activity ${days}d native gesture `+JSON.stringify(gestureReceipt));
+      }
+      assert.ok(gestureReceipt?.complete,'the native historical gesture receipt must be complete');
+      assert.ok(gestureReceipt.events?.some(event=>event.type==='pointerdown'&&event.trusted&&event.shift&&event.target==='activity'),'the native historical gesture must reach its plot');
+      assert.ok(gestureReceipt.events?.some(event=>event.type==='pointerup'&&event.trusted),'the native historical gesture must release its pointer');
+      assert.notEqual((await shownRange()).to,gestureStart.to,'the native historical gesture must commit a changed range');
+      assert.ok(gesturePoint);
       console.error('bench: fixed Activity settled '+JSON.stringify(await cdp.evaluate('window.__quotumFixedActivity.status()')));
       const sample=()=>cdp.evaluate<Sample>('window.__quotumFixedActivity.sample()');
-      const baseline=await sample();assert.ok(baseline.activity.known);assert.ok(baseline.tiles.length<=8);
-      await cdp.evaluate('window.__quotumFixedActivity.observeNews()');
       const selectedFilter=[...bodies.bodies].reverse().find(row=>row.body.workFilter)!.body.workFilter;assert.ok(selectedFilter);
       assert.equal(await cdp.evaluate('window.__quotumFixedActivity.status().members'),4,'emphasis adds no history reader');
       // SVG viewport bounds lose float precision after native focus scrolls the page.
       // Its own bounds and matrix stay exact; CSS boxes use document coordinates.
-      const geometry=()=>cdp.evaluate<string>(`JSON.stringify([...document.querySelectorAll('.widgets>.widget,.panel[data-time="chart"] .chart,.panel[data-time="chart"]>.legend,.activity-info,.panel[data-time="chart"] .plot-layer,.panel[data-time="chart"] .plot-move,.panel[data-time="chart"] .slides,.activity-stack,[data-series] path,.plan-line,.forecast-line')].map(e=>{
-        const svg=e instanceof SVGGraphicsElement,b=svg?e.getBBox():e.getBoundingClientRect(),m=svg?e.getCTM():null;
-        return[svg?'svg':'box',b.x+(svg?0:scrollX),b.y+(svg?0:scrollY),b.width,b.height,e.getAttribute('d'),e.getAttribute('transform'),e.style.transform,m&&[m.a,m.b,m.c,m.d,m.e,m.f]];
-      }))`);
+      const geometryScript=`()=>{
+        const boxes=[...document.querySelectorAll('.widgets>.widget,.panel[data-time="chart"] .chart,.panel[data-time="chart"]>.legend,.activity-info,.panel[data-time="chart"] .plot-layer,.panel[data-time="chart"] .plot-move,.panel[data-time="chart"] .slides,.activity-stack,[data-series] path,.plan-line,.forecast-line')].map(e=>{
+          const svg=e instanceof SVGGraphicsElement,b=svg?e.getBBox():e.getBoundingClientRect(),m=svg?e.getCTM():null;
+          return[svg?'svg':'box',b.x+(svg?0:scrollX),b.y+(svg?0:scrollY),b.width,b.height,e.getAttribute('d'),e.getAttribute('transform'),e.style.transform,m&&[m.a,m.b,m.c,m.d,m.e,m.f]];
+        });
+        const projections=[...document.querySelectorAll('.panel[data-time="chart"] .chart>svg')].map(svg=>{
+          const panel=svg.closest('.panel'),activity=panel.classList.contains('activity'),quota=panel.classList.contains('history'),left=activity?48:quota?40:76;
+          const layer=svg.parentElement.querySelector(activity?'.plot-clip.is-band .plot-move .slides':'.plot-move[data-plot-main] .slides'),matrix=layer?.getScreenCTM();
+          const from=Number(svg.dataset.drawFrom),to=Number(svg.dataset.drawTo),span=to-from,inner=svg.viewBox.baseVal.width-left-12;
+          if(!matrix||!(span>0)||!Number.isFinite(matrix.a)||matrix.a===0)throw Error('emphasis needs a committed historical projection');
+          const point=at=>new DOMPoint(left+(at-from)/span*inner,0).matrixTransform(matrix).x+scrollX;
+          const axes=[...svg.querySelectorAll('.tick,.axis-line,.grid')].map(e=>[e.textContent,e.getAttribute('x'),e.getAttribute('y'),e.getAttribute('y1'),e.getAttribute('y2'),e.getAttribute('transform'),e.style.transform]);
+          return[from,to,point(${selection.from}),point(${selection.from+(selection.to-selection.from)/2}),svg.getAttribute('viewBox'),axes];
+        });
+        if(projections.length!==5)throw Error('emphasis must retain all five projections');
+        return JSON.stringify({boxes,projections});
+      }`;
+      const geometry=()=>cdp.evaluate<string>('('+geometryScript+')()');
+      const beforePark={range:await shownRange(),geometry:await geometry(),numbers:(await sample()).numbers};
+      const pointerPark=await fixedActivityPointerPark(cdp,{x:gesturePoint.x+48,y:gesturePoint.y},()=>settled());
+      assert.deepEqual(await shownRange(),beforePark.range,'pointer setup preserves the committed historical range');
+      assert.equal(await geometry(),beforePark.geometry,'pointer setup preserves widget geometry, time landmarks and value projections');
+      let baseline=await sample();assert.deepEqual(baseline.numbers,beforePark.numbers,'pointer setup preserves the complete cohort numbers');assert.ok(baseline.activity.known);assert.ok(baseline.tiles.length<=8);
+      console.error(`bench: fixed Activity ${days}d pointer setup `+JSON.stringify(pointerPark));
+      await cdp.evaluate('window.__quotumFixedActivity.observeNews()');
       const beforeHover=await geometry(),hoverStart=bodies.bodies.length;
       await cdp.evaluate('window.__quotumFixedActivity.reset();__quotumBench.reset()');
       console.error(`bench: ${days}d emphasis matrix and native keys`);
-      const emphasis=await cdp.evaluate<{name:string;matrix:number[][]}[]>(`(async()=>{
-        const reports=[];
+      const emphasisMatrix=()=>cdp.evaluate<{name:string;matrix:number[][]}[]>(`(async()=>{
+        const geometry=${geometryScript},expectedGeometry=geometry(),reports=[];
         for(const panel of document.querySelectorAll('.panel[data-time="chart"]')){
           const buttons=[...panel.querySelectorAll('.legend-item')];if(buttons.length<3)throw Error('emphasis fixture needs three series in '+panel.querySelector('h2').textContent+': '+buttons.length);
           const pause=async()=>{
             const deadline=performance.now()+1000;
             do{
               await new Promise(requestAnimationFrame);
+              if(geometry()!==expectedGeometry)throw Error('legend emphasis moved a widget, time landmark or value projection');
               if(!buttons.some(button=>button.getAnimations().some(animation=>animation.pending||animation.playState==='running')))return;
             }while(performance.now()<deadline);
             throw Error('legend opacity transition did not settle');
@@ -205,6 +367,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
           buttons[1].click();await pause();assert([1,1,1]);reports.push({name:panel.querySelector('h2').textContent,matrix});
         }return reports;
       })()`);
+      const emphasis=await emphasisMatrix();
       assert.equal(emphasis.length,5);
       const key=async(key:string,code:string,windowsVirtualKeyCode:number)=>{
         const text=key==='Enter'?'\r':key===' '?' ':undefined;
@@ -213,6 +376,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       for(let index=0;index<5;index++){
         await cdp.evaluate(`document.querySelectorAll('.panel[data-time="chart"]')[${index}].querySelector('.legend-item').focus()`);
         await key('Enter','Enter',13);await key('Tab','Tab',9);await key(' ','Space',32);
+        assert.equal(await geometry(),beforeHover,'native legend keys preserve both time landmarks and value geometry');
         const pressed=await cdp.evaluate<string[]>(`[...document.querySelectorAll('.panel[data-time="chart"]')[${index}].querySelectorAll('.legend-item')].slice(0,3).map(button=>button.getAttribute('aria-pressed'))`);
         assert.deepEqual(pressed,['true','true','false'],'native Enter and Space independently choose two series');
         await key('Escape','Escape',27);
@@ -223,6 +387,16 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       assert.ok(!paint.renders.some(part=>part.kind==='chart'),'emphasis cannot render chart consumers');
       reports.push({days,name:'emphasis',charts:emphasis,requests:0,httpRequests:hovered.fetches,scheduledPreparations:hovered.jobsStarted,preparationAdvances:hovered.advances,preferenceWrites:hovered.preferenceWrites});
       console.error('bench: emphasis '+JSON.stringify(reports.at(-1)));
+      // Back restores the exact near-now fixed URL without invoking the gesture's
+      // intentional snap-to-live behavior. Work scenarios keep their original oracle.
+      await cdp.evaluate('history.back()');
+      await waitFor(`new URLSearchParams(location.search).get('from')==='${selection.from}'&&new URLSearchParams(location.search).get('to')==='${selection.to}'`);
+      await settled();await waitFor(`!document.querySelector('.chart>svg[data-pan-end],.chart>svg.is-panning')`);
+      assert.deepEqual(await shownRange(),{from:selection.from,to:selection.to});baseline=await sample();
+      const poseDeadline=Date.now()+30_000;
+      while(bodies.active.size||bodies.pending.size){if(Date.now()>poseDeadline)throw Error('historical gesture preparation traffic did not finish');await Promise.allSettled([...bodies.pending]);await pause(20);}
+      const poseReads=bodies.bodies.slice(poseStart);
+      reports.push({days,name:'historical gesture and Back preparation',requests:poseReads.length,requestBytes:poseReads.reduce((sum,row)=>sum+row.requestBytes,0),decoded:poseReads.reduce((sum,row)=>sum+row.decoded,0),encoded:poseReads.reduce((sum,row)=>sum+row.encoded,0),cancelled:poseReads.filter(row=>row.cancelled).length});
       let referenceReceipt={requests:0,requestBytes:0,decodedBytes:0,encodedBytes:0};
       const reference=async()=>{
         const request:PeriodRequest={version:1,selection:{mode:'live',periodMs:Date.now()-selection.from+60_000},evaluatedAt:Date.now(),workFilter:selectedFilter,sessions:{}};
@@ -236,6 +410,14 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       const check=async()=>{
         const current=await sample(),trace=await reference();assert.deepEqual(current.numbers,activityOracle(trace,selection.from,selection.to));
         assert.equal(await cdp.evaluate('Number(document.querySelector(\'.activity-totals\').dataset.agentMs)'),current.numbers.agentMs,'the mounted summary reads that same cohort');
+        const text=await cdp.evaluate<{actual:string[];expected:string[]}>(`(()=>{
+          if(document.documentElement.lang!=='en')throw Error('fixed Activity uses the English catalogue');
+          const n=${JSON.stringify(current.numbers)},locale=navigator.languages.find(tag=>tag.toLowerCase().split('-')[0]==='en')??'en';
+          const number=(value,digits=0)=>new Intl.NumberFormat(locale,{maximumFractionDigits:digits}).format(value);
+          const hours=ms=>{const minutes=Math.round(ms/60000);if(minutes<60)return(ms>0&&ms<60000?'< 1':minutes)+'m';const value=ms/3600000;return(value<10?number(value,1):number(Math.round(value)))+'h';};
+          return {actual:[...document.querySelectorAll('.activity-totals b')].map(e=>e.textContent),expected:[hours(n.agentMs),hours(n.activeMs),number(n.agents),n.activeMs?number(n.agentMs/n.activeMs,1):'—']};
+        })()`);
+        assert.deepEqual(text.actual,text.expected,'all four mounted metrics use the shared-filter cohort');
         for(const [at,activeMs,agentMs,agents] of current.activity.cells)assert.deepEqual({activeMs,agentMs,agents},activityOracle(trace,Math.max(selection.from,at),Math.min(selection.to,at+current.activity.barMs)));
         for(let at=cellStart(selection.from,current.activity.barMs);at<selection.to;at+=current.activity.barMs){
           const expected=activityOracle(trace,Math.max(selection.from,at),Math.min(selection.to,at+current.activity.barMs));
@@ -322,6 +504,8 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       const during=await phase('news during response',()=>intercepted(async()=>{await actor.through(actor.floorAt+500);},async()=>{
         await actor.through(actor.floorAt+600);await pause(350);
         assert.equal(await cdp.evaluate('document.querySelector(".activity-totals").outerHTML'),retainedSummary,'held work answers preserve the complete previous cohort, including all four metrics');
+        assert.equal((await emphasisMatrix()).length,5,'every intermediate emphasis state preserves retained historical geometry while replacement is held');
+        assert.equal(await cdp.evaluate('document.querySelector(".activity-totals").outerHTML'),retainedSummary,'leaving H restores all four retained metrics without changing their cohort');
       },true),2);
       assert.ok(during.current.flights<=2);
       await phase('cancelled A to B to A',()=>intercepted(async()=>{await actor.through(actor.floorAt+700);},async()=>{
@@ -342,6 +526,7 @@ export async function fixedActivity(browser:Browser,stand:Stand){
       await phase('through upper bound',async()=>{await actor.through(selection.to);},1);
       await phase('outside range',async()=>{await actor.through(selection.to+100);await waitFor(`window.__quotumFixedActivity.heardSince(${selection.to})`);},0);
       const receipt=await cdp.evaluate<{status:string;members:{kind:string}[];[key:string]:unknown}>(`(()=>{__quotumHistoryPoolReceipt.mark(2,3);return __quotumHistoryPoolReceipt.read();})()`);
+      evidence?.save(`fixed-activity-pool-${days===1?'24h':'30d'}`,{days,receipt});
       assert.equal(receipt.status,'complete',JSON.stringify(Object.fromEntries(['status','attached','registrationOrderQualified','omitted','errors','snapshotOmitted','summaryOmitted','nearOmitted','sendingUnknown','lastCheckpoint'].map(key=>[key,receipt[key]]))));assert.equal(receipt.members.length,4);assert.ok(!receipt.members.some(member=>member.kind==='activity'));
     }finally{releaseInterrupted();await tab.close();await actor.close();}
   }

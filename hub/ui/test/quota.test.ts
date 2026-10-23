@@ -34,5 +34,5 @@ test('the fade goes in half-minute steps, so the page is idle in between', () =>
 test('a series is named by its source and the scope of its window, not its kind', () => {
   const claude = {provider: 'claude', title: 'Claude'};
   assert.equal(seriesName(claude, {kind: 'weekly', label: null, minutes: 10080}), 'Claude');
-  assert.equal(seriesName(claude, {kind: 'weekly', label: 'Fable', minutes: 10080}), 'Claude · Fable');
+  assert.equal(seriesName(claude, {kind: 'weekly', label: 'Fable', minutes: 10080}), 'Claude\nFable');
 });

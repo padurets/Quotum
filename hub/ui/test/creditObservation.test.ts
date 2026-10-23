@@ -1,4 +1,5 @@
 import * as widgets from '../../server/domain/widgets';
+import {pan} from '../lib/pan';
 import {test,type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -110,12 +111,12 @@ function drawing(h:Awaited<ReturnType<typeof creditHistory>>,initial:Update,page
   const Chart=()=>null;
   const memo=(read:()=>unknown,deps:unknown[])=>{const box=outer.useRef(null) as {current:{deps:unknown[];value:unknown}|null};if(!box.current||deps.some((value,i)=>!Object.is(value,box.current!.deps[i])))box.current={deps,value:read()};return box.current.value;};
   const modules:Record<string,unknown>={
-    'react/jsx-runtime':jsx,react:{memo:reactMemo,useRef:outer.useRef,useMemo:memo},
+    'react/jsx-runtime':jsx,react:{memo:reactMemo,useRef:outer.useRef,useMemo:memo,useLayoutEffect:outer.useLayoutEffect},
     '../../server/domain/providers':providers,'../../server/domain/currency':currency,'../../server/domain/meterHistory':{composeMetersPrepared},
-    '../lib/board':{useBoardId:()=> 'board',useCurrencyContext:()=>currency.defaultCurrencyContext,useNamed:()=>sources},
+    '../lib/board':{useServerView:()=>undefined,useBoardId:()=> 'board',useCurrencyContext:()=>currency.defaultCurrencyContext,useNamed:()=>sources},
     '../lib/history':{useBudgetFinancialHistory:()=>({history:shown,drawing:shown,loading:false,presentation}),useBudgetHistoryPlot:()=>null,useHistoryBegins:()=>current.historyStart,fundsHistory:{retry(){}}},
     '../lib/prefs':{usePref:(key:keyof typeof prefs)=>prefs[key]},'../lib/moneySelection':{moneySelection},'../lib/moneyView':moneyView,'../lib/money':money,'../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},
-    '../lib/view':{...widgets,colorOf:()=> '#fff'},'../lib/periods':periods,'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>current.now},'../lib/pan':{usePanning:()=>null},
+    '../lib/view':{...widgets,colorOf:()=> '#fff'},'../lib/periods':periods,'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>current.now},'../lib/pan':{pan,usePanning:()=>null},
     '../lib/axisNavigation':{axisNavigation:()=>({context:'board'})},'../i18n':{t:(key:string)=>key,useLocale:()=> 'en'},
     './prepared':{usePrepared:outer.usePrepared},'./sizing':{usePlot:()=>({plot:160,onBase(){}})},'./Chart':{Chart},
   };
@@ -124,7 +125,7 @@ function drawing(h:Awaited<ReturnType<typeof creditHistory>>,initial:Update,page
   runInNewContext(ts.transpileModule(moneySource,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,component);
   const chartSource=readFileSync(new URL('../components/Chart.tsx',import.meta.url),'utf8'),start=chartSource.indexOf('  const inputs = '),region=chartSource.slice(start,chartSource.indexOf('  const model = ',start));
   const child={...inner,axis:{active:false,basis:{from:initial.now-DAY,to:initial.now,end:initial.now}},incomingLines:[] as Line[],incomingReady:false,valueAxis:undefined as ChartProps['axis'],modelContext:'',
-    incomingPlans:[],incomingForecasts:[],incomingMarkers:[],incomingStrip:null,desiredFrom:initial.now-DAY,desiredTo:initial.now,desiredNow:initial.now,desiredLive:true,navigation:undefined,stepped:true,cellMs:h.cell,
+    incomingPlans:[],incomingForecasts:[],incomingMarkers:[],incomingStrip:null,desiredFrom:initial.now-DAY,desiredTo:initial.now,desiredNow:initial.now,desiredLive:true,navigation:undefined,stepped:true,incomingCellMs:h.cell,
     width:1240,height:160,left:76,right:12,top:12,bottom:28,clipPrepared,plotPathPrepared,observationRunsPrepared,draw:null as unknown as ()=>Drawn};
   runInNewContext(ts.transpileModule(`function draw(){${region}\nreturn prepared;}\nglobalThis.draw=draw;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,child);
   const groupStart=chartSource.indexOf('  const seriesArtwork='),groupEnd=chartSource.indexOf('  const seriesEnds=',groupStart);
@@ -141,13 +142,13 @@ function drawing(h:Awaited<ReturnType<typeof creditHistory>>,initial:Update,page
   const render=()=>{
     outer.begin();const tree=component.exports.MoneyHistory({family:'funds',arrange:{view:EMPTY_VIEW,owner:false}});
     const chart=tree.props.children.find(node=>node?.type===Chart) as ReactElement<ChartProps>;assert.ok(chart);
-    outer.commit();Object.assign(child,{incomingLines:chart.props.lines,incomingReady:chart.props.prepared,valueAxis:chart.props.axis,modelContext:chart.props.modelContext,
+    outer.commit();Object.assign(child,{incomingCellMs:chart.props.cellMs,incomingLines:chart.props.lines,incomingReady:chart.props.prepared,valueAxis:chart.props.axis,modelContext:chart.props.modelContext,
       desiredFrom:chart.props.from,desiredTo:chart.props.to,desiredNow:chart.props.now});child.axis.basis={from:chart.props.from,to:chart.props.to,end:chart.props.now};
     inner.begin();const result=child.draw();commit(result.value);inner.commit();return result;
   };
   const settle=()=>{for(let i=0;i<5;i++){render();outer.finish();inner.finish();}return render();};
   return {render,settle,finishParent:()=>outer.finish(),finishChart:()=>inner.finish(),replace:(update:Update)=>{current=update;shown=history();},retire:()=>{presentation++;},
-    mutations:()=>({path:pathChanges,observation:observationChanges}),close:()=>{outer.scheduler.dispose();inner.scheduler.dispose();}};
+    mutations:()=>({path:pathChanges,observation:observationChanges}),close:()=>{outer.dispose();inner.dispose();}};
 }
 
 test('equal credit heartbeats count only after their new prepared observation reaches the chart',async t=>{

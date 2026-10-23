@@ -1,4 +1,4 @@
-import {AnalyticsPanel, AnalyticsNote} from './AnalyticsPanel';
+import {AnalyticsPanel} from './AnalyticsPanel';
 import {AnalyticsTable, TableSettings, type AnalyticsRow, type AnalyticsColumn, type Cell, type TimedCell} from './AnalyticsTable';
 import {memo, useCallback, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type RefObject} from 'react';
 import {num, rateText} from '../lib/format';
@@ -35,7 +35,7 @@ import {boardPeriod} from '../lib/period';
 import {useQuotaPresentation} from '../lib/dataFilters';
 import {observationDeadline} from '../../server/domain/resources';
 import {formatLocale, t, useLocale, type Key} from '../i18n';
-import {useTableWidget, WidgetPages, TableMeasure, TableSortMenu} from './TableWidget';
+import {TableSurface,useTableWidget, WidgetPages, TableMeasure, TableSortMenu} from './TableWidget';
 
 const spentText = (spent: Spent) => (spent.key === 'points' ? t('table.points', {value: num(spent.value, 1)}) : spent.key === 'unused' ? t('table.unused') : '—');
 
@@ -61,7 +61,7 @@ const HEADINGS: Record<ForecastColumn, {title: Key; range?: Key; hint?: Key}> = 
 const heading = (column: ForecastColumn, range: boolean) => t((range && HEADINGS[column].range) || HEADINGS[column].title);
 
 /** Clock-only order changes publish retained row descriptors only after a permutation. */
-const SortedForecast=memo(function SortedForecast({rows,models,columns,fixed,rangeKey,panel,kind='weekly',children,...panelProps}:{rows:AnalyticsRow<ForecastColumn>[];models:SortRow[];columns:AnalyticsColumn<ForecastColumn>[];fixed:boolean;rangeKey:string;panel:RefObject<HTMLElement|null>;kind?:QuotaKind} & Omit<ComponentProps<typeof AnalyticsPanel>,'ref'|'controls'>) {
+const SortedForecast=memo(function SortedForecast({rows,models,columns,fixed,rangeKey,panel,kind='weekly',children,structure,...panelProps}:{rows:AnalyticsRow<ForecastColumn>[];models:SortRow[];columns:AnalyticsColumn<ForecastColumn>[];fixed:boolean;rangeKey:string;panel:RefObject<HTMLElement|null>;kind?:QuotaKind;structure?:readonly number[]} & Omit<ComponentProps<typeof AnalyticsPanel>,'ref'|'controls'>) {
   const sortKey=kind==='session'?'sessionSort':'forecastSort',saved=usePref(sortKey),locale=useLocale();
   const active=useMemo(()=>visibleForecastSort(saved,columns.map(c=>c.id)),[saved,columns]);
   const current=useRef({rows,models,active,fixed,rangeKey,locale});current.current={rows,models,active,fixed,rangeKey,locale};
@@ -91,13 +91,11 @@ const SortedForecast=memo(function SortedForecast({rows,models,columns,fixed,ran
   const ordered=useSyncExternalStore(subscribe,evaluate,evaluate);
   const onSort=useCallback((column:SortColumn|null,cycle?:boolean)=>setPrefs({[sortKey]:nextForecastSort(active,column,cycle)}),[active,sortKey]);
   const sorting={active,onSort,headers:[{id:'name' as const,title:t('table.limit')},...columns],label:t('table.sort'),defaultLabel:t('table.defaultOrder')};
-  const widget=useTableWidget(panel,columns.map(column=>column.width),FORECAST_WIDTHS.limit,ordered.map(row=>row.key),JSON.stringify([rangeKey,active]));
-  return <AnalyticsPanel {...panelProps} ref={panel} controls={widget.layout==='list'&&<TableSortMenu {...sorting}/>}>{children}
-    {ordered.length>0&&<>
-      <AnalyticsTable columns={columns} rows={ordered.slice(widget.from,widget.to)} name={t('table.limit')} lead={fixed?'end':'now'} sorting={sorting} layout={widget.layout} body={widget.live}/>
-      <WidgetPages table={widget} count={ordered.length}/>
+  const widget=useTableWidget(panel,columns.map(column=>column.width),FORECAST_WIDTHS.limit,ordered.map(row=>row.key),JSON.stringify([rangeKey,active]),undefined,structure);
+  return <AnalyticsPanel {...panelProps} ref={panel} controls={widget.layout==='list'&&<TableSortMenu {...sorting}/>}>
+    <TableSurface table={widget}>{children}<AnalyticsTable columns={columns} rows={ordered.slice(widget.from,widget.to)} name={t('table.limit')} lead={fixed?'end':'now'} sorting={sorting} layout={widget.layout} body={widget.live}/>
+      </TableSurface><WidgetPages table={widget} count={ordered.length}/>
       <TableMeasure table={widget}><AnalyticsTable columns={columns} rows={ordered.slice(widget.measureFrom,widget.measureTo)} name={t('table.limit')} lead={fixed?'end':'now'} sorting={sorting} layout={widget.layout} body={widget.measured} still/></TableMeasure>
-    </>}
   </AnalyticsPanel>;
 });
 
@@ -137,6 +135,10 @@ const WindowForecast = memo(function WindowForecast({arrange,kind='weekly'}: {ar
   const panel = useRef<HTMLElement>(null);
   const definitions = modeColumns.map(id => ({id, title: heading(id, range), width: FORECAST_WIDTHS[id], hint: HEADINGS[id].hint ? t(HEADINGS[id].hint!) : undefined}));
   const visible = definitions.filter(column => columns.includes(column.id));
+  const structure=useMemo(()=>{
+    const modes=[LIVE_COLUMNS,RANGE_COLUMNS].map(mode=>mode.filter(id=>columnShown(view,widget,id)).map(id=>FORECAST_WIDTHS[id]));
+    return Array.from({length:Math.max(...modes.map(columns=>columns.length))},(_,i)=>Math.max(...modes.map(columns=>columns[i]??0)));
+  },[view.columns,view.shownColumns,widget]);
   /** Every cell of a line, by column. */
   const cellsOf = (line: Line): Record<ForecastColumn, Cell | TimedCell> => {
     const source = sources.find(s => s.id === line.sourceId);
@@ -255,12 +257,12 @@ const WindowForecast = memo(function WindowForecast({arrange,kind='weekly'}: {ar
   // the table also keeps every clock cell from replanning its deadline on input.
   const data=useMemo(()=>({rows:lines.map(line=>({key:line.key,name:line.name,color:line.color,cells:cellsOf(line)})),
     models:lines.map(line=>{const source=sources.find(s=>s.id===line.sourceId);const meter=source?.meters?.find(m=>m.id===line.windowId);return {line,validUntil:line.capCells&&meter?Math.min(observationDeadline(meter),meter.resetAt??Infinity):undefined,live:source?.windows.find(w=>w.id===line.windowId),measuredAt:source?.successAt??null,ahead:forecasts[lineup.indexOf(line.sourceId)]?.[line.windowId]??null,context:{windows:source?.windows??[],freeResets:source?.resets?.available??0,announced:announcedOf(news,line.provider,source?.successAt??null)},plan:planOf(view,line.sourceId)};})}),[lines,columns,range,sources,forecasts,news,history,view,locale]);
-  return <SortedForecast {...data} kind={kind} columns={visible} fixed={range} rangeKey={history?.range??''} panel={panel}
-    className="forecast" title={t(kind==='session'?'forecast.sessionTitle':'forecast.title')} history={history} loading={loading} error={error} retry={quotaHistory.retry}
+  return <SortedForecast {...data} kind={kind} columns={visible} fixed={range} rangeKey={history?.range??''} panel={panel} structure={structure}
+    className="forecast" title={t(kind==='session'?'forecast.sessionTitle':'forecast.title')} history={history} loading={loading} error={error} retry={quotaHistory.retry} details={omitted>0?t('history.quotaOverflow',{count:omitted}):null}
     settings={<TableSettings arrange={arrange} widget={widget} columns={definitions} visible={columns}/>}
   >
-    {omitted>0&&<AnalyticsNote>{t('history.quotaOverflow',{count:omitted})}</AnalyticsNote>}
-    {!history?error?null:<div className="panel-loading">{t('history.loading')}</div>:!lines.length?<p className="panel-empty">{t('forecast.empty')}</p>:null}
+
+    {!history?null:!lines.length?<p className="panel-empty">{t('forecast.empty')}</p>:null}
   </SortedForecast>;
 });
 

@@ -152,7 +152,7 @@ test('closing the board during a gesture clears accounting, drawing and pending 
   } finally {h.close();}
 });
 
-test('ordinary period changes and same-membership reconnects keep the last complete frame while exact evidence waits', async () => {
+test('ordinary period changes and same-run reconnects keep the last complete frame while exact evidence waits', async () => {
   const h = harness();
   try {
     const initial = await h.start(); h.exact(false); h.choose('6h'); await h.answerCells();
@@ -162,9 +162,26 @@ test('ordinary period changes and same-membership reconnects keep the last compl
     assert.equal(h.render().history, initial.history, 'an ordinary evidence error does not revoke membership');
     assert.equal(h.render().drawing, initial.drawing); assert.equal(h.render().loading, false);
     h.exact(false); h.reconnect(); await h.answerCells();
-    assert.equal(h.render().history, initial.history, 'a reconnect with unchanged membership preserves the complete frame');
+    assert.equal(h.render().history, initial.history, 'a same-run reconnect with unchanged membership preserves the complete frame');
     assert.equal(h.render().drawing, initial.drawing);
     h.exact(true); assert.equal(h.render().history!.range, '6h'); assert.notEqual(h.render().drawing, initial.drawing);
+  } finally {h.close();}
+});
+
+test('a changed-run reconnect retires the complete frame even with unchanged membership', async () => {
+  const h = harness();
+  try {
+    const initial = await h.start(), run = h.page.get().hubEpoch;
+    h.exact(false); h.restart();
+    assert.notEqual(h.page.get().hubEpoch, run, 'the restart actually changes the observed producer');
+    emptyFrame(h.render(), 'immediately after the new run');
+    await h.answerCells();
+    assert.ok(h.loader.get().history, 'the replacement really published native cells');
+    emptyFrame(h.render(), 'native cells cannot authorize work from the previous run');
+    h.exact(false, 'history_failed'); emptyFrame(h.render(), 'new-run exact evidence failed');
+    h.exact(true);
+    assert.ok(h.render().history); assert.notEqual(h.render().history, initial.history);
+    assert.equal(h.render().drawing, h.render().history);
   } finally {h.close();}
 });
 

@@ -33,16 +33,24 @@ export class SeriesFocus {
   attach(root:HTMLElement,phase:Pick<typeof pan,'shifting'|'active'|'onPhase'>=pan) {
     let hovered:HTMLButtonElement|null=null,focused:HTMLButtonElement|null=null,pinned:HTMLButtonElement|null=null;
     let dismissed=false,touchButton:HTMLButtonElement|null=null,timer:ReturnType<typeof setTimeout>|undefined;
+    let hoverTimer:ReturnType<typeof setTimeout>|undefined;
+    const detailAt=(target:EventTarget|null)=>target instanceof Element?target.closest<HTMLElement>('.series-tip[data-series-context]'):null;
     const painted=new Map<string,string>();
     const write=(key:string,value:string|undefined)=>{
       if(painted.get(key)===value)return;
       if(value===undefined){root.style.removeProperty(key);painted.delete(key);}
       else{root.style.setProperty(key,value);painted.set(key,value);}
     };
-    const buttonAt=(target:EventTarget|null)=>{
+    const legendAt=(target:EventTarget|null)=>{
       const button=target instanceof Element?target.closest<HTMLButtonElement>('button.legend-item[data-series-key]'):null;
       return button&&root.contains(button)?button:null;
     };
+    const buttonAt=(target:EventTarget|null)=>{
+      const detail=detailAt(target);
+      return detail?[hovered,focused,pinned].find(button=>button?.dataset.seriesKey===detail.dataset.seriesContext)??null:legendAt(target);
+    };
+    const detailFor=(button:HTMLButtonElement)=>[...root.querySelectorAll<HTMLElement>('.series-tip')].find(detail=>detail.dataset.seriesContext===button.dataset.seriesKey);
+    const clearHover=()=>{if(hoverTimer!==undefined)clearTimeout(hoverTimer);hoverTimer=undefined;};
     const clearPin=()=>{if(timer!==undefined)clearTimeout(timer);timer=undefined;pinned=null;};
     const paint=()=>{
       const buttons=Array.from(root.querySelectorAll<HTMLButtonElement>('button.legend-item[data-series-key]'));
@@ -62,6 +70,12 @@ export class SeriesFocus {
     const pointer=(event:PointerEvent)=>{
       if(event.pointerType==='touch')return;
       const next=buttonAt(event.type==='pointerout'?event.relatedTarget:event.target);
+      clearHover();
+      if(!next&&hovered&&event.type==='pointerout'){
+        const detail=detailFor(hovered);
+        // A bounded, scrollable preview must remain reachable across its small gap.
+        if(detail&&detail.scrollHeight>detail.clientHeight){hoverTimer=setTimeout(()=>{hoverTimer=undefined;hovered=null;paint();},150);return;}
+      }
       if(next!==hovered){hovered=next;dismissed=false;}paint();
     };
     const focus=(event:FocusEvent)=>{
@@ -71,24 +85,33 @@ export class SeriesFocus {
     };
     const touch=(event:PointerEvent)=>{
       if(event.pointerType!=='touch')return;
-      hovered=focused=null;
+      if(detailAt(event.target))return;
+      clearHover();hovered=focused=null;
       touchButton=buttonAt(event.target);clearPin();dismissed=false;
     };
     const click=(event:MouseEvent)=>{
-      const button=buttonAt(event.target),touched=button&&button===touchButton;touchButton=null;
+      const button=legendAt(event.target),touched=button&&button===touchButton;touchButton=null;
       if(!button)return;
       const key=button.dataset.seriesKey!;
       if(this.chosen.has(key))this.chosen.delete(key);else this.chosen.add(key);
       if(touched){clearPin();pinned=button;timer=setTimeout(()=>{timer=undefined;pinned=null;paint();},4000);}
       paint();
     };
-    const outside=(event:PointerEvent)=>{if(pinned&&!pinned.contains(event.target as Node)){clearPin();paint();}};
+    const outside=(event:PointerEvent)=>{if(pinned&&buttonAt(event.target)!==pinned){clearPin();paint();}};
     const escape=(event:KeyboardEvent)=>{if(event.key==='Escape'){dismissed=true;clearPin();paint();}};
+    const scroll=(event:KeyboardEvent)=>{
+      const button=buttonAt(event.target),detail=button&&detailFor(button);
+      if(!button||button.dataset.seriesKey!==this.selected||!detail||detail.scrollHeight<=detail.clientHeight)return;
+      const step=event.key==='ArrowDown'?32:event.key==='ArrowUp'?-32:event.key==='PageDown'?detail.clientHeight:event.key==='PageUp'?-detail.clientHeight:null;
+      if(step===null&&event.key!=='Home'&&event.key!=='End')return;
+      event.preventDefault();event.stopPropagation();detail.scrollTop=event.key==='Home'?0:event.key==='End'?detail.scrollHeight:detail.scrollTop+step!;
+    };
     this.refresh=paint;
-    this.dismiss=()=>{hovered=focused=touchButton=null;dismissed=false;clearPin();paint();};
+    this.dismiss=()=>{clearHover();hovered=focused=touchButton=null;dismissed=false;clearPin();paint();};
     this.reset=()=>{this.chosen.clear();this.dismiss();};
     root.addEventListener('pointerover',pointer);root.addEventListener('pointerout',pointer);
     root.addEventListener('focusin',focus);root.addEventListener('focusout',focus);root.addEventListener('pointerup',touch);
+    root.addEventListener('keydown',scroll);
     addEventListener('pointerdown',outside);addEventListener('keydown',escape);root.addEventListener('click',click);
     const stop=phase.onPhase(paint);
     // The chart finishes its fold after the shared gesture phase has ended.
@@ -98,6 +121,7 @@ export class SeriesFocus {
     return()=>{
       root.removeEventListener('pointerover',pointer);root.removeEventListener('pointerout',pointer);
       root.removeEventListener('focusin',focus);root.removeEventListener('focusout',focus);root.removeEventListener('pointerup',touch);
+      root.removeEventListener('keydown',scroll);
       removeEventListener('pointerdown',outside);removeEventListener('keydown',escape);root.removeEventListener('click',click);stop();observer.disconnect();this.reset();
       this.refresh=this.reset=this.dismiss=()=>{};
     };

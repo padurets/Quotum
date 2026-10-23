@@ -3,9 +3,12 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {compose, targetOf, cellStart, type Chunk} from '../../server/domain/history';
-import {plotBar, plotGroups, plotOf} from '../lib/historyPlot';
+import {plotTarget, plotBar, plotGroups, plotOf} from '../lib/historyPlot';
 import {Pan} from '../lib/pan';
 import {clipPlot} from '../components/PlotLayer';
+import ts from 'typescript';
+import {navigationAt,navigationKey} from '../lib/axisNavigation';
+import {activityScale} from '../lib/activity';
 
 test('the actual activity edge painter retains full and partial bars when a selected range moves forward', () => {
   const M = 60_000, H = 60 * M, DAY = 24 * H, NOW = 100 * DAY;
@@ -39,10 +42,10 @@ test('the actual activity edge painter retains full and partial bars when a sele
   const edges = {current: {querySelectorAll: () => paths}}, edgePaint = {current: committed};
   const commits: (() => void)[] = [];
   const source = readFileSync(new URL('../components/Activity.tsx', import.meta.url), 'utf8');
-  const start = source.search(/(?:const paintEdges|edgePaint.current) = \(\) => \{/);
-  const body = source.slice(start, source.indexOf('useLayoutEffect(() => pan.subscribe', start));
+  const start = source.indexOf('const paintEdges = (');
+  const body = source.slice(start, source.indexOf('  useEffect(() => {if (!strip)', start));
   const y = (ms: number) => 100 - ms / (.7 * H) * 100;
-  runInNewContext(body, {axis: {held: false, visualGeometry: () => ({from: pan.get()!.from, to: pan.get()!.to}), screenX: (at: number) => (at - selected.from) / H - (pan.get()!.to - pan.get()!.originEnd) / H}, edgePaint, strip, mask, bandClip, clipPlot, edges, pan, from: selected.from, to: selected.to, targetOf, cellStart, plotBar, groups, by: 'project', painted: {current: ''}, barMs: strip.barMs, vertical: {max: .7 * H}, height: 100, width: 24, scale: 1, left: 0, right: 0, perMs: 1 / H, x: (at: number) => (at - selected.from) / H, y, useLayoutEffect: (commit: () => void) => commits.push(commit)});
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText, {navigationAt,navigationKey,navigation:{context:'test',range:'selected'},timeRange:()=>selected,valueContext:'',coherent:false,valuePin:{current:null},activityScale,heights:new Map(),paintValue:()=>{},paintedValue:{current:''},basis:{},incomingReady:true,prepared:{ready:true},axis: {commitDrawing:(_basis:unknown,_ready:boolean,paint:()=>void)=>{edgePaint.current=paint;},held: false, visualGeometry: () => ({from: pan.get()!.from, to: pan.get()!.to, end: pan.get()!.to}), screenX: (at: number) => (at - selected.from) / H - (pan.get()!.to - pan.get()!.originEnd) / H}, edgePaint, strip, mask, bandClip, clipPlot, edges, pan, from: selected.from, to: selected.to, targetOf, cellStart, plotBar, plotTarget, groups, by: 'project', painted: {current: ''}, barMs: strip.barMs, vertical: {max: .7 * H}, height: 100, width: 24, scale: 1, left: 0, right: 0, perMs: 1 / H, x: (at: number) => (at - selected.from) / H, y, useLayoutEffect: (commit: () => void) => commits.push(commit)});
   assert.equal(edgePaint.current, committed, 'a preparing render cannot replace the painter of the old DOM');
   edgePaint.current();
   assert.equal(committedPaints, 1);

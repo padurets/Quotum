@@ -1,3 +1,5 @@
+import {plotTarget, plotBar} from '../lib/historyPlot';
+import {targetOf} from '../../server/domain/history';
 import {workChange} from '../lib/workChanges';
 import {projectColorBindings} from './projectColorBindings';
 import * as periodValueClockBindings from '../../server/domain/periodValues';
@@ -54,15 +56,25 @@ import type {Hub} from '../../server/api';
 export const NOW=1_800_000_000_000,H=3_600_000,M=60_000;
 export const flush=async()=>{for(let i=0;i<300;i++)await Promise.resolve();};
 
+/** A held HTTP boundary settles on cancellation, even before its producer releases it. */
+export function abortable<T>(pending:Promise<T>,signal:AbortSignal):Promise<T> {
+  return new Promise<T>((resolve,reject)=>{
+    const abort=()=>{signal.removeEventListener('abort',abort);reject(signal.reason??new DOMException('Aborted','AbortError'));};
+    signal.addEventListener('abort',abort,{once:true});
+    pending.then(value=>{signal.removeEventListener('abort',abort);resolve(value);},error=>{signal.removeEventListener('abort',abort);reject(error);});
+    if(signal.aborted)abort();
+  });
+}
+
 /** Actual producer, wire JSON boundary, page reducer, transport and bounded server reader. */
-export async function fixture({heatmap=false,personal=false,ownerDevice=false,transportLive=false,privateWork=false,unknown=false,current=false,stable=true,fixed=false,tableOnly=false,periodName="1h",creditFrom=NOW-3*M,creditTo=NOW-2*M,clocked=false,sessionMs=24*H,initialFilters=null as filterModelBindings.DataFilters|null}={}) {
+export async function fixture({heatmap=false,activityOnly=false,personal=false,ownerDevice=false,transportLive=false,privateWork=false,unknown=false,current=false,stable=true,fixed=false,tableOnly=false,periodName="1h",creditFrom=NOW-3*M,creditTo=NOW-2*M,clocked=false,sessionMs=24*H,initialFilters=null as filterModelBindings.DataFilters|null,initialFailure=false,periodSource=undefined as string|undefined}={}) {
   let selectedRange=fixed?{from:NOW-H,to:NOW}:null;
   const start=NOW-Math.max(3*H,periodOf(periodName).ms+H);
   const store=new Store(':memory:',start),directory=new Directory(store.db);
   const alice=directory.createUser('a@example.com','Alice','unused',start),bob=directory.createUser('b@example.com','Bob','unused',start);
   const board=personal?directory.boards(alice.id)[0].id:directory.createBoard('Shared',alice.id,start).id;
   if(!personal)directory.addMember(board,bob.id,start);
-  directory.saveView(board,{...EMPTY_VIEW,shown:[AGENTS,'quota-history',...(heatmap?[AGENT_HOURS_HEATMAP]:[])],hidden:[ACTIVITY]},alice.id,start);
+  directory.saveView(board,{...EMPTY_VIEW,shown:[AGENTS,...(activityOnly?[ACTIVITY]:['quota-history']),...(heatmap?[AGENT_HOURS_HEATMAP]:[])],hidden:activityOnly?[...QUOTA_WIDGETS]:[ACTIVITY]},alice.id,start);
   const source=store.source('codex','a'.repeat(24),start);store.hold(source,alice.id,start);store.hold(source,bob.id,start);
   if(tableOnly)directory.saveView(board,{...EMPTY_VIEW,shown:[AGENTS],enabledWhenEmpty:[AGENTS],hidden:[ACTIVITY,'quota-history','quota-session-history','quota-table','quota-session-table','subscription-funds','budget-history','budget-table','source:'+source]},alice.id,start);
   if(!personal)store.share(board,source,alice.id,start);
@@ -76,9 +88,13 @@ export async function fixture({heatmap=false,personal=false,ownerDevice=false,tr
   const live=(working=false)=>({accountBy:funding?'login' as const:null,source:funding,clientId:'codex',sessionId:stable?'c'.repeat(32):null,device:{id:device,name:'Work laptop'},origin:'terminal' as const,project:'Work project',folder:'Private folder',startedAt:start,sentStartedAt:start,lastWorkedAt:NOW-2*M,working});
   if(current)hub.ingest.live.report(device,owner,[live()],NOW);
   const timers=new Map<object,{at:number;run:()=>void}>();
-  const events=new Events(hub,undefined,{now:()=>now,after:(ms,run)=>{const token={};timers.set(token,{at:now+ms,run});return ()=>{timers.delete(token);};}},null),tiles=new HistoryTiles(store),reader=new PeriodReader(hub,tiles,events);
-  events.onHistory=(source,since,scopes,work)=>{tiles.touch(source,since,scopes);reader.touch(source,since,scopes,work);};
-  events.onClientHistory=(user,since,device)=>{tiles.touchClient(user,since,device);reader.touchClient(user,since,device);};events.attach();
+  const eventClock={now:()=>now,after:(ms:number,run:()=>void)=>{const token={};timers.set(token,{at:now+ms,run});return ()=>{timers.delete(token);};}};
+  let events=new Events(hub,undefined,eventClock,null);
+  const tiles=new HistoryTiles(store);let reader=new PeriodReader(hub,tiles,events);
+  const attach=()=>{
+    events.onHistory=(source,since,scopes,work)=>{tiles.touch(source,since,scopes);reader.touch(source,since,scopes,work);};
+    events.onClientHistory=(user,since,device)=>{tiles.touchClient(user,since,device);reader.touchClient(user,since,device);};events.attach();
+  };attach();
   const page=createStore(reduce,INITIAL),frames:Frame[]=[],requests:PeriodRequest[]=[],pool=new HistoryPool();
   let stream:ReadableStreamDefaultController<Uint8Array>|null=null;
   const connection=transportLive?new Live({fetch:async()=>new Response(new ReadableStream<Uint8Array>({start:controller=>{stream=controller;}}),{headers:{'content-type':'text/event-stream'}}),now:()=>now,setTimeout:(run,ms)=>{const token={};timers.set(token,{at:now+ms,run});return token;},clearTimeout:token=>{timers.delete(token as object);},random:()=>0.5,visible:()=>true,hubNow:()=>now,heard:()=>{},dispatch:event=>page.dispatch(event),unauthorized:()=>{},gone:()=>{},epochChanged:()=>{},script:null,reload:()=>{},storage:()=>({getItem:()=>null,setItem:()=>{}})}):null;
@@ -93,12 +109,17 @@ export async function fixture({heatmap=false,personal=false,ownerDevice=false,tr
   if(!initial||initial==='limit')throw new Error('stream did not open');let opened=initial;feed(opened.frames);
   if(connection)await flush();
   const settings={range:periodName,kind:'session',money:DEFAULT_MONEY,funds:DEFAULT_MONEY};
-  const code=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
-  let wait:Promise<void>|null=null,preparer:Preparations|null=null;
+  const code=periodSource??readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
+  let wait:{promise:Promise<void>;signal?:AbortSignal;reply?:PeriodReply}|null=null,preparer:Preparations|null=null,failInitial=initialFailure;
   const pageClock=new PageClock({now:()=>now,visible:()=>true,setTimeout:(run,ms)=>{const token={};timers.set(token,{at:now+ms,run});return token;},clearTimeout:token=>{timers.delete(token as object);}});
   const pan=new Pan({now:()=>now,commit:()=>{},requestFrame:run=>{run();return null;},cancelFrame:()=>{},setTimeout:()=>null,clearTimeout:()=>{}});
   const context={workChange,exports:{} as any,hubNow:clocked?pageClock.hubNow:()=>now,retention,historyPool:pool,clock:clocked?pageClock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,
-    fetchPeriod:async(_board:string,body:PeriodRequest)=>{requests.push(body);const reply=expandPeriod(JSON.parse(reader.read(board,alice.id,JSON.parse(JSON.stringify(body)))));const pending=wait;wait=null;await pending;return reply;},
+    fetchPeriod:async(_board:string,body:PeriodRequest,signal:AbortSignal)=>{
+      signal.throwIfAborted();requests.push(body);if(failInitial){failInitial=false;throw new Error('initial transport unavailable');}
+      const reply=expandPeriod(JSON.parse(reader.read(board,alice.id,JSON.parse(JSON.stringify(body))))),pending=wait;wait=null;
+      if(pending){pending.signal=signal;pending.reply=reply;await abortable(pending.promise,signal);}
+      signal.throwIfAborted();return reply;
+    },
     periodTextChangesAt,page,pan,preparations:()=>preparer,prepareAsync:(owner:object,work:Parameters<typeof drain>[0],valid:()=>boolean)=>prepareAsync(owner,work,valid,preparer),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,
     packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,
     WorkCalendar,AGENT_HOURS_HEATMAP,timeRange:()=>selectedRange,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
@@ -106,17 +127,25 @@ export async function fixture({heatmap=false,personal=false,ownerDevice=false,tr
   if(initialFilters)filterRuntimeBindings.publishDataFilters(initialFilters);
   const period=new context.exports.BoardPeriod();pan.onPhase(()=>period.refreshWorkClock());page.listen((event,state)=>period.changed(event,state));period.activate(true);await flush();
   const limited=!!initialFilters&&!filterModelBindings.executableWorkFilters(initialFilters);
-  assert.equal(period.get().error,limited?'filters_limit':null);assert.equal(period.get().rows.length,limited?0:1);const initialRequests=requests.slice();requests.length=0;frames.length=0;
+  assert.equal(period.get().error,limited?'filters_limit':initialFailure?'unavailable':null);assert.equal(period.get().rows.length,limited||initialFailure?0:1);const initialRequests=requests.slice();requests.length=0;frames.length=0;
   const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=Math.max(now,next[1].at);timers.delete(next[0]);next[1].run();events.flush();}now=Math.max(now,at);if(!clocked)period.tick();};
   const jump=(at:number)=>{now=at;for(const [token,timer] of [...timers])if(timer.at<=at){timers.delete(token);timer.run();}events.flush();if(clocked)pageClock.wakeDue();else period.tick();};
-  return {elapse:(ms:number)=>{now+=ms;},hub,device,owner,advance,jump,pan,selectedRange:()=>selectedRange,selectRange:(range:typeof selectedRange)=>{selectedRange=range;period.changed();},clock:pageClock,initialRequests,prepareWith:(value:Preparations|null)=>{preparer=value;},settings,pool,reader,store,directory,board,alice,bob,source,credit,events,period,page,frames,requests,
+  const consumers=new Set<()=>void>();
+  return {onClose:(stop:()=>void)=>{consumers.add(stop);return()=>consumers.delete(stop);},hub,device,owner,advance,jump,elapse:(ms:number)=>{now+=ms;},elapseTo:(at:number)=>{now=at;},pan,selectedRange:()=>selectedRange,selectRange:(range:typeof selectedRange)=>{selectedRange=range;period.changed();},clock:pageClock,initialRequests,prepareWith:(value:Preparations|null)=>{preparer=value;},settings,pool,get reader(){return reader;},store,directory,board,alice,bob,source,credit,get events(){return events;},period,page,frames,requests,
     report:(working=false,at=NOW)=>{now=at;hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(at).toISOString(),sessions:[{provider:'codex',...(funding?{account:(privateWork?'b':'a').repeat(24)}:{}),sessionId:stable?'c'.repeat(32):null,origin:'terminal',project:'Work project',folder:'Private folder',startedAt:new Date(start).toISOString(),lastWorkedAt:new Date(NOW-2*M).toISOString(),working}]},at);events.flush();},
     endIdle:()=>{hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(NOW).toISOString(),sessions:[]},NOW);events.flush();},
     event:(event:HubEvent)=>page.dispatch({type:'hub',event}),
-    hold:()=>{let release!:()=>void,reject!:(error:Error)=>void;wait=new Promise<void>((yes,no)=>{release=yes;reject=no;});return {release,reject};},
+    hold:()=>{let release!:()=>void,reject!:(error:Error)=>void;const held:{promise:Promise<void>;signal?:AbortSignal;reply?:PeriodReply}={promise:new Promise<void>((yes,no)=>{release=yes;reject=no;})};wait=held;return {release,reject,get signal(){return held.signal;},get reply(){return held.reply;}};},
     disconnect:()=>{opened.close();page.dispatch({type:'connection',status:'retrying',lostAt:now});}, reconnect:()=>{page.dispatch({type:'connection',status:'connecting',lostAt:now});opened=events.open({user:alice.id,secret,board,kind:'stream',send:feed,end:()=>{}}) as any;feed(opened.frames);}, remove:()=>{directory.removeMember(board,bob.id);store.unshareOrphans(board);events.flush();},
+    restart:()=>{
+      opened.close();events.close();now++;
+      events=new Events(hub,undefined,eventClock,null);reader=new PeriodReader(hub,tiles,events);attach();
+      opened=events.open({user:alice.id,secret,board,kind:'stream',send:feed,end:()=>{}}) as any;
+      const baseline=opened.frames.filter(frame=>frame.type!=='hello');feed(opened.frames.filter(frame=>frame.type==='hello'));
+      return ()=>feed(baseline);
+    },
     fresh:()=>expandPeriod(JSON.parse(reader.read(board,alice.id,{version:1,selection:{mode:'live',periodMs:H},evaluatedAt:NOW,sessions:{}}))) as PeriodReply,
-    close:async()=>{period.activate(false);connection?.close();stream?.close();opened.close();events.close();await new Promise(resolve=>setImmediate(resolve));store.close();assert.equal(pool.estimatedBytes,0);assert.equal(pool.activeFlights,0);}};
+    close:async()=>{for(const stop of [...consumers])stop();period.activate(false);connection?.close();stream?.close();opened.close();events.close();await new Promise(resolve=>setImmediate(resolve));store.close();assert.equal(pool.estimatedBytes,0);assert.equal(pool.activeFlights,0);}};
 }
 
 
@@ -129,44 +158,48 @@ import {plotGroupsPrepared} from '../lib/historyPlot';
 import {StackPaths} from '../lib/stackPaths';
 import {groupRegistry} from '../lib/plotRegistry';
 import {cellStart} from '../../server/domain/history';
-import {niceTicks} from '../lib/periods';
+import {niceTicks,timeTickWords} from '../lib/periods';
 import {navigationKey} from '../lib/axisNavigation';
 import {cardId,isHidden} from '../lib/view';
 
-export function consumer(h: any) {
+export function consumer(h: any, options:{now?:()=>number;focus?:{get:()=>string|null;subscribe:(run:()=>void)=>()=>void}}={}) {
   const parent=preparationFixture(),child=preparationFixture();
   const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
-  const axis={box:{current:null},svg:{current:null},width:400,scale:1,hover:null,drag:null,clip:'c',handlers:{},basis:{from:NOW-H,to:NOW,end:NOW},active:false,screenX:(at:number)=>48+(at-(NOW-H))/H*340,commitDrawing:()=>{}};
+  const axis={box:{current:null},svg:{current:null},width:400,scale:1,hover:null,drag:null,clip:'c',handlers:{},basis:{from:NOW-H,to:NOW,end:NOW},active:false,visualGeometry:()=>axis.basis,presentation:()=>axis.basis,screenX:(at:number)=>48+(at-(NOW-H))/H*340,commitDrawing:()=>{}};
   const EMPTY_ACTIVITY={since:0,known:null,barMs:60_000,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}};
   const titles=Object.fromEntries(Object.values(h.page.get().board!.cards).map((c:any)=>[c.id,{provider:c.provider,title:'Shared source'}]));
   let panning:number|null=null;
+  const focus=options.focus??{get:()=>null,subscribe:()=>()=>{}};
   const prefs={range:'1h',activityBy:'project'};
-  const context={...projectColorBindings(h.page),ACTIVITY,
+  const context={...projectColorBindings(h.page),ACTIVITY,boardPeriod:h.period,
     exports:{} as any,React,...parent,memo:(f:any)=>f,useMemo:(f:any,deps:any[])=>{const slot=parent.useRef(null) as any;if(!slot.current||deps.some((v,i)=>!Object.is(v,slot.current.deps[i])))slot.current={deps,value:f()};return slot.current.value;},
-    useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useActivityHistory:()=>h.renderActivity(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
+    useSyncExternalStore:(_subscribe:any,get:any)=>get(),useEffect:()=>{},useSeriesFocus:()=>focus,seriesFocusStyle:()=>({}),useId:()=> 'c',useActivityHistory:()=>h.renderActivity(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
     useLineup:()=>h.page.get().board!.lineup,usePersonalBoard:()=>false,useTitles:()=>titles,
     usePref:(key:keyof typeof prefs)=>prefs[key],useLocale:()=> 'en',useTimeRange:()=>h.selectedRange(),useBoardId:()=>h.board,
-    axisNavigation:()=>({context:'b',range:'1h'}),useClock:()=>NOW,usePanning:()=>panning,
-    pan:{get:()=>null,active:()=>null,subscribe:()=>()=>{}},useHistoryBegins:()=>0,frameOf:()=>({from:NOW-H,to:NOW,live:true}),measuredTo:()=>NOW,
-    activityEmpty,groupColors,groupRegistry,activitySeriesKey,plotGroupsPrepared,StackPaths,stacksHeight:()=>160,activityScale,niceTicks,cellStart,MINUTE:60_000,EMPTY_ACTIVITY,groupName:(g:any)=>g.name??g.key,cardId,isHidden,t:(s:any)=>s,
-    quotaHistory:{retry:()=>{}},AnalyticsPanel:()=>null,ActivitySettings:()=>null,Totals:()=>null,LegendItem:()=>null,
+    axisNavigation:()=>({context:'b',range:'1h'}),useClock:()=>options.now?.()??NOW,usePanning:()=>panning,
+    pan:{get:()=>null,active:()=>null,subscribe:()=>()=>{},onStop:()=>()=>{}},useHistoryBegins:()=>0,frameOf:()=>({from:(options.now?.()??NOW)-H,to:options.now?.()??NOW,live:true}),measuredTo:()=>options.now?.()??NOW,
+    activityEmpty,groupColors,groupRegistry,activitySeriesKey,plotGroupsPrepared,StackPaths,stacksHeight:()=>160,activityScale,niceTicks,timeTickWords,cellStart,plotBar,plotTarget,targetOf,MINUTE:60_000,EMPTY_ACTIVITY,groupName:(g:any)=>g.name??g.key,cardId,isHidden,t:(s:any)=>s,
+    quotaHistory:{retry:()=>h.loader.retry()},AnalyticsPanel:()=>null,ActivitySettings:()=>null,Totals:()=>null,LegendItem:()=>null,
     setTimeRange:()=>{},timeRangeKey,navigationKey,useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),
     PlotLayer:()=>null,PlotOverlay:()=>null,Tooltip:()=>null,clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',
     CSS:{escape:(id:any)=>id},Stacks:null as any,StackArtwork:null as any};
   runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;globalThis.StackArtwork=StackArtwork;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,Object.assign(context,{workChange},periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   function find(node:any,type:any):any{if(Array.isArray(node))return node.map(n=>find(n,type)).find(Boolean);if(!React.isValidElement(node))return null;if(node.type===type)return node;return find((node.props as any).children,type);}
   const pathsOf=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(pathsOf);if(!React.isValidElement(node))return [];const p=node.props as any;if(node.type===context.StackArtwork)return pathsOf(context.StackArtwork(p));return p.className==='activity-stack'&&p.d!==undefined?[p.d]:pathsOf(p.children);};
-  let latestParent:any;const renderParent=()=>{Object.assign(context,parent);parent.begin();latestParent=context.exports.Activity({arrange:{view:h.page.get().board!.view}});return find(latestParent,context.Stacks).props;};
-  const renderChild=(props:any)=>{Object.assign(context,child);child.begin();return pathsOf(context.Stacks(props));};
+  let latestParent:any,latestChild:any;const renderParent=()=>{Object.assign(context,parent);parent.begin();latestParent=context.exports.Activity({arrange:{view:h.page.get().board!.view}});return find(latestParent,context.Stacks).props;};
+  const renderChild=(props:any)=>{Object.assign(context,child);child.begin();latestChild=context.Stacks(props);return pathsOf(latestChild);};
 
     const names=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(names);if(!React.isValidElement(node))return [];const props=node.props as any;return node.type===context.LegendItem?[props.name]:names(props.children);};
-    const render=()=>{const props=renderParent();parent.commit();const paths=renderChild(props);child.commit();return {paths,names:names(latestParent),ready:props.prepared};};
+    const render=()=>{const props=renderParent();parent.commit();const paths=renderChild(props);child.commit();const legend=(node:any):any[]=>{if(Array.isArray(node))return node.flatMap(legend);if(!React.isValidElement(node))return [];const p=node.props as any;return node.type===context.LegendItem?[p]:legend(p.children);};
+      const result={paths,names:names(latestChild),ready:props.prepared};return Object.defineProperties(result,{entries:{value:legend(latestChild)},tree:{value:latestChild},totals:{value:find(latestChild,context.Totals)?.props},incomingFrame:{value:props.detailFrame},retry:{value:find(latestParent,context.AnalyticsPanel)?.props.retry}}) as typeof result&{entries:any[];tree:any;totals:any;incomingFrame:any;retry:()=>void};};
     const settle=()=>{for(let i=0;i<4;i++){render();parent.finish();child.finish();}return render();};
-    return {render,settle,pan:()=>{panning=1;axis.active=true;}};
+    let closed=false;const close=()=>{if(closed)return;closed=true;unregister();parent.dispose();child.dispose();};
+    const unregister=h.onClose(close);
+    return {render,settle,queuedParent:()=>parent.scheduler.size,queuedChild:()=>child.scheduler.size,finishParent:parent.finish,finishChild:child.finish,close,pan:()=>{panning=1;axis.active=true;}};
 }
 
 
-import {HistoryStore,follow} from '../lib/history';
+import {HistoryStore,follow,type HistoryEnv} from '../lib/history';
 import {expandHistory} from '../../server/domain/history';
 
 export async function drawings(h:any,activity=true,scope:'quota'|'budget'='quota'){
@@ -174,10 +207,12 @@ export async function drawings(h:any,activity=true,scope:'quota'|'budget'='quota
  const source=readFileSync(new URL('../lib/history.ts',import.meta.url),'utf8');
  const read=source.split('\n').find(line=>line.trimStart().startsWith('read:')),retry=source.split('\n').find(line=>line.trimStart().startsWith('retry:'));assert.ok(read);assert.ok(retry);
  const adapter=source.slice(source.indexOf('const selectedMeters ='),source.indexOf('function activeReaders('));
- const readerContext={read:null as any,retry:null as any,selected:null as any,boardPeriod:h.period,scope,family:'budget',pan:h.pan,expandHistory,prefs:()=>h.settings,subscriptionSelection,moneyReadSelection};
- runInNewContext(ts.transpileModule(adapter+'\nglobalThis.read=({'+read+'}).read;globalThis.retry=({'+retry+'}).retry;globalThis.selected=selectedMeters;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,readerContext);
- const loader=new HistoryStore({sharedTransport:true,workInPresentation:scope!=='budget',now:()=>NOW,preparations:null,read:readerContext.read,retry:readerContext.retry,setTimeout:(run,ms)=>{const token={};scheduled.set(token,{run,ms});return token;},clearTimeout:token=>{scheduled.delete(token as object);},dropTimeRange:()=>{}},undefined,scope,h.pool);
- const stop=follow(loader,h.page);loader.setActivityActive(activity);loader.choose(h.settings.range,h.selectedRange());loader.open(h.board);loader.setWorkFilter(JSON.stringify(filterRuntimeBindings.effectiveFilters()?filterModelBindings.workFilter(filterRuntimeBindings.effectiveFilters()!):null),filterRuntimeBindings.effectiveFilters()??undefined);loader.hello(h.events.epoch);
+ const workKey=source.split('\n').find(line=>line.startsWith('const selectedWorkKey='));assert.ok(workKey);
+ const readerContext={read:null as any,retry:null as any,selected:null as any,workKey:null as any,boardPeriod:h.period,scope,family:'budget',pan:h.pan,expandHistory,prefs:()=>h.settings,subscriptionSelection,moneyReadSelection,...filterModelBindings,...filterRuntimeBindings};
+ runInNewContext(ts.transpileModule(adapter+'\n'+workKey+'\nglobalThis.read=({'+read+'}).read;globalThis.retry=({'+retry+'}).retry;globalThis.selected=selectedMeters;globalThis.workKey=selectedWorkKey;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,readerContext);
+ const env:HistoryEnv={sharedTransport:true,workInPresentation:scope!=='budget',now:()=>NOW,preparations:null,read:readerContext.read,retry:readerContext.retry,setTimeout:(run,ms)=>{const token={};scheduled.set(token,{run,ms});return token;},clearTimeout:token=>{scheduled.delete(token as object);},dropTimeRange:()=>{}};
+ const loader=new HistoryStore(env,undefined,scope,h.pool);
+ const stop=follow(loader,h.page);loader.setActivityActive(activity);loader.choose(h.settings.range,h.selectedRange());loader.open(h.board);loader.setWorkFilter(readerContext.workKey(h.page.get()),filterRuntimeBindings.effectiveFilters()??undefined);loader.hello(h.events.epoch);
  loader.setMeters(readerContext.selected(h.page.get(),scope));
  const board=h.page.get().board;loader.snapshot(board.lineup,Object.values(board.cards).flatMap((c:any)=>c.windows.map((w:any)=>`${c.id} ${w.id}`)),board.historyStart,board.workAuthority);await flush();
  const selectedSlots:any[]=[],financialSlots:any[]=[],activitySlots:any[]=[],forecastSlots:any[]=[];let slots=selectedSlots,cursor=0;
@@ -189,7 +224,7 @@ export async function drawings(h:any,activity=true,scope:'quota'|'budget'='quota
  const renderFinancial=()=>{slots=financialSlots;cursor=0;return context.read(loader,false,true);};
  const renderActivity=()=>{slots=activitySlots;cursor=0;return context.read(loader,true,false,true);};
  const renderForecast=()=>{slots=forecastSlots;cursor=0;return context.read(loader,false);};
- return {loader,render,renderFinancial,renderActivity,renderForecast,runScheduled:()=>{const timers=[...scheduled];for(const [token,timer] of timers){scheduled.delete(token);timer.run();}return timers.map(([,timer])=>timer.ms);},close:()=>{stop();loader.close();}};
+ return {loader,render,renderFinancial,renderActivity,renderForecast,prepareWith:(value:Preparations|null)=>{env.preparations=value;},syncFilters:()=>{loader.setWorkFilter(readerContext.workKey(h.page.get()),filterRuntimeBindings.effectiveFilters()??undefined);loader.setMeters(readerContext.selected(h.page.get(),scope));},runScheduled:()=>{const timers=[...scheduled];for(const [token,timer] of timers){scheduled.delete(token);timer.run();}return timers.map(([,timer])=>timer.ms);},close:()=>{stop();loader.close();}};
 }
 import {subscriptionLinesOf} from '../lib/subscription';
 import {lineWork,workText} from '../lib/work';

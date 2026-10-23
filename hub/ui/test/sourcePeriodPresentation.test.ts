@@ -1,3 +1,5 @@
+import {windowName} from '../lib/quota';
+import {selectedAllowanceIds} from '../lib/moneySelection';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -9,7 +11,7 @@ import {timeRangeLabel} from '../lib/timeRange';
 import {t} from '../i18n';
 import {EMPTY_VIEW} from '../../server/domain/view';
 import {providerOf} from '../../server/domain/providers';
-import {quotaPeriods} from '../lib/subscription';
+import {quotaPeriods,primaryQuotaPeriods} from '../lib/subscription';
 import {hasSubscriptionCaps} from '../lib/providers';
 import type {WorkedSession} from '../../server/domain/periodWork';
 import type {SessionPeriod} from '../lib/period';
@@ -24,7 +26,7 @@ function component(file:string,name:string,start:string,end?:string,bindings:Rec
   const source=code(file),at=source.indexOf(start);
   assert.ok(at>=0);
   const body=source.slice(at,end?source.indexOf(end,at):undefined);
-  const context={useDataFilters:()=>({current:null}),exports:{},draw:null as unknown as (props:Record<string,unknown>)=>Node|null,
+  const context={selectedAllowanceIds,usePref:()=>({unit:'USD'}),useDataFilters:()=>({current:null}),exports:{},draw:null as unknown as (props:Record<string,unknown>)=>Node|null,
     require:()=>runtime,t,...bindings};
   runInNewContext(ts.transpileModule(body+`\nglobalThis.draw=${name};`,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   return context.draw;
@@ -44,7 +46,7 @@ function sourceHook(board:ReturnType<typeof workStore>,id:string) {
   const source=code('../lib/period.ts'),body=source.slice(source.indexOf('const roster='));
   let cursor=0,changes=0;
   const slots:unknown[]=[],subscriptions:{read:()=>unknown;value:unknown;stop:()=>void}[]=[];
-  const context={useDataFilters:()=>({current:null}),exports:{} as {useTimeRange:()=>null,useSourcePeriodSessions:(id:string)=>SessionPeriod&{rows:WorkedSession[]}},boardPeriod:board,selector,sameJson,
+  const context={selectedAllowanceIds,usePref:()=>({unit:'USD'}),useDataFilters:()=>({current:null}),exports:{} as {useTimeRange:()=>null,useSourcePeriodSessions:(id:string)=>SessionPeriod&{rows:WorkedSession[]}},boardPeriod:board,selector,sameJson,
     useRef:(value:unknown)=>{const index=cursor++;return slots[index]??(slots[index]={current:value});},
     useState:(initial:()=>unknown)=>{const index=cursor++;return [slots[index]??(slots[index]=initial())];},
     useSyncExternalStore:(subscribe:(listener:()=>void)=>()=>void,read:()=>unknown)=>{
@@ -95,7 +97,7 @@ test('global work publication never wakes unrelated source cards but a source ev
 });
 
 function agents(page=0,retry=()=>{}) {
-  const status=component('../components/PeriodStatus.tsx','PeriodStatus','export function PeriodStatus',undefined,{timeRangeLabel,boardPeriod:{retry}});
+  const status=component('../components/PeriodStatus.tsx','PeriodStatus','export function PeriodStatus',undefined,{timeRangeLabel,boardPeriod:{retry},useRemovalFocus:()=>()=>{}});
   const sharedPages=component('../components/TableWidget.tsx','TablePages','export function TablePages(','\ntype Measurement=');
   const pages=component('../components/Agents.tsx','AgentPages','function AgentPages(',undefined,{TablePages:sharedPages});
   return component('../components/Agents.tsx','Agents','export function Agents(','/** A project as',{
@@ -139,13 +141,13 @@ test('the actual card tray keeps an accessible loading/error disclosure and retr
 test('card measurements distinguish a failed first read from a successful absence',()=>{
   let reading:{value:null|{windows:[];meters:[];keys:[]};basis:typeof basis|null;loading:boolean;error:string|null}={value:null,basis:null,loading:false,error:'unavailable'};
   const draw=component('../components/SourceCard.tsx','CardMeasurements','function CardMeasurements(','/** Historical funds',{
-    usePeriodValues:()=>reading,useTimeRange:()=>basis.range,useCurrencyContext:()=>({sources:{}}),historicalCurrencyContext,quotaPeriods,hasSubscriptionCaps,
+    usePeriodValues:()=>reading,useTimeRange:()=>basis.range,useCurrencyContext:()=>({sources:{}}),historicalCurrencyContext,quotaPeriods,primaryQuotaPeriods,windowName,PercentLimit:'unavailable',hasSubscriptionCaps,
     isWindowHidden:()=>false,planOf:()=>null,MeasurementClock:{Provider:'clock'},providerOf,
     MoneyValues:'money',MoneyCard:'money',QuotaCard:'quota',Limit:'limit',AllHidden:'hidden',PeriodStatus:'period-status',
   });
   const render=()=>nodes(draw({source:{id:'s',provider:'claude',windows:[]},arrange:{view:EMPTY_VIEW},boardId:'b'}));
   assert.equal(render().some(node=>node.props.children===t('period.noEvidence')),false);
-  assert.equal(render().find(node=>node.type==='period-status')?.props.error,'unavailable');
+  assert.equal(render().some(node=>node.type==='period-status'),false,'errors use the existing disclosure instead of inserting a body row');
   reading={value:{windows:[],meters:[],keys:[]},basis,loading:false,error:null};
   assert.ok(render().some(node=>node.props.children===t('period.noEvidence')));
   reading={...reading,error:'history_limit'};
@@ -161,9 +163,10 @@ test('historical card consumers accept the recorded Codex conversion through the
   assert.ok(value);assert.equal(value.meters.find((m:any)=>m.unit==='USD')?.amount,'2000000000');
   const bindings={usePeriodValues:()=>h.period.getValue(h.source),useTimeRange:h.selectedRange,useCurrencyContext:()=>h.page.get().board!.currencies,
     budgetVisible,subscriptionFundsVisible,historicalCurrencyContext,MeasurementClock:{Provider:'clock'},CardTray:'tray',MoneyValues:'money',
-    quotaPeriods,hasSubscriptionCaps,isWindowHidden:()=>false,planOf:()=>null,providerOf,Limit:'limit',PeriodStatus:'status'};
+    quotaPeriods,primaryQuotaPeriods,windowName,PercentLimit:'unavailable',hasSubscriptionCaps,isWindowHidden:()=>false,planOf:()=>null,providerOf,Limit:'limit',PeriodStatus:'status'};
   const footer=component('../components/SourceCard.tsx','CardFooter','function CardFooter(',undefined,bindings);
-  const measurements=component('../components/SourceCard.tsx','CardMeasurements','function CardMeasurements(','/** Historical funds',bindings);
+  const MoneyCard=component('../components/MoneyCard.tsx','MoneyCard','export function MoneyCard(','type MoneySource=',{...bindings,useShownKeys:()=>({keys:[],meters:[],allowances:[]})});
+  const measurements=component('../components/SourceCard.tsx','CardMeasurements','function CardMeasurements(','/** Historical funds',{...bindings,MoneyCard});
   const props={source:h.page.get().board!.cards[h.source],arrange:{view:EMPTY_VIEW},boardId:h.board};
   const funds=(footer(props)!.props.funds as Node).props.children as Node;
   const measured=nodes(measurements({...props,source:{...props.source,provider:'deepseek'}})).find(node=>node.type==='money')!;

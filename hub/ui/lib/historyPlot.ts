@@ -1,5 +1,5 @@
 import {sourceKey} from '../../server/domain/workAccess';
-import {cellStart, resetEventsPrepared,planEventsPrepared, type Chunk, type HistoryMeta, type SourceEvent, type SeriesCells, type Target} from '../../server/domain/history';
+import {CLOCK_TOLERANCE_MS,cellStart, resetEventsPrepared,planEventsPrepared, type Chunk, type HistoryMeta, type SourceEvent, type SeriesCells, type Target} from '../../server/domain/history';
 import {barOf} from '../../server/domain/work';
 import type {ActivityDimension} from './types';
 import type {PlotBlock, PlotSeries} from './lines';
@@ -66,6 +66,11 @@ export type PlotBuffer = {
   barMs: number;
   knownFrom: number;
 };
+
+/** A displayed range uses the saved strip's grid and its own measurement end. */
+export function plotTarget(buffer: Pick<PlotBuffer,'cell'>, range: {from:number;to:number;end:number}): Pick<Target,'k0'|'k1'> {
+  return {k0:Math.floor(range.from/buffer.cell),k1:Math.min(Math.ceil(range.to/buffer.cell)-1,Math.floor((range.end+CLOCK_TOLERANCE_MS)/buffer.cell))};
+}
 
 const activityDecoded = new WeakMap<Chunk['activity'], {from: number; cell: number; rows: Map<number, PlotBar>}>();
 function* activityOf(chunk: Chunk, cell: number): Preparation<Map<number, PlotBar>> {

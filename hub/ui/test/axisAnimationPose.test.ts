@@ -32,10 +32,10 @@ function fixture(scale: number) {
       created.push(animation); return animation;
     }});
   const owner = makeSurface(), layer = makeSurface(); layer.closest = () => owner;
-  const context = {scale, width: 600, left: 40, right: 20, drawing: {current: base}, pose: {current: {a: 1, b: 0, offset: 0}},
+  const context = {document:{timeline:{currentTime:0}},paintTicks:{current:()=>{}},animateTicks:{current:()=>[]},scale, width: 600, left: 40, right: 20, drawing: {current: base}, pose: {current: {a: 1, b: 0, offset: 0}},
     animations: {current: new Map<Surface, Moving>()}, animationPoses: {current: new WeakMap<Moving, {from: Pose; to: Pose}>()},
     panLayers: {current: [owner]}, box: {current: {querySelector: () => layer, querySelectorAll: () => [layer]}},
-    foldTicket: {current: 0}, wanted: {current: {navigation: {context: 'test', range: 'range'}}}, navigationKey,
+    foldTicket: {current: 0}, wanted: {current: {navigation: {context: 'test', range: 'range'},projection:base}},captured:{current:null},finished:{current:null}, navigationKey,
     motion: {current: null}, pan: {active: () => null}, setFolding: () => {}, performance: {now: () => 0}, matchMedia: () => ({matches: false}),
     getComputedStyle: (target: Surface) => {
       styleReads++; const animation = created.slice().reverse().find(a => !a.canceled && a.effect.target === target)!;
@@ -90,6 +90,20 @@ test('retargeting an owned projection keeps the sampled position with fresh endp
     next.progress = .37; f.checkPixels(next);
     next.progress = 1; f.checkPixels(next);
     assert.equal(f.styleReads(), 0);
+  }
+});
+
+test('the displayed measurement end survives a cross-period fold without becoming forecast time',()=>{
+  for(const fold of [false,true])for(const scale of [.5,.731,1]){
+    const f=fixture(scale),end=72*H;
+    f.context.animateProjection({from:0,to:end,end},{from:48*H,to:end,end},160,fold);
+    for(const progress of [0,.13,.61,1]){
+      f.created[0].progress=progress;
+      const shown=f.context.visualGeometry();
+      near(shown.end,end);near(shown.to-shown.end,0);
+      assert.ok(shown.to-shown.from>=24*H-1e-7&&shown.to-shown.from<=72*H+1e-7);
+    }
+    assert.equal(f.styleReads(),0);
   }
 });
 

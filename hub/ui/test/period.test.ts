@@ -376,17 +376,18 @@ test('a sibling chart reply cannot cancel the coordinator preparation of histori
 test('a dense retained month adopts its decoded reservation within the shared memory budget',async()=>{
   const pool=new HistoryPool(),flight={role:'visible' as const};
   pool.register({estimatedBytes:6*1024*1024,evictionCandidates:()=>[]});
-  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {BoardPeriod:new()=>{receive(reply:PeriodReply,intent:PeriodIntent,reserve:(bytes:number)=>boolean):Promise<void>;estimatedBytes:number}},
+  const context={WorkCalendar,AGENT_HOURS_HEATMAP,exports:{} as {BoardPeriod:new()=>{active:boolean;selection:PeriodRequest['selection'];receive(reply:PeriodReply,intent:PeriodIntent,reserve:(bytes:number)=>boolean):Promise<void>;get():{rows:unknown[]};estimatedBytes:number}},
     hubNow:()=>2_700_000_000,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
     evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,empty:()=>({value:null,basis:null,loading:false,error:null}),
-    prefs:()=>({range:'30d'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{},
+    sameJson,prefs:()=>({range:'30d'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{},
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
   const body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
   runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,{workChange},periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   const period=new context.exports.BoardPeriod(),selection={mode:'range' as const,from:0,to:2_700_000_000};
+  period.active=true;period.selection=selection;
   const basis={run:'r',revision:'1',evaluatedAt:selection.to,evidenceCut:selection.to,range:selection};
   const samples=Array.from({length:9000},(_,i)=>[i?300000:0,(i%100)+.125,0,i?0:600000,0]).flat();
   const reply:PeriodReply={basis,quota:{state:'complete',basis,value:{run:'r',now:selection.to,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:{from:0,cut:selection.to,replaceFrom:0,cursor:'a',money:[],quota:Array.from({length:12},(_,i)=>({source:String(i),window:'w',samplesEncoding:'delta',samples:[...samples]}))}}}};
@@ -396,6 +397,7 @@ test('a dense retained month adopts its decoded reservation within the shared me
   assert.equal(pool.reserve(flight,JSON.stringify(reply).length*3),true);
   await period.receive(reply,{board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:selection.to,sessions:{},quota:{cell:'7200000',from:'0',to:String(selection.to),cells:'skip'}}},bytes=>pool.reserve(flight,bytes));
   assert.equal(reply.quota!.state,'complete','lossless evidence must fit without dropping the period');
+  assert.equal(period.get().rows.length,20,'the active coordinator publishes the real dense roster within that same ceiling');
   assert.equal(reply.quota!.state==='complete'&&reply.quota!.value.tape!.quota.reduce((n,s)=>n+s.samples.length/5,0),108000);assert.ok(pool.estimatedBytes<=15*1024*1024);
   pool.release(flight);
   const delta:PeriodReply={basis,quota:{state:'complete',basis,value:{run:'r',now:selection.to,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:{from:0,cut:selection.to,replaceFrom:2_699_000_000,cursor:'b',money:[],quota:[{source:'0',window:'w',samples:[2_699_400_000,12.5,-1,600000,-1]}]}}}};
@@ -489,7 +491,11 @@ test('complete live and fixed targets share supplier evidence in the LRU and cac
   selected={from:300,to:1_400_300};period.changed();await flush();assert.equal(reads,2);assert.equal(period.getValue('s').value.currencyUnavailable,undefined);assert.equal(period.get().rows[0].workedMs,59_700);
   assert.ok(stagedRestores>=2);
   period.changed({type:'hub',event:{type:'history',data:{sources:['s'],since:4_000_000}}});await flush();assert.equal(reads,2,'later live work cannot rewrite this past target');
-  selected={from:1800,to:1_401_800};period.changed();await flush();assert.equal(reads,3,'new evidence retires old forward-reuse proofs and cached value intervals');
+  selected={from:1800,to:1_401_800};period.changed();await flush();assert.equal(reads,2,'a proven nearby shift before the dirty tail preserves its evidence');
+  selected={from:2500,to:1_402_500};period.changed();await flush();assert.equal(reads,2,'positive control: this further target is also covered before new evidence');
+  selected={from:1800,to:1_401_800};period.changed();await flush();assert.equal(reads,2);
+  period.changed({type:'hub',event:{type:'history',data:{sources:['s'],since:1_402_000}}});await flush();assert.equal(reads,2,'the dirty tail starts after the active exclusive endpoint');
+  selected={from:2500,to:1_402_500};period.changed();await flush();assert.equal(reads,3,'neither a cached exact target nor shifted proofs can cross the changed tail');
   period.changed({type:'hub',event:{type:'history',data:{sources:['s'],since:1_000_000,changes:[{source:'s',scope:'quota',since:1_000_000}]}}});await flush();assert.equal(reads,4,'a changed fixed measurement refreshes its exact accounting even without a chart demand');
   selected=null;period.changed();await flush();assert.equal(reads,5,'live evidence invalidated while hidden is refreshed on return');
 });

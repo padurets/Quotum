@@ -737,7 +737,9 @@ separate states. Zero active time has no average concurrency.
 The four metrics sit directly below the heading, without a separate group-name row.
 Pointing to a visible legend entry or focusing it with the keyboard temporarily shows
 that group's metrics in the same space. Pointer takes visual priority over keyboard
-focus; each focused entry keeps its own accessible description. Escape dismisses the
+focus. A retained legend identity with no work in the known selected interval shows
+zero for that group, preserving unknown and unavailable evidence; it does not borrow
+the totals of other groups. Each focused entry keeps its own accessible description. Escape dismisses the
 preview, and a tap toggles emphasis and holds that entry's preview for four
 seconds. Click choices do not alter the summary or bar numbers. Shift and panning suppress
 temporary readouts. The heading area, plot and widget retain their geometry throughout.
@@ -1502,6 +1504,9 @@ waiting for garbage collection or continuing to encode the abandoned body.
 
 ## The dashboard
 
+Private device-contact updates do not reconfigure analytical readers. Resource-card
+readers share their projections while the immutable board is unchanged.
+
 A single-page React app served by the hub. It asks nothing again and again: it opens one
 connection to its board's [events](../spec/dashboard-v1.md) (`GET /api/events`), and the
 hub tells it the board as it is, then each part of it that changes, within a tenth of a
@@ -1577,7 +1582,9 @@ interval and wake separately when their displayed numbers change; a label past t
 chart's right edge counts down on its own, and
 a forecast's line goes at the moment the table says it runs out, or at the reset; in the
 table, the plan, where the pace leads and the active hours left each read otherwise at
-their own moment. History is read when the hub tells of measurements or credited agent
+their own moment. A timed compact cell marks its complete preview wrapper as showing
+time; ordinary data cells and static measurement remain outside that clock boundary.
+History is read when the hub tells of measurements or credited agent
 work. Quota/activity, wallet budgets and additional subscription funds use separate readers,
 caches and selections. The two monetary readers share the budget history protocol;
 selected source IDs isolate their invalidations.
@@ -1590,34 +1597,54 @@ and share one sparse extraction with other work consumers; they read neither
 financial history nor a full session ledger just for the heatmap. Browser geometry
 aggregates those fine cells into a chronological strip, day/hour matrix or compact
 calendar as the duration and width require, without new reads or inner scrolling.
-Its cells fill a manually chosen height while labels and gaps keep their size.
+Civil coordinates and geometry are prepared after commit through the shared
+cancellable scheduler. A compatible refresh keeps the complete grid until its
+replacement is ready; a changed selection or authority retires it immediately.
+Bounded civil-time and label caches contain no work values. A hidden surface keeps
+its last positive measurement until it can measure its visible width again.
+The plot has a natural height of 300 CSS pixels and a minimum of 160, independent
+of the selected duration. A chosen height changes orientation, cell grouping and
+label density; it never removes a civil date or divides a coarse amount to invent
+fine evidence. Repeated DST hours retain separate lanes. Its cells fill the assigned
+plot while labels remain legible and gaps fit the available pitch.
+Pointer and keyboard previews share one active cell. Opening a cell's detail
+suppresses previews; touch opens that detail directly.
 Its legend inherits the same typography as the other charts and keeps the
 agent-hours unit beside its scale.
 Anonymous aggregate hour patterns share the history budget and preserve exact
 within-cell changes, so cached return and nearby endpoints reuse accepted work
 without rereading it or dividing already aggregated amounts. Work or authority
 changes invalidate these patterns; eviction falls back to the common transport.
-Cache projections borrow the existing anonymous curves and count that storage once.
-Removed entries stay charged until their synchronous reads finish, and authority
-changes retire those reads immediately. Accepted numeric cells take over their
-projection reservation before subscribers are notified.
 Wire decoding releases its temporary anonymous sweep after projecting numeric cells,
 before expanding other reply sections. Restored cells and the original packed proof
 keep their own charge in the shared history budget.
+Cache projections borrow only the anonymous curves used by their selected segments,
+without charging a second copy. Planning releases references to unrelated entries
+before reserving the projection, so those proofs remain available for eviction.
+A removed cache entry stays charged while a synchronous read still
+owns it; authority changes retire that read's answer immediately. Curve construction
+releases temporary arrays as it proceeds, and an accepted numeric reading takes
+over its projection reservation before notifying subscribers.
 Named local dates, repeated hours and partial bounds preserve actual elapsed time.
 Shared filter choices cover the common selected work range; closed controls request
 nothing. Shared-clock expiry retires stale contributions in individual buckets
 without rebuilding geometry or polling. Null history, registered zero and
 observation completeness remain distinct.
-An explicit interval/day action changes the common selection; only elapsed retained
+An explicit interval/day action changes the common selection and focuses its ready
+grid after the requested evidence and geometry commit. Temporary unknown cells
+cannot consume that focus handoff. Later deliberate input or focus revokes permission
+to move focus; selection or authority changes retire the request altogether. An explicit
+calendar Retry can continue its still-pending drill, while background recovery cannot
+reclaim that permission. A committed ready grid completes the request even when focus
+stays elsewhere. Only elapsed retained
 evidence is counted. Fixed thresholds scale with the displayed interval, use the
 first Nord Warm colour and remain independent of the filtered sample.
 
 The page makes cells from `since` stale and reads only those its frame needs,
 without a rate limit or a timer. Reconnect, a new lineup, or a change of whose work the
 board shows or its names (`Store.workKey`) makes all tiles stale. The last frame stays
-undimmed while its tail loads. A frame of another period stays dimmed until its cells
-are complete. One pending read per target coalesces news until its response, while another
+undimmed while its tail loads. A replacement period retains compatible content at full opacity until its cells
+are complete; incompatible or unauthorized evidence retires inside the same shell. One pending read per target coalesces news until its response, while another
 target can read independently. Errors and retries belong to the target that requested
 them. Time alone never rebuilds or reads history; cells past the hub's cut are
 known empty until new data arrives, and a response predating news cannot restore that
@@ -1651,6 +1678,9 @@ Its translucent surface remains distinct from the page background. On wide scree
 the backing shares the content's 1240 px maximum width and 28 px inner side spacing,
 with rounded lower corners. Hiding filters reduces that same surface to the header.
 Narrow screens keep edge-to-edge bars.
+Viewing controls use a viewport-based grid. Filter counts and reset actions cannot
+wrap the shared bar onto another row; narrow controls retain their full accessible
+names when their visible labels need an ellipsis.
 The row also owns data selection for Resources, Projects, Devices and Clients.
 Provided-data authority, these predicates and layout visibility are independent.
 The v1 defaults live in `board_filters`, with their own revision and an opaque
@@ -1675,6 +1705,17 @@ while source evidence retains its own cursor, cache identity and generation.
 Late source-only adoption shares native arrays and copies only changed fixed
 summaries after reserving their metadata. The captured response remains charged
 beside recipient staging until adoption and its chart consumers finish.
+After preparation, the period coordinator commits resource tapes, values, facets,
+work indexes and row snapshots together, including their resident storage charge,
+before notifying any subscriber. Synchronous navigation or new evidence from a
+subscriber therefore sees a complete snapshot and cannot revive the captured reply.
+Period changes, cached restoration and retirement also finish their storage and
+clock updates before publishing. Calendar notifications share that synchronous
+boundary; calendar replies retain their independent authority and adoption boundary.
+Relevant work news advances the calendar's evidence generation before a queued reply
+can adopt. A reply from before that news cannot publish, cache a fresh proof or clear
+the new demand. The permitted prior reading stays visible until a current answer
+arrives; a failed replacement cannot make its obsolete proof reusable after navigation.
 The private storage wrapper keeps boolean decisions that coincide with a changed
 rule's default; repeated include/exclude or wallet auto/only transitions cannot
 forget a dormant exclusion. Its filters and retained decisions together fit
@@ -1743,9 +1784,11 @@ estimates retain a separate source-only work sweep from the same authorized read
 remain owner settings, while shared data controls are available to every reader. Each
 analytics panel uses the same heading and reader-error component. The selected
 period and its back/forward buttons appear together at the right end of the shared
-analytics controls. While a different range is loading
-or has failed, retained results name the interval they actually cover; this status
-disappears when the selected answer arrives. The
+analytics controls. Its caption stays on one line within the arrows' remaining
+width; the period menu exposes the complete range. Changing the range cannot grow
+the sticky controls or move the board. Pending reads, retained evidence dates and
+retry use the existing heading disclosure without adding a status row. Compatible
+values remain visible until their complete replacement is ready. The
 limit and budget tables share their column controls, cells and responsive renderer;
 when their selected columns no longer fit, both become labelled rows. Their own
 data models provide the values and column widths, including clock-driven cells.
@@ -1753,13 +1796,13 @@ Every widget is arranged on one grid. A row is 48 px (a 32 px track and a 16 px 
 Content measurements update grid positions and reading order directly, without a
 React render of the grid or neighbouring widgets. Only a widget whose own allocated
 height changes hears a sizing update; layout edits still reconcile through React.
-Each widget fills the fewest whole rows that contain its content, with any spare room
-above a card's tray or at the bottom of a panel, unless the owner chose a height for it
-(`h`, in rows). A chosen height is a request, not what shows: a card never
-gets shorter than its content, and grows past the chosen rows while its content needs
-more, back to them when it needs less, without the view changing. All five charts give a
-chosen height to their plot, never drawing it lower than they do by themselves, their
-heads, totals and legends whole. The Agent sessions widget gathers the period's sessions
+Each widget establishes its natural height and minimum from its structural shell.
+The grid rounds that height to whole rows unless the owner chose a height (`h`, in rows),
+clamped to the structural minimum. Data, filters, period navigation and asynchronous
+results do not revise those dimensions. Display configuration and viewport reflow
+can establish a new structure. Spare room stays above a card's tray or at the bottom
+of a panel. All five charts give the allocated content height to their plot while
+keeping their heads, totals and legends whole. The Agent sessions widget gathers the period's sessions
 by project (one name across people, as agent activity counts it), machine or subscription,
 each viewer for themselves, or lists each agent with None first. Client is shown by
 default in individual and disclosure rows; its owner column setting is independent
@@ -1784,13 +1827,16 @@ with fifty candidates and expands to the fitting page and its next row, without 
 subscriptions. A separate footer puts the whole-selection summary on the left and
 the matching row count beside the compact pager on a separate line below it.
 Wide totals align with their table columns, using the same widths and showing only
-values under the dividing rule; column headings are not repeated. A narrow list uses
+values under the dividing rule; column headings are not repeated. When session
+grouping has no matching row columns, its whole-period totals use one labelled line
+of the same height. The owner's metric switches select those totals independently
+of grouping, including None. A narrow list uses
 a fixed two-column metric grid above the count and pager. Tables without aggregate
 metrics show only the count and pager.
 Each value names its metric and scope. The sessions table shows whole-period work and
 context counts; quota and budget tables show matching row counts without summing
-unrelated percentages or overlapping wallet components. One-page tables hide the
-pager. Grouping uses the shared labelled segmented control, with None first and
+unrelated percentages or overlapping wallet components. One-page tables keep the disabled 1/1
+pager in the same footer slot. Grouping uses the shared labelled segmented control, with None first and
 Project still the default. Optional activity and concurrency columns do not add
 details to the compact session rows. The current working count is a subtitle under
 the session widget's heading, in the shared analytics-note style.
@@ -1913,6 +1959,9 @@ or restoring the same IDs cannot bring back a retired result. Board, access,
 currency, resource selections, visible consumers and request generations prevent a late
 response from acquiring a newer label. Superseded period reads leave the transport queue;
 retrying an analytical widget repeats its failed exact evidence as well as its drawing cells.
+Leaving the board invalidates pending numerical preparation before clearing its data.
+Subscribers see the complete cleared period before they can reopen it. Old flights keep
+their memory and slots until their readers finish, then wake a newer entry if one exists.
 A bounded signed frontier lets the next read replace changed work and measurement
 intervals or extend missing older evidence. Each bounded work and measurement journal
 has its own monotonic proof boundary. Session cursors require the work proof, quota
@@ -1976,7 +2025,15 @@ through a source/time index. Fixed summaries retain compact numeric columns whil
 built; temporary wire rows are released before the next source is read.
 Complete live indexes and fixed
 summaries can move into the shared LRU when a different interval is selected. Returning
-to a retained target reuses it; new evidence or authority changes invalidate those entries.
+to a retained target reuses it. History events invalidate each retained target against
+its own exclusive endpoint. A later change preserves earlier evidence and bounds its
+shift proofs at the first changed instant; it cannot be replayed into the changed tail.
+Calendar curves can retain that unchanged prefix of a wider interval. Authority changes
+retire their evidence immediately, independently of event timestamps.
+Adopting a newer compatible revision preserves those prefixes. Each segment stops at
+its observed range and first changed instant; a fresh tail can complete their union.
+Retained live proofs keep their observation cutoff as the clock moves, while historical
+curves alone cannot satisfy an unread live tail. Missing coverage requires a read.
 Fixed summaries also describe exact duration and timestamp changes between
 observation, work, availability and grid boundaries. Nearby positions use sparse
 changes between those intervals and an immutable starting summary. The initial reply
@@ -2040,10 +2097,30 @@ zero, preserving unknown and unavailable evidence rather than borrowing the boar
 Monetary details and currency provenance appear in the shared glass tooltip
 anchored to the legend entry, using exact money presentation. They occupy no space
 at rest and do not constrain a widget's minimum height. Quota charts reserve no strip.
+Quota window and series names keep their source, scope and duration as semantic
+lines in plain text. Cards, compact rows, filters, legends and tables use the shared
+name renderer, with quieter details and the existing line allocation. Forecast SVG
+labels flatten those lines for their measured fit, then distinguish the detail by
+fill alone; their tooltip keeps the complete name. Owner punctuation stays literal.
+Recovery controls return keyboard focus before they disappear. A removed Retry
+returns to its surviving disclosure button; a retiring disclosure returns to an
+available control in the same widget, or its heading when no control remains.
+This covers source measurement details, session trays and wallet allowances as
+well as analytics. A disclosure owns its portaled panel, while its stable return
+target belongs to the widget that holds its trigger. Each attached recovery node
+keeps its own removal cleanup, including details reused by several disclosures.
+Filter-save recovery returns to the resource filter while Save is disabled. These
+returns preserve a newer focus elsewhere and do not count as new reader navigation.
+The existing widget heading keeps at least its control height for both owners and
+readers. A temporary reader control cannot move the plot or table when a reader
+has no permanent settings button.
 The common Resources filter selects accounts, key caps and subscription funds
 across cards, charts and tables. An account selects its total balance; a key selects
 its reported remaining cap within the shared 32-meter bound. Balance components
-remain in card details. Board opening defaults are saved separately from each tab's
+remain in card details. When capacity blocks an available key, its expanded list
+explains how to free a choice; selected rows remain removable. Loading, stale rows
+and keys without a reported cap do not receive that explanation.
+Board opening defaults are saved separately from each tab's
 current selection. Existing per-unit data subsets retain their shared-filter semantics;
 old legend hiding and its monetary visibility fallbacks are no longer read.
 
@@ -2078,9 +2155,18 @@ width and font weight. Loading a web font or changing the SVG viewport scale cle
 both sets of measurements. Its container
 owns pointer capture and wheel input, projected through its fixed SVG viewport, including labels in another
 surface. Surface geometry and painters become visible only after their DOM commits.
-The future moves with the strip during the gesture, then folds away over 160 ms on
-release in the past, or unfolds on returning to live. Reduced motion skips this final
-transition. Release within eight source pixels of now restores the chosen live preset.
+The future moves with the strip during the gesture. Historical release retains the
+last displayed time-to-pixel mapping, including its future margin, through pending
+reads, the complete answer and later ordinary updates. Returning to live can unfold
+the future over 160 ms; reduced motion skips that transition. Release within eight
+source pixels of now restores the chosen live preset.
+Time labels share the moving HTML owner but sit outside the scaled SVG data group.
+Their translation and whole-label visibility use the data animation's easing and
+document timeline. Replacement labels join its original start; interruption freezes
+both at the sampled pose. Glyphs keep their width, and a date crossing an edge is
+shown only while it fits entirely inside the clip. At subdaily density, the first
+represented tick and each local day boundary name the date; the other ticks show
+the clock. Offscreen strip labels do not consume the visible interval's first date.
 One changed gesture creates one address entry; cancellation or returning to the exact
 origin creates none. A horizontal wheel ends after a 200 ms pause. An arriving event
 starts a new transaction only when both its capture and delivery gaps reach that
@@ -2091,9 +2177,9 @@ the preceding gesture's committed range as its origin, even before that selectio
 renders. Publishing it preserves the new gesture; a later navigation still cancels it.
 Neither adds inertia. Holding Shift hides
 chart and activity-legend readouts even before movement starts. The plot and legend
-keep their height through the gesture, final fold and resulting range; extra legend
-entries scroll inside. Ordinary range navigation or a layout/language change measures
-them again. Changing the time frame by hand therefore cannot resize the chart.
+keep their height through gestures and range changes; extra legend entries scroll
+inside their bounded viewport. Only structural layout, width or language changes
+establish another shell allocation. Data filters and readiness never resize the plot.
 An answered activity frame without work keeps its time axis and legend viewport;
 its empty message sits inside the plot, which still accepts the next gesture.
 
@@ -2106,15 +2192,50 @@ band; a counter-translation keeps its artwork in place. The clip boundaries use
 compositor transforms while the SVG's coordinate system stays unchanged. Two short
 edge bars in their own SVG are recomputed when the draft crosses a cell; moving within
 a cell only translates the prepared artwork
-and updates its clip. The final 160 ms fold animates the existing HTML surface over
-the final SVG projection, avoiding repainting dotted plan strokes on every frame.
-Only during this fold may horizontal scaling change stroke thickness; completion or
-interruption restores the SVG's non-scaling strokes. Each owned animation keeps its
-absolute projection endpoints; reading its eased effect progress reconstructs the
-displayed pose without querying computed styles. Retargeting and interruption use
-that same pose. An inactive effect
-uses the committed pose, and an animation without known endpoints retains the native
-transform fallback. Ordinary 220 ms navigation slides still animate inside SVG.
+and updates its clip. A historical completed drawing adopts the held SVG projection
+without a release-time zoom. Activity's vertical scale uses the selected visible
+interval and exact boundary bars, excluding its overscan and unread cells.
+The same native painter updates that value projection with the time position, using
+the committed height index. Prepared paths retain their numeric basis; a matching
+replacement adopts the displayed value projection without changing it on release.
+The final historical value scale is also retained through exact edge replacement:
+a smaller partial boundary bar cannot enlarge all the unchanged interior stacks.
+Higher newly read work can expand that scale; another navigation, shared data selection,
+authority or explicit geometry change establishes a new value projection.
+Budget and subscription-funds charts also preserve the monetary value domain painted
+at a historical gesture's release. The committed Chart model supplies that domain;
+an earlier parent preparation cannot replace it before its drawing commits.
+The native stop owns this handoff even when React coalesces an active phase.
+Consecutive gestures inherit the domain; a no-op or cancellation never releases it.
+Replacing an overscan strip with exact cells cannot
+rescale unchanged balances. New values may expand the domain; an explicit range,
+currency, resource selection or authority establishes a new one. Its bounds stay in
+integer millionths independently of the prepared path's numeric offset.
+A compatible change of history cell size prepares a replacement while retaining
+the previous complete drawing. Both monetary preparation and the shared chart
+publish the cell size with their own model, so its paths, axis and exact readouts
+keep one grid until replacement. Authority, display context and geometry changes
+still retire an incompatible drawing immediately.
+Activity publishes a replacement only when its selected work and native drawing
+are both ready. A quota answer arriving first cannot publish its pending-work
+placeholder as an empty Activity chart. The previous complete work frame and its
+numbers remain visible through compatible refresh failures until replacement; hard work retirement clears
+them immediately, independently of native quota readiness.
+Activity's rolling work projection does not rebuild native financial series or inspect
+plan events. A fixed Activity frame reuses a complete cached projection; it prepares
+full native accounting only when another visible quota widget needs that same frame.
+With Activity alone it keeps the work-only path. Its numerical clocks remain independent
+of financial expiry; quota and monetary consumers retain their own deadlines.
+A return-to-live fold lasts 160 ms and uses the existing moving surface over the final
+SVG projection. Owners with separately translated whole time labels animate their SVG
+projection so the glyphs keep their own width. Composited HTML folds avoid repainting
+dotted plan strokes on every frame; only during those folds may horizontal scaling
+change stroke thickness. Completion or interruption restores non-scaling strokes.
+Each owned animation keeps its absolute projection endpoints; its eased progress
+reconstructs the displayed pose without querying computed styles. Retargeting and
+interruption use that same pose. An inactive effect uses the committed pose, and an
+animation without known endpoints retains the native transform fallback. Ordinary
+220 ms navigation slides still animate inside SVG.
 A temporary shared registry keeps plot interiors, edge bars, legend markers and readouts
 consistent in colour and dash, adding new groups with a pending total. Surviving groups
 keep their colours through rank changes and reversal; new projects and machines take
@@ -2139,8 +2260,13 @@ Unvisited optional cells remain charged to that gesture after an
 abort or reversal; entering them restores the allowance. A disjoint jump inside a
 held tile also reads the minimum unknown or stale bridge to its retained interval,
 without rereading its fresh component. Empty tiles have no head to fill. At most
-one foreground read per resource family and one purely speculative flight overall share
-the two aggregate HTTP slots. The shared transport collects visible family reads before
+one foreground drawing read per resource family and one purely speculative flight overall share
+the two aggregate HTTP slots. Newly requested filter choices can use the second slot
+beside an older combined response for the same cohort that did not request those choices.
+Their separate admission identity keeps the original transport and storage owner;
+a body already covering the choices prevents duplicate admission. The same two-slot
+and retained-memory bounds apply, including while cancelled recipients finish.
+The shared transport collects visible family reads before
 requesting a slot, so all three families can share one response. A coalesced response
 retains its borrowed drawing slots until its HTTP read and recipient preparation settle,
 including after that drawing is cancelled. Foreground requests take priority. A waiting
@@ -2187,8 +2313,13 @@ late updates reuse clean native cells with the existing compact exact summary; n
 before dispatch coalesces and news during a response requires a current replacement.
 Work-filter replacement can refill Activity drawing cells through the existing reader
 and its bounded tile window. Cancelled and late responses remain counted. Work starting
-at or after the fixed upper endpoint does not reread the session ledger; the shared
-calendar and its drawing cells can still refresh. The 24h/30d benchmark covers this
+at or after the fixed upper endpoint does not reread the session ledger or start an
+independent drawing read, including while the first answer is pending. The reader
+keeps the exact outside cutoff until navigation needs that suffix or a necessary
+read covers its boundary. Earlier missing tiles can fill without invalidating the
+cached tail. Navigation applies the cutoff to cached cells and older flights before
+using the new target; a read covering it replaces the dirty cells normally. The shared
+calendar may still refresh within the combined transport. The 24h/30d benchmark covers this
 shared-filter path and checks that all five charts' emphasis causes zero reads,
 preparation or preference writes under the existing transport, preparation, two-slot
 and 15 MiB memory ceilings.
@@ -2196,6 +2327,29 @@ A complete Activity frame waits for coherent native and selected-work evidence.
 Same-context replacement retains permitted complete metrics; a native-only placeholder
 cannot erase them. Hard work cutoffs retire evidence and retained previews synchronously,
 even with unchanged IDs/authority. Retry reaches the failed shared work owner.
+The summary, legend amounts, previews and bar readout commit with the prepared
+stacks. Parent and child preparation carry the same captured numerical frame;
+an early answer cannot replace only part of that presentation. Live frames retain
+their own authorized interval projector, charged once across current, cached,
+displayed and preparing owners. Dropping a cache owner rechecks the actual remaining
+charge when another frame still owns that storage. Shared-clock deadlines still
+expire rolling work and knowledge during replacement; a gesture freezes its accepted
+frame at the gesture's evaluation time. Retired access, filters or ranges cannot
+revive old scalar amounts. Fixed frames carry the exact computed numerical evidence
+with their prepared drawing, without a separate legend work projector.
+Legend controls remain available while replacement prepares. Choices and previews
+change paint or contextual details, never the prepared cohort or its value domain.
+Same-run greetings and compatible snapshots, ownership and lineup baselines retain
+the complete permitted frame. The page records the hub run before widgets mount.
+A changed run immediately retires work, session indexes, calendar evidence and
+prepared drawings. Independent native financial evidence keeps its authority.
+Replacement work must confirm the new run; a late old reply cannot restore it.
+Source-free zero work cutoffs, relevant quota zero cutoffs and compatible legacy
+zero cutoffs retire work synchronously even when the authority token is unchanged.
+Financial and unrelated-source news do not. An unchanged failed view does not retry
+because it renders again. Explicit Retry reaches the shared work and native-history
+owners; it does not create a legend reader. Evidence dates and recovery use existing
+disclosures. Relevant new work follows the ordinary bounded update path.
 
 Selected activity cells have their own filter identity, coverage and prepared strip.
 Changing a project, device or client retires those cells and pending selected jobs,
@@ -2209,6 +2363,11 @@ Their error state and retry belong to activity alone: new native measurements st
 read and commit their own cells, including while activity waits for memory or its
 retry deadline. Retry also repeats failed selected period evidence. Native failures
 remain visible to their own chart while its last complete frame is retained.
+Financial consumers observe resource readiness and errors alongside native accounting
+authority. A successful retry clears the error even when financial values are
+unchanged; ordinary work-only publications keep financial snapshots stable.
+Replacing native quota windows or monetary meter choices retires their own projection;
+it does not retire an authorized Activity frame with the same selected work scope.
 A stored work predicate that exceeds the executable limit makes selected activity
 unavailable until the selection is narrowed. Native drawings continue through their
 own coverage; their unselected activity cells cannot fill a selected strip, including
@@ -2219,14 +2378,36 @@ Each chart replaces one typed drawing model whole after preparation, then publis
 its geometry and painters after the DOM commits. Input keeps the displayed model and
 its composed SVG matrix and CSS offset until that handoff. Finishing a gesture commits
 the address immediately and presents its last pending delta on RAF. If another gesture
-starts first, each chart applies that accepted delta before capturing the new origin;
-cancellation keeps the currently displayed pose. The final pose stays held until the
-matching drawing model is ready. The surface fold and CSS offset
-reset then start from the same displayed coordinates. A new gesture samples that
-actual presentation, including an interrupted fold, separately from its URL origin.
+starts first, each chart applies that accepted delta before capturing its new origin.
+The final pose stays held until the matching drawing model is ready, then remains
+the historical projection. The SVG matrix and CSS offset compose to the same displayed
+coordinates before and after adoption. Activity paints its value scale and clipped
+edges after the committed time pose in that same native frame, including cancellation;
+logical completion cannot pin a value scale from a pose that is still about to be
+restored. Every retained Activity drawing uses its actual visible viewport for its
+value scale and edge clipping, including another gesture before replacement and a
+forced release. A saved strip keeps its own cell grid, whole-cell accounting and
+coverage checks. The selected period and the saved paths' numeric basis cannot
+substitute for that viewport. The axis also supplies each commit's intended presentation for
+time labels: its shifted bounds set their inventory, and its visible span sets their
+density. A borrowed strip's label inventory stays within one extra visible period
+on either side, including the visible interval even past unread data. Matching
+historical and default live projections keep the native strip's complete inventory.
+Explicit navigation
+supplies its new projection before layout; matching
+native captures and unpainted final frames retain the physical pose. A ready live
+handoff uses the live target. A historical viewport survives ready data when both
+of its measured endpoints match the committed interval; a different requested
+duration or a retention clamp adopts its own interval at the reached measurement
+end. That end moves with the presented artwork, including a sampled animation;
+an older, longer drawing cannot turn the duration difference into forecast space.
+Its known-data boundary belongs
+to that same drawing, including a confirmed absence of an unknown prefix. A new
+gesture samples that actual presentation, including an interrupted fold, separately
+from its URL origin.
 Partial plots continue to publish during the gesture. Its final drawing readiness
 also requires the complete history answer for the requested range, so a partial
-strip cannot start the fold before that answer replaces it.
+strip cannot complete the handoff before that answer replaces it.
 User navigation owns the requested projection separately from drawing readiness.
 Back, a preset or a horizon change retires an older held pose and its pending RAF or
 fold; all five charts immediately place their retained data in the requested projection.
@@ -2294,9 +2475,43 @@ values and top-ups compare exact integer millionths from the same accounting
 model as their cells. Unknown values stay last in either direction. Hidden columns
 temporarily use default without losing the saved choice. Default preserves the budget
 series order; live accounting boundaries use the shared page clock and retain cells.
+Each table owns a stable content viewport and footer for its structural column
+configuration. Empty, pending, retained, failed and complete results occupy that
+same viewport; grouping, sorting and paging do not change its capacity or neighbours.
+Rows use a bounded preview, with oversized text and complete values reachable through
+the shared Popover. Whole rows page through the full loaded index without an inner
+vertical scroller or another history read.
+Subscription cards keep two primary percentage slots, with a session and weekly
+limit when both families are available. General five-hour and weekly windows lead;
+equal-specificity and equal-duration ties use descending stable IDs, independently
+of supplier reply order or remaining amounts. Every selected native window
+remains in their existing measurement disclosure. Wallet cards show one available
+balance, or the first selected cap when the balance is excluded; other caps and exact
+amounts remain in the balance disclosure.
+Full disclosure names wrap within the glass, including nested historical status labels
+and unavailable allowance names; their values and status marks stay beside the text.
+The first cap follows canonical English key-name and ID order before it joins historical
+evidence, independently of server or browser locale.
+An absent first cap stays unavailable instead of promoting a later arrived cap; unresolved
+selected names keep the primary unknown until their bounded metadata read completes.
+Native choices combine current descriptors with historical-only windows. A selected
+missing window remains named in the disclosure without borrowing a current percentage.
+A successful historical read before any observation shows one empty state inside
+the primary area, replacing empty quota scales rather than appending a row.
+An explicitly empty limit selection keeps its hidden-limits state and filter action.
+Loading extra selected caps never adds a card row or an inventory-wide lookup.
+The allowance count and disclosure use the logical wallet selection shared with
+analytics. Explicit choices remain named with an unavailable value when their cap
+is absent, including beside known caps and before their first historical observation.
+Automatic choices include only the capped preview. Current key names can label an
+older gap, but current amounts cannot fill it. Compact uses the same full disclosure.
 The budget chart, legend and table name a total balance by its account rather than
 repeating "Available balance". Scoped key limits keep their names; balance components,
 roles and currency provenance remain reachable in card details.
+Monetary table values open their exact amount and existing provenance through the shared
+Popover even when the rounded value fits. The same timed cell supplies both presentations,
+including in narrow lists; static row measurement adds no interactive controls. Closed
+details schedule nothing; an open time-dependent detail owns its shared-clock deadline.
 
 On charts narrower than 560 SVG units, reset and exhaustion labels show the name
 and countdown, with an arrow only beyond the visible edge. Their backing is bounded

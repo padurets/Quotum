@@ -1,5 +1,8 @@
 import {boardPeriod,usePeriodSessions,type SessionOrder,type SessionPeriod} from '../lib/period';
 import {PeriodStatus} from './PeriodStatus';
+import {ReadState} from './ReadState';
+import {TablePreview} from './TablePreview';
+import {TableSurface} from './TableWidget';
 import {WarningIcon} from './StatusMark';
 import {timeRangeLabel,timeRangeKey,useTimeRange} from '../lib/timeRange';
 import {memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject} from 'react';
@@ -350,6 +353,11 @@ function AgentsRows({
 }) {
   const context: Context = {still, color, by: name};
   const open = (group: AgentGroup) => (single || still || !onOpen ? undefined : () => onOpen(group.key));
+  const activate=(group:AgentGroup,target:EventTarget)=>{
+    const element=target as Element,button=element.closest('button');
+    if(element.closest('.popover')||button&&!button.classList.contains('agents-open'))return;
+    open(group)?.();
+  };
   const rowClass = (group: AgentGroup) => `${group.working ? 'is-working' : ''} ${single || still || !onOpen ? '' : 'is-group'}`;
   // A row of one agent takes its card's colour, for its mark; a group's marks each take their own.
   const rowStyle = (group: AgentGroup) => (single ? color(group.rows[0].source) : undefined);
@@ -358,6 +366,7 @@ function AgentsRows({
     <button
       type="button"
       className="agents-open"
+      onClick={event=>{event.stopPropagation();open(group)?.();}}
       data-agents-group={still ? undefined : group.key}
       tabIndex={still || !onOpen ? -1 : undefined}
       title={`${groupName(group)}\n${t('agents.openGroup')}`}
@@ -375,7 +384,7 @@ function AgentsRows({
         {groups.map(group => {
           const session = group.rows[0].session;
           return (
-            <li key={group.key} className={rowClass(group)} style={rowStyle(group)} onClick={open(group)}>
+            <li key={group.key} className={rowClass(group)} style={rowStyle(group)} onClick={event=>activate(group,event.target)}><TablePreview label={groupName(group)} still={still}>
               <div className="agents-compact-main">
                 {single ? (
                   <>
@@ -402,7 +411,7 @@ function AgentsRows({
                   ))}
                 </div>
               )}
-            </li>
+            </TablePreview></li>
           );
         })}
       </ul>
@@ -425,20 +434,20 @@ function AgentsRows({
           {groups.map(group => {
             const session = group.rows[0].session;
             return (
-              <tr key={group.key} className={rowClass(group)} style={rowStyle(group)} onClick={open(group)}>
+              <tr key={group.key} className={rowClass(group)} style={rowStyle(group)} onClick={event=>activate(group,event.target)}>
                 {single ? (
-                  <td title={placeOf(session)}>
+                  <td title={placeOf(session)}><TablePreview label={placeOf(session)??projectName(session.project)} still={still}>
                     <Mark session={session} />
                     <Origin origin={session.origin} />
                     {projectName(session.project)}
                     {folderOf(session) && <small className="agents-folder">{folderOf(session)}</small>}
                     <SessionState session={session}/>
-                  </td>
+                  </TablePreview></td>
                 ) : (
-                  <td>{opener(group)}</td>
+                  <td><TablePreview label={groupName(group)} still={still}>{opener(group)}</TablePreview></td>
                 )}
                 {columns.map(column => (
-                  <td key={column} title={fullOf(group, column)}>{COLUMNS[column].cell(group, context)}</td>
+                  <td key={column} title={fullOf(group, column)}><TablePreview label={t(COLUMNS[column].title)} still={still}>{COLUMNS[column].cell(group, context)}</TablePreview></td>
                 ))}
               </tr>
             );
@@ -597,15 +606,19 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   const sortBy = useCallback((from: AgentsSort, column: AgentColumn|null, cycle = true) => setPrefs({agentsSort: nextAgentsSort(from, column, cycle)}), []);
   const sorting: Sorting = {active, headers: shown.map(id => ({id, title: COLUMNS[id].title})), sortBy: (column, cycle) => sortBy(active, column, cycle)};
   const single = agentsBy === 'none';
-  const table=useTableWidget(panel,columns.map(column=>AGENT_WIDTHS[column]),NAME_WIDTH,ordered.map(group=>group.key),JSON.stringify([agentsBy,active,selected?timeRangeKey(selected):range]),0);
+  const structural=AGENTS_BY.map(by=>columnsOf(by).rest.filter(column=>columnShown(view,AGENTS,column)));
+  const structure=Array.from({length:Math.max(...structural.map(columns=>columns.length))},(_,i)=>Math.max(...structural.map(columns=>AGENT_WIDTHS[columns[i]]??0)));
+  const summaryColumns=(['agents','worked','active','concurrency'] as const).filter(column=>columnShown(view,AGENTS,column));
+  const footerMetrics=summaryColumns.length;
+  const table=useTableWidget(panel,columns.map(column=>AGENT_WIDTHS[column]),NAME_WIDTH,ordered.map(group=>group.key),JSON.stringify([agentsBy,active,selected?timeRangeKey(selected):range]),0,structure,footerMetrics);
   const layout=table.layout;
   const refs=rows.flatMap(row=>row.session.ref?[row.session.ref]:[]);
   const worked=rows.some(row=>row.session.workedMs===null)?null:rows.reduce((sum,row)=>sum+row.session.workedMs!,0);
   const workedText=(now:number)=>!boardPeriod.activitySummaryAt(activityDimension(by),now)?.known||worked===null?'—':workHours(boardPeriod.workedAt(refs,worked,now)!);
   const metrics:TableMetric[]=[
-    ...(single||columns.includes('agents')?[{id:'sessions',column:'agents',label:t('activity.agents'),cell:{time:'session-count',changesAt:(now:number)=>boardPeriod.activityCoverageChangesAt(now),at:(now:number)=>({content:boardPeriod.activitySummaryAt(activityDimension(by),now)?.known?agentCount(rows):'—',title:t('activity.agentsHint')})}}]:[]),
-    ...(columns.includes('worked')?[{id:'worked',label:t('agents.worked'),cell:{time:'worked',changesAt:(now:number)=>withCoverage(now,worked===null?null:boardPeriod.workedChangesAt(refs,now,workedText)),at:(now:number)=>({content:workedText(now),title:t('agents.workedHint')})}}]:[]),
-    ...(['active','concurrency'] as const).filter(column=>columns.includes(column)).map(column=>({id:column,label:t(COLUMNS[column].title),compactLabel:column==='concurrency'?t('activity.atOnce'):undefined,cell:activityCell(by,column)})),
+    ...(summaryColumns.includes('agents')?[{id:'sessions',column:'agents',label:t('activity.agents'),cell:{time:'session-count',changesAt:(now:number)=>boardPeriod.activityCoverageChangesAt(now),at:(now:number)=>({content:boardPeriod.activitySummaryAt(activityDimension(by),now)?.known?agentCount(rows):'—',title:t('activity.agentsHint')})}}]:[]),
+    ...(summaryColumns.includes('worked')?[{id:'worked',label:t('agents.worked'),cell:{time:'worked',changesAt:(now:number)=>withCoverage(now,worked===null?null:boardPeriod.workedChangesAt(refs,now,workedText)),at:(now:number)=>({content:workedText(now),title:t('agents.workedHint')})}}]:[]),
+    ...(['active','concurrency'] as const).filter(column=>summaryColumns.includes(column)).map(column=>({id:column,label:t(COLUMNS[column].title),compactLabel:column==='concurrency'?t('activity.atOnce'):undefined,cell:activityCell(by,column)})),
   ];
   const workingSummary:TimedCell={time:'working-count',changesAt:now=>boardPeriod.activityCoverageChangesAt(now),at:now=>{
     const known=boardPeriod.activitySummaryAt(activityDimension(by),now)?.known;
@@ -632,11 +645,13 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
       data-history-range={period.loading||period.error?undefined:selected&&period.basis?timeRangeKey(period.basis.range):range}>
       <div className="panel-head">
         <div className="panel-heading"><h2 ref={heading} tabIndex={-1}>{t('agents.title')}</h2>
-          {period.basis&&tableCell('working',workingSummary,(cell,time)=><p className="analytics-note" data-time={time}>{cell.content}</p>)}
+          {tableCell('working',workingSummary,(cell,time)=><p className="analytics-note" data-time={time}>{cell.content}</p>)}
         </div>
         <div className="panel-controls">
+          <ReadState loading={period.loading&&!!selected} error={period.error} range={period.basis?.range} retry={boardPeriod.retry}/>
           {layout === 'list' && <SortMenu {...sorting} />}
           <Popover label={t('agents.settings')} icon={<SlidersIcon />}>
+            <div className="popover-pad"><SessionCoverage by={by} empty={empty} showEmpty={!period.loading&&!period.error}/></div>
             <TableGrouping value={agentsBy} options={AGENTS_BY.map(by=>[by,t(by==='none'?'agents.byNone':COLUMNS[by].title)])} onChange={agentsBy=>setPrefs({agentsBy})}/>
             {arrange.owner && (
               <>
@@ -664,8 +679,8 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
           </Popover>
         </div>
       </div>
-      <PeriodStatus {...period}/>
-      <SessionCoverage by={by} empty={empty} showEmpty={!period.loading&&!period.error}/>
+      <TableSurface table={table}>
+      {empty&&<SessionCoverage by={by} empty={empty} showEmpty={!period.loading&&!period.error}/>}
       {!empty && (
         <AgentsRows
           groups={ordered.slice(table.from,table.to)}
@@ -679,7 +694,8 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
           body={table.live}
         />
       )}
-      {period.basis&&<WidgetPages table={table} count={ordered.length} metrics={metrics} columns={[name,...columns]}/>}
+      </TableSurface>
+      <WidgetPages table={table} count={ordered.length} metrics={metrics} columns={[name,...columns]}/>
       <TableMeasure table={table} metrics={metrics} columns={[name,...columns]}><AgentsRows groups={ordered.slice(table.measureFrom,table.measureTo)} name={name} columns={columns} single={single} layout={layout} color={color} still body={table.measured}/></TableMeasure>
       {open && (
         <AgentsDialog

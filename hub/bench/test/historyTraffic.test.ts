@@ -7,7 +7,8 @@ import ts from 'typescript';
 import {brotliCompressSync, constants} from 'node:zlib';
 import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from '../historyProxy';
 import {HistoryCutChanged, bodyBounds, bodyTotals, stableHistory, trafficProblems, transferFor} from '../historyTrafficBudget';
-import {trafficReadEvidence} from '../historyTrafficBrowser';
+import {trafficReadEvidence,historyCheckpointScript} from '../historyTrafficBrowser';
+import {deadline} from '../deadline';
 
 test('history cleanup releases its owned target when the renderer cannot answer', async () => {
   const source = readFileSync(new URL('../historyTrafficBrowser.ts', import.meta.url), 'utf8');
@@ -55,15 +56,38 @@ test('pool diagnostics preserve an unavailable original renderer without another
   for(const command of [{socketState:1,terminal:null,failure:null,pending:[{id:1}]},
     {socketState:1,terminal:null,failure:{id:1},pending:[]},
     {socketState:3,terminal:null,failure:null,pending:[]}]){
-    let evaluations=0,bindings=0,closed=0;const saved:{name:string;value:unknown}[]=[];
+    let evaluations=0,bindings=0,closed=0;const saved:{name:string;value:unknown}[]=[],raw:{file:string;value:any}[]=[];
     const fixture={poolEvidence:{save:(name:string,value:unknown)=>saved.push({name,value})},poolCaptured:false,poolName:'fixture',name:'fixture',
-      bodies:{reads:[]},trafficReadEvidence,cdp:{snapshot:()=>command,evaluate:()=>{evaluations++;return new Promise(()=>{});}},
+      bodies:{reads:[],diagnostic:()=>({reads:[]})},poolScenario:{length:30*86400000,future:86400000,cell:3600000,geometry:{series:12}},checkpoints:[{label:'cached return/before-input',pending:1}],proxy:{transfers:[]},writeFileSync:(file:string,body:string)=>raw.push({file,value:JSON.parse(body)}),trafficReadEvidence,cdp:{snapshot:()=>command,evaluate:()=>{evaluations++;return new Promise(()=>{});}},
       poolBinding:{afterFamily:()=>{bindings++;return new Promise(()=>{});},close:()=>{closed++;}},capturePool:null as unknown as ()=>Promise<void>};
     runInNewContext(ts.transpileModule(`${source.slice(start,end)}\nglobalThis.capturePool=capturePool;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,fixture);
     await fixture.capturePool();
     assert.equal(evaluations,0);assert.equal(bindings,0);assert.equal(closed,1);
     assert.equal((saved.find(entry=>entry.name.startsWith('pool-receipt'))!.value as {receipt:{status:string}}).receipt.status,'insufficient-evidence');
     assert.equal((saved[0].value as {command:unknown}).command,command);
+    assert.equal(raw.length,1);assert.match(raw[0].file,/quotum-bench-history-pool-fixture\.json$/);
+    assert.deepEqual(raw[0].value.checkpoints,[{label:'cached return/before-input',pending:1}]);
+    assert.equal(raw[0].value.receipt.status,'insufficient-evidence');assert.equal(raw[0].value.calendar.status,'insufficient-evidence');
+  }
+});
+
+test('pool capture retains exact checkpoints and stops debugger collection after a failed receipt',async()=>{
+  const source=readFileSync(new URL('../historyTrafficBrowser.ts',import.meta.url),'utf8');
+  const start=source.indexOf('  const capturePool = async () =>'),end=source.indexOf('\n  // Closing this owned target',start);
+  for(const fail of [false,true]){
+    const saved=new Map<string,any>(),raw:any[]=[];let evaluations=0,bindings=0,closed=0;
+    const command={socketState:1,terminal:null,failure:null,pending:[]};
+    const fixture={poolEvidence:{save:(name:string,value:unknown)=>saved.set(name,value)},poolCaptured:false,poolName:'fixture',name:'fixture',length:86400000,
+      bodies:{reads:[],phase:'warm',stage:'cached repeat',diagnostic:()=>({reads:[]})},poolScenario:{length:86400000,future:0,cell:300000,geometry:{series:12}},checkpoints:[] as unknown[],proxy:{transfers:[]},
+      writeFileSync:(_file:string,body:string)=>raw.push(JSON.parse(body)),trafficReadEvidence,historyCheckpointScript,deadline,
+      cdp:{snapshot:()=>fail&&evaluations?{...command,failure:{id:1}}:command,evaluate:async(script:string)=>{evaluations++;assert.ok(script.includes('cohort/before-cleanup'));if(fail)throw Error('renderer unavailable');return {receipt:{status:'complete'},calendar:{status:'complete'},page:{label:'cohort/before-cleanup',pending:{preparationSize:1}}};}},
+      poolBinding:{afterFamily:async()=>{bindings++;},close:()=>{closed++;}},capturePool:null as unknown as ()=>Promise<void>};
+    runInNewContext(ts.transpileModule(`${source.slice(start,end)}\nglobalThis.capturePool=capturePool;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,fixture);
+    await fixture.capturePool();await fixture.capturePool();
+    assert.equal(evaluations,1);assert.equal(bindings,fail?0:1);assert.equal(closed,1);assert.equal(raw.length,1);
+    assert.equal(raw[0].receipt.status,fail?'insufficient-evidence':'complete');
+    if(!fail){assert.equal(raw[0].checkpoints[0].label,'cohort/before-cleanup');assert.equal(raw[0].checkpoints[0].page.pending.preparationSize,1);}
+    assert.equal(saved.get('pool-original-fixture').command,command);
   }
 });
 

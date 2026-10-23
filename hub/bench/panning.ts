@@ -1,13 +1,13 @@
 import type {Cdp} from './cdp.js';
 import type {IdleCpuDiagnostic} from './idleCpuDiagnostic.js';
-import {panningProblems, type PanReading} from './panningBudget.js';
+import {panningProblems, type PanReading,type NativePanTarget} from './panningBudget.js';
 import {panTransactionsScript, panPartialScript} from './panEvidence.js';
 import {deadline} from './deadline.js';
 import {panningReload,type ReloadDiagnostic} from './panningReload.js';
 import {panningSettlement} from './panningFailure.js';
 
 /** Native input against the real charts; the temporary layout brings all five into view. */
-export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp, 'at'|'off'|'snapshot'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), options?: {save(name: string, value: unknown): void; selection?: 'quota24'}|ReloadDiagnostic, diagnoseReload?:ReloadDiagnostic, nativeTrace?:()=>IdleCpuDiagnostic) {
+export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp, 'at'|'off'|'snapshot'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), options?: {save(name: string, value: unknown): void; saveTrace?(name:string,value:unknown):void; selection?: 'quota24'}|ReloadDiagnostic, diagnoseReload?:ReloadDiagnostic, nativeTrace?:()=>IdleCpuDiagnostic, nativeTarget:NativePanTarget='activity/24h') {
   const evidence=typeof options==='function'?undefined:options;
   diagnoseReload??=typeof options==='function'?options:undefined;
   cdp.at?.('panning/setup');
@@ -53,7 +53,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       at('load');
       // A newly opened board gives each input owner an independently unread edge.
       progress(`${initiator}/reload`);
-      const familyTrace=initiator==='activity'?nativeTrace?.():undefined;
+      const familyTrace=initiator===nativeTarget.split('/')[0]?nativeTrace?.():undefined;
       await panningReload(cdp,initiator,diagnoseReload);
       progress(`${initiator}/charts-open`);
       await cdp.evaluate(`(async()=>{window.__quotumBench?.pause();const until=Date.now()+15000;while(!['quota-history','quota-session-history','activity','budget-history','subscription-funds'].every(id=>document.querySelector('[data-widget="'+id+'"] .chart>svg'))){if(Date.now()>until)throw new Error('panning charts did not open');await new Promise(r=>setTimeout(r,20));}})()`);
@@ -87,7 +87,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       })()`),...await density()};
       evidence?.save('panning-stage', {initiator, period, stage: 'starting', viewport: [1280,2400], throttle: 4, geometry});
       const edgeSeries:PanReading['edgeSeries']=[];
-      const traced=period==='24h'?familyTrace:undefined;
+      const traced=period===nativeTarget.split('/')[1]?familyTrace:undefined;
+      const detailed=!!traced&&nativeTarget==='session/30d';
       const samplerSource=`(() => {
         const initiator=${JSON.stringify(initiator)},period=${JSON.stringify(period)};
         const transactions=${panTransactionsScript()};let nextRequest=0;
@@ -100,7 +101,20 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         const bands=[...charts[1].parentElement.querySelectorAll('.plot-move')].filter(layer=>layer.querySelector('.activity-stack'));
         const connected=()=>layers.every((layer,i)=>layer.isConnected!==false&&slides[i].isConnected!==false)&&clips.every(clip=>clip.isConnected!==false);
         const probe=window.__quotumPan={initiator,period,frames:[],latency:[],responses:[],inputs:0,updated:0,chartUpdates:Array(5).fill(0),synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,mutationSamples:[],undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[],wheelGapMs:0,lastWheel:null};
-        const originalPush=history.pushState.bind(history);probe.originalPush=originalPush;
+        ${detailed?`// One bounded journal extends the existing probe only in the selected diagnostic cell.
+        const detail={limit:4096,count:0,omitted:0,startedAt:performance.now(),stoppedAt:0,preparationAttached:false,preparationRestored:false,preparationJobsAtAttach:null,preparationPendingAtAttach:null,frames:[],inputs:[],callbacks:[],preparations:[]};
+        let sampleSerial=0,activeSample=0,rafSerial=0,activeRaf=0;
+        const keep=(kind,row)=>{if(detail.count>=detail.limit){detail.omitted++;return false;}detail.count++;detail[kind].push(row);return true;};
+        const scheduler=window.__quotumPanPreparations,env=scheduler?.env,post=env?.post;
+        const observedPost=typeof post!=='function'?null:function(run){return post.call(this,()=>{
+          if(!probe.running)return run();
+          const at=performance.now(),jobsBefore=scheduler.size;
+          try{return run();}finally{keep('preparations',{at,to:performance.now(),jobsBefore,jobsAfter:scheduler.size});}
+        });};
+        if(observedPost){detail.preparationJobsAtAttach=scheduler.size;detail.preparationPendingAtAttach=typeof scheduler.pending==='boolean'?scheduler.pending:null;env.post=observedPost;detail.preparationAttached=true;}
+        probe.stopDiagnostic=()=>{detail.stoppedAt=performance.now();if(observedPost&&env.post===observedPost){env.post=post;detail.preparationRestored=true;}};
+        probe.readDiagnostic=()=>({status:!probe.running&&!detail.omitted&&detail.preparationAttached&&detail.preparationRestored&&detail.preparationJobsAtAttach===0&&detail.preparationPendingAtAttach===false&&detail.frames.length===probe.frames.length&&detail.inputs.length===probe.inputs?'complete':'insufficient-evidence',initiator,period,timeOrigin:performance.timeOrigin,...detail});
+        `:''}const originalPush=history.pushState.bind(history);probe.originalPush=originalPush;
         history.pushState=(...args)=>{if(probe.feeding){probe.pushesDuring++;transactions.push(probe.segment,root.dataset.panToken===undefined?NaN:Number(root.dataset.panToken));}else probe.pushesAfter++;originalPush(...args);};
         probe.returnSnapshot=()=>({now:Date.now(),url:location.search,charts:charts.map((svg,i)=>{
           const left=i===1?48:i===0||i===4?40:76,box=svg.viewBox.baseVal.width,inner=box-left-12,r=svg.getBoundingClientRect(),scale=r.width/box;
@@ -185,10 +199,10 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         const schedule=callback=>originalRAF.call(window,callback);
         let previous=charts.map(()=>'0:1'),phase='idle',lastFrame=null,paintedToken=null;
         let sampleEntry=0,callbacksSinceMovingFrame=0,maxCallbackGapMs=0,samplerMs=0;
-        const consume=(count,now,stamp,reachedGesture)=>{const reached=probe.pending.slice(0,count).filter(input=>input.gesture===reachedGesture);probe.pending=probe.pending.filter((input,i)=>i>=count||input.gesture!==reachedGesture);for(const input of reached){const ms=now-input.at;probe.latency.push(ms);probe.responses.push({ms,queued:input.delivered-input.at,processed:now-input.delivered,segment:input.segment,requests:probe.flights.size${evidence?.selection === 'quota24' ? ',at:input.at,delivered:input.delivered,reached:now,id:input.id' : ''}});}};
+        const consume=(count,now,stamp,reachedGesture)=>{const reached=probe.pending.slice(0,count).filter(input=>input.gesture===reachedGesture);probe.pending=probe.pending.filter((input,i)=>i>=count||input.gesture!==reachedGesture);for(const input of reached){const ms=now-input.at;probe.latency.push(ms);probe.responses.push({ms,queued:input.delivered-input.at,processed:now-input.delivered,segment:input.segment,requests:probe.flights.size${evidence?.selection === 'quota24' ? ',at:input.at,delivered:input.delivered,reached:now,id:input.id' : ''}});${detailed?`const response=probe.responses.at(-1);if(keep('inputs',response))Object.assign(response,{id:input.id,sampleId:activeSample,rafId:activeRaf,token:Number.isFinite(Number(input.gesture.token))?Number(input.gesture.token):null,at:input.at,delivered:input.delivered,reached:now});`:''}}};
         const sample=(stamp,afterCallback=false)=>{
           if(!probe.running)return;
-          const now=performance.now();
+          const now=performance.now();${detailed?'activeSample=++sampleSerial;':''}
           try {
           const demand=probe.pending.length,layers=owners(),active=!!root.dataset.panEnd;
           // Count sample entries, including callbacks with the same RAF timestamp.
@@ -199,12 +213,14 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
             return null;
           }),folding=folds.some(Boolean);
           probe.sizeStable&&=connected()&&charts.every((svg,i)=>svg.isConnected&&size(svg)===sizes[i]);
-          const matrices=layers.map((layer,i)=>{const owner=folds[i]?.owner,matrix=active?matrixOf(layer.style.transform):owner?foldMatrix(owner):matrixOf('none');return owner&&owner!==layer?{a:matrix.a,e:matrix.e*scales[i]}:matrix;}),current=matrices.map(matrix=>matrix.e+':'+matrix.a);
+          const actual=active?charts.map((svg,i)=>presentation(svg,layers[i],i,gesture?.origin)):null;
+          const matrices=layers.map((layer,i)=>{const owner=folds[i]?.owner,matrix=active?matrixOf(layer.style.transform):owner?foldMatrix(owner):matrixOf('none');return owner&&owner!==layer?{a:matrix.a,e:matrix.e*scales[i]}:matrix;});
+          const current=actual?actual.map(p=>p.x+':'+p.perMs):matrices.map(matrix=>matrix.e+':'+matrix.a);
           const nextPhase=active?'pan':folding?'fold':'idle';
           // The wheel's intentional 200 ms rest is stationary, before the fold begins.
-          if(nextPhase!==phase||active&&paintedToken!==root.dataset.panToken){probe.last=0;lastFrame=null;previous=nextPhase==='pan'?charts.map(svg=>(Number(svg.dataset.panBase||0))+':1'):current;phase=nextPhase;paintedToken=root.dataset.panToken;}
+          if(nextPhase!==phase||active&&paintedToken!==root.dataset.panToken){probe.last=0;lastFrame=null;previous=nextPhase==='pan'&&gesture?gesture.shown.map(p=>p.x+':'+p.perMs):current;phase=nextPhase;paintedToken=root.dataset.panToken;}
           const moved=current.map((value,i)=>value!==previous[i]);
-          if(active){probe.synchronized&&=connected()&&charts.every((svg,i)=>{const shown=gesture?.shown[i],actual=presentation(svg,layers[i],i,gesture?.origin),delta=(Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin));return svg.dataset.panEnd===root.dataset.panEnd&&Math.abs(delta/Number(svg.dataset.panScale)+matrices[i].e-Number(svg.dataset.panBase||0))<.01&&shown&&Number.isFinite(actual.x)&&Math.abs(actual.perMs*Number(svg.dataset.panScale)-1)<1e-6&&Math.abs(actual.perMs/shown.perMs-1)<1e-6&&Math.abs(actual.x-(shown.x-delta*shown.perMs))<.1;})&&bands.every(layer=>layer.isConnected!==false&&Math.abs(matrixOf(layer.style.transform).e-matrices[1].e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
+          if(active){probe.synchronized&&=connected()&&charts.every((svg,i)=>{const shown=gesture?.shown[i],point=actual[i],delta=(Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin));return svg.dataset.panEnd===root.dataset.panEnd&&Math.abs(delta/Number(svg.dataset.panScale)+matrices[i].e-Number(svg.dataset.panBase||0))<.01&&shown&&Number.isFinite(point.x)&&Math.abs(point.perMs*Number(svg.dataset.panScale)-1)<1e-6&&Math.abs(point.perMs/shown.perMs-1)<1e-6&&Math.abs(point.x-(shown.x-delta*shown.perMs))<.1;})&&bands.every(layer=>layer.isConnected!==false&&Math.abs(matrixOf(layer.style.transform).e-matrices[1].e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
           // Every input reaches all five plots; their finishing animations can
           // end separately, so an idle quota plot cannot hide a moving follower.
           if(active&&probe.synchronized&&(moved.every(Boolean)||afterCallback||probe.pending.some(input=>input.gesture===gesture&&input.clamped))){
@@ -221,18 +237,21 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
                 const ms=now-probe.last;probe.frames.push(ms);
                 const receipt={at:now,stamp,ms,segment:folding?'fold':probe.segment,inputSegment:probe.segment,pending:demand,requests:probe.flights.size};
                 if(ms>50){receipt.callbacksSinceMovingFrame=callbacksSinceMovingFrame;receipt.maxCallbackGapMs=maxCallbackGapMs;receipt.samplerMs=samplerMs;receipt.foldMask=folds.reduce((mask,fold,i)=>mask|(fold?1<<i:0),0);receipt.svgFoldMask=folds.reduce((mask,fold,i)=>mask|(fold&&fold.owner===slides[i]?1<<i:0),0);receipt.movedMask=moved.reduce((mask,changed,i)=>mask|(changed?1<<i:0),0);}
-                probe.samples.push(receipt);
+                ${detailed?`if(keep('frames',receipt))Object.assign(receipt,{index:probe.frames.length-1,sampleId:activeSample,rafId:activeRaf,token:Number.isFinite(Number(root.dataset.panToken))?Number(root.dataset.panToken):null});`:''}probe.samples.push(receipt);
               }
               probe.last=now;lastFrame=stamp;callbacksSinceMovingFrame=0;maxCallbackGapMs=0;samplerMs=0;
             }
           }
           if(!active&&!folding&&probe.pending.length&&charts.every(svg=>svg.dataset.drawReady==='true'&&!svg.classList.contains('is-panning'))){
             // Release may commit the last coalesced input before its own RAF.
-            // Its effect is observable only after the final geometry and fold.
+            // Its effect is observable only in the committed geometry. A historical
+            // handoff retains its SVG pose instead of resetting it to identity.
             const ends=charts.map(svg=>Number(svg.parentElement.dataset.axisEnd)),selected=new URLSearchParams(location.search).has('to');
             let reached=-1;
-            for(let i=0;i<probe.pending.length;i++){const input=probe.pending[i],g=input.gesture;const tolerance=selected?1.1:8*g.scale+1.1;if(g===gesture&&g.started&&g.scale>0&&ends.every(end=>Math.abs(end-(g.origin-input.pixels*g.scale))<=tolerance))reached=i;}
-            if(reached>=0){consume(reached+1,now,stamp,probe.pending[reached].gesture);}
+            for(let i=0;i<probe.pending.length;i++){const input=probe.pending[i],g=input.gesture;const tolerance=selected?1.1:8*g.scale+1.1;
+              const landmarks=!selected||charts.every((svg,j)=>{const actual=presentation(svg,layers[j],j,g.origin),shown=g.shown[j],shift=input.pixels*g.scale;return [0,-g.scale*views[driver]*scales[driver]/2].every(offset=>Math.abs(actual.x+offset*actual.perMs-(shown.x+(offset+shift)*shown.perMs))<=1);});
+              if(g===gesture&&g.started&&g.scale>0&&ends.every(end=>Math.abs(end-(g.origin-input.pixels*g.scale))<=tolerance)&&landmarks)reached=i;}
+            if(reached>=0)consume(reached+1,now,stamp,gesture);
           }
           if(!active&&!folding)probe.last=0;
           previous=current;probe.undimmed&&=charts.every(svg=>!svg.closest('.is-loading')&&(!svg.style.opacity||svg.style.opacity==='1'));
@@ -243,9 +262,10 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         // five drawings only when the initiator's real drawing has changed.
         const painted=()=>[root.dataset.panToken,root.dataset.panEnd,layers[driver].style.transform,slides[driver].style.transform,root.dataset.drawFrom,root.dataset.drawTo].join(':');
         let lastPaint=painted();
-        window.requestAnimationFrame=callback=>schedule(stamp=>{try{callback.call(window,stamp);}finally{
+        window.requestAnimationFrame=callback=>${detailed?'((id)=>':''}schedule(stamp=>{${detailed?'const at=performance.now(),sampleFrom=sampleSerial,before=activeRaf;activeRaf=id;':''}try{callback.call(window,stamp);}finally{
           if(probe.running&&probe.pending.length){const next=painted();if(next!==lastPaint){lastPaint=next;sample(stamp,true);}}
-        }});
+          ${detailed?"if(probe.running)keep('callbacks',{id,stamp,at,to:performance.now(),sampleFrom,sampleTo:sampleSerial});activeRaf=before;":''}
+        }})${detailed?')(++rafSerial)':''};
         const tick=stamp=>{
           if(!probe.running)return;
           // A clamped delta requests the already bounded pose and may schedule no
@@ -257,7 +277,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
           probe.raf=schedule(tick);
         };
         probe.readTransactions=()=>transactions.read();
-        probe.cleanup=()=>{probe.running=false;cancelAnimationFrame(probe.raf);probe.observer.disconnect();for(const type of types){owner.removeEventListener(type,capture,true);window.removeEventListener(type,input);}window.requestAnimationFrame=originalRAF;window.fetch=originalFetch;history.pushState=originalPush;};
+        probe.cleanup=()=>{probe.running=false;${detailed?'probe.stopDiagnostic();':''}cancelAnimationFrame(probe.raf);probe.observer.disconnect();for(const type of types){owner.removeEventListener(type,capture,true);window.removeEventListener(type,input);}window.requestAnimationFrame=originalRAF;window.fetch=originalFetch;history.pushState=originalPush;};
         probe.raf=schedule(tick);
       })()`;
       await cdp.evaluate(samplerSource);
@@ -308,9 +328,11 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       await cdp.evaluate('window.__quotumPan.returnInput={pixels:0,events:0,tokens:[]}');
       await cdp.evaluate('window.__quotumPan.feeding=true');
       const returnPixels = await cdp.evaluate<number>(`(() => {
-        const p=new URLSearchParams(location.search),from=Number(p.get('from')),to=Number(p.get('to'));
-        const svg=document.querySelector('${selector} .chart>svg'),width=svg.getBoundingClientRect().width,box=svg.viewBox.baseVal.width;
-        return (Date.now()-to)/(to-from)*(width*(box-${inset})/box);
+        const to=Number(new URLSearchParams(location.search).get('to'));
+        const svg=document.querySelector('${selector} .chart>svg'),box=svg.viewBox.baseVal.width;
+        const slides=svg.parentElement.querySelector('${initiator==='activity'?'.plot-clip.is-band .slides':'[data-plot-main] .slides'}');
+        const perMs=slides.getScreenCTM().a*(box-${inset})/(Number(svg.dataset.drawTo)-Number(svg.dataset.drawFrom));
+        return (Date.now()-to)*perMs;
       })()`);
       await scroll(-Math.max(0, returnPixels - 4));
       await cdp.evaluate('window.__quotumPan.feeding=false');
@@ -320,11 +342,17 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       const report = await cdp.evaluate<PanReading>(`(() => {
         const p=window.__quotumPan;p.cleanup();
         const segments={};for(const segment of ['wheel','drag','return','fold']){const values=p.samples.filter(s=>s.segment===segment).map(s=>s.ms).sort((a,b)=>a-b);segments[segment]={count:values.length,p95:values[Math.ceil(values.length*.95)-1]??0,max:values.at(-1)??0};}
-        return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,chartUpdates:p.chartUpdates,synchronized:p.synchronized,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,mutationSamples:p.mutationSamples,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,wheelGapMs:p.wheelGapMs,segments,transactions:p.readTransactions(),outliers:p.samples.filter(s=>s.ms>50),responses:p.responses.filter(r=>r.ms>34)};
+        return {${detailed?'nativeDiagnostic:p.readDiagnostic(),':''}frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,chartUpdates:p.chartUpdates,synchronized:p.synchronized,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,mutationSamples:p.mutationSamples,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,wheelGapMs:p.wheelGapMs,segments,transactions:p.readTransactions(),outliers:p.samples.filter(s=>s.ms>50),responses:p.responses.filter(r=>r.ms>34)};
       })()`);
       report.initiator = initiator; report.period = period; report.series = geometry.series; report.sessionSeries=geometry.sessionSeries; report.edgeSeries=edgeSeries; report.budgetSeries = geometry.budgetSeries; report.fundsSeries = geometry.fundsSeries; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;
       reports.push(report);
+      // Keep the bounded diagnostic separate from the ordinary one-MiB summaries.
+      const diagnostic=report.nativeDiagnostic;delete report.nativeDiagnostic;
       evidence?.save('panning-'+initiator+'-'+period,report);
+      if(diagnostic){
+        const bytes=Buffer.byteLength(JSON.stringify(diagnostic));
+        evidence?.saveTrace?.('native-panning-receipt',bytes<=4*1024*1024?diagnostic:{status:'insufficient-evidence',reason:'native panning receipt byte limit',bytes,limit:4*1024*1024});
+      }
       // The frozen report ends measurement; exporting diagnostics needs no CPU throttle.
       let diagnosticFailure:{error:unknown}|undefined;
       try{

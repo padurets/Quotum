@@ -24,7 +24,7 @@ import {fixtureTiming, idlePhaseProblems, idlePhaseScript, idleWindow, overviewC
 import {hear, type Heard} from './stream.js';
 import {frequencyKeys, moneyView, selectMoney} from './controls.js';
 import {panning} from './panning.js';
-import {panningProblems} from './panningBudget.js';
+import {panningProblems,type NativePanTarget} from './panningBudget.js';
 import {seedPanningBudgets,panningSet} from './fixture.js';
 import {historyTraffic} from './historyTraffic.js';
 import {browserHistoryTraffic,diagnoseReversal} from './historyTrafficBrowser.js';
@@ -42,6 +42,7 @@ import {IdleCpuDiagnostic,sourceIdentity} from './idleCpuDiagnostic.js';
 import {idleRetentionScript,idleRetentionProblems,type IdleRetention} from './idleRetention.js';
 import {ObservedWork} from './observed.js';
 import {fixedActivity} from './fixedActivity.js';
+import {measurementDetails} from './measurementDetailsFixture.js';
 import {captionControl} from './captionControl.js';
 import {captionGeometry} from './captionGeometry.js';
 import {deadline} from './deadline.js';
@@ -118,6 +119,7 @@ async function main() {
   const idleCpuMode = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_CPU;
   const captionMode = process.env.QUOTUM_BENCH_CAPTION_CONTROL;
   const nativeFrameMode=idleCpuMode==='native-trace'||idleCpuMode==='native-profile';
+  const nativeFrameTarget=process.env.QUOTUM_BENCH_NATIVE_TARGET||'activity/24h';
   const poolDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL;
   const scrollControl=process.env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL;
   const historySuffix=process.env.QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX;
@@ -147,6 +149,7 @@ async function main() {
     address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
     if (idleCpuMode && (!['trace','profile','native-trace','native-profile'].includes(idleCpuMode) || !options.ci || options.cdp || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
     if (poolDiagnostic && (poolDiagnostic !== '1' || !options.ci || options.cdp || idleCpuMode || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting history pool diagnostic mode');
+    if (process.env.QUOTUM_BENCH_NATIVE_TARGET && (!nativeFrameMode || !['activity/24h','session/30d'].includes(nativeFrameTarget))) throw new Stop('Unknown or conflicting native trace target');
     await prepare(address);
     chrome = options.cdp ? null : findChrome(process.env);
     if (!options.cdp && !chrome) throw new Stop('No Chrome to run: set QUOTUM_CHROME, put google-chrome or chromium on PATH, or pass --cdp <http://host:port>.');
@@ -280,6 +283,10 @@ async function main() {
           period:p?{generation:p.generation,revision:p.revision,workNeeded:p.workNeeded,dirty:[...p.dirtyScopes],error:p.get().error,calendar:p.calendar.state.error,calendarNeeded:p.calendar.needed,completed:p.transport.completed,failed:p.transport.failed,
             flights:[...p.transport.flights].map(f=>({extras:f.extras,preparing:!!f.preparing,aborted:f.controller.signal.aborted,sections:Object.keys(f.intent.request)}))}:null};
       };};
+      ${nativeFrameMode&&nativeFrameTarget==='session/30d'?`(() => {
+        const inspect=window.__quotumInspectPreparations;
+        window.__quotumInspectPreparations=value=>{if(typeof inspect==='function')inspect(value);window.__quotumPanPreparations=value;};
+      })();`:''}
       ${probeScript()}`;
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source:bootstrapSource});
     idleCpu?.binding.rememberInjected(1,bootstrapSource,'idle-probe');
@@ -431,7 +438,7 @@ async function main() {
         const observer=await observeReversal(cdp,browser!,{signal,origin});
         try{await observer.diagnose(label);}finally{await observer.close();}
       })()]);
-    },nativeFrameTrace);
+    },nativeFrameTrace,nativeFrameTarget as NativePanTarget);
     const panned = await runPanning(cdp, undefined, evidence);
     evidence.save('panning', panned);
     problems.push(...panned.problems);
@@ -448,13 +455,16 @@ async function main() {
     evidence.save('money', monetary);
     evidence.begin('fixed-activity');
     say('checking paint-only emphasis and shared Activity filters, late-work cells and cancellation at 24h/30d');
-    const selectedActivity=await fixedActivity(browser,stand);
+    const selectedActivity=await fixedActivity(browser,stand,evidence);
     problems.push(...selectedActivity.problems);
     evidence.save('fixed-activity', selectedActivity);
     problems.push(...monetary.problems);
+    say('checking complete measurement disclosure text after all performance readings');
+    const measurementDisclosures=await measurementDetails(browser,ana);
     const result = {
       mode: options.scope,
       set: set.id,
+      measurementDisclosures,
       idle: {
         seconds: actualSeconds, plannedSeconds: seconds, planned, phase, phaseProblems,
         requests: {count: requests.count, bytes: requests.bytes, byPath: requests.byPath},

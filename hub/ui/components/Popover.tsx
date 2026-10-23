@@ -1,9 +1,11 @@
+/** @jsxRuntime automatic */
 import {createPortal} from 'react-dom';
 import {useCallback, useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type FocusEvent, type ReactNode, type RefObject} from 'react';
 import {barsOf, coverOf, crampedOf, roomOf, shiftOf, sideOf} from '../lib/place';
 import {settler} from '../lib/settle';
 import {X} from 'lucide-react';
 import {t} from '../i18n';
+import {returnFocus,returnFocusOutside} from './focusReturn';
 
 /** A button with an anchored panel; closes on outside click, Escape, focus moving out and its button going out of sight. */
 export function Popover({
@@ -50,9 +52,14 @@ export function Popover({
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const portalAnchor=useRef<HTMLDivElement>(null);
+  const boxRef=useCallback((element:HTMLDivElement|null)=>{
+    // A retiring trigger also owns its portaled panel; neither can receive the return.
+    if(!element&&box.current&&(box.current.contains(document.activeElement)||panel.current?.contains(document.activeElement)))returnFocusOutside(box.current);
+    box.current=element;
+  },[]);
   const panelRef = useCallback((element: HTMLDivElement | null) => {
     // A form can close its panel directly. Return focus before its focused control is removed.
-    if (!element && panel.current?.contains(document.activeElement)) button.current?.focus({preventScroll: true});
+    if (!element && panel.current?.contains(document.activeElement)) returnFocus(button.current);
     panel.current = element;
   }, []);
   // A panel never scrolls the page, lengthens it nor widens it: it opens whole in the window,
@@ -104,7 +111,7 @@ export function Popover({
     };
     // Focus in the panel goes back to the button, as on Escape, without scrolling the page to it.
     const unfocus = () => {
-      if (element.contains(document.activeElement)) trigger.focus({preventScroll: true});
+      if (element.contains(document.activeElement)) returnFocus(trigger);
     };
     const close = () => {
       unfocus();
@@ -283,7 +290,7 @@ export function Popover({
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       // Focus inside the panel would fall to the page's start; it goes back to the button.
-      if ((box.current?.contains(document.activeElement)||panel.current?.contains(document.activeElement))) button.current?.focus();
+      if ((box.current?.contains(document.activeElement)||panel.current?.contains(document.activeElement))) returnFocus(button.current);
       setOpen(false);
     };
     document.addEventListener('mousedown', close);
@@ -315,7 +322,7 @@ export function Popover({
         </div>);
 
   return (
-    <div className="picker" ref={box} onBlur={leave}>
+    <div className="picker" ref={boxRef} onBlur={leave}>
       <button
         type="button"
         className={trigger ? `text-button ${triggerClass ?? ''}` : 'icon-button'}

@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {HistoryStore} from '../lib/history';
 import {HistoryPool} from '../lib/historyPool';
+import {abortable} from './periodRuntimeFixture';
 import {PeriodTransport,type HistoryReadOwner,type PeriodIntent} from '../lib/periodTransport';
 import {Preparations} from '../lib/prepare';
 import {expandHistory,tileEnd,tileOf,type Chunk,type HistoryAnswer} from '../../server/domain/history';
@@ -212,4 +213,144 @@ test('ordinary navigation replaces a submitted target before physical HTTP admis
     await h.attempts[1].answer();h.pool.release(blockers[1]);await h.finish();assert.equal(h.attempts.length,2,'the displaced target must never start or create a duplicate demand');
     assert.equal(reader.get().history?.range,`${selected.from}-${selected.to}`);assert.equal(state(reader).metaAt,700);
   }finally{for(const flight of blockers)h.pool.release(flight);await h.close();}
+});
+
+
+test('an aborted HTTP attempt owns its slot and decoded reservation until its boundary settles',async()=>{
+  const pool=new HistoryPool();let complete!:()=>void,signal!:AbortSignal;
+  const intent:PeriodIntent={board:'b',generation:1,revision:1,request:{version:1,selection:{mode:'range',from:NOW-H,to:NOW},evaluatedAt:NOW,sessions:{}}};
+  const transport=new PeriodTransport(pool,()=>intent,()=>{},(_board,_body,requestSignal,reserve)=>new Promise(resolve=>{
+    signal=requestSignal;assert.equal(reserve(1024),true);
+    complete=()=>resolve({basis:{run:'run',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range:{from:NOW-H,to:NOW}}});
+  }));
+  try{
+    transport.change();await flush();assert.equal(pool.activeFlights,1);assert.equal(pool.estimatedBytes,1024);
+    transport.reset();await flush();assert.equal(signal.aborted,true);
+    assert.equal(pool.activeFlights,1,'aborting a signal is not completion of the HTTP boundary');
+    assert.equal(pool.estimatedBytes,1024,'the cancelled decoder still owns its reservation');
+    complete();await flush();assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);
+  }finally{complete?.();transport.reset();await flush();}
+});
+
+/** Keep adoption and the drawing's finished promise independently owned across reset. */
+async function resetLifecycle(holdNext=false,blockSecondSlot=false) {
+  const pool=new HistoryPool(),sends:{generation:number;signal:AbortSignal}[]=[];
+  const blocker={role:'visible' as const};
+  let generation=1,active=true,adoptions=0,pins=0,role:'visible'|null='visible',finish!:()=>void,adopt!:()=>void,deliver!:()=>void;
+  const finished=new Promise<void>(resolve=>{finish=resolve;}),adopting=new Promise<void>(resolve=>{adopt=resolve;}),delivery=new Promise<void>(resolve=>{deliver=resolve;});
+  const basis={run:'run',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range:{from:NOW-H,to:NOW}};
+  const intent=():PeriodIntent|null=>active?{board:'b',generation,revision:generation,resourceGeneration:1,request:{version:1,selection:{mode:'range',...basis.range},evaluatedAt:NOW,quota:{...query}}}:null;
+  const transport=new PeriodTransport(pool,intent,async(_reply,_intent,reserve)=>{
+    pins++;reserve!.retain!(()=>{pins--;});if(++adoptions===1)await adopting;
+  },async(_board,body,signal,reserve)=>{
+    sends.push({generation,signal});assert.equal(reserve(2048),true);
+    if(holdNext&&sends.length>1)await abortable(delivery,signal);
+    const reply:PeriodReply={basis};
+    for(const scope of PERIOD_SCOPES)if(body[scope])reply[scope]={state:'complete',basis,value:{run:'run',now:NOW,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:{cursor:'cursor-'+sends.length,from:NOW-H,cut:NOW,replaceFrom:NOW-H,quota:[],money:[]}}};
+    return reply;
+  });
+  const first=transport.read('quota',query,undefined,{finished,role:()=>role,cancel:()=>{role=null;}}).catch(error=>error);
+  await flush();assert.equal(sends.length,1);assert.equal(adoptions,1);assert.equal(pins,1);assert.equal(pool.activeFlights,1);assert.equal(pool.estimatedBytes,2048);
+  if(blockSecondSlot){pool.request({estimatedBytes:0,evictionCandidates:()=>[]},blocker,()=>{},()=>{});await flush();assert.equal(pool.activeFlights,2);}
+  const finishAdoption=async()=>{adopt();await flush();assert.equal(pool.activeFlights,blockSecondSlot?2:1,'the original drawing still owns the shared slot');assert.equal(pool.estimatedBytes,2048);assert.equal(pins,1);};
+  const finishReader=async()=>{finish();await flush();if(blockSecondSlot){pool.release(blocker);await flush();}};
+  const close=async()=>{active=false;transport.reset();adopt();finish();deliver();pool.release(blocker);await first;await flush();assert.equal(pins,0);assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);};
+  return {pool,transport,sends,first,finishAdoption,finishReader,pins:()=>pins,next:()=>{generation++;},close};
+}
+
+test('a newer intent before reset cannot authorize an unrequested post-reset baseline',async()=>{
+  const h=await resetLifecycle();try{
+    h.next();h.transport.change();await flush();assert.equal(h.sends.length,1);
+    h.transport.reset();assert.equal((await h.first).name,'AbortError');
+    await h.finishAdoption();await h.finishReader();
+    assert.equal(h.sends.length,1,'an intent that already existed at reset supplies no new demand');
+    assert.equal(h.pins(),0);assert.equal(h.pool.activeFlights,0);assert.equal(h.pool.estimatedBytes,0);
+  }finally{await h.close();}
+});
+
+for(const action of ['change','read'] as const)for(const target of ['same','new'] as const)test(`a post-reset ${action} for the ${target} intent waits for the actual old owner and resumes`,async()=>{
+  const h=await resetLifecycle(false,action==='read');let read:Promise<unknown>|undefined;try{
+    h.transport.reset();if(target==='new')h.next();
+    if(action==='change')h.transport.change();else read=h.transport.read('quota',query);
+    await flush();assert.equal(h.sends.length,1,'the new request cannot borrow the old visible slot');
+    await h.finishAdoption();assert.equal(h.sends.length,1);
+    await h.finishReader();await read;
+    assert.ok(h.sends.length>1,'demand after reset must wake even when the intent text is unchanged');
+    assert.equal(h.sends[1].generation,target==='same'?1:2);
+    assert.equal(h.pins(),0);assert.equal(h.pool.activeFlights,0);assert.equal(h.pool.estimatedBytes,0);
+  }finally{await h.close();}
+});
+
+for(const cancellation of ['latest reset','queued read'] as const)test(`the latest reset retires earlier demand after ${cancellation}`,async()=>{
+  const h=await resetLifecycle(false,cancellation==='queued read');try{
+    h.next();h.transport.change();h.transport.reset();h.transport.change();h.transport.reset();
+    if(cancellation==='queued read'){
+      const signal=new AbortController(),read=h.transport.read('quota',query,signal.signal).catch(error=>error);
+      await flush();assert.equal(h.sends.length,1);signal.abort();assert.equal((await read).name,'AbortError');
+    }
+    await h.finishAdoption();await h.finishReader();
+    assert.equal(h.sends.length,1,'neither an earlier change nor a canceled reader survives the latest reset');
+    assert.equal(h.pins(),0);assert.equal(h.pool.activeFlights,0);assert.equal(h.pool.estimatedBytes,0);
+  }finally{await h.close();}
+});
+
+test('canceling a started post-reset reader does not make its implicit demand sticky',async()=>{
+  const h=await resetLifecycle(true);try{
+    h.transport.reset();await h.finishAdoption();await h.finishReader();assert.equal(h.pool.activeFlights,0);
+    const signal=new AbortController(),read=h.transport.read('quota',query,signal.signal).catch(error=>error);
+    await flush();assert.equal(h.sends.length,2);assert.equal(h.pool.activeFlights,1);assert.equal(h.pool.estimatedBytes,2048);
+    signal.abort();assert.equal((await read).name,'AbortError');await flush();
+    assert.equal(h.sends.length,2,'cancellation before delivery cannot request an exact baseline');
+    assert.equal(h.pins(),0);assert.equal(h.pool.activeFlights,0);assert.equal(h.pool.estimatedBytes,0);
+  }finally{await h.close();}
+});
+
+test('a canceled queued reader leaves no implicit baseline in its scheduled flush',async()=>{
+  const pool=new HistoryPool();let sent=0;
+  const intent:PeriodIntent={board:'b',generation:1,revision:1,request:{version:1,selection:{mode:'range',from:NOW-H,to:NOW},evaluatedAt:NOW,quota:{...query}}};
+  const transport=new PeriodTransport(pool,()=>intent,()=>{},async()=>{sent++;throw new Error('unexpected baseline');});
+  const signal=new AbortController(),read=transport.read('quota',query,signal.signal).catch(error=>error);
+  try{
+    signal.abort();assert.equal((await read).name,'AbortError');await flush();
+    assert.equal(sent,0);assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);
+  }finally{transport.reset();await flush();}
+});
+
+test('canceling the last delivered reader before baseline admission revokes only its implicit demand',async()=>{
+  const pool=new HistoryPool();let sent=0;
+  const basis={run:'run',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range:{from:NOW-H,to:NOW}};
+  const intent:PeriodIntent={board:'b',generation:1,revision:1,request:{version:1,selection:{mode:'range',...basis.range},evaluatedAt:NOW,quota:{...query}}};
+  const transport=new PeriodTransport(pool,()=>intent,()=>{},async()=>{sent++;return {basis,quota:{state:'complete',basis,value:{run:'run',now:NOW,historyStart:0,known:{work:0,sources:{}},chunks:[]}}};});
+  const signal=new AbortController();try{
+    await transport.read('quota',query,signal.signal);signal.abort();await flush();
+    assert.equal(sent,1,'a completed drawing that is then canceled cannot leave a later exact baseline');
+    assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);
+  }finally{transport.reset();await flush();}
+});
+
+test('canceling a queued post-reset reader preserves an independent coordinator change',async()=>{
+  const h=await resetLifecycle(false,true);try{
+    h.transport.reset();h.transport.change();
+    const signal=new AbortController(),read=h.transport.read('quota',query,signal.signal).catch(error=>error);
+    await flush();assert.equal(h.sends.length,1);signal.abort();assert.equal((await read).name,'AbortError');
+    await h.finishAdoption();await h.finishReader();
+    assert.ok(h.sends.length>1,'canceling the reader does not cancel the independently requested baseline');
+    assert.equal(h.pool.activeFlights,0);assert.equal(h.pool.estimatedBytes,0);assert.equal(h.pins(),0);
+  }finally{await h.close();}
+});
+
+for(const cancellation of ['one of two readers','an older reset epoch'] as const)test(`canceling ${cancellation} preserves another delivered reader's demand`,async()=>{
+  const pool=new HistoryPool(),signals=[new AbortController(),new AbortController()];let sent=0;
+  const basis={run:'run',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range:{from:NOW-H,to:NOW}};
+  const intent:PeriodIntent={board:'b',generation:1,revision:1,request:{version:1,selection:{mode:'range',...basis.range},evaluatedAt:NOW,quota:{...query},budget:{...query}}};
+  const transport=new PeriodTransport(pool,()=>intent,()=>{},async(_board,body)=>{
+    sent++;const reply:PeriodReply={basis};for(const scope of PERIOD_SCOPES)if(body[scope])reply[scope]={state:'complete',basis,value:{run:'run',now:NOW,historyStart:0,known:{work:0,sources:{}},chunks:[]}};return reply;
+  });
+  try{
+    if(cancellation==='one of two readers')await Promise.all([transport.read('quota',query,signals[0].signal),transport.read('budget',query,signals[1].signal)]);
+    else {await transport.read('quota',query,signals[0].signal);transport.reset();await transport.read('quota',query,signals[1].signal);}
+    const before=sent;signals[0].abort();await flush();
+    assert.equal(sent,before+1,'the other reader still requests one exact combined baseline');
+    assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);
+  }finally{for(const signal of signals)signal.abort();transport.reset();await flush();}
 });

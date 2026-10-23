@@ -40,7 +40,7 @@ function widgetFixture(border=0,manual=true){
   const modules:Record<string,unknown>={react:hooks,'react-dom':{flushSync:(callback:()=>void)=>callback()},'react/jsx-runtime':{jsx:element,jsxs:element},'../lib/table':tables,'../i18n':{useLocale:()=> 'en'},'./Popover':{},'./sizing':{
     useSizing:()=>sizing,fillOf:()=>root.fill,pixels:(n:number)=>Math.round(n*64)/64,same:(a:number|undefined,b:number|undefined)=>a===b||a!==undefined&&b!==undefined&&Math.abs(a-b)<1,
   }};
-  const context={exports:{} as Pick<typeof import('../components/TableWidget'),'useTableWidget'|'TableMeasure'>,require:(name:string)=>modules[name],
+  const context={exports:{} as Pick<typeof import('../components/TableWidget'),'useTableWidget'|'TableMeasure'|'TableSurface'>,require:(name:string)=>modules[name],
     getComputedStyle:()=>({paddingLeft:'22',paddingRight:'22',borderBottomWidth:String(border*2)}),ResizeObserver:class {
       record:{callback:(entries:{target:unknown}[])=>void;targets:Set<unknown>;initial:Set<unknown>};constructor(callback:(entries:{target:unknown}[])=>void){this.record={callback,targets:new Set(),initial:new Set()};observers.push(this.record);}
       observe(target:unknown){this.record.targets.add(target);this.record.initial.add(target);}disconnect(){this.record.targets.clear();this.record.initial.clear();}
@@ -60,8 +60,10 @@ function widgetFixture(border=0,manual=true){
       widget=context.exports.useTableWidget(panel,[120,120,180,180],180,keys,key);
       measuring=context.exports.TableMeasure({table:widget,children:null})!==null;
       measuredBody=measuring?measuredBody??body():null;
-      const current=keys.slice(widget.from,widget.to),footer=widget.pages>1?80:46;
-      const natural=shell+current.reduce((sum,id)=>sum+height(id),0)+footer;
+      const current=keys.slice(widget.from,widget.to),footer=80;
+      const head=widget.layout==='table'?56:18;
+      const natural=shell-head+widget.surfaceHeight+footer;
+      widget.surface.current={getBoundingClientRect:()=>({height:displayed?widget.surfaceHeight:0})} as HTMLDivElement;
       root.height=Math.max(sizing.allocated,natural);root.fill=displayed?root.height-natural:0;
       widget.live.current=liveBody.update(current) as unknown as HTMLElement;
       widget.measured.current=measuredBody?measuredBody.update(keys.slice(widget.measureFrom,widget.measureTo)) as unknown as HTMLElement:null;
@@ -79,6 +81,8 @@ function widgetFixture(border=0,manual=true){
   };
   const original=keys;
   return {render,reports,keys:()=>keys,shown:(widget:TableWidget)=>keys.slice(widget.from,widget.to),resize:(height:number)=>{sizing.allocated=height;},narrow:()=>{root.clientWidth=350;sizing.width='narrow';},reset:(next='period-b')=>{key=next;},clear:()=>{keys=[];},limit:(n:number)=>{keys=original.slice(0,n);},height:()=>root.height,rowReads:()=>rowReads,layoutReads:()=>layoutReads,updates:()=>updates,measuring:()=>measuring,
+    hide:(notify=true)=>{displayed=false;if(notify)for(const observer of observers)if(observer.targets.has(root))observer.callback([{target:root,borderBoxSize:[{inlineSize:0,blockSize:0}]}] as any);},
+    show:(width=1200)=>{displayed=true;givenWidth=width;sizing.width=width<800?'narrow':'wide';for(const observer of observers)if(observer.targets.has(root))observer.callback([{target:root,borderBoxSize:[{inlineSize:width,blockSize:root.height}]}] as any);},
     display:(show:boolean,boxes=true,deliver=true)=>{displayed=show;if(!deliver)return;for(const observer of observers)if(observer.targets.has(root))observer.callback([{target:root,...(boxes?{borderBoxSize:[{inlineSize:root.clientWidth,blockSize:show?root.height:0}]}:{})}] as any);},
     reverse:()=>{keys=[...keys].reverse();},
     rowHeights:(changes:Record<string,number>)=>{for(const [id,height]of Object.entries(changes))rowHeights.set(id,height);},
@@ -102,7 +106,7 @@ test('hidden tables remove their measurement tree and observe new rows when show
     assert.ok(f.notifyRows(['row-56'])>0,'the replacement measurement row is observed');
     const min=f.reports.at(-1)!.min;
     f.rowHeights({'row-56':250});f.render();f.notifyRows(['row-56']);widget=f.render();
-    assert.equal(f.reports.at(-1)!.min,min+30);assert.equal(f.height(),560);assert.ok(widget.to<57);
+    assert.equal(f.reports.at(-1)!.min,min,'row growth cannot change the structural shell');assert.equal(f.height(),560);assert.ok(widget.to<57);
   }
 });
 
@@ -142,14 +146,14 @@ test('a zero read before resize observation cannot suspend later measurements',(
   const f=widgetFixture();f.render();const min=f.reports.at(-1)!.min,reads=f.rowReads();
   f.display(false,true,false);f.resize(561);f.render();
   f.rowHeights({'row-0':60,'row-1':28});f.display(true,true,false);f.resize(560);f.render();
-  assert.equal(f.reports.at(-1)!.min,min+16);assert.ok(f.rowReads()>reads);
+  assert.equal(f.reports.at(-1)!.min,min);assert.ok(f.rowReads()>reads);
   assert.equal(f.height(),560,'the observed outer dimensions never changed');
 });
 
 test('showing the same-sized panel remeasures balanced row changes',()=>{
   const f=widgetFixture();f.render();const min=f.reports.at(-1)!.min,reads=f.rowReads();
   f.display(false);f.rowHeights({'row-0':60,'row-1':28});f.display(true);f.render();
-  assert.equal(f.reports.at(-1)!.min,min+16,'the tallest row changed while the total height stayed fixed');
+  assert.equal(f.reports.at(-1)!.min,min,'balanced row changes keep the shell stable');
   assert.ok(f.rowReads()>reads,'matching old outer dimensions cannot reuse hidden row heights');
 });
 
@@ -173,9 +177,10 @@ test('panel chrome repaginates without rereading its unchanged measurement rows'
 });
 
 test('an allocation change reads pending row growth before resize delivery',()=>{
-  const f=widgetFixture();f.render();const min=f.reports.at(-1)!.min;
+  const f=widgetFixture();f.render();const min=f.reports.at(-1)!.min,reads=f.rowReads();
   f.rowHeights({'row-0':74,'row-1':14});f.resize(608);f.render();
-  assert.equal(f.reports.at(-1)!.min,min+30);
+  assert.ok(f.rowReads()>reads,'allocation reads pending row growth before resize delivery');
+  assert.equal(f.reports.at(-1)!.min,min,'row growth cannot change the structural shell');
 });
 
 test('a changed border invalidates cached measurement strides',()=>{
@@ -185,9 +190,9 @@ test('a changed border invalidates cached measurement strides',()=>{
 
 test('individual row size changes invalidate measurements even when their combined height stays fixed',()=>{
   for(const manual of [true,false]){
-    const f=widgetFixture(0,manual);f.render();const min=f.reports.at(-1)!.min,shown=f.height();
+    const f=widgetFixture(0,manual);f.render();const min=f.reports.at(-1)!.min,shown=f.height(),reads=f.rowReads();
     f.rowHeights({'row-0':74,'row-1':14});f.render();f.notifyRows(['row-0','row-1']);f.render();
-    assert.equal(f.reports.at(-1)!.min,min+30);assert.equal(f.height(),shown);
+    assert.ok(f.rowReads()>reads,'individual row changes invalidate cached strides');assert.equal(f.reports.at(-1)!.min,min,'row growth cannot change the structural shell');assert.equal(f.height(),shown);
   }
 });
 
@@ -202,13 +207,47 @@ test('initial row observations, including the final border, do not force another
 test('successive small row changes stay relative to the last actual measurement',()=>{
   const f=widgetFixture();f.render();const reads=f.rowReads(),min=f.reports.at(-1)!.min;
   f.rowHeights({'row-0':44.6,'row-1':43.4});f.notifyRows(['row-0','row-1']);f.render();assert.equal(f.rowReads(),reads);
-  f.rowHeights({'row-0':45.2,'row-1':42.8});f.notifyRows(['row-0','row-1']);f.render();assert.ok(f.reports.at(-1)!.min>min+1);
+  f.rowHeights({'row-0':45.2,'row-1':42.8});f.notifyRows(['row-0','row-1']);f.render();assert.ok(f.rowReads()>reads);assert.equal(f.reports.at(-1)!.min,min);
 });
 
 test('missing observed border boxes cannot hide balanced row growth',()=>{
-  const f=widgetFixture();f.render();const min=f.reports.at(-1)!.min;
+  const f=widgetFixture();f.render();const min=f.reports.at(-1)!.min,reads=f.rowReads();
   f.rowHeights({'row-0':74,'row-1':14});f.notifyRows(['row-0','row-1'],false);f.render();
-  assert.equal(f.reports.at(-1)!.min,min+30);
+  assert.ok(f.rowReads()>reads,'missing border boxes invalidate cached strides');
+  assert.equal(f.reports.at(-1)!.min,min,'row growth cannot change the structural shell');
+});
+
+test('a hidden table retains its page and geometry without measuring rows, then measures them on reveal',()=>{
+  const f=widgetFixture();let before=f.render();before.onPage(2);before=f.render();
+  const reads=f.rowReads(),reports=f.reports.length;
+  f.hide();const hidden=f.render();
+  assert.equal(f.rowReads(),reads,'a zero-width root has no row geometry to measure');
+  assert.equal(f.reports.length,reports,'hidden measurements cannot replace useful sizing reports');
+  assert.deepEqual([hidden.page,hidden.from,hidden.to,hidden.surfaceHeight],[before.page,before.from,before.to,before.surfaceHeight]);
+  f.fill();assert.equal(f.rowReads(),reads,'unrelated notifications cannot resume a hidden table');
+  f.show();const shown=f.render();
+  assert.ok(f.rowReads()>reads,'returning to the same width still requires fresh row geometry');
+  assert.deepEqual([shown.page,shown.from,shown.to,shown.surfaceHeight],[before.page,before.from,before.to,before.surfaceHeight]);
+});
+
+test('a synchronous zero width before its observer notification keeps the complete page until recovery',()=>{
+  const f=widgetFixture();let before=f.render();before.onPage(2);before=f.render();
+  const reads=f.rowReads();f.hide(false);f.resize(561);const hidden=f.render();
+  assert.equal(f.rowReads(),reads);
+  assert.deepEqual([hidden.page,hidden.from,hidden.to],[before.page,before.from,before.to]);
+  f.resize(560);f.show();const shown=f.render();
+  assert.ok(f.rowReads()>reads);
+  assert.deepEqual([shown.page,shown.from,shown.to,shown.surfaceHeight],[before.page,before.from,before.to,before.surfaceHeight]);
+});
+
+test('an initially hidden table and a hidden wide table both resume into a real narrow layout',()=>{
+  for(const initiallyHidden of [false,true]){
+    const f=widgetFixture();if(!initiallyHidden)f.render();f.hide();f.render();const reads=f.rowReads();
+    f.show(350);const shown=f.render();
+    assert.equal(shown.layout,'list');assert.ok(f.rowReads()>reads);
+    assert.equal(f.height(),560);assert.ok(shown.to>shown.from&&shown.to<f.keys().length);
+    assert.ok(f.reports.every(report=>report.min>0&&Number.isFinite(report.natural)));
+  }
 });
 
 test('the real shared hook pages all rows once, fits height, resets and clamps before paint',()=>{

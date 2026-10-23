@@ -149,10 +149,9 @@ export function Widgets({
   const sizeOf = (id: string, measured = geometry.heights): Size | undefined => {
     const size = geometry.sizes[id], shown = measured[id];
     if (!size) return shown === undefined ? undefined : {min: shown, natural: shown};
-    // Following its content, a chart or the list of agents shows all of itself, and the board measures that as soon as
-    // styles change it (at a breakpoint), before the widget renders. Stretched to a height, or measured on a gesture's
-    // release before it has drawn itself at the width it snapped to, it is what it tells, in the frame its least comes from.
-    return measured === geometry.heights && intended(id) === undefined && shown !== undefined ? {min: size.min, natural: shown} : size;
+    // Actual content height is used for fill, while the declared template owns
+    // automatic placement. A new result cannot create a new layout intent.
+    return size;
   };
   /** How few rows a widget can take, and how many it takes with the height it has, at its width and content now. */
   const bounds = (id: string, measured = geometry.heights) => {

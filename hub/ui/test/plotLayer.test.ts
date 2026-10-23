@@ -10,11 +10,13 @@ test('the moving artwork keeps its SVG projection inside a stationary CSS clip',
   const rendered = renderToStaticMarkup(createElement(PlotLayer, {
     width: 400, height: 200, scale: .875, left: 40, right: 12, main: true,
     children: createElement('path', {d: 'M-100,10L500,20'}),
+    ticks: createElement('text', {x: 100, className: 'tick'}, '23 Oct'),
   }));
   assert.ok(rendered.includes('class="plot-clip" style="left:35px;right:10.5px"'));
   assert.ok(rendered.includes('class="plot-move" data-plot-main="true" style="left:-35px;width:350px"'));
   assert.ok(rendered.includes('viewBox="0 0 400 200" preserveAspectRatio="none"'));
   assert.ok(rendered.includes('M-100,10L500,20'), 'the fixed HTML viewport, not the artwork coordinates, clips overscan');
+  assert.ok(rendered.includes('<g class="slides"><path d="M-100,10L500,20"></path></g><g class="time-ticks"><text x="100" class="tick">23 Oct</text></g>'), 'dates share the moving owner but never inherit the data scale');
 });
 
 test('changing a whole-bar clip preserves its origin and SVG dimensions', () => {

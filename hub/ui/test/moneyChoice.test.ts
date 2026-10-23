@@ -105,3 +105,23 @@ test('old legend masks are ignored while data choices and unrelated preferences 
   assert.deepEqual(JSON.parse(JSON.stringify(reloaded.prefs().money.selected.USD)),[['wallet','balance']]);
   assert.equal(reloaded.prefs().moneySort?.column,'value');
 });
+
+test('wallet details and history share logical cap choices across automatic, explicit and excluded scopes',()=>{
+  const source=card('wallet','openrouter');
+  source.keys=Array.from({length:6},(_,i)=>({id:`key${i}`,name:`Allowance ${i}`,disabled:false,expiresAt:null,includeByok:false,at:1,staleAfterMs:1000,presence:'observed',missCount:0,periods:{day:null,week:null,month:null}}));
+  source.meters!.push(...source.keys.filter((_,i)=>i!==1).map(key=>({...source.meters![0],id:`key:${key.id}:cap`,kind:'cap' as const,limit:'10000000'})));
+  const filters=defaultFilters();
+  const check=(expected:string[])=>{
+    publishDataFilters(filters);
+    const scope=selection.selectedAllowanceIds(source,undefined,'USD',filters);
+    const reads=selection.moneySelection([source],[],selection.DEFAULT_MONEY).selection!.ids.flatMap(([,id])=>selection.keyMeter(id)?.[1]??[]);
+    assert.deepEqual(scope,expected);assert.deepEqual(new Set(reads),new Set(expected));
+  };
+  try{
+    check(['key0','key2','key3','key4']);
+    filters.wallet={mode:'only',values:[{source:'wallet',kind:'balance'},{source:'wallet',kind:'keyCap',key:'key1'},{source:'wallet',kind:'keyCap',key:'unknown'},{source:'wallet',kind:'keyCap',key:'unknown'}]};check(['key1','unknown']);
+    filters.wallet={mode:'auto',include:[{source:'wallet',kind:'keyCap',key:'unknown'}],exclude:[{source:'wallet',kind:'keyCap',key:'key2'}]};check(['unknown','key0','key3','key4']);
+    filters.wallet={mode:'only',values:[]};check([]);
+    filters.wallet={mode:'only',values:[{source:'wallet',kind:'keyCap',key:'unknown'}]};filters.sources={mode:'include',values:[]};check([]);
+  }finally{publishDataFilters(null,false);}
+});

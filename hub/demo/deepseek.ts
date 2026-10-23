@@ -2,6 +2,7 @@ import type {Store} from '../server/store/store.js';
 import type {Directory} from '../server/store/directory.js';
 import {shareConnectorScene, type Stand} from './setup.js';
 import {deepSeekMeasurement} from '../server/connectors/deepseek.js';
+import {transaction} from '../server/touches.js';
 import type {ExchangeRates} from '../server/domain/currency.js';
 
 /** Consent, withdrawal/reset races and transient form replies are held by deepseek.test.ts and connections.test.ts. */
@@ -34,13 +35,13 @@ export async function seedDeepSeek(store:Store,directory:Directory,stand:Stand) 
   for(const [index,scene] of DEEPSEEK_SCENES.entries()) {
     const created=await owner.post<{sourceId:string}>('/api/credentials',{provider:'deepseek',secret:DEEPSEEK_KEY(index),account:{kind:'new',name:scene.id==='cny'?'Personal':scene.id==='work'?'Work':scene.id},allowUnknownExpiry:true});
     const source=created.sourceId;ids.push(source);
-    const record=(at:number,answer:unknown)=>{
+    const record=(at:number,answer:unknown)=>transaction(store.db,()=>{
       const measured=deepSeekMeasurement(answer,at),staleAfterMs=scene.id==='stale'?60_000:3*3_600_000;
       store.record(source,{...measured,staleAfterMs,meters:measured.meters.map(m=>({...m,staleAfterMs})),balanceStatus:{...measured.balanceStatus!,staleAfterMs}});
       // Historical fixtures use the same shared valuation store as live capture.
       const quote=store.currencies.save(demoRates(at));
       if(!measured.meters.some(m=>m.unit==='USD'))for(const meter of measured.meters)store.currencies.record(source,{...meter,staleAfterMs},'USD',quote);
-    };
+    });
     record(now-2*3_600_000,deepSeekPayload(scene.id,true));
     if(scene.id==='recovery') {
       const cell=Math.floor((now-60_000)/60_000)*60_000;

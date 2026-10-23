@@ -62,10 +62,10 @@ test('actual money order follows an exclusive availability boundary without repl
     useLayoutEffect:(run:()=>void)=>effects.push(run),useSyncExternalStore:(subscribe:(notify:()=>void)=>()=>void,read:()=>unknown)=>{const state=slot(()=>{const state={value:read(),stop:()=>{}};state.stop=subscribe(()=>{const next=read();if(next!==state.value){state.value=next;dirty=true;}});return state;});state.value=read();return state.value;},
     clock,hubNow:()=>now,moneyTableValues,moneyComparator,nextMoneySort,visibleMoneySort,
     boardPeriod:{moneyWorkAt:()=>undefined,moneyAt:(entry:MeterHistory,at:number)=>(moneyReads++,{...entry,...accounting.moneySummary(entry.sourceId,entry.meterId,entry.unit,{from:at-H,to:at})}),rangeAt:(_scope:string,at:number)=>({from:at-H,to:at}),moneyOrderAt:(at:number)=>accounting.changesAt(at,H)},
-    AnalyticsPanel:()=>{},TableSortMenu:()=>{},TableMeasure:()=>{},WidgetPages:()=>{},useTableWidget:(_panel:unknown,_columns:unknown,_name:unknown,keys:string[])=>({layout:'table',from:0,to:keys.length,measureFrom:0,measureTo:0}),AnalyticsTable:()=>{},setPrefs:()=>{},t:()=> 'Account'};
+    AnalyticsPanel:()=>{},TableSortMenu:()=>{},TableMeasure:()=>{},WidgetPages:()=>{},TableSurface:'surface',useTableWidget:(_panel:unknown,_columns:unknown,_name:unknown,keys:string[])=>({layout:'table',from:0,to:keys.length,measureFrom:0,measureTo:0}),AnalyticsTable:()=>{},setPrefs:()=>{},t:()=> 'Account'};
   const source=readFileSync(new URL('../components/MoneyAnalytics.tsx',import.meta.url),'utf8'),start=source.indexOf('const SortedMoney=');
   runInNewContext(ts.transpileModule(`export ${source.slice(start,source.indexOf('const pointAt=',start))}`,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
-  const render=()=>{index=0;dirty=false;const value=context.exports.SortedMoney(props).props.children[1].props.children[0].props.rows as typeof rows;effects.splice(0).forEach(run=>run());return value;};
+  const render=()=>{index=0;dirty=false;const value=context.exports.SortedMoney(props).props.children[0].props.children[1].props.rows as typeof rows;effects.splice(0).forEach(run=>run());return value;};
   assert.deepEqual(Array.from(render(),row=>row.key),['A','B']);
   const beforeWake=moneyReads;
   now=H+4999;clock.wakeDue();const unchangedReads=moneyReads-beforeWake;assert.equal(dirty,false);
@@ -96,10 +96,10 @@ test('active-time sorting wakes at a linear crossing before the next work bounda
     useLayoutEffect:(run:()=>void)=>effects.push(run),useSyncExternalStore:(subscribe:(notify:()=>void)=>()=>void,read:()=>unknown)=>{const state=slot(()=>{const state={value:read(),stop:()=>{}};state.stop=subscribe(()=>{const next=read();if(next!==state.value){state.value=next;dirty=true;}});return state;});state.value=read();return state.value;},
     clock,hubNow:()=>now,moneyTableValues,moneyComparator,nextMoneySort,visibleMoneySort,
     boardPeriod:{moneyWorkAt:(source:string,at:number)=>accounting.moneyWorkSummary(source,{from:at-H,to:at}),moneyAt:(entry:MeterHistory)=>entry,rangeAt:(_scope:string,at:number)=>({from:at-H,to:at}),moneyOrderAt:order},
-    AnalyticsPanel:()=>{},TableSortMenu:()=>{},TableMeasure:()=>{},WidgetPages:()=>{},useTableWidget:(_panel:unknown,_columns:unknown,_name:unknown,keys:string[])=>({layout:'table',from:0,to:keys.length,measureFrom:0,measureTo:0}),AnalyticsTable:()=>{},setPrefs:()=>{},t:()=> 'Account'};
+    AnalyticsPanel:()=>{},TableSortMenu:()=>{},TableMeasure:()=>{},WidgetPages:()=>{},TableSurface:'surface',useTableWidget:(_panel:unknown,_columns:unknown,_name:unknown,keys:string[])=>({layout:'table',from:0,to:keys.length,measureFrom:0,measureTo:0}),AnalyticsTable:()=>{},setPrefs:()=>{},t:()=> 'Account'};
   const source=readFileSync(new URL('../components/MoneyAnalytics.tsx',import.meta.url),'utf8'),start=source.indexOf('const SortedMoney=');
   runInNewContext(ts.transpileModule('export '+source.slice(start,source.indexOf('const pointAt=',start)),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
-  const render=()=>{index=0;dirty=false;const value=context.exports.SortedMoney(props).props.children[1].props.children[0].props.rows as typeof rows;effects.splice(0).forEach(run=>run());return value;};
+  const render=()=>{index=0;dirty=false;const value=context.exports.SortedMoney(props).props.children[0].props.children[1].props.rows as typeof rows;effects.splice(0).forEach(run=>run());return value;};
   try{
     assert.deepEqual(Array.from(render(),row=>row.key),['A','B']);assert.equal(Math.min(...[...timers.values()].map(timer=>timer.at)),H+10*M+1);
     now=H+10*M;clock.wakeDue();assert.equal(dirty,false);

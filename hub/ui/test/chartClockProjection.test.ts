@@ -6,6 +6,7 @@ import ts from 'typescript';
 import * as React from 'react';
 import {preciseReadout} from '../lib/lines';
 import {stamp} from '../lib/format';
+import {timeTickWords} from '../lib/periods';
 
 test('current clock presentation keeps paired future paths, raw marker coordinates and composed overlays', () => {
   const H = 3_600_000, minute = 60_000, source = readFileSync(new URL('../components/Chart.tsx', import.meta.url), 'utf8');
@@ -17,13 +18,13 @@ test('current clock presentation keeps paired future paths, raw marker coordinat
   const hoverX = source.split('\n').find(line => line.startsWith('  const hoverX = '));
   const bandWidth = source.split('\n').find(line => line.startsWith('  const bandWidth = '));
   const basis = {from: 0, to: 2 * H, end: H};
-  const context = {React, stamp,preciseReadout, prepared: {ready: true, value: {basis, now: H, lines: [] as {pointMode?:'cell'|'observation'}[], plans: [{key: 'expired', until: H}, {key: 'valid', until: 3 * H}], planPaths: ['expired-plan', 'valid-plan'],
+  const context = {React, stamp,preciseReadout,onDrawing:undefined, prepared: {ready: true, value: {basis, now: H, lines: [] as {pointMode?:'cell'|'observation'}[], plans: [{key: 'expired', until: H}, {key: 'valid', until: 3 * H}], planPaths: ['expired-plan', 'valid-plan'],
     forecasts: [{key: 'expired', until: H}, {key: 'valid', until: 3 * H}], forecastPaths: ['expired-forecast', 'valid-forecast'],
     markers: [{key: 'entering', at: 2 * H + minute, until: 3 * H, label: 'reset', color: 'red'}, {key: 'expired', at: H, until: H}], paths: [], strip: null}},
     valueAxis: undefined, currentClock: H + minute, desiredFrom: minute, desiredNow: H + minute, desiredTo: 2 * H, desiredLive: true,
-    incomingReady: true, cellMs: minute, left: 40, right: 12, width: 900, height: 220, top: 12, bottom: 28,
-    axis: {basis, hover: H, rawHover:H+minute/4, screenX: (at: number) => 40 + (at - context.desiredFrom) / (context.desiredTo - context.desiredFrom) * 848, commitDrawing: () => {}},
-    niceTicks: () => ({ticks: [], daily: false}), useLayoutEffect: () => {}, cellLabel: () => '',
+    incomingReady: true, incomingCellMs: minute, left: 40, right: 12, width: 900, height: 220, top: 12, bottom: 28,
+    axis: {basis, hover: H, rawHover:H+minute/4, presentation:()=>({from:context.desiredFrom,to:context.desiredTo}),screenX: (at: number) => 40 + (at - context.desiredFrom) / (context.desiredTo - context.desiredFrom) * 848, commitDrawing: () => {}},
+    timeTickWords,niceTicks: () => ({ticks: [], daily: false}), useLayoutEffect: () => {}, cellLabel: () => '',
     draw: null as unknown as () => {plans: {key: string}[]; planPaths: string[]; forecasts: {key: string}[]; forecastPaths: string[]; now: number; to: number; hoverX: number; bandWidth: number; elements: React.ReactNode[]; x: (at: number) => number},
   };
   runInNewContext(ts.transpileModule(`function draw(){${head}\n${observationHover}\n${hoverX}\n${bandWidth}\nreturn {plans,planPaths,forecasts,forecastPaths,now,to,hoverX,bandWidth,x,elements:${markerRender}};}\nglobalThis.draw=draw;`, {compilerOptions: {target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React}}).outputText, context);

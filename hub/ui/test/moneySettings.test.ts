@@ -28,10 +28,11 @@ const nodes=(value:unknown):Node[]=>Array.isArray(value)?value.flatMap(nodes):va
 const flush=async()=>{for(let i=0;i<60;i++)await Promise.resolve();};
 const meter=(id:string,amount='1'):Meter=>({id,amount,kind:id.endsWith(':cap')?'cap':'balance',unit:'USD',at:1,staleAfterMs:1000,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null});
 
-function fixture(selected:[string,string][]=[],budget?:{source:Named;context:CurrencyContext;others?:Named[]}) {
+function fixture(selected:[string,string][]=[],budget?:{source:Named;context:CurrencyContext;others?:Named[];automatic?:boolean}) {
   const hooks=preparationFixture();
   const state=new DataFilterState({save:async()=>{throw new Error('explicit save only');}});
   state.open('u','b');const filters=defaultFilters();filters.wallet={mode:'only',values:[{source:budget?.source.id??'s',kind:'balance'},...selected.filter(([,id])=>id.endsWith(':cap')).map(([source,id])=>({source,kind:'keyCap' as const,key:id.slice(4,-4)}))]};
+  if(budget?.automatic)filters.wallet={mode:'auto',include:[],exclude:[]};
   state.accept({filters,revision:1,authority:'a',unavailable:{}} as FilterEnvelope);
   state.subscribe(()=>publishDataFilters(state.get().current));publishDataFilters(state.get().current);
   let active=true,revision=1,prefs={money:readMoney(budget?{unit:'USD',...(selected.length?{selected:{USD:selected}}:{})}:{unit:'USD',selected:{USD:[['s','balance'],...selected]}})};
@@ -117,6 +118,50 @@ test('loading more keys appends rows without replacing a selected live key',asyn
   assert.equal(f.switches().some(n=>n.key==='0'),true);
   assert.equal(f.reads.length,before+1,'only the new batch is read');
   const loaded=f.reads.length;await f.openKeys(false);await f.openKeys();assert.equal(f.reads.length,loaded,'reopening the disclosure reuses its rows');
+});
+
+test('the key list explains a full board-wide selection and recovers as choices are freed',async()=>{
+  const f=fixture(Array.from({length:30},(_,i)=>['s',`key:gone-${i}:cap`]));await f.settle();await f.openKeys();
+  const hint=()=>f.render().some(n=>n.props.children==='money.selectionFull');
+  const key=(id:string)=>f.switches().find(n=>n.key===id)!;
+  assert.equal(hint(),false,'31 choices leave room for a real reported cap');
+  assert.equal(key('0').props.disabled,false);
+  (key('0').props.onChange as (on:boolean)=>void)(true);await f.settle();
+  assert.equal(hint(),true,'the next available key explains the shared capacity');
+  assert.equal(key('1').props.disabled,true);
+  assert.equal(key('0').props.disabled,false,'selected choices remain removable');
+  (key('gone-0').props.onChange as (on:boolean)=>void)(false);await f.settle();
+  assert.equal(hint(),false);assert.equal(key('1').props.disabled,false);
+  (key('1').props.onChange as (on:boolean)=>void)(true);await f.settle();
+  assert.equal(hint(),true);
+  f.refresh();f.render();f.render();
+  assert.equal(hint(),false,'refreshing retained rows does not claim a capacity failure');
+  await f.settle();
+  assert.equal(key('2').props.disabled,true);assert.equal(key('2').props.value,'money.noCap');
+  assert.equal(hint(),false,'a key without a reported cap has a different cause');
+});
+
+test('automatic choices across other wallets count toward the same key-list capacity',async()=>{
+  const source:Named={id:'s',title:'Keys',provider:'openrouter',plan:'',successAt:1,error:null,stale:false,windows:[],resets:null,owners:[],staleAfterMs:1000,measureIntervalMs:null,meters:[meter('balance')],keys:[],keysCount:20};
+  const others=Array.from({length:33},(_,i)=>({...source,id:`wallet-${i}`,keysCount:0}));
+  const f=fixture([],{source,others,context:defaultCurrencyContext,automatic:true});await f.settle();await f.openKeys();
+  const hint=()=>f.render().some(n=>n.props.children==='money.selectionFull');
+  assert.equal(hint(),true,'34 automatic balances are counted across resources');
+  assert.equal(f.slots()[0].props.disabled,true);
+  const balances=f.switches().filter(row=>row.key==='balance');
+  assert.equal(balances.length,34);assert.ok(balances.every(row=>row.props.disabled===false));
+  for(const row of balances.slice(0,3))(row.props.onChange as (on:boolean)=>void)(false);
+  await f.settle();
+  assert.equal(hint(),false);assert.equal(f.slots()[0].props.disabled,false);
+});
+
+test('capacity is explained only when a loaded available choice is actually blocked',async()=>{
+  const selected:[string,string][]=[...Array.from({length:21},(_,i):[string,string]=>['s',`key:gone-${i}:cap`]),...Array.from({length:10},(_,i):[string,string]=>['s',`key:${i}:cap`])];
+  const f=fixture(selected);await f.settle();await f.openKeys();
+  assert.equal(f.render().some(n=>n.props.children==='money.selectionFull'),false,'all loaded live keys are selected and removable');
+  await f.loadMore();
+  assert.equal(f.render().some(n=>n.props.children==='money.selectionFull'),true,'the next page has available unselected keys');
+  assert.equal(f.switches().find(n=>n.key==='10')?.props.disabled,true);
 });
 
 test('selected archived scales remain removable beside the live key list',async()=>{

@@ -1,3 +1,5 @@
+import {plotTarget, plotBar} from '../lib/historyPlot';
+import {targetOf} from '../../server/domain/history';
 import {projectColorBindings} from './projectColorBindings';
 import {ACTIVITY} from '../../server/domain/widgets';
 import assert from 'node:assert/strict';
@@ -14,7 +16,7 @@ import {plotGroupsPrepared} from '../lib/historyPlot';
 import {StackPaths} from '../lib/stackPaths';
 import {groupRegistry} from '../lib/plotRegistry';
 import {cellStart} from '../../server/domain/history';
-import {niceTicks} from '../lib/periods';
+import {niceTicks,timeTickWords} from '../lib/periods';
 import {navigationKey} from '../lib/axisNavigation';
 import {cardId,isHidden} from '../lib/view';
 
@@ -22,19 +24,19 @@ import {cardId,isHidden} from '../lib/view';
 function consumer(h: ReturnType<typeof harness>) {
   const parent=preparationFixture(),child=preparationFixture();
   const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
-  const axis={box:{current:null},svg:{current:null},width:400,scale:1,hover:null,drag:null,clip:'c',handlers:{},basis:{from:NOW-H,to:NOW,end:NOW},active:false,screenX:(at:number)=>48+(at-(NOW-H))/H*340,commitDrawing:()=>{}};
+  const axis={box:{current:null},svg:{current:null},width:400,scale:1,hover:null,drag:null,clip:'c',handlers:{},basis:{from:NOW-H,to:NOW,end:NOW},active:false,visualGeometry:()=>axis.basis,presentation:()=>axis.basis,screenX:(at:number)=>48+(at-(NOW-H))/H*340,commitDrawing:()=>{}};
   const EMPTY_ACTIVITY={since:0,known:null,barMs:60_000,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}};
   const titles={removed:{provider:'codex',title:'Removed'},kept:{provider:'codex',title:'Kept'}};
   let panning:number|null=null;
   const prefs={range:'1h',activityBy:'project'};
-  const context={...projectColorBindings(h.page),ACTIVITY,
+  const context={...projectColorBindings(h.page),ACTIVITY,boardPeriod:{captureActivity:()=>null},
     exports:{} as any,React,...parent,memo:(f:any)=>f,useMemo:(f:any,deps:any[])=>{const slot=parent.useRef(null) as any;if(!slot.current||deps.some((v,i)=>!Object.is(v,slot.current.deps[i])))slot.current={deps,value:f()};return slot.current.value;},
-    useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useActivityHistory:()=>h.render(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
+    useSyncExternalStore:(_subscribe:any,get:any)=>get(),useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useActivityHistory:()=>h.render(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
     useLineup:()=>h.page.get().board!.lineup,usePersonalBoard:()=>false,useTitles:()=>titles,
     usePref:(key:keyof typeof prefs)=>prefs[key],useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=> 'b',
     axisNavigation:()=>({context:'b',range:'1h'}),useClock:()=>NOW,usePanning:()=>panning,
-    pan:{get:()=>null,active:()=>null,subscribe:()=>()=>{}},useHistoryBegins:()=>0,frameOf:()=>({from:NOW-H,to:NOW,live:true}),measuredTo:()=>NOW,
-    activityEmpty,groupColors,groupRegistry,activitySeriesKey,plotGroupsPrepared,StackPaths,stacksHeight:()=>160,activityScale,niceTicks,cellStart,MINUTE:60_000,EMPTY_ACTIVITY,groupName:(g:any)=>g.name??g.key,cardId,isHidden,t:(s:any)=>s,
+    pan:{get:()=>null,active:()=>null,subscribe:()=>()=>{},onStop:()=>()=>{}},useHistoryBegins:()=>0,frameOf:()=>({from:NOW-H,to:NOW,live:true}),measuredTo:()=>NOW,
+    activityEmpty,groupColors,groupRegistry,activitySeriesKey,plotGroupsPrepared,StackPaths,stacksHeight:()=>160,activityScale,niceTicks,timeTickWords,cellStart,plotBar,plotTarget,targetOf,MINUTE:60_000,EMPTY_ACTIVITY,groupName:(g:any)=>g.name??g.key,cardId,isHidden,t:(s:any)=>s,
     quotaHistory:{retry:()=>{}},AnalyticsPanel:()=>null,ActivitySettings:()=>null,Totals:()=>null,LegendItem:()=>null,
     setTimeRange:()=>{},navigationKey,useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),
     PlotLayer:()=>null,PlotOverlay:()=>null,Tooltip:()=>null,clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',
@@ -42,11 +44,11 @@ function consumer(h: ReturnType<typeof harness>) {
   runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;globalThis.StackArtwork=StackArtwork;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,context);
   function find(node:any,type:any):any{if(Array.isArray(node))return node.map(n=>find(n,type)).find(Boolean);if(!React.isValidElement(node))return null;if(node.type===type)return node;return find((node.props as any).children,type);}
   const pathsOf=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(pathsOf);if(!React.isValidElement(node))return [];const p=node.props as any;if(node.type===context.StackArtwork)return pathsOf(context.StackArtwork(p));return p.className==='activity-stack'&&p.d!==undefined?[p.d]:pathsOf(p.children);};
-  let latestParent:any;const renderParent=()=>{Object.assign(context,parent);parent.begin();latestParent=context.exports.Activity({arrange:{view:h.page.get().board!.view}});return find(latestParent,context.Stacks).props;};
-  const renderChild=(props:any)=>{Object.assign(context,child);child.begin();return pathsOf(context.Stacks(props));};
+  let latestParent:any,latestChild:any;const renderParent=()=>{Object.assign(context,parent);parent.begin();latestParent=context.exports.Activity({arrange:{view:h.page.get().board!.view}});return find(latestParent,context.Stacks).props;};
+  const renderChild=(props:any)=>{Object.assign(context,child);child.begin();latestChild=context.Stacks(props);return pathsOf(latestChild);};
 
     const names=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(names);if(!React.isValidElement(node))return [];const props=node.props as any;return node.type===context.LegendItem?[props.name]:names(props.children);};
-    const render=()=>{const props=renderParent();parent.commit();const paths=renderChild(props);child.commit();return {paths,names:names(latestParent),ready:props.prepared};};
+    const render=()=>{const props=renderParent();parent.commit();const paths=renderChild(props);child.commit();return {paths,names:names(latestChild),ready:props.prepared};};
     const settle=()=>{for(let i=0;i<4;i++){render();parent.finish();child.finish();}return render();};
     return {render,settle,pan:()=>{panning=1;axis.active=true;}};
 }

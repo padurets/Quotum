@@ -41,7 +41,16 @@ export {CODEX_CREDIT_SCENES} from './codexCredits.js';
 export {CURRENCY_SCENES} from './currencies.js';
 export {LINK_SCENES} from './links.js';
 
-/** Mixed analytics stays visible; loading and read failures are held by history tests.
+/** Mixed analytics stays visible; transient reads, errors, hard cutoffs and retries
+ * are held by analyticsPanel, activityFrame, activityCoherence, moneyKeys,
+ * historicalSelectedKeys, moneyDisclosure, filterSavePresentation and focusReturn UI tests.
+ * Consecutive monetary gestures, shared projector ownership and cold keyboard drill
+ * handoffs are held by moneyPanDomain, activityProjectorMemory and heatmapDrillFocus.
+ * Split reconnect legends and resize preparation are held by periodContinuity and
+ * chartPreparation; future-relative cache admission by periodEventAdmission.
+ * Retained strips across period changes, repeated gestures and producer recovery
+ * are held by activityPanProjection; measurement-end folds by axisAnimationPose.
+ * Stable intermediate plot/table geometry is checked on the real demo in the browser.
  * Legend emphasis, table-only views and explicit empty Add are exercised on this set in
  * both languages. The shared range and all five charts use the native-input bench.
  * Plan-event access and retention expiry are held in server/test/planHistory.test.ts
@@ -58,6 +67,15 @@ export const ANALYTICS_SCENES=[
  * Controller/lifetime races are held by ui/test/seriesFocus.test.ts; numerical semantics
  * by ui/test/activityNumbers.test.ts, including a retained legend identity with no
  * work left in the interval. Shared filters remain a separate operation.
+ * Committed frame coherence, retained live expiry, projector ownership and failure
+ * recovery are held by activityFrame, activityLiveFrame, activityProjectorMemory
+ * and activityFeedback. Full monetary disclosure is held by unnamedMoneyDisclosure
+ * and the late browser measurementDetails fixture. Native strip-to-exact value
+ * poses are held by moneyPanDomain and activityAxisCancel. A retained fixed-period
+ * drawing returning to a different live period, its dates and its known-data
+ * boundary, including another actual gesture before replacement, are held by
+ * activityAxisRetention. chartPreparation checks shared tick density; axisNavigation
+ * holds the presentation's navigation, cancellation-RAF and ready-handoff fences.
  */
 export const CHART_SERIES_SCENES=[
   {id:'board-cohort',expect:['board-summary','exact-union','distinct-sessions']},
@@ -74,6 +92,10 @@ export const CHART_SERIES_SCENES=[
  * initial errors, in ui/test/sourcePeriodPresentation.test.ts.
  * Session dialogs retain that status in ui/test/agentsPeriodDialog.test.ts; saved
  * unlimited credits remain measurement evidence in ui/test/sourcePeriodEvidence.test.ts.
+ * Native logical choices and first wallet-cap identity are held by nativeLogicalSelection
+ * and walletPrimarySelection; exact monetary cells by tableMoneyDetails.
+ * Split greetings, changed-run work retirement, late/error replies and cooperative
+ * cancellation are held by ui/test/workRunLifetime.test.ts.
  */
 export const PERIOD_SCENES=[
   {id:'retained-period',expect:['past-values','retained-work','exclusive-interval','shared-activity']},
@@ -89,7 +111,7 @@ export const SESSION_ACTIVITY_SCENES=[
   {id:'comparison',expect:['opt-in-table','union-total','retained-contributions','shared-work-index']},
   {id:'review',expect:['populated-24h','paged-comparison','height-fit-pages','narrow-sort-menu','header-sort-reset','retained-pagination','rich-breakdowns'],
     look:['Complete-period totals have their own line above the separate row count and pager; wide totals align with columns and narrow totals use a fixed two-by-two grid.',
-      'Increasing the session table height fits all 57 projects and hides its pager.',
+      'Increasing the session table height fits all 57 projects and keeps a disabled 1/1 pager in the stable footer.',
       'Agent sessions starts with None, then Project, Machine and Subscription. Client is visible by default in ordinary rows and the disclosure, and its switch is independent of chart selections.']},
 ] as const;
 
@@ -152,12 +174,29 @@ export const SESSION_ACTIVITY_SCENES=[
  * permission loss and late replies are checked on the live menu.
  * An in-flight filter save is held by ui/test/filterState.test.ts; the saving indicator
  * and disabled actions are checked on the live menu with a delayed response.
- * Continuous panning, partial loading and future folding are short-lived transitions:
+ * Continuous panning, partial loading and return-to-live unfolding are short-lived transitions:
  * ui/test/pan.test.ts, history.test.ts and historyPlot.test.ts hold their input,
  * cancellation, coverage and whole-cell accounting; bench/panning.ts exercises native
- * wheel and Shift-drag with delayed history on both charts. Cooperative preparation
+ * wheel and Shift-drag with delayed history on all five charts. Cooperative preparation
  * and the held final pose are checked by ui/test/prepare.test.ts, history.test.ts and
  * timeAxisMotion.test.ts; they add no lasting demo state.
+ * Cross-period monetary grid handoff is held by ui/test/moneyPanDomain.test.ts:
+ * both preparation owners keep the prior curve until their replacement is ready.
+ * Animated date clipping, glyph width and shared-clock replacements are held by
+ * ui/test/axisTicks.test.ts and axisTickAnimation.test.ts, including reduced motion.
+ * Calendar prefix reuse across fresh revisions, missing live-tail evidence and
+ * genuinely late work are held by ui/test/workCalendar.test.ts.
+ * Activity's atomic X/Y cancellation frame is held by ui/test/activityAxisCancel.test.ts.
+ * Selected-work summaries and cells adopt one revision through filter changes and
+ * delayed drawing preparation in ui/test/activityCohortAdoption.test.ts.
+ * Same-run frame refresh and new-run retirement are held by ui/test/activityFrame.test.ts
+ * and ui/test/workRunLifetime.test.ts.
+ * Native catalogue changes retain selected work in ui/test/activityCoherence.test.ts;
+ * selected wallet reads in flight are held by ui/test/moneyDisclosure.test.ts.
+ *
+ * Heatmap preparation,
+ * compatible replacement, authority retirement and hidden-width recovery are held
+ * by ui/test/heatmapFocus.test.ts.
  *
  * Two states of a weekly window's forecast never last on a working hub, and have no entry:
  * `renewing`, the moment between a measurement and the hub's forecast of it (the hub works
@@ -567,13 +606,15 @@ const all: DemoSet = {
         'The table of agents in a dialog has a way back to all the groups when it was opened from them, and none when opened from a row',
         'The agent details dialog has no repeated working-count or work-total summary above its rows; the toolbar appears only for Back or compact-list sorting',
         'At the wide dialog width, default agent details form a table whose rows highlight from edge to edge; on a narrow screen they form an inset list',
-        'Each agent\'s directory appears below its project in the details table, without a separate column; long worktree names wrap and stay readable',
+        'Each agent\'s directory appears below its project, without a separate column; oversized rows keep a bounded preview and complete worktree names in the shared disclosure',
         'The card tray\'s agents panel labels its right column Agent-hours and shows each session\'s credited work rather than its running duration; infra has zero work although its client is open',
         'Agent sessions is 32 grid rows tall: projects fit as whole rows, with a pager and row count at the bottom right; the remaining projects stay on widget pages, whole-period totals stay above the pager, and a project opens its own session details',
         'Agent activity and the chart are taller than they draw themselves: the room goes to the plot, the totals, heads and legends stay whole',
         'The table is 30 rows tall: room under it on a wide screen; on a narrow one, where it is a list, it is as tall as its rows',
         'The chart\'s tooltip has a row for every line in the legend\'s order, with what is left, the plan and the gap in columns up to now, and after it the plan and where each forecast leads; on a phone it stays whole on the screen',
         'The chart\'s settings switch the plan and the forecast on and off, under "On the chart"',
+        'At 3 days, all five chart axes retain date context on wide screens while intermediate ticks show the clock; narrow daily ticks keep their dates. Compare EN/RU, a historical range and the live forecast margin.',
+        'Scoped quota names separate their lead and quieter detail across cards, compact rows, Resources, legends and tables. Forecast captions keep their measured fit and full tooltip; owner punctuation stays literal.',
         'On a narrow window the labels past the chart\'s right edge stay within the plot, the soonest first: those with no room are said together as "and N more →", which tells each of them and its time when pointed at or tapped',
         'Agent activity → Settings → Manage projects: quotum once, on the laptop, though three agents work in three folders (the tray and quotum\'s agents in the list\'s dialog show it three times, with hub and quotum.feat-18-desktop-app under two of them)',
         'Renamed or merged in Manage projects, a project is shown under its new name in the tray and the list of agents too, merged ones as one group',
@@ -731,7 +772,7 @@ const all: DemoSet = {
         {stale: false},
         {agents: 10, drawn: true},
         {window: 'weekly', name: 'Weekly', level: 'ok', note: null, reset: 'resetsIn', started: true},
-        {window: 'weekly:fable', name: 'Fable · weekly', note: 'behind'},
+        {window: 'weekly:fable', name: 'Fable\nweekly', note: 'behind'},
         {window: 'session', name: '5 hours', note: null},
         // Ten agents round the clock spend its week along the plan's first days, faster than it lasts: it runs out days before the reset.
         {forecast: 'weekly', outlook: 'runsOut', tone: 'v-crit', unit: 'd'},
@@ -767,9 +808,9 @@ const all: DemoSet = {
       on: {ana: {plan: 'off'}, grid: {plan: 'off', place: {x: 3, y: 2, w: 3, h: 8}}},
       expect: [
         {title: 'Antigravity'},
-        {window: 'gemini:session', name: 'Gemini Pro · 5 hours'},
-        {window: 'claude:weekly', name: 'Claude · weekly', note: null, reset: 'resetUnknown'},
-        {window: 'flash:window-1440', name: 'Flash · 1d'},
+        {window: 'gemini:session', name: 'Gemini Pro\n5 hours'},
+        {window: 'claude:weekly', name: 'Claude\nweekly', note: null, reset: 'resetUnknown'},
+        {window: 'flash:window-1440', name: 'Flash\n1d'},
         {work: 'gemini:weekly', range: {from: -13 * DAY, to: -11 * DAY}, none: 'unknown', from: 0, to: 0},
         {window: 'credits', name: 'Credits', reset: 'resetUnknown'},
         {forecast: 'gemini:weekly', outlook: 'pace'},
@@ -1686,7 +1727,13 @@ const activity: DemoSet = {
   ],
 };
 
-const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter and DeepSeek wallets, partial readings and private access failures'};
+export const MONEY_SELECTION_SCENES=[{id:'capacity',expect:['money.selectionFull']}] as const;
+const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter and DeepSeek wallets, partial readings and private access failures',entries:all.entries.map(entry=>entry.kind==='person'&&entry.id==='ana'?{...entry,look:[...(entry.look??[]),
+  'Expand Resources → OpenRouter keys → Key series. The automatic wallet selection exceeds the shared 32-series bound: available unselected keys explain how to free a choice, while selected balances and caps remain removable. Turn off unused choices until 31 remain, select a new key, and compare the explanation at 32. Check both languages without moving the cards; a missing cap or a refresh never claims a capacity failure.',
+  'Select several OpenRouter key allowances, including a key beyond the preview. Move the common historical endpoint before its first observation and between observations: the balance disclosure keeps the selected count, full names and unavailable values beside any known caps. Current amounts never fill an older gap. Check both languages; compact opens the same full detail layout.',
+  'Exclude balance and select two allowances. The first in current name order stays primary when its historical cap is missing; another arrived amount never takes its place. Turn balance and all allowances off, then move before the first observation: the existing filter action remains available.',
+  'Open a monetary table value with keyboard or touch, in a wide table and narrow list. Its shared disclosure gives the exact amount and currency provenance, including when the rounded number fits without an ellipsis.',
+]}:entry)};
 export const FILTER_SCENES=['mixed-resources','populated-work','selected-empty','unfiltered-facets','resources-continue','member-current','save-restore'] as const;
 const dataFilters:DemoSet={...SESSION_ANALYTICS,id:'filters',about:'Populated mixed-resource filter playground, with a separate saved-empty board',entries:[
   ...SESSION_ANALYTICS.entries.filter(entry=>entry.kind!=='board').map(entry=>entry.kind==='card'?{...entry,

@@ -1,3 +1,4 @@
+import {activityClockConsumer as consumer} from './activityClockFixture';
 import {projectColorBindings} from './projectColorBindings';
 import {ACTIVITY} from '../../server/domain/widgets';
 import {test} from 'node:test';
@@ -7,49 +8,24 @@ import {runInNewContext} from 'node:vm';
 import {createRequire} from 'node:module';
 import ts from 'typescript';
 import {PageClock} from '../lib/clock';
-import {num,workHours,stamp} from '../lib/format';
-import {atOnce,activitySeriesKey} from '../lib/activity';
+import {workHours,stamp} from '../lib/format';
+import {activitySeriesKey} from '../lib/activity';
 import {t,setLocale} from '../i18n';
-import {cellLabel} from '../lib/periods';
 import {PeriodActivity} from '../lib/periodActivity';
 import {PeriodCurves,WorkTimeline} from '../../server/domain/periodCurves';
 import type {History} from '../../server/domain/history';
 import type {WorkTrace} from '../../server/domain/periodWork';
 import {fixture,drawings,NOW,H,M} from './periodRuntimeFixture';
 import {preparationFixture} from './preparationFixture';
-import {activityEmpty,groupColors,activityGroupName as groupName} from '../lib/activity';
+import {activityEmpty,groupColors} from '../lib/activity';
+import {defaultFilters} from '../../server/domain/dataFilters';
 import {flush} from './periodRuntimeFixture';
 import {CHART_SERIES_SCENES} from '../../demo/catalogue';
 import {groupRegistry} from '../lib/plotRegistry';
 
-const require=createRequire(import.meta.url),React=require('react'),{renderToStaticMarkup}=require('react-dom/server');
+const require=createRequire(import.meta.url),React=require('react');
 const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
-const clockSource=readFileSync(new URL('../lib/clock.ts',import.meta.url),'utf8');
 const compile=(code:string)=>ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
-
-/** Persistent hook slots, real PageClock subscriptions and the production numerical renderer. */
-function consumer(name:string,clock:PageClock,period:any,initial:any,panning:()=>number|null=()=>null) {
-  let cursor=0,dirty=true,renders=0,props=initial,output='',node:any;
-  const focus={get:()=>null,subscribe:()=>()=>{}};
-  props={focus,titles:{},...props};
-  const slots:any[]=[],effects:(()=>void)[]=[],stops:(()=>void)[]=[];
-  const slot=(create:()=>any)=>{const at=cursor++;return slots[at]??(slots[at]=create());};
-  const useRef=(current:any)=>slot(()=>({current}));
-  const context:any={...projectColorBindings(),ACTIVITY,exports:{},require,memo:(value:any)=>value,useLocale:()=>{},usePanning:panning,boardPeriod:period,
-    useId:()=> 'legend-description',seriesFocusStyle:()=>({}),useRef,useState:(initial:any)=>{const box=slot(()=>({value:typeof initial==='function'?initial():initial}));return [box.value,(value:any)=>{box.value=value;dirty=true;}];},
-    useSyncExternalStore:(subscribe:any,read:any)=>{const box=slot(()=>{const value={current:read()};stops.push(subscribe(()=>{const next=read();if(!Object.is(next,value.current)){value.current=next;dirty=true;}}));return value;});return box.current=read();},
-    LABELS:{source:'activity.bySource',project:'activity.byProject',device:'activity.byDevice'},groupName,useLayoutEffect:(effect:any)=>effects.push(effect),clock,hubNow:clock.hubNow,num,workHours,stamp,atOnce,activitySeriesKey,t,cellLabel,
-    Tooltip:({children}:any)=>React.createElement('div',{className:'tooltip'},children),
-  };
-  runInNewContext(compile(clockSource.slice(clockSource.indexOf('export function useClock'))),context);context.useClock=context.exports.useClock;
-  const numbers=source.slice(source.indexOf('function Metrics('),source.indexOf('/** Keyboard descriptions'));
-  const totals=source.slice(source.indexOf('const Totals=memo'),source.indexOf('/**\n * Agent-hours'));
-  const readout=source.slice(source.indexOf('function ActivityReadout('),source.indexOf('const Stacks ='));
-  const legend=source.slice(source.indexOf('const LegendItem = memo'),source.indexOf('/** Only this small region'));
-  runInNewContext(compile(numbers+legend+totals+readout+`\nexports.component=${name};`),context);
-  const render=()=>{if(dirty){dirty=false;cursor=0;node=context.exports.component(props);output=renderToStaticMarkup(node);renders++;while(effects.length)effects.shift()!();}return output;};
-  return {render,focus:(visible:boolean)=>node.props.children[0].props.onFocus({currentTarget:{matches:()=>visible}}),update:(next:any)=>{props={focus,titles:{},...next};dirty=true;return render();},get renders(){return renders;},close:()=>stops.forEach(stop=>stop())};
-}
 
 test('a mouse-focused legend keeps its own metric description when keyboard modality changes',async test=>{
   test.mock.method(Date,'now',()=>NOW);setLocale('en');const h=await fixture(),d=await drawings(h);
@@ -92,6 +68,31 @@ for(const periodName of ['1h','30d'])test(`${periodName}: PageClock updates fina
     assert.equal(h.requests.length,0);
     const counts=readers.map(reader=>reader.renders);advance(now+H);assert.deepEqual(readers.map(reader=>reader.renders),counts,'empty numerical consumers have no polling wake');
   } finally {readers.forEach(reader=>reader.close());d.close();await h.close();}
+});
+
+for(const lang of ['en','ru'] as const)test(`${lang}: all four Activity metrics survive a soft work refresh and its failure until retry replaces them`,async test=>{
+  test.mock.method(Date,'now',()=>NOW);setLocale(lang);
+  const h=await fixture({initialFilters:defaultFilters(),creditFrom:NOW-4*M,creditTo:NOW-2*M}),d=await drawings(h);
+  const clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}});
+  const props={history:d.renderActivity().drawing,by:'project',since:null},totals=consumer('Totals',clock,h.period,props);
+  const held=h.hold();
+  try{
+    const first=totals.render();assert.equal((first.match(/<b>/g)??[]).length,4);
+    h.credit(NOW-2*M,NOW-M);h.events.flush();await flush();
+    assert.ok(h.requests.some(request=>request.sessions),'the replacement work response is still held');
+    assert.equal(totals.update({...props,history:d.renderActivity().drawing}),first);
+    held.reject(new Error('held work read failed'));await flush();
+    const failed=d.renderActivity();assert.equal(failed.error,'history_failed');
+    assert.equal(totals.update({...props,history:failed.drawing}),first);
+    const activity=failed.history.activity,group=activity.by.project[0],hover=activity.cells.find((cell:number[])=>cell[2]>0)![0];
+    const readout=consumer('ActivityReadout',clock,h.period,{history:failed.drawing,by:'project',hover,barMs:activity.barMs,bar:[hover,M,M,1],parts:[{key:group.key,name:'Work project',color:'red',ms:2*M}],tipProps:{}});
+    try{const detail=readout.render();assert.ok(detail.includes('>'+workHours(M)+'</strong>'));assert.ok(!detail.includes('>'+workHours(2*M)+'</strong>'),'a retained tooltip reads its bar, never the whole-period total');}finally{readout.close();}
+    h.period.retry();d.loader.retry();await flush();
+    const ready=d.renderActivity();assert.equal(ready.error,undefined);
+    assert.equal(ready.history.activity.agentMs,3*M);
+    const replaced=totals.update({...props,history:ready.drawing});
+    assert.equal((replaced.match(/<b>/g)??[]).length,4);assert.notEqual(replaced,first);
+  }finally{held.release();totals.close();d.close();await h.close();}
 });
 
 test('numerical labels freeze during a gesture and retire on an authority replacement',async test=>{
@@ -203,22 +204,54 @@ test('a retained legend identity previews confirmed zero when its work leaves th
   }finally{d.close();await h.close();}
 });
 
+test('a retained legend group with no work in the selected interval previews zero instead of another group',async test=>{
+  test.mock.method(Date,'now',()=>NOW);
+  const h=await fixture({personal:true,creditFrom:NOW-50*M,creditTo:NOW-40*M}),d=await drawings(h);
+  const clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}});
+  try{
+    const first:History=d.renderActivity().drawing!;
+    const seed=first.activity.by.project.map(group=>({...group,color:'blue'})),old=seed[0];assert.ok(old);
+    h.store.creditWork(h.device,NOW-25*M,NOW-15*M,[{source:h.source,client:'codex',origin:'terminal',project:'B',folder:'',startedAt:NOW-H,identity:{kind:'stable',sessionId:'B'}}]);
+    h.events.flush();await flush();
+    h.selectRange({from:NOW-30*M,to:NOW-10*M});d.loader.choose(h.settings.range,h.selectedRange());await flush();
+    const history:History=d.renderActivity().drawing!;
+    const groups=history.activity.by.project,legend=groupRegistry(seed,seed,groups);
+    assert.equal(h.period.activityProjectionState(history).ready,true);
+    assert.equal(history.activity.agentMs,10*M);assert.equal(groups.length,1);assert.notEqual(groups[0].key,old.key);
+    assert.ok(legend.some(group=>group.key===old.key),'the actual registry retains the old legend identity');
+    let selected:string|null=activitySeriesKey('project',old.key);const focus={get:()=>selected,subscribe:()=>()=>{}};
+    h.requests.length=0;
+    for(const locale of ['en','ru'] as const)for(const scoped of [false,true]){
+      setLocale(locale);const props={history,by:'project',groups,focus,scoped,since:null},view=consumer('Totals',clock,h.period,props);
+      try{
+        const html=view.render();assert.ok(html.includes('data-series-context='),'the absent group remains the preview context');assert.ok(html.includes('data-agent-ms="0"'));assert.ok(html.includes(t('activity.agents')+'</span><b>0'));
+        selected=null;const all=view.update({...props,scoped:false});assert.ok(all.includes('data-agent-ms="600000"'));assert.ok(!all.includes('data-series-context='));
+        selected=activitySeriesKey('project',old.key);
+      }finally{view.close();}
+    }
+    assert.equal(h.requests.length,0,'hover and focus only read accepted evidence');
+  }finally{setLocale('en');d.close();await h.close();}
+});
+
 test('the Activity clock advances the plot without invalidating unchanged numerical consumers',async test=>{
   test.mock.method(Date,'now',()=>NOW);const h=await fixture(),d=await drawings(h),hooks=preparationFixture();
   let now=NOW,shown={...d.render(),presentation:0};
   const prefs={range:'1h',activityBy:'project'},titles={},view=h.page.get().board!.view;
-  const context:any={...projectColorBindings(h.page),ACTIVITY,exports:{},require,memo:(value:any)=>value,...hooks,
+  const context:any={...projectColorBindings(h.page),boardPeriod:h.period,ACTIVITY,exports:{},require,memo:(value:any)=>value,...hooks,
     useMemo:(read:any,deps:any[])=>{const box=hooks.useRef(null) as any;if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;},
-    useActivityHistory:()=>shown,useHistoryPlot:()=>null,usePlot:()=>({}),useLineup:()=>[],usePersonalBoard:()=>false,useTitles:()=>titles,
-    usePref:(key:keyof typeof prefs)=>prefs[key],useSeriesFocus:()=>{},useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=>h.board,useClock:()=>now,usePanning:()=>null,useHistoryBegins:()=>0,
+    useSyncExternalStore:(_subscribe:any,get:any)=>get(),useActivityHistory:()=>shown,useHistoryPlot:()=>null,usePlot:()=>({}),useLineup:()=>[],usePersonalBoard:()=>false,useTitles:()=>titles,
+    usePref:(key:keyof typeof prefs)=>prefs[key],useSeriesFocus:()=>{},useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=>h.board,useClock:()=>now,hubNow:()=>now,usePanning:()=>null,useHistoryBegins:()=>0,
     axisNavigation:()=>({context:h.board,range:'1h'}),frameOf:()=>({from:now-H,to:now}),measuredTo:()=>now,
     activityEmpty,groupColors,groupName:(group:any)=>group.name,activitySeriesKey,stamp,t,useLayoutEffect:hooks.useLayoutEffect,
     isHidden:()=>false,cardId:(id:string)=>id,quotaHistory:{},setTimeRange:()=>{},pan:{get:()=>null},
     AnalyticsPanel:()=>null,ActivitySettings:()=>null,Totals:()=>null,Stacks:()=>null,LegendItem:()=>null,EMPTY_ACTIVITY:shown.history!.activity,
   };
-  runInNewContext(compile(source.slice(source.indexOf('export const Activity ='),source.indexOf('/** How tall'))),context);
+  const numbers=source.slice(source.indexOf('function useActivityNumbers('),source.indexOf('function LegendAmount('));
+  const empty=source.slice(source.indexOf('const EmptyState = memo('),source.indexOf('const StackArtwork = memo('));
+  assert.ok(numbers.startsWith('function useActivityNumbers(')&&empty.startsWith('const EmptyState = memo('));
+  runInNewContext(compile(numbers+empty+source.slice(source.indexOf('export const Activity ='),source.indexOf('/** How tall'))),context);
   const find=(node:any,type:any):any=>Array.isArray(node)?node.flatMap(part=>find(part,type)):React.isValidElement(node)?[...(node.type===type?[node]:[]),...find((node.props as any).children,type)]:[];
-  const render=()=>{hooks.begin();const node=context.exports.Activity({arrange:{view}});hooks.commit();return {totals:find(node,context.Totals)[0].props,legend:find(node,context.LegendItem).map((entry:any)=>entry.props),plot:find(node,context.Stacks)[0].props};};
+  const render=()=>{hooks.begin();const node=context.exports.Activity({arrange:{view}});hooks.commit();const plot=find(node,context.Stacks)[0].props,details=plot.renderDetails(plot.detailFrame,false);return {totals:details.summary.props,legend:find(details.legend,context.LegendItem).map((entry:any)=>entry.props),plot};};
   try{
     render();hooks.finish();const before=render();assert.equal(before.legend.length,1);
     now+=5*M;h.advance(now);shown={...shown,history:h.period.project(shown.history,'quota',now)};
@@ -227,5 +260,5 @@ test('the Activity clock advances the plot without invalidating unchanged numeri
     assert.equal(moved.totals.history,before.totals.history,'exact totals keep their independent numerical deadline');
     shown={...shown,history:null,drawing:null,presentation:1};const retired=render();
     assert.equal(retired.legend.length,0);assert.equal(retired.totals.history,null,'a new authority cannot retain withdrawn numerical evidence');
-  }finally{d.close();await h.close();}
+  }finally{hooks.dispose();d.close();await h.close();}
 });

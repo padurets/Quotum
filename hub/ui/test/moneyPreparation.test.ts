@@ -1,6 +1,8 @@
 import * as widgets from '../../server/domain/widgets';
 import {moneyBalanceSeries} from '../lib/moneyTable';
 import {defaultCurrencyContext} from '../../server/domain/currency';
+import {axisNavigation} from '../lib/axisNavigation';
+import {pan} from '../lib/pan';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -44,7 +46,7 @@ test('balance and funds drawing facts do not depend on the visible quantity fram
   for(const [family,meterSeries] of [['budget',[balance,cap]],['funds',[funds]]] as const) {
     const chunks=[{from:0,meterSeries:[...meterSeries]}],drawing={meterSeries:composeMeters(chunks,minute,0,4*minute)};
     const draw=(quantities:{from:number;to:number}|undefined)=>{
-      const context={authority:0,family,moneyBalanceSeries,accounting:()=>true,settings:{},context:defaultCurrencyContext,strip:{meterChunks:chunks,cell:minute,from:0,to:4*minute,meterFrame:quantities},drawing,history:drawing,unit:'USD',prefs:{},sources:[{id:'wallet',provider:'openrouter'},{id:'subscription',provider:'codex'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:[]},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof drawing.meterSeries;lines:Record<string,unknown>[];origin:bigint;span:bigint;pad:bigint}};
+      const context={authority:0,family,axisNavigation,selected:null,panning:null,useRef:(value:unknown)=>({current:value}),moneyBalanceSeries,accounting:()=>true,settings:{},context:defaultCurrencyContext,strip:{meterChunks:chunks,cell:minute,from:0,to:4*minute,meterFrame:quantities},drawing,history:drawing,unit:'USD',prefs:{range:'1h',horizon:'auto',muted:{}},sources:[{id:'wallet',provider:'openrouter'},{id:'subscription',provider:'codex'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:meterSeries.map(s=>[s.source,s.meter])},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof drawing.meterSeries;lines:Record<string,unknown>[];origin:bigint;span:bigint;pad:bigint}};
       runInNewContext(ts.transpileModule(region+'\nglobalThis.model=prepared.value;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
       return context.model;
     };
@@ -69,7 +71,7 @@ test('the actual prepared money chart keeps its value axis, step geometry and ex
   const context={context:defaultCurrencyContext,...hook,axis:{active:false,basis:{from:0,to:120000,end:60000}},incomingLines:[{key:'money',points:[[0,0,1],[60000,10,1]]}],
     incomingPlans:[],incomingForecasts:[],incomingMarkers:[],incomingStrip:null,desiredFrom:0,desiredTo:120000,desiredNow:60000,
     desiredLive:true,incomingReady:true,modelContext:'money',navigation:undefined,valueAxis,stepped:true,
-    cellMs:60000,width:900,height:220,left:40,right:12,top:12,bottom:28,clipPrepared,plotPathPrepared,
+    incomingCellMs:60000,width:900,height:220,left:40,right:12,top:12,bottom:28,clipPrepared,plotPathPrepared,
     draw:null as unknown as ()=>{value:{valueAxis:typeof valueAxis;paths:{line:string;latest:string}[]}|null;ready:boolean}};
   const source=readFileSync(new URL('../components/Chart.tsx',import.meta.url),'utf8'),start=source.indexOf('  const inputs = ');
   const region=source.slice(start,source.indexOf('  const model = ',start));
@@ -85,25 +87,26 @@ test('the actual prepared money chart keeps its value axis, step geometry and ex
   const next=context.draw().value!;assert.equal(next.valueAxis,context.valueAxis);assert.equal(next.paths[0].latest,'60000:3000000');
 });
 
-for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'resource revision']) test(`MoneyHistory retires ${change} through the prepared Chart`, () => {
+for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'resource revision', 'empty selection']) test(`MoneyHistory retires ${change} through the prepared Chart`, t => {
     const outer = preparationFixture(), inner = preparationFixture();
+    t.after(()=>{outer.dispose();inner.dispose();});
     const cards: Card[] = ['A', 'B'].map(id => ({id, title: id, provider: 'openrouter', plan: '', successAt: 60000, error: null, stale: false, windows: [], resets: null, owners: [], staleAfterMs: 1000, measureIntervalMs: null,
       meters: [{id: 'balance', amount: '10000000', kind: 'balance', unit: 'USD', limit: null, at: 60000, stale: false, staleAfterMs: 1000, resetAt: null, minutes: null, scope: null, label: null}]}));
     const chunks = [{from: 0, meterSeries: cards.map(c => ({source: c.id, meter: 'balance', kind: 'balance', unit: 'USD', semantics: null, cells: [[0, '10000000', '1000000', '0', 60000], [1, '10000000', '3000000', '0', 60000]]} as MeterSeriesCells))}];
     const series = composeMeters(chunks, 60000, 0, 120000);
     let history = {board: 'board', range: '1h', cellMs: 60000, since: 0, to: 120000, meterSeries: series} as History | null;
-    let sources = cards, view = EMPTY_VIEW, presentation = 0;
-    const prefs = {money: {unit: 'USD', view: 'balance', selected: {}}, range: '1h', horizon: 'auto'};
+    let sources = cards, view = EMPTY_VIEW, presentation = 0,loading:boolean|undefined;
+    const prefs = {money: {unit: 'USD', view: 'balance', selected: {}}, muted: {}, range: '1h', horizon: 'auto'};
     const Chart = () => null;
     const memo = (read: () => unknown, deps: unknown[]) => {const box = outer.useRef(null) as {current: {deps: unknown[]; value: unknown} | null}; if (!box.current || deps.some((v, i) => !Object.is(v, box.current!.deps[i]))) box.current = {deps, value: read()}; return box.current.value;};
     const modules: Record<string, unknown> = {
-      'react/jsx-runtime': jsx, react: {memo: reactMemo, useRef: outer.useRef, useMemo: memo},
+      'react/jsx-runtime': jsx, react: {memo: reactMemo, useRef: outer.useRef, useMemo: memo,useLayoutEffect:outer.useLayoutEffect},
       '../../server/domain/providers': providers, '../../server/domain/currency': currency, '../../server/domain/meterHistory': {composeMetersPrepared},
-      '../lib/board': {useBoardId: () => 'board', useCurrencyContext: () => defaultCurrencyContext, useNamed: () => sources},
-      '../lib/history': {useBudgetFinancialHistory: () => ({history,drawing:history,loading:!history,presentation}),useBudgetHistory: () => ({history, drawing: history, loading: !history, presentation}), useBudgetHistoryPlot: () => null, useHistoryBegins: () => 0, budgetHistory: {retry: () => {}}},
+      '../lib/board': {useServerView:()=>undefined,useBoardId: () => 'board', useCurrencyContext: () => defaultCurrencyContext, useNamed: () => sources},
+      '../lib/history': {useBudgetFinancialHistory: () => ({history,drawing:history,loading:loading??!history,presentation}),useBudgetHistory: () => ({history, drawing: history, loading: !history, presentation}), useBudgetHistoryPlot: () => null, useHistoryBegins: () => 0, budgetHistory: {retry: () => {}}},
       '../lib/prefs': {usePref: (key:keyof typeof prefs) => prefs[key]}, '../lib/moneySelection': {moneySelection}, '../lib/moneyView': moneyView, '../lib/money': money,
       '../lib/view': {...widgets,colorOf: () => '#fff'}, '../lib/periods': {frameOf: () => ({from: 0, to: 120000, live: true}), measuredTo: () => 60000},
-      '../lib/timeRange': {useTimeRange: () => null}, '../lib/clock': {useClock: () => 60000}, '../lib/pan': {usePanning: () => null},
+      '../lib/timeRange': {useTimeRange: () => null}, '../lib/clock': {useClock: () => 60000}, '../lib/pan': {pan,usePanning: () => null},
       '../lib/axisNavigation': {axisNavigation: () => ({context: 'board'})}, '../i18n': {t: (key: string) => key, useLocale: () => 'en'},
       './prepared': {usePrepared: outer.usePrepared}, './sizing': {usePlot: () => ({plot: {}, onBase: () => {}})}, './Chart': {Chart},
       './seriesFocus': {useSeriesFocus:()=>{}}, '../lib/moneyTable': moneyTable,
@@ -111,7 +114,7 @@ for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'reso
     const component = {exports: {} as {MoneyHistory: (props: unknown) => ReactElement<{children: ReactElement[]}>}, require: (name: string) => modules[name] ?? {}};
     runInNewContext(ts.transpileModule(readFileSync(new URL('../components/MoneyAnalytics.tsx', import.meta.url), 'utf8'), {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX}}).outputText, component);
     const child = {...inner, axis: {active: false, basis: {from: 0, to: 120000, end: 60000}}, incomingPlans: [], incomingForecasts: [], incomingMarkers: [], incomingStrip: null,
-      desiredFrom: 0, desiredTo: 120000, desiredNow: 60000, desiredLive: true, navigation: undefined, stepped: true, cellMs: 60000,
+      desiredFrom: 0, desiredTo: 120000, desiredNow: 60000, desiredLive: true, navigation: undefined, stepped: true, incomingCellMs: 60000,
       width: 900, height: 220, left: 40, right: 12, top: 12, bottom: 28, clipPrepared, plotPathPrepared,
       draw: null as unknown as () => {value: {lines: {sourceId: string}[]; paths: {line: string; latest: string}[]; valueAxis: unknown} | null; ready: boolean}};
     const source = readFileSync(new URL('../components/Chart.tsx', import.meta.url), 'utf8'), start = source.indexOf('  const inputs = ');
@@ -121,7 +124,7 @@ for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'reso
       const tree = component.exports.MoneyHistory({arrange: {view, owner: false}});
       const chart = tree.props.children.find(node => node?.type === Chart)! as ReactElement<ComponentProps<typeof ChartComponent>>;
       outer.commit();
-      Object.assign(child, {incomingLines: chart.props.lines, incomingReady: chart.props.prepared, valueAxis: chart.props.axis, modelContext: chart.props.modelContext});
+      Object.assign(child, {incomingCellMs: chart.props.cellMs, incomingLines: chart.props.lines, incomingReady: chart.props.prepared, valueAxis: chart.props.axis, modelContext: chart.props.modelContext});
       inner.begin(); const result = child.draw(); inner.commit(); return result;
     };
     const settle = () => {for (let i = 0; i < 4; i++) {draw(); outer.finish(); inner.finish();} return draw();};
@@ -133,8 +136,13 @@ for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'reso
     const previous = history!; history = null; presentation++;
     if (change === 'removed') sources = cards.slice(1);
     else if (change === 'hidden') view = {...view, hidden: ['source:A']};
+    else if(change==='empty selection'){sources=[];loading=false;}
     if (change !== 'batched boundary') assert.equal(draw().value, null, 'the nested geometry retires immediately');
-    if (change === 'hidden' || change === 'removed') {
+    if(change==='empty selection'){
+      const empty=settle();assert.equal(empty.ready,true,'a known empty selection needs no future history answer');assert.equal(empty.value!.lines.length,0);
+      history={...previous,range:'1h'};
+      const retained=settle();assert.equal(retained.ready,true,'a retained answer for another range cannot strand an empty chart');assert.equal(retained.value!.lines.length,0);
+    }else if (change === 'hidden' || change === 'removed') {
       assert.equal(settle().value, null, 'no old path, amount or value axis survives while the answer is pending');
     } else {
       history = {...previous, range: '3h', since: 60000, meterSeries: series.map(series => ({...series, end: '5000000', points: series.points.map(point => ({...point, value: '5000000'}))}))};

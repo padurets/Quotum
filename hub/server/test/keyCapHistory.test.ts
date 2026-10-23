@@ -34,9 +34,9 @@ const rawKey=(index:number,limit:unknown)=>({hash:String(index).padStart(64,'0')
 /** Render the production card, substituting only effects and closed UI primitives. */
 async function renderer() {
   const load=(file:string)=>import(new URL(file,import.meta.url).href);
-  const money=await load('../../ui/lib/money.ts'),format=await load('../../ui/lib/format.ts'),i18n=await load('../../ui/i18n/index.ts');
+  const money=await load('../../ui/lib/money.ts'),format=await load('../../ui/lib/format.ts'),i18n=await load('../../ui/i18n/index.ts'),focusReturn=await load('../../ui/components/focusReturn.ts');
   let clock=now;
-  const trigger=({trigger}:{trigger:React.ReactNode})=>React.createElement('span',{},trigger);
+  const trigger=({trigger,children}:{trigger:React.ReactNode;children:React.ReactNode})=>React.createElement('span',{},trigger,React.createElement('span',{'data-fixture-disclosure':true},children));
   const fixture={exports:{} as {MoneyValues:React.ComponentType<Record<string,unknown>>},require:(name:string)=>{
     if(name==='../lib/dataFilters')return {useDataFilters:()=>({current:null})};
     if(name==='../../server/domain/dataFilters')return filterModel;
@@ -47,6 +47,7 @@ async function renderer() {
     if(name==='../lib/money')return money;if(name==='../lib/format')return format;if(name==='../i18n')return i18n;
     if(name==='../lib/measurementClock')return {useMeasurementClock:()=>clock,useMeasurementTime:()=>clock};
     if(name==='./Popover')return {Popover:trigger};if(name==='./StatusMark')return {StatusMark:trigger,KeyIcon:()=>null,WarningIcon:()=>null};
+    if(name==='./focusReturn')return focusReturn;
     if(name==='./Meter')return {MeterBar:()=>null};if(name==='./Kit')return {ErrorLine:()=>null};if(name==='../lib/quota')return {level:()=> 'ok'};
     return {};
   }};

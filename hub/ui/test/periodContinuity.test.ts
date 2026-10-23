@@ -4,6 +4,33 @@ import {Projection} from '../../server/projection';
 import {workedSessions} from '../../server/domain/periodWork';
 import {fixture,drawings,consumer,quotaCells,flush,NOW,M} from './periodRuntimeFixture';
 
+for(const fixed of [false,true])test(`a split same-run ${fixed?'fixed':'live'} reconnect keeps the complete Activity legend until colour confirmation`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({transportLive:true,fixed}),d=await drawings(h);
+  let release=()=>{};
+  try{
+    const c=consumer({...h,...d}),before=c.settle(),authority=h.page.get().board!.workAuthority;
+    assert.ok(before.paths.length);assert.ok(before.names.length);
+    const open=h.events.open.bind(h.events);
+    h.events.open=((request:any)=>{
+      const reply:any=open(request);if(!reply||reply==='limit')return reply;
+      const hello=reply.frames.filter((frame:any)=>frame.type==='hello'),rest=reply.frames.filter((frame:any)=>frame.type!=='hello');
+      release=()=>request.send(rest);return {...reply,frames:hello};
+    }) as typeof h.events.open;
+    h.reconnect();await flush();
+    assert.equal(h.page.get().board!.workAuthority,authority);
+    assert.equal(h.page.get().board!.projectColorsBaselineReady,false,'a held legend never confirms new connection metadata');
+    for(const current of [c.render(),c.settle()]){
+      assert.deepEqual(current.paths,before.paths,'the compatible numerical drawing stays visible');
+      assert.deepEqual(current.names,before.names,'cooperative preparation cannot erase only the legend');
+      assert.equal(current.ready,false,'new drawing still waits for confirmed metadata');
+    }
+    release();release=()=>{};await flush();assert.deepEqual(c.settle(),before);
+    const gate=h.hold();h.remove();await flush();
+    assert.deepEqual(c.settle().names,[]);assert.deepEqual(c.settle().paths,[],'actual revoked authority retires the complete presentation');
+    gate.release();await flush();
+  }finally{release();d.close();await h.close();}
+});
+
 for(const failure of [false,true])test(`a reconnect retires revoked work through the final SVG, legend and quota text while its baseline ${failure?'fails':'waits'}`,async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=await fixture(),d=await drawings(h);
   try {

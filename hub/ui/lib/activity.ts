@@ -28,7 +28,7 @@ export {OTHER_COLOR} from './projectColors';
  * The colour of each group of a stack: a subscription has its card's, as on the chart;
  * projects and machines take CATEGORY_COLORS by agent-hours, so a project may change
  * colour when the period does. Past the palette, the rest share a neutral: each is
- * still a group of its own, named in the tooltip and switched off and on in the legend.
+ * still a group of its own, named in the tooltip and emphasized through the legend.
  */
 export function groupColors(groups: ActivityGroup[], by: ActivityDimension, view: View, providerOf: (source: string) => string,pins:ProjectColorPins=[]): string[] {
   if(by==='project')return resolveProjectColors(groups,pins).map(group=>group.color);

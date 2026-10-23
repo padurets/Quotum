@@ -1,4 +1,5 @@
 import * as widgets from '../../server/domain/widgets';
+import {pan} from '../lib/pan';
 import {test,type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -64,21 +65,22 @@ async function fixture(t:TestContext) {
 }
 
 /** Execute MoneyHistory and its real preparation hook; only browser hooks are supplied. */
-function consumer(sourceId:string,board:string,range:PeriodRange) {
+function consumer(sourceId:string,board:string,range:PeriodRange,t:TestContext) {
   const hooks=preparationFixture(),Chart=()=>null;
+  t.after(hooks.dispose);
   const sources=[{id:sourceId,title:'Wallet',provider:'openrouter'}];
   let history:History|null=null,strip:PlotBuffer|null=null;
   const prefs={money:{unit:'USD'},range:'1h',horizon:'auto'};
   const memo=(read:()=>unknown,deps:unknown[])=>{const ref=hooks.useRef(null) as {current:{deps:unknown[];value:unknown}|null};if(!ref.current||deps.some((v,i)=>!Object.is(v,ref.current!.deps[i])))ref.current={deps,value:read()};return ref.current.value;};
   const modules:Record<string,unknown>={
-    'react/jsx-runtime':jsx,react:{memo:reactMemo,useRef:hooks.useRef,useMemo:memo},
+    'react/jsx-runtime':jsx,react:{memo:reactMemo,useRef:hooks.useRef,useMemo:memo,useLayoutEffect:hooks.useLayoutEffect},
     '../../server/domain/providers':providers,'../../server/domain/currency':currency,'../../server/domain/meterHistory':{composeMetersPrepared},
-    '../lib/board':{useBoardId:()=>board,useCurrencyContext:()=>currency.defaultCurrencyContext,useNamed:()=>sources},
+    '../lib/board':{useServerView:()=>undefined,useBoardId:()=>board,useCurrencyContext:()=>currency.defaultCurrencyContext,useNamed:()=>sources},
     '../lib/history':{useBudgetFinancialHistory:()=>({history,drawing:history,loading:false,presentation:0}),useBudgetHistoryPlot:()=>strip,useHistoryBegins:()=>NOW-3*H,budgetHistory:{retry:()=>{}}},
     '../lib/prefs':{usePref:(key:keyof typeof prefs)=>prefs[key]},'../lib/moneySelection':{moneySelection:()=>({selection:{unit:'USD',ids:[[sourceId,'balance']]},omitted:0,removed:0})},
     '../lib/moneyView':moneyView,'../lib/money':money,'../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},'../lib/view':{...widgets,colorOf:()=> '#fff'},
     '../lib/periods':{frameOf:()=>({...range,live:false}),measuredTo:()=>range.to},'../lib/timeRange':{useTimeRange:()=>range,timeRangeKey},
-    '../lib/clock':{useClock:()=>NOW},'../lib/pan':{usePanning:()=>strip?1:null},'../lib/axisNavigation':{axisNavigation:()=>({context:board})},
+    '../lib/clock':{useClock:()=>NOW},'../lib/pan':{pan,usePanning:()=>strip?1:null},'../lib/axisNavigation':{axisNavigation:()=>({context:board})},
     '../i18n':{t:(key:string)=>key,useLocale:()=> 'en'},'./prepared':{usePrepared:hooks.usePrepared},'./sizing':{usePlot:()=>({plot:{},onBase:()=>{}})},'./Chart':{Chart},
   };
   type Drawing={lines:Line[];prepared:boolean;axis:{rawValue:(key:string,at:number)=>string|undefined}};
@@ -97,7 +99,7 @@ for(const amount of ['3000000','9007199254740993'])test(`the balance consumer pr
   const settle=async(ready:()=>boolean)=>{for(let i=0;i<1000;i++){await new Promise(resolve=>setImmediate(resolve));if(ready())return;}throw Error('history did not settle');};
   await settle(()=>!!loader.get().history&&!loader.get().loading);
   loader.pan({token:1,length:selected.to-selected.from,...selected,direction:1});await settle(()=>!!loader.getPlot());
-  const draw=consumer(h.source,h.board,selected),pan=draw(loader.get().history!,loader.getPlot());
+  const draw=consumer(h.source,h.board,selected,t),pan=draw(loader.get().history!,loader.getPlot());
   const remaining=(20000000000000000n-BigInt(amount)).toString();
   assert.equal(pan.axis.rawValue(pan.lines[0].key!,selected.to-1),remaining,'the raw strip retains exact balance after the reported usage');
   range=selected;const answer=await h.read(range);loader.choose('1h',range);loader.endPan(true);
@@ -132,5 +134,5 @@ test('gaps stay unlocated while available boundary points retain confirmed zero 
   assert.equal(series.spent,'0');assert.equal(pointSum(series),'0');assert.equal(series.coveredMs,20_000);
   assert.deepEqual(series.unlocated.map(step=>[step.amount,step.evidence]),[['3000000','gap']]);
   assert.deepEqual(series.points.flatMap(point=>point.steps).map(step=>[step.amount,step.evidence]),[['3000000','gap']]);
-  const result=consumer(h.source,h.board,selected)(exact,null);assert.equal(result.prepared,true);assert.equal(result.axis.rawValue(result.lines[0].key!,selected.to-1),'19999999997000000');
+  const result=consumer(h.source,h.board,selected,t)(exact,null);assert.equal(result.prepared,true);assert.equal(result.axis.rawValue(result.lines[0].key!,selected.to-1),'19999999997000000');
 });

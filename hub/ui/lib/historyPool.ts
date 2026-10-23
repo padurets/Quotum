@@ -1,4 +1,5 @@
-type Flight = {role: 'visible' | 'ahead'};
+// Interactive admission can differ from the member that owns retained bytes.
+type Flight = {role: 'visible' | 'ahead';admission?:object};
 type Candidate = {bytes: number; shownAt: number; drop(): void};
 export type HistoryMember = {readonly estimatedBytes: number; evictionCandidates(): Candidate[]};
 type Waiting = {owner: HistoryMember; flight: Flight; start(): void; cancel(): void};
@@ -55,14 +56,14 @@ export class HistoryPool {
     queueMicrotask(() => {this.scheduled = false; this.pump();});
   }
   private pump() {
-    if(this.active.size===2&&this.waiting.some(item=>item.flight.role==='visible'&&![...this.active.values()].some(active=>active.owner===item.owner&&active.flight.role==='visible'))) {
+    if(this.active.size===2&&this.waiting.some(item=>item.flight.role==='visible'&&![...this.active.values()].some(active=>(active.flight.admission??active.owner)===(item.flight.admission??item.owner)&&active.flight.role==='visible'))) {
       [...this.active.values()].find(item=>item.flight.role==='ahead')?.cancel();
     }
     while (this.active.size < 2) {
       const foreground = this.waiting.some(item => item.flight.role === 'visible');
       const index = this.waiting.findIndex(item => {
         if (item.flight.role === 'ahead') return !foreground && ![...this.active.keys()].some(flight => flight.role === 'ahead');
-        return ![...this.active.values()].some(active => active.owner === item.owner && active.flight.role === 'visible');
+        return ![...this.active.values()].some(active => (active.flight.admission??active.owner)===(item.flight.admission??item.owner) && active.flight.role === 'visible');
       });
       if (index === -1) return;
       const [item] = this.waiting.splice(index, 1);
@@ -83,7 +84,9 @@ export class HistoryPool {
     if (bytes <= this.budget) return true;
     const candidates = [...this.members].flatMap(member => member.evictionCandidates()).sort((a,b) => a.shownAt - b.shownAt);
     for (const candidate of candidates) {
-      candidate.drop(); bytes -= candidate.bytes;
+      candidate.drop();
+      // A dropped cache entry can share storage with a frame that still owns it.
+      bytes = this.estimatedBytes;
       if (bytes <= this.budget) return true;
     }
     return false;

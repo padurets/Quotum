@@ -6,6 +6,7 @@ import ts from 'typescript';
 import {Pan} from '../lib/pan';
 import {navigationAt, navigationKey} from '../lib/axisNavigation';
 import {axisPresentationFixture} from './axisPresentationFixture';
+import {tickKeyframes, tickPresentation, tickVisible} from '../lib/axisTicks';
 
 const offsetIs = (transform: string, expected: number, message?: string) => assert.ok(Math.abs(Number(transform.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0) - expected) < 1e-9, message);
 
@@ -65,7 +66,7 @@ test('the actual axis publishes committed HTML owners and applies the captured C
   const panLayers = {current: [] as ReturnType<typeof makeLayer>[]};
   const captured = {current: null};
   const paintPan = {current: () => {}};
-  const context = {pan, source, svg, box, panLayers, captured, paintPan, navigationAt, wanted: {current: {navigation: {context: 'test', range: 'range'}}}, motion: {current: null}, finished: {current: null}, foldTicket: {current: 0},
+  const context = {paintDrawing:{current:undefined},navigationAt,paintTicks:{current:()=>{}},pan, source, svg, box, panLayers, captured, paintPan, wanted: {current: {navigation: {context: 'test', range: 'range'}}}, motion: {current: null}, finished: {current: null}, foldTicket: {current: 0},
     drawing: {current: {...selected, end: selected.to}}, pose: {current: {a: 1, b: 0, offset: 0}}, finishPresentation: {current: null}, finalFrame: {current: null}, folding: false,
     visualGeometry: () => ({...selected, end: selected.to}), freezeSlides: () => {}, setFolding: () => {}, cancelSlides: () => {},
     width: 600, left: 40, right: 20, scale: .5, panPointer: {current: null as {id: number} | null}, wheelBounds: {current: null},
@@ -140,6 +141,7 @@ test('starting from a settled axis avoids a style flush but samples an interrupt
   const layer = {getAnimations: () => {throw new Error('animation lookup must not flush styles');}};
   const animations = {current: new Map()};
   const context = {box: {current: {querySelector: () => layer}}, animations, animationPoses: {current: new WeakMap()},
+    captured:{current:null},finished:{current:null},motion:{current:null},wanted:{current:{projection:{from:0,to:1_000_000,end:800_000}}},
     drawing: {current: {from: 0, to: 1_000_000, end: 800_000}}, pose: {current: {a: 1, b: 0, offset: 0}}, scale: .5, left: 40, right: 12, width: 900,
     getComputedStyle: () => {reads++; return {transform: 'matrix'};},
     DOMMatrix: class {a = .5; e = 20;}, read: null as unknown as () => {from: number; to: number; end: number}};
@@ -150,7 +152,7 @@ test('starting from a settled axis avoids a style flush but samples an interrupt
   const sampled = context.read();
   assert.equal(reads, 1);
   assert.equal(sampled.to - sampled.from, 2_000_000, 'an interrupted fold retains its actual displayed scale');
-  assert.equal(sampled.end, 800_000);
+  assert.equal(sampled.end, sampled.to-200_000,'the sampled projection keeps its owned future extent');
 });
 
 test('the actual slide owner cancels replacements and releases only its own completed animation', async () => {
@@ -181,20 +183,20 @@ test('the actual slide owner cancels replacements and releases only its own comp
   assert.equal(context.animations.current.size, 0, 'unmount releases every owned animation');
 });
 
-test('the actual drawing commit holds pending geometry and starts its final fold at the previous composed pixels', () => {
+test('the actual drawing commit preserves two landmarks through pending, replacement and the completed handoff', () => {
   const H = 3_600_000, width = 600, left = 40, right = 20, scale = .5, inner = width - left - right;
   const old = {from: 0, to: 2 * H, end: H}, initial = {a: .7, b: 5, offset: 13};
   const inverse = (px: number) => (((px - initial.offset) / scale - initial.b) / initial.a - left) / inner * 2 * H;
   const delta = -.25 * H, visual = {from: inverse(left * scale) + delta, to: inverse((width - right) * scale) + delta, end: H + delta};
-  const selected = {from: visual.from, to: visual.from + H};
+  const selected = {from: visual.from, to: visual.end};
   const layers = [{style: {transform: 'held'}}], slides = [{style: {transform: 'frozen'}, closest: () => layers[0]}];
   const frames: Keyframe[][] = [];
   const pose = {current: {...initial, offset: initial.offset - delta / (visual.to - visual.from) * inner * scale}};
-  const known = H / 2;
-  const before = scale * (pose.current.a * (left + known / (old.to - old.from) * inner) + pose.current.b) + pose.current.offset;
-  const context = {shown: {current: old}, drawing: {current: old}, svg: {current: {dataset: {} as Record<string, string>}}, box: {current: {querySelectorAll: () => slides}},
+  const known = [H / 2, H];
+  const before = known.map(at => scale * (pose.current.a * (left + at / (old.to - old.from) * inner) + pose.current.b) + pose.current.offset);
+  const context = {document:{timeline:{currentTime:0}},animateTicks:{current:()=>[]},paintDrawing:{current:undefined},paintTicks:{current:()=>{}},shown: {current: old}, drawing: {current: old}, svg: {current: {dataset: {} as Record<string, string>}}, box: {current: {querySelectorAll: () => slides}},
     panLayers: {current: layers}, pose, pan: {active: () => null}, paintPan: {current: () => {}},
-    navigationKey, wanted: {current: {navigation: {context: 'test', range: 'range'}, projection: {from: selected.from, to: selected.to, end: selected.to}}}, requestedNavigation: {context: 'test', range: 'range'}, motion: {current: null}, captured: {current: null},
+    navigationKey, wanted: {current: {navigation: {context: 'test', range: 'range'}, projection: {from: selected.from, to: selected.to, end: selected.to},positioned:true}}, requestedNavigation: {context: 'test', range: 'range'}, motion: {current: null}, captured: {current: null},
     finished: {current: {navigation: {context: 'test', range: 'range'}, visual, stop: {range: selected, canceled: false}} as {navigation: {context: string; range: string}; visual: typeof visual; stop: {range: typeof selected; canceled: boolean}} | null},
     finishPresentation: {current: null}, finalFrame: {current: 1 as number | null}, timeRange: () => selected, left, right, width, scale, from: selected.from, to: selected.to,
     foldTicket: {current: 0}, animations: {current: new Map()}, animationPoses: {current: new WeakMap()}, matchMedia: () => ({matches: false}), setFolding: () => {},
@@ -211,10 +213,13 @@ test('the actual drawing commit holds pending geometry and starts its final fold
   context.finalFrame.current = null;
   const next = {from: selected.from, to: selected.to, end: selected.to};
   context.commit(next, true);
-  assert.equal(context.finished.current, null); assert.equal(layers[0].style.transform, ''); assert.equal(frames.length, 1);
-  const matrix = String(frames[0][0].transform).match(/translateX\(([-.\de+]+)px\) scaleX\(([-.\de+]+)\)/)!;
-  const after = Number(matrix[2]) * scale * (pose.current.a * (left + (known - next.from) / (next.to - next.from) * inner) + pose.current.b) + Number(matrix[1]);
-  assert.ok(Math.abs(after - before) < 1e-9, 'numeric model, SVG matrix and HTML reset must preserve a known time’s pixel');
+  assert.equal(context.finished.current, null); assert.equal(layers[0].style.transform, '');
+  const point = (at: number) => scale * (pose.current.a * (left + (at - next.from) / (next.to - next.from) * inner) + pose.current.b) + pose.current.offset;
+  // The old oracle checked only the first animation keyframe, missing its final zoom.
+  known.forEach((at,i) => assert.ok(Math.abs(point(at) - before[i]) < 1e-9, 'the fully settled matrix preserves both timestamps'));
+  assert.equal(frames.length, 0, 'replacement is a change of numeric basis, not another navigation');
+  context.commit(next, true);
+  known.forEach((at,i) => assert.ok(Math.abs(point(at) - before[i]) < 1e-9, 'later ordinary commits cannot reframe the positioned view'));
 });
 
 test('sampling and freezing an owned fold keeps its matrix after cancelling the animation', () => {
@@ -222,7 +227,7 @@ test('sampling and freezing an owned fold keeps its matrix after cancelling the 
   const start = source.indexOf('  const readPose = '), body = source.slice(start, source.indexOf('  useLayoutEffect(() => pan.register(', start));
   const layer = {style: {transform: ''}}, other = {style: {transform: ''}}, animations = {current: new Map([[layer, {}]])};
   const pose = {current: {a: 1, b: 0, offset: 17}};
-  const context = {box: {current: {querySelector: () => layer, querySelectorAll: () => [layer, other]}}, animations, pose, animationPoses: {current: new WeakMap()},
+  const context = {paintTicks:{current:()=>{}},box: {current: {querySelector: () => layer, querySelectorAll: () => [layer, other]}}, animations, pose, animationPoses: {current: new WeakMap()},
     getComputedStyle: () => ({transform: 'matrix'}), DOMMatrix: class {a = .6; e = 21;}, cancelSlides: () => animations.current.clear(), freeze: null as unknown as () => void};
   runInNewContext(ts.transpileModule(`${body}\nglobalThis.freeze=freezeSlides;`, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
   context.freeze();
@@ -240,7 +245,7 @@ test('an interrupted HTML fold composes its CSS matrix with the final SVG pose b
     let canceled = false;
     const animation = {effect: {target: owner}};
     const animations = {current: new Map([[layer, animation]])};
-    const context = {drawing: {current: base}, box: {current: {querySelector: () => layer, querySelectorAll: () => [layer, other]}}, animations, pose, animationPoses: {current: new WeakMap()},
+    const context = {captured:{current:null},finished:{current:null},motion:{current:null},wanted:{current:{projection:base}},paintTicks:{current:()=>{}},drawing: {current: base}, box: {current: {querySelector: () => layer, querySelectorAll: () => [layer, other]}}, animations, pose, animationPoses: {current: new WeakMap()},
       scale, width: 600, left: 40, right: 20,
       getComputedStyle: (target: object) => {assert.equal(target, owner); return {transform: 'matrix(.63,0,0,1,27,0)'};},
       DOMMatrix: class {a = .63; e = 27;}, cancelSlides: () => {canceled = true; animations.current.clear();},
@@ -286,6 +291,20 @@ test('only gesture completion scales the HTML surface; ordinary navigation retai
   assert.equal(ordinary.animations.length, 2);
 });
 
+test('a fold keeps whole-date owners in SVG while other drawing layers use HTML',()=>{
+  const base={from:0,to:7_200_000,end:3_600_000},navigation={context:'test',range:'range'};
+  const f=axisPresentationFixture(base,navigation);
+  Object.assign(f.slides[0],{parentElement:{querySelector:()=>({})}});
+  Object.assign(f.slides[1],{parentElement:{querySelector:()=>null}});
+  f.context.finished.current={visual:{...base,from:-600_000},navigation,stop:{range:null,canceled:false}};
+  f.context.wanted.current.projection={from:600_000,to:4_200_000,end:4_200_000};
+  f.context.commit(base,true);
+  assert.equal(f.animations[0].owner,f.slides[0],'independent glyph animation cannot inherit an HTML scale');
+  assert.equal(f.animations[1].owner,f.layers[1],'the remaining drawing keeps the HTML fold');
+  assert.equal(f.context.animationPoses.current.has(f.animations[0]),true);
+  assert.equal(f.context.animationPoses.current.has(f.animations[1]),true);
+});
+
 test('the actual last-input RAF uses the gesture CSS scale rather than the mount-time axis closure', () => {
   const H = 3_600_000, now = 100 * H, selected = {from: now - 2 * H, to: now - H};
   const inputFrames: (() => void)[] = [], finalFrames: (() => void)[] = [];
@@ -293,7 +312,7 @@ test('the actual last-input RAF uses the gesture CSS scale rather than the mount
   const token = pan.begin({source: Symbol('chart'), input: 'pointer', selected, length: H, now, historyStart: 0, span: H, width: 270})!;
   pan.move(token, -27); inputFrames.shift()!();
   const layer = {style: {transform: 'translateX(44px)'}};
-  const context = {pan, navigationAt, drawing: {current: {...selected, end: selected.to}}, box: {current: null}, width: 900, left: 40, right: 20, scale: 1,
+  const context = {paintDrawing:{current:undefined},paintTicks:{current:()=>{}},pan, navigationAt, drawing: {current: {...selected, end: selected.to}}, box: {current: null}, width: 900, left: 40, right: 20, scale: 1,
     captured: {current: {token, ...selected, end: selected.to, visual: {...selected, end: selected.to}, pose: {a: 1, b: 0, offset: 17}, pixelsPerMs: 270 / H, navigation: {context: 'test', range: 'range'}, innerWidth: 540, cssScale: .5, left: 40}},
     finished: {current: null}, pose: {current: {a: 1, b: 0, offset: 44}}, finishPresentation: {current: null}, finalFrame: {current: null}, panLayers: {current: [layer]},
     setFolding: () => {}, present: () => {}, requestAnimationFrame: (run: () => void) => {finalFrames.push(run); return finalFrames.length;},
@@ -311,8 +330,53 @@ test('the actual last-input RAF uses the gesture CSS scale rather than the mount
   assert.ok(Math.abs(context.pose.current.offset - 57) < 1e-9);
 });
 
+test('committed axis ticks reuse shaped widths across frames and measure only changed glyphs',async()=>{
+  let reads=0;
+  const tick=(text:string,x:number)=>({textContent:text,x,style:{visibility:'',transform:''},getAttribute:()=>String(x),getComputedTextLength:()=>{reads++;return 44;}});
+  const ticks=[tick('14 Oct',60),tick('15 Oct',200)];
+  const context={tickElements:{current:[]},animateTicks:{current:()=>[]},motion:{current:null},animations:{current:new Map()},animateSlide:()=>{throw Error('no animation without motion');},tickKeyframes,box:{current:{querySelectorAll:()=>ticks}},tickWidths:{current:new Map()},tickGlyphs:{current:new WeakMap()},paintTicks:{current:()=>{}},pose:{current:{a:1,b:0,offset:0}},scale:.73,left:48,right:12,width:920,tickPresentation,tickVisible,
+    useLayoutEffect:(run:()=>void)=>run(),measure:null as unknown as ()=>void};
+  const source=readFileSync(new URL('../components/timeAxis.ts',import.meta.url),'utf8'),start=source.indexOf('  useLayoutEffect(() => {\n    // Measure only after DOM commit.');
+  const body=source.slice(start,source.indexOf('\n  return {box, svg',start));
+  runInNewContext(ts.transpileModule('globalThis.measure=()=>{'+body+'};',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+  context.measure();assert.equal(reads,2);assert.equal(ticks[0].style.visibility,'hidden');assert.equal(ticks[1].style.visibility,'');
+  for(let i=0;i<100;i++){context.pose.current.offset=i*.01;context.paintTicks.current();context.measure();}
+  assert.equal(reads,2,'input and ordinary commits never force text layout for retained labels');
+  ticks[0].textContent='16 Oct';context.measure();assert.equal(reads,3);
+  ticks[0]=tick('16 Oct',60);ticks[1]=tick('15 Oct',200);context.measure();assert.equal(reads,3,'rebuilt strips reuse glyph widths without another forced layout');
+  context.tickWidths.current.clear();context.measure();assert.equal(reads,5,'a font change retires the shaped widths');
+  for(let i=0;i<200;i++){ticks[0].textContent='day '+i;context.measure();}
+  assert.equal(context.tickWidths.current.size,128,'long navigation keeps the glyph cache bounded');
+});
 
-for (const mode of ['idle', 'cancel', 'shift']) test(`all four axes retain accepted input on ${mode} before the final RAF`, () => {
+test('native tick movement never reparses unchanged glyph transforms after CSS rounds their coordinates',async()=>{
+  let writes=0,gets=0,presentations=0,wanted='',serialized='';
+  const tick=(x:number)=>({x,textContent:'14 Oct',style:{visibility:'',get transform(){gets++;return serialized;},set transform(value:string){writes++;wanted=value;serialized=value.replace(/-?\d+(?:\.\d+)?/g,n=>String(Number(Number(n).toPrecision(6))));}},getAttribute(){return String(this.x);},getComputedTextLength:()=>44});
+  const ticks=[tick(500.123456789)],pose={current:{a:.731231231,b:4.123456789,offset:0}};
+  const context={tickElements:{current:[]},animateTicks:{current:()=>[]},motion:{current:null},animations:{current:new Map()},animateSlide:()=>{throw Error('no animation without motion');},tickKeyframes,box:{current:{querySelectorAll:()=>ticks}},tickWidths:{current:new Map()},tickGlyphs:{current:new WeakMap()},paintTicks:{current:()=>{}},pose,scale:.73,left:48,right:12,width:920,tickVisible,tickPresentation:(...args:Parameters<typeof tickPresentation>)=>{presentations++;return tickPresentation(...args);},
+    useLayoutEffect:(run:()=>void)=>run(),measure:null as unknown as ()=>void};
+  const source=readFileSync(new URL('../components/timeAxis.ts',import.meta.url),'utf8'),start=source.indexOf('  useLayoutEffect(() => {\n    // Measure only after DOM commit.');
+  const body=source.slice(start,source.indexOf('\n  return {box, svg',start));
+  runInNewContext(ts.transpileModule('globalThis.measure=()=>{'+body+'};',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+  context.measure();assert.notEqual(wanted,serialized,'the browser normalizes a fractional CSS transform');
+  assert.equal(writes,1);
+  for(let i=0;i<100;i++){pose.current.offset=-i*4;context.paintTicks.current();context.measure();}
+  assert.equal(writes,1,'native translation changes visibility without rewriting the glyph transform');
+  assert.equal(presentations,1,'translation does not rebuild the unchanged glyph transform string');
+  assert.equal(gets,0,'native frames do not read a normalized string just to write its equivalent again');
+  assert.equal(ticks[0].style.visibility,'hidden');
+  pose.current.a=1.23456789;context.paintTicks.current();assert.equal(writes,2,'a changed projection replaces the glyph transform');
+  assert.equal(wanted,tickPresentation(500.123456789,44,pose.current,.73,48,908).transform);
+  ticks[0]=tick(600.987654321);context.measure();assert.equal(writes,3,'new committed tick coordinates receive their own transform');
+  ticks[0].x=610.123456789;context.measure();assert.equal(writes,4,'a reused node follows its new committed coordinate');
+  assert.equal(wanted,tickPresentation(ticks[0].x,44,pose.current,.73,48,908).transform);
+  pose.current.a=1;context.paintTicks.current();assert.equal(writes,5);
+  ticks[0].x+=4;context.measure();assert.equal(writes,5,'identity glyph transforms do not depend on their new coordinate');
+  pose.current.a=.5;context.paintTicks.current();assert.equal(writes,6);
+  assert.equal(wanted,tickPresentation(ticks[0].x,44,pose.current,.73,48,908).transform);
+});
+
+for (const mode of ['idle', 'cancel', 'shift']) test(`all five axes retain accepted input on ${mode} before the final RAF`, () => {
   const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
   const region = (start: string, end: string) => {const i = source.indexOf(start), j = source.indexOf(end, i); assert.ok(i >= 0 && j > i); return source.slice(i, j);};
   const actual = [region('  const startPan = ', '  const wheelPan = '), region('  const readPose = ', '  useLayoutEffect(() => pan.register('), region('  const paint = () => {', '\n  useLayoutEffect(() => {\n    const unsubscribe'), region('  useLayoutEffect(() => pan.onStop(stop => {', '  useEffect(() => () => {\n    foldTicket.current++')].join('\n');
@@ -327,7 +391,7 @@ for (const mode of ['idle', 'cancel', 'shift']) test(`all four axes retain accep
     setTimeout: (run, ms) => {assert.equal(ms, 200); const id = ++serial; timers.set(id, run); return id;},
     clearTimeout: id => {timers.delete(id as number);},
   }, () => delivery);
-  const specs = [[600, .5, 40, 20], [700, .6, 48, 12], [800, .8, 76, 12], [900, 1, 76, 12]];
+  const specs = [[600, .5, 40, 20], [700, .6, 48, 12], [760, .7, 48, 12], [800, .8, 76, 12], [900, 1, 76, 12]];
   const axes = specs.map(([width, scale, left, right]) => {
     const f = axisPresentationFixture({from: now - H, to: now, end: now}, {context: 'test', range: 'live'}, width, scale, left, right);
     const chart = {current: Symbol('chart')};

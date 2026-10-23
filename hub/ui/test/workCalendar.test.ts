@@ -11,10 +11,37 @@ import {expandPeriod} from '../../server/domain/periodWire.js';
 import {fixture,flush,NOW,M} from './periodRuntimeFixture.js';
 const H=3_600_000,DAY=24*H;
 const row=(from:number,to:number):Stretch=>({session:1,source:null,device:'d',user:'u',origin:'terminal',project:null,folder:null,startedAt:from,from,to});
+test('calendar presentation identity separates live periods without changing on ordinary clock movement',()=>{
+  const calendar=new WorkCalendar(),now=Date.UTC(2035,1,10,12);
+  calendar.configure(true,'authority',now,false,{mode:'live',periodMs:DAY});const day=calendar.presentationKey();
+  calendar.tick(now+60_000);assert.equal(calendar.presentationKey(),day);
+  calendar.configure(true,'authority',now,false,{mode:'live',periodMs:30*DAY});const month=calendar.presentationKey();
+  assert.notEqual(month,day,'cached evidence for another live duration cannot retain the previous grid');
+  calendar.configure(true,'authority',now,false,{mode:'range',from:now-DAY,to:now});const fixed=calendar.presentationKey();
+  assert.notEqual(fixed,day);assert.notEqual(fixed,month);
+  calendar.configure(true,'replacement',now,false,{mode:'range',from:now-DAY,to:now});assert.notEqual(calendar.presentationKey(),fixed);
+});
 function reading(from:number,to:number,zone='UTC'){
   const window=calendarWindow(to,zone,{mode:'range',from,to}),cells=drain(calendarCells([row(from,to)],window.edges,window.edges.slice(1).map((_,i)=>i),to,from,from,90*DAY,{from,to})).map(([,c])=>c);
   return {window,value:{zone,edges:window.edges,cells,availableFrom:from,retainedFrom:from,cursor:'cursor'},basis:null,loading:false,error:null};
 }
+test('replacement calendar arrays reuse civil instants without caching work or mixing time zones',t=>{
+  const from=Date.UTC(2032,8,20,5),r=reading(from,from+DAY),other=reading(from,from+DAY,'Pacific/Honolulu'),distant=reading(from+3*DAY,from+4*DAY);
+  let calls=0;const original=Intl.DateTimeFormat.prototype.formatToParts;
+  t.mock.method(Intl.DateTimeFormat.prototype,'formatToParts',function(this:Intl.DateTimeFormat,...args:Parameters<typeof original>){calls++;return original.apply(this,args);});
+  const draw=(value:typeof r)=>heatmapLayout(value,1138,'matrix','en');
+  const clone=(value:typeof r)=>({...value,window:{...value.window,edges:[...value.window.edges]}});
+  const first=draw(r);assert.ok(calls>1000);calls=0;
+  const index=r.value.cells.findIndex(cell=>cell.agentMs!==null),updated={...clone(r),value:{...r.value,cells:r.value.cells.map((cell,i)=>i===index?{...cell,agentMs:cell.agentMs!+M}:cell)}};
+  const next=draw(updated);
+  assert.equal(calls,0,'a replacement with the same partition formats no old instant again');
+  assert.equal(next.cells.reduce((sum,c)=>sum+(c.cell.agentMs??0),0),DAY+M,'only civil coordinates are cached; new work remains exact');
+  const geometry=(layout:ReturnType<typeof draw>)=>layout.cells.map(({key,from,to,x,y,width,height})=>({key,from,to,x,y,width,height}));
+  assert.deepEqual(geometry(next),geometry(first));
+  const local=draw(other);assert.ok(calls>1000,'a different zone has its own civil coordinates');
+  assert.notEqual(local.cells[0].date,first.cells[0].date);calls=0;draw(clone(r));assert.equal(calls,0);
+  draw(distant);calls=0;draw(clone(r));assert.ok(calls>0,'navigation cannot retain an unbounded set of formatted instants');
+});
 test('civil dates and registered sums survive 23/25-hour and half-hour DST days',()=>{
   for(const [from,to,zone,hours] of [
     ['2026-03-08T05:00Z','2026-03-09T04:00Z','America/New_York',23],
@@ -56,7 +83,7 @@ test('exact hours reuse their locale formatter across values and locale changes'
   for(const count of created.values())assert.ok(count<=1,'the same locale needs only one formatter');
 });
 test('compact calendar fits all selected dates without separate date rows',()=>{
-  const r=reading(NOW-30*DAY,NOW);for(const width of [248,318,538,1138]){const l=heatmapLayout(r,width,'calendar','en');assert.ok(l.height<=204);assert.equal(l.cells.reduce((n,c)=>n+(c.cell.agentMs??0),0),30*DAY);assert.ok(l.cells.every(c=>c.x>=0&&c.x+c.width<=width));}
+  const r=reading(NOW-30*DAY,NOW);for(const width of [248,318,538,1138]){const l=heatmapLayout(r,width,'calendar','en');assert.equal(l.height,300);assert.equal(l.cells.reduce((n,c)=>n+(c.cell.agentMs??0),0),30*DAY);assert.ok(l.cells.every(c=>c.x>=0&&c.x+c.width<=width));}
 });
 test('optional heatmap keeps its string codec identity on source-free boards',()=>{
   assert.equal(widgetVisible(EMPTY_VIEW,AGENT_HOURS_HEATMAP,0),false);const v=showWidgets(EMPTY_VIEW,[AGENT_HOURS_HEATMAP]);assert.deepEqual(decodeView(encodeView(v)),v);
@@ -161,6 +188,45 @@ test('a monthly heatmap replacement preserves other loaded history inside the sh
   }finally{retained=0;await h.close();}
 });
 
+test('a fresh live calendar revision preserves an unaffected historical prefix for the shifted repeat',async t=>{
+  let now=NOW;t.mock.method(Date,'now',()=>now);const h=await fixture({heatmap:true,periodName:'30d',creditFrom:NOW-25*DAY+1234,creditTo:NOW-24*DAY+5678});t.after(()=>h.close());
+  const cold={from:NOW-45*DAY,to:NOW-15*DAY};h.selectRange(cold);await flush();
+  assert.equal(h.requests.filter(r=>r.calendar).length,1);h.requests.length=0;
+  h.credit(NOW-M,NOW);h.events.flush();await flush();
+  assert.equal(h.requests.filter(r=>r.calendar).length,0,'recent work cannot invalidate a selected month ending fifteen days ago');
+  now+=2517;h.jump(now);h.selectRange(null);await flush();
+  assert.equal(h.requests.filter(r=>r.calendar).length,1,'the affected live tail requires fresh evidence');h.requests.length=0;
+  const repeat={from:cold.from+2517,to:cold.to+2517};h.selectRange(repeat);await flush();
+  assert.equal(h.requests.filter(r=>r.calendar).length,0,'a newer live revision must not erase reusable historical integrals');
+  const fresh=expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,{version:1,selection:{mode:'range',...repeat},evaluatedAt:now,calendar:{zone:h.period.calendar.state.window.zone}})));
+  if(fresh.calendar?.state!=='complete')throw new Error('oracle');assert.deepEqual(h.period.calendar.state.value.cells,fresh.calendar.value.cells);
+  const before=h.period.calendar.state.value.cells.reduce((sum:number,c:CalendarCell)=>sum+(c.agentMs??0),0);h.requests.length=0;
+  h.store.creditWork(h.device,NOW-20*DAY,NOW-20*DAY+H,[{source:h.source,accountBy:'login',client:'codex',origin:'terminal',startedAt:NOW-21*DAY,project:'Late project',folder:'Late folder',identity:{kind:'stable',sessionId:'d'.repeat(32)}}]);h.events.flush();await flush();
+  assert.equal(h.requests.filter(r=>r.calendar).length,1,'a genuinely relevant historical credit still refreshes the selected calendar');
+  assert.equal(h.period.calendar.state.value.cells.reduce((sum:number,c:CalendarCell)=>sum+(c.agentMs??0),0),before+H);
+});
+
+test('historical calendar evidence cannot impersonate a live tail after the live proof is evicted',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({heatmap:true,periodName:'30d'});t.after(()=>h.close());
+  const live=h.period.calendar.state.value.cells;assert.ok(live.some((c:CalendarCell)=>(c.agentMs??0)>0));
+  h.selectRange({from:NOW-45*DAY,to:NOW-15*DAY});await flush();h.requests.length=0;
+  const entries=h.period.calendar.evictionCandidates();assert.equal(entries.length,2);entries[0].drop();
+  h.selectRange(null);await flush();
+  assert.equal(h.requests.filter(r=>r.calendar).length,1,'the unobserved fifteen-day tail requires actual evidence');
+  assert.deepEqual(h.period.calendar.state.value.cells,live,'the ready live calendar retains recent credited work');
+});
+
+test('overlapping calendar prefixes cover a range even when the newest original proof has a dirty tail',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({heatmap:true,periodName:'30d'});t.after(()=>h.close());
+  h.selectRange({from:NOW-45*DAY,to:NOW-15*DAY});await flush();
+  h.store.creditWork(h.device,NOW-20*DAY,NOW-20*DAY+H,[{source:h.source,accountBy:'login',client:'codex',origin:'terminal',startedAt:NOW-21*DAY,project:'Late project',folder:'Late folder',identity:{kind:'stable',sessionId:'d'.repeat(32)}}]);h.events.flush();await flush();
+  h.selectRange({from:NOW-35*DAY,to:NOW-5*DAY});await flush();h.requests.length=0;
+  const target={from:NOW-40*DAY,to:NOW-10*DAY};h.selectRange(target);await flush();
+  assert.equal(h.requests.filter(r=>r.calendar).length,0,'the actual union covers the target without any single enclosing proof');
+  const fresh=expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,{version:1,selection:{mode:'range',...target},evaluatedAt:NOW,calendar:{zone:h.period.calendar.state.window.zone}})));
+  if(fresh.calendar?.state!=='complete')throw new Error('oracle');assert.deepEqual(h.period.calendar.state.value.cells,fresh.calendar.value.cells);
+});
+
 test('a fresh baseline adopts UTC or local date rollover before the civil clock wakes',t=>{
   let zone='UTC';const resolved=Intl.DateTimeFormat.prototype.resolvedOptions;
   t.mock.method(Intl.DateTimeFormat.prototype,'resolvedOptions',function(this:Intl.DateTimeFormat){return {...resolved.call(this),timeZone:zone};});
@@ -178,4 +244,20 @@ test('a baseline with the same partition cannot replace the selected period with
   const part={state:'complete' as const,basis:{run:'r',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range,calendarKey:'k',workAuthority:'a',filterKey:'f'},value:{zone:window.zone,edges:window.edges,availableFrom:range.from,retainedFrom:0,cursor:'c',cells:drain(calendarCells([],window.edges,window.edges.slice(1).map((_,i)=>i),NOW,range.from,0,90*DAY,range)).map(([,cell])=>cell)}};
   c.receive(part,c.generation,()=>true);const accepted=c.get();
   c.receive({...part,basis:{...part.basis,revision:'2',range:{from:range.from+M,to:range.to}}},c.generation,()=>true);assert.equal(c.get(),accepted);
+});
+
+test('31 exact days spanning 32 civil dates fit a stable height at every density without dropping evidence',()=>{
+  for(const zone of ['UTC','Europe/Moscow','America/New_York','Australia/Lord_Howe']){
+    const to=Date.parse('2026-11-08T17:50:06.430Z'),r=reading(to-31*DAY,to,zone);
+    assert.equal(r.window.dates.length,32);
+    for(const locale of ['en','ru'])for(const width of [248,318,538,1138])for(const height of [160,300,520])for(const view of ['matrix','calendar'] as const){
+      const l=heatmapLayout(r,width,view,locale,height);
+      assert.equal(l.height,height);assert.equal(l.naturalHeight,300);
+      assert.deepEqual([...new Set(l.cells.map(c=>c.date))],r.window.dates,'both partial boundary dates survive responsive thinning');
+      assert.equal(l.cells.reduce((n,c)=>n+(c.cell.agentMs??0),0),31*DAY);
+      assert.ok(l.cells.every(c=>c.width>0&&c.height>0&&c.x>=0&&c.x+c.width<=width+.01&&c.y>=0&&c.y+c.height<=height));
+      assert.ok(l.labels.every(label=>label.x>=0&&label.x<=width&&label.y>=0&&label.y<=height),'all label anchors stay in the assigned plot');
+      assert.equal(l.cells.reduce((n,c)=>n+c.parts.reduce((sum,part)=>sum+(part.agentMs??0),0),0),31*DAY,'coarser geometry retains exact fine contributions');
+    }
+  }
 });

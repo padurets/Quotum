@@ -81,6 +81,9 @@ export function KeyMoneySettings({sources,source:focused,hidden:_hidden,series,a
   const current=new Set(inCard?source?.keys?.map(key=>key.id):membership?.identity===identity?membership.keys:[]);
   const archived=source&&membershipReady?archivedKeyGroups(source.id,selected,current,series):[];
   const keyRow=(id:string,label:string,meters:string[],archived=false)=>row(source!.id,meters,label,archived||!meters.length,archived?t('money.archived'):!meters.length?t('money.noCap'):undefined,id,true);
+  const capacityBlocked=!!source&&!!page&&!loading&&!stale&&selected.length>=MAX_METERS&&page.keys.some(key=>{
+    const id=`key:${key.id}:cap`;return !has(source.id,id)&&page.meters.some(meter=>meter.unit===unit&&meter.id===id);
+  });
   return <>
     {(focused?[focused]:accounts).map(source=>balance(source)&&row(source.id,[balance(source)!.id],focused?t('money.balance'):source.title??source.id))}
     {source&&(!!source.keysCount||selectedKeys!=='[]'||!!archived.length)&&<details className="filter-key-details" open={keysOpen} onToggle={event=>setKeysOpen(event.currentTarget.open)}>
@@ -88,6 +91,7 @@ export function KeyMoneySettings({sources,source:focused,hidden:_hidden,series,a
       <ErrorLine error={error}/>
       {changed&&<p className="popover-note">{t('money.changed')}</p>}
       {(page?.inventory??source.inventory)?.complete===false&&<p className="popover-note">{t('money.inventoryPartial')}</p>}
+      {capacityBlocked&&<p className="popover-note">{t('money.selectionFull',{count:MAX_METERS})}</p>}
       {page?.keys.map(part=>keyRow(part.id,keyName(part),[`key:${part.id}:cap`].filter(id=>page.meters.some(meter=>meter.unit===unit&&meter.id===id)||has(source.id,id))))}
       {archived.map(group=>keyRow(group.id,group.label,[group.cap],true))}
       {loading&&!page&&<p className="popover-note">{t('desktop.loading')}</p>}

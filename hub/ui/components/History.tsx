@@ -1,4 +1,4 @@
-import {AnalyticsPanel, AnalyticsNote, SeriesLegendItem} from './AnalyticsPanel';
+import {AnalyticsPanel, SeriesLegendItem} from './AnalyticsPanel';
 import {useSeriesFocus} from './seriesFocus';
 import {memo, useMemo, useLayoutEffect, useRef} from 'react';
 import {earliest, num} from '../lib/format';
@@ -92,7 +92,7 @@ const WindowHistory = memo(function WindowHistory({arrange,kind='weekly'}: {arra
   const selected = useTimeRange();
   const answered = history?.range === (selected ? timeRangeKey(selected) : prefs.range);
   const board = useBoardId();
-  const navigation = axisNavigation(board, selected, prefs);
+  const baseNavigation=axisNavigation(board,selected,prefs),navigation={...baseNavigation,context:JSON.stringify([baseNavigation.context,authority])};
   // On with the next cell, when what the chart points at past its right edge comes due (drawn
   // within it then), or when a forecast is drawn no more.
   const codex = useResetsFor('codex');
@@ -199,10 +199,10 @@ const WindowHistory = memo(function WindowHistory({arrange,kind='weekly'}: {arra
   ), [lines, widget, locale, history, error, authority, board]);
 
   return (
-    <AnalyticsPanel ref={panel} className="history" title={t(kind==='session'?'history.sessionTitle':'history.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
+    <AnalyticsPanel ref={panel} className="history" title={t(kind==='session'?'history.sessionTitle':'history.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry} details={omitted>0?t('history.quotaOverflow',{count:omitted}):null}
       settings={<HistorySettings arrange={arrange} kind={kind} planAvailable={model?.planAvailable ?? false} forecastAvailable={frame.live && (currentHints?.forecast ?? false)}/>}
     >
-      {omitted > 0 && <AnalyticsNote>{t('history.quotaOverflow', {count: omitted})}</AnalyticsNote>}
+
       <Chart
           lines={model?.visible ?? []}
           plans={model?.plans}
@@ -218,7 +218,7 @@ const WindowHistory = memo(function WindowHistory({arrange,kind='weekly'}: {arra
           strip={model?.strip ?? null}
           prepared={prepared.ready && (panning !== null || answered || !!error)}
           modelContext={`${authority}:${history?.board}:${prefs.kind}`}
-          empty={error ? null : !history ? t('history.loading') : t('history.noLines')}
+          empty={error ? null : !history ? null : t('history.noLines')}
           onSelect={setTimeRange}
           plot={plot}
           onBase={onBase}

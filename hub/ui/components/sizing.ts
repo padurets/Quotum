@@ -1,14 +1,10 @@
 import {createContext, useCallback, useContext, useLayoutEffect, useRef, useState, type RefObject} from 'react';
-import {pan} from '../lib/pan';
-import {onTimeRange, timeRange, type TimeRange} from '../lib/timeRange';
-import {onPrefs, prefs} from '../lib/prefs';
 import {useLocale} from '../i18n';
-import {page} from '../lib/board';
 
 /** What a widget needs, in CSS pixels: at least (`min`), and to show all of itself (`natural`). */
 export type Size = {min: number; natural: number};
-/** What a widget tells the board: what it needs, and how tall it shows now (`shown`), under which the board fills its rows. */
-export type Report = Size & {shown: number};
+/** Structural geometry belongs to a layout lifetime; data never creates a new one. */
+export type Report = Size & {shown: number;layout: string};
 
 /**
  * How tall the board makes a widget: whether its owner chose a height (`manual`), and
@@ -52,22 +48,21 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
   const locale = useLocale();
   const [plot, setPlot] = useState<number | undefined>(undefined);
   const base = useRef<number | null>(null);
-  const held = useRef<{legend: HTMLElement; height: string; overflow: string; alignContent: string; keep: boolean; range: TimeRange | null} | null>(null);
-  const legendSize=useRef<{legend:HTMLElement;height:number}|null>(null);
-  const watchLegend=useRef(()=>{});
-  const locked = () => !!pan.active() || pan.shifting() || !!panel.current?.querySelector('.chart > svg.is-panning');
+  const shell=useRef<{layout:string;chrome:number}|null>(null);
   const measure = useRef(() => {});
   measure.current = () => {
     const root = panel.current;
     const chart = root?.querySelector<HTMLElement>(':scope > .chart');
-    if (!sizing || !root || !chart || locked() || held.current) return;
+    if (!sizing || !root || !chart) return;
     const own = chart.querySelector(':scope > svg') ? base.current : parseFloat(getComputedStyle(chart).minHeight) || 0;
     if (own === null) return;
     const shown = root.getBoundingClientRect().height - fillOf(root);
     // What is not the plot does not depend on how tall the plot is: the head, totals and legend wrap only with the width.
-    const chrome = shown - chart.getBoundingClientRect().height;
+    const layout=JSON.stringify([root.clientWidth,locale,own]);
+    if(shell.current?.layout!==layout)shell.current={layout,chrome:shown-chart.getBoundingClientRect().height};
+    const chrome=shell.current.chrome;
     const min = pixels(chrome + own);
-    sizing.report({min, natural: min, shown: pixels(shown)});
+    sizing.report({min, natural: min, shown: pixels(shown),layout});
     const next = sizing.manual ? pixels(Math.max(own, sizing.allocated - chrome)) : undefined;
     setPlot(was => (same(was, next) ? was : next));
   };
@@ -75,70 +70,12 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
   // size. Reading its rect after every such render forces their layout during input.
   // Allocation changes are measured here; content changes arrive before paint through
   // the observer below, and a new plot base is measured by onBase.
-  useLayoutEffect(() => measure.current(), [sizing?.manual, sizing?.allocated, sizing?.width]);
+  useLayoutEffect(() => measure.current(), [sizing?.manual, sizing?.allocated, sizing?.width, locale]);
   useLayoutEffect(() => {
-    let alive = true;
-    const restore = () => {
-      const saved = held.current;
-      if (!saved) return;
-      Object.assign(saved.legend.style, {height: saved.height, overflow: saved.overflow, alignContent: saved.alignContent});
-      held.current = null;
-    };
-    const changed = () => {
-      watchLegend.current();
-      if (locked()) {
-        const legend = panel.current?.querySelector<HTMLElement>(':scope > .legend');
-        if (held.current || !legend) return;
-        const height = legendSize.current?.legend===legend?legendSize.current.height:legend.getBoundingClientRect().height;
-        held.current = {legend, height: legend.style.height, overflow: legend.style.overflow, alignContent: legend.style.alignContent, keep: false, range: timeRange()};
-        Object.assign(legend.style, {height: `${height}px`, overflow: 'auto', alignContent: 'flex-start'});
-      } else if (held.current && !held.current.keep) {
-        // Finish renders its fold before this check. Its class change releases the
-        // legend only after the animation. A changed pan keeps its viewport for
-        // the resulting range too; fewer entries must not enlarge the plot.
-        const saved = held.current;
-        queueMicrotask(() => {if (alive && held.current === saved && !locked() && !saved.keep) {restore(); measure.current();}});
-      }
-    };
-    const unsubscribe = pan.onPhase(changed);
-    const stopped = pan.onStop(stop => {
-      if (stop.changed && held.current) {held.current.keep = true; held.current.range = stop.range;}
-    });
-    const navigated = onTimeRange(() => {
-      const saved = held.current, range = timeRange();
-      if (saved && !(range === saved.range || range && saved.range && range.from === saved.range.from && range.to === saved.range.to)) {restore(); measure.current();}
-    });
-    let context = prefs();
-    const preferences = onPrefs(() => {
-      const next = prefs();
-      if (next.range !== context.range || next.activityBy !== context.activityBy) {restore(); measure.current();}
-      context = next;
-    });
-    const board = page.listen(event => {
-      if (event.type === 'board-open' || event.type === 'board-close') {restore(); measure.current();}
-    });
-    const observer = new MutationObserver(changed);
-    if (panel.current) observer.observe(panel.current, {subtree: true, childList: true, attributes: true, attributeFilter: ['class']});
-    changed();
-    return () => {alive = false; unsubscribe(); stopped(); navigated(); preferences(); board(); observer.disconnect(); restore();};
-  }, [panel, sizing?.manual, sizing?.allocated, sizing?.width, locale]);
-  useLayoutEffect(() => {
-    let legend:HTMLElement|null=null;
-    const observer = new ResizeObserver(entries => {
-      for(const entry of entries)if(entry.target===legend&&!locked()&&!held.current)legendSize.current={legend:legend!,height:entry.borderBoxSize?.[0]?.blockSize??entry.contentRect.height};
-      measure.current();
-    });
-    const follow=()=>{
-      const next=panel.current?.querySelector<HTMLElement>(':scope > .legend')??null;
-      if(next===legend)return;
-      if(legend)observer.unobserve(legend);
-      legend=next;legendSize.current=null;
-      if(legend)observer.observe(legend);
-    };
-    watchLegend.current=follow;follow();
-    if (panel.current) observer.observe(panel.current);
-    return () => {watchLegend.current=()=>{};observer.disconnect();legendSize.current=null;};
-  }, [panel]);
+    const observer=new ResizeObserver(()=>measure.current());
+    if(panel.current)observer.observe(panel.current);
+    return()=>observer.disconnect();
+  },[panel,locale]);
   const report = sizing?.report;
   useLayoutEffect(() => () => report?.(null), [report]);
   const onBase = useCallback((height: number) => {

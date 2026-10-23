@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {frameOf, periodLabel, periodOf, PERIODS, step} from '../lib/periods';
+import {frameOf, niceTicks, periodLabel, periodOf, PERIODS, step} from '../lib/periods';
 import {heardHub, hubNow} from '../lib/clock';
 import {setLocale} from '../i18n';
 
@@ -85,4 +85,21 @@ test('the page reckons the hub’s clock from the last answer, ahead or behind i
   heardHub(now + 3 * minute, now);
   assert.equal(hubNow(now), now + 3 * minute);
   heardHub(now, now);
+});
+
+test('time labels bound a borrowed long strip by the visible period without trimming ordinary native inventory',()=>{
+  const viewport={from:Date.UTC(2026,9,23,2,17,18),to:Date.UTC(2026,9,23,3,17,18)};
+  for(const count of [4,7])for(const length of [6*day,60*day]){
+    const inventory={from:viewport.to-length,to:viewport.to+length/2};
+    const value=niceTicks(inventory.from,inventory.to,count,viewport);
+    assert.ok(value.ticks.length<=3*count+1,'offscreen labels stay bounded independently of the old period');
+    assert.ok(value.ticks.every(at=>at>=viewport.from-hour&&at<=viewport.to+hour));
+    assert.deepEqual(value.ticks.filter(at=>at>=viewport.from&&at<=viewport.to),niceTicks(viewport.from,viewport.to,count).ticks,'the visible labels keep their normal density');
+  }
+  for(const length of [day,3*day,30*day])for(const count of [4,7]){
+    const shown={from:now-length,to:now},inventory={from:shown.from-length/2-hour,to:shown.to+length/2+hour};
+    assert.deepEqual(niceTicks(inventory.from,inventory.to,count,shown),niceTicks(inventory.from,inventory.to,count*(inventory.to-inventory.from)/length),'the ordinary two-period strip keeps its complete native inventory');
+  }
+  const elsewhere=niceTicks(viewport.from-60*day,viewport.from-30*day,4,viewport);
+  assert.deepEqual(elsewhere.ticks.filter(at=>at>=viewport.from&&at<=viewport.to),niceTicks(viewport.from,viewport.to,4).ticks,'an unread viewport still has its own time labels');
 });

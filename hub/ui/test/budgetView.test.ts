@@ -22,6 +22,7 @@ import {defaultCurrencyContext} from '../../server/domain/currency';
 import {Store} from '../../server/store/store';
 import * as statusMarks from '../components/StatusMark';
 import * as currencySettings from '../lib/currencySettings';
+import * as focusReturn from '../components/focusReturn';
 
 Object.assign(globalThis,{React});
 
@@ -51,6 +52,7 @@ const fixture={exports:{} as {MoneyCard:(props:{source:Card;board:string;compact
   if(name==='../lib/moneyKeys')return {useShownKeys:(source:Card)=>({keys:source.keys??[],meters:source.meters??[],error:null})};
   if(name==='./Popover')return {Popover:({trigger,triggerClass,label}:{trigger:ReactNode;triggerClass?:string;label:string})=>createElement('button',{'aria-expanded':false,className:triggerClass,'aria-label':label},trigger)};
   if(name==='./StatusMark')return statusMarks;
+  if(name==='./focusReturn')return focusReturn;
   if(name==='./Kit')return {ErrorLine:()=>null};
   if(name==='../lib/board')return {useCurrencyContext:()=>shownCurrency};
   if(name==='../lib/clock')return {useClock:()=>1};

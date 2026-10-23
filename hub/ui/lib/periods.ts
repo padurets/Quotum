@@ -1,5 +1,5 @@
 import {t} from '../i18n';
-import {clock, day, stamp} from './format';
+import {clock, day, shortDay, stamp} from './format';
 import type {Horizon} from './prefs';
 import {timeRangeKey, type TimeRange} from './timeRange';
 
@@ -67,8 +67,16 @@ export function measuredTo(frame: Frame, history: {range: string; to: number} | 
   return answered ? Math.max(frame.to, selected ? Math.min(answered.to, selected.to) : answered.to) : frame.to;
 }
 
-/** The times along a chart's axis from `from` to `to`, about `count` of them on round local times, and whether they fall on days. */
-export function niceTicks(from: number, to: number, count: number) {
+/** Round local times, about `count` across the visible viewport, or the supplied range. */
+export function niceTicks(from: number, to: number, count: number, viewport?: {from:number;to:number}) {
+  if(viewport){
+    const visible=Math.max(60_000,viewport.to-viewport.from);
+    // A borrowed strip can span a much longer previous period. Keep native pan
+    // room without shaping thousands of offscreen labels at the new density.
+    from=Math.min(viewport.from,Math.max(from,viewport.from-visible));
+    to=Math.max(viewport.to,Math.min(to,viewport.to+visible));
+    count*=(to-from)/visible;
+  }
   const span = to - from;
   const steps = [5, 10, 15, 30, 60, 120, 180, 360, 720, 1440, 2880, 10080].map(minutes => minutes * 60_000);
   const step = steps.find(candidate => span / candidate <= count) ?? steps.at(-1)!;
@@ -79,6 +87,17 @@ export function niceTicks(from: number, to: number, count: number) {
 }
 
 const sameDay = (a: number, b: number) => new Date(a).toDateString() === new Date(b).toDateString();
+
+/** Keep the first represented day and later local day boundaries readable at subdaily density. */
+export function timeTickWords(ticks: readonly number[], daily: boolean, presentation: {from:number;to:number}) {
+  let represented = false;
+  return ticks.map((at, index) => {
+    const inside = at >= presentation.from && at <= presentation.to;
+    const date = daily || index === 0 || !sameDay(ticks[index - 1], at) || inside && !represented;
+    if (inside) represented = true;
+    return date ? shortDay(at) : clock(at);
+  });
+}
 
 /**
  * A cell's times under its day. Cells are laid on UTC, so one may cross midnight here, and

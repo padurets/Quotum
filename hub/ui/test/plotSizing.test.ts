@@ -50,98 +50,75 @@ function fixture() {
     paint: () => frames.splice(0).forEach(run => run()), flush: () => microtasks.splice(0).forEach(run => run()), flushOne: () => microtasks.shift()?.(), cleanup: () => cleanups.reverse().forEach(run => run())};
 }
 
-test('a painted legend holds its observed height through a gesture without reading layout', () => {
-  const f = fixture(); f.resize(130.5); const reports = f.reports.length;
+test('the structural legend shell keeps plot allocation through a gesture without reading layout', () => {
+  const f = fixture(); f.resize(130.5); const reports = f.reports.length, geometry = f.reports.at(-1);
   const token = f.start();
-  assert.equal(f.reads, 0, 'starting a gesture must not flush a legend after the plot styles change');
-  assert.equal(f.legend.style.height, '130.5px');
+  assert.equal(f.reads, 0, 'starting a gesture never measures legend content');
+  assert.equal(f.legend.style.height, '', 'data cannot own the structural legend height');
   f.resize(60); f.mutate();
-  assert.equal(f.legend.style.height, '130.5px', 'changed entries cannot resize the held viewport');
-  assert.equal(f.reports.length, reports, 'held input cannot change plot allocation');
+  assert.equal(f.reports.length, reports, 'changed entries cannot reallocate the plot');
   f.pan.move(token, -12); f.paint(); f.fold(true); f.pan.finish(token); f.flush(); f.fold(false); f.flush();
-  assert.equal(f.legend.style.height, '130.5px', 'a changed range retains the legend viewport after completion');
-  assert.equal(f.reads, 0); f.cleanup();
+  assert.deepEqual(f.reports.at(-1), geometry, 'the selected range keeps the same plot allocation');
+  assert.equal(f.reports.length, reports); assert.equal(f.reads, 0); f.cleanup();
   assert.equal(f.legend.style.height, ''); assert.equal(f.legend.style.overflow, ''); assert.equal(f.legend.style.alignContent, '');
   assert.ok(f.observers.every(observer => observer.targets.size === 0));
 });
 
-test('Shift uses the latest observed legend size and cancellation restores its styles', () => {
-  const f = fixture(); f.resize(130.5); f.resize(171.25);
+test('Shift and cancellation preserve the structural shell without content measurements', () => {
+  const f = fixture(); f.resize(130.5); f.resize(171.25); const before=f.reports.length,geometry=f.reports.at(-1);
   f.pan.setShift(true);
-  assert.equal(f.legend.style.height, '171.25px'); assert.equal(f.reads, 0);
-  f.pan.setShift(false); f.flush();
-  assert.equal(f.legend.style.height, '');
-  f.resize(99.5); const token = f.start(); f.pan.cancel(token); f.flush();
   assert.equal(f.legend.style.height, ''); assert.equal(f.reads, 0);
-  f.cleanup(); f.start(); assert.equal(f.legend.style.height, '', 'the unmounted hook no longer holds a legend');
+  f.pan.setShift(false); f.flush();
+  f.resize(99.5); const token = f.start(); f.pan.cancel(token); f.flush();
+  assert.deepEqual(f.reports.at(-1),geometry);assert.equal(f.reports.length,before);assert.equal(f.reads,0);
+  f.cleanup(); f.start(); assert.equal(f.legend.style.height, '', 'the unmounted hook cannot change a later legend');
 });
 
-test('a replacement legend receives its own size and an unseen one uses actual geometry', () => {
-  const f = fixture(); f.resize(130.5); const old = f.legend;
+test('a replacement legend inherits the CSS shell without a synchronous content read', () => {
+  const f=fixture();f.resize(130.5);const old=f.legend,before=f.reports.length,geometry=f.reports.at(-1);
   f.replace(70.25);
-  assert.ok(f.observers.every(observer => !observer.targets.has(old)));
-  const token = f.start();
-  assert.equal(f.legend.style.height, '70.25px', 'the old element cannot supply a replacement size');
-  assert.equal(f.reads, 1, 'input before the first resize delivery still gets correct geometry');
-  f.pan.cancel(token); f.flush(); f.resize(70.25); f.start();
-  assert.equal(f.reads, 1, 'the observed replacement no longer needs a synchronous read');
-  f.cleanup();
+  assert.ok(f.observers.every(observer=>!observer.targets.has(old)));
+  const token=f.start();f.pan.cancel(token);f.flush();f.resize(70.25);f.start();
+  assert.equal(f.legend.style.height,'');assert.equal(f.reads,0);
+  assert.equal(f.reports.length,before);assert.deepEqual(f.reports.at(-1),geometry);f.cleanup();
 });
 
-test('observed zero and the content-box fallback retain their measured sizes', () => {
-  for (const height of [0, 44.5]) {
-    const f = fixture(); f.resize(height, false); f.start();
-    assert.equal(f.legend.style.height, `${height}px`); assert.equal(f.reads, 0); f.cleanup();
+test('zero and partial legend observations cannot replace useful widget geometry', () => {
+  for(const height of [0,44.5]){
+    const f=fixture(),before=f.reports.length,geometry=f.reports.at(-1);f.resize(height,false);f.start();
+    assert.equal(f.legend.style.height,'');assert.equal(f.reads,0);
+    assert.equal(f.reports.length,before);assert.deepEqual(f.reports.at(-1),geometry);f.cleanup();
   }
 });
 
-test('repeated completion deliveries restore and measure a held legend once', () => {
-  const f = fixture(); f.resize(130.5);
-  const before = f.reports.length, geometry = f.reports.at(-1);
-  const token = f.start();
-  f.pan.cancel(token); f.mutate();
-  assert.equal(f.reports.length, before, 'completion waits for the queued release');
-  f.flush();
-  assert.equal(f.legend.style.height, '');
-  assert.equal(f.reports.length - before, 1, 'two completion callbacks must not repeat synchronous layout measurement');
-  assert.deepEqual(f.reports.at(-1), geometry, 'restoration preserves plot allocation');
-  f.cleanup();
+test('repeated completion deliveries never remeasure a structural legend shell', () => {
+  const f=fixture();f.resize(130.5);const before=f.reports.length,geometry=f.reports.at(-1);
+  const token=f.start();f.pan.cancel(token);f.mutate();f.flush();
+  assert.equal(f.reports.length,before,'completion carries no widget-sizing work');
+  assert.deepEqual(f.reports.at(-1),geometry);assert.equal(f.reads,0);f.cleanup();
 });
 
-test('a queued completion cannot release a legend held by a new gesture', () => {
-  const f = fixture(); f.resize(130.5);
-  const first = f.start(); f.pan.cancel(first);
-  const second = f.start(), before = f.reports.length;
-  f.flush();
-  assert.equal(f.legend.style.height, '130.5px');
-  assert.equal(f.reports.length, before);
-  f.pan.cancel(second); f.flush();
-  assert.equal(f.legend.style.height, '');
-  assert.equal(f.reports.length - before, 1);
-  f.cleanup();
+test('a completion cannot reallocate a shell used by a newer gesture', () => {
+  const f=fixture();f.resize(130.5);const first=f.start();f.pan.cancel(first);
+  const second=f.start(),before=f.reports.length,geometry=f.reports.at(-1);f.flush();
+  assert.equal(f.legend.style.height,'');assert.equal(f.reports.length,before);
+  f.pan.cancel(second);f.flush();
+  assert.equal(f.reports.length,before);assert.deepEqual(f.reports.at(-1),geometry);f.cleanup();
 });
 
-test('a completion queued before unmount performs no later measurement', () => {
-  const f = fixture(); f.resize(130.5);
-  const token = f.start(); f.pan.cancel(token); f.mutate();
-  f.cleanup(); const before = f.reports.length;
-  f.flush();
-  assert.equal(f.reports.length, before);
-  assert.equal(f.legend.style.height, '');
+test('a completion before unmount performs no later measurement', () => {
+  const f=fixture();f.resize(130.5);const token=f.start();f.pan.cancel(token);f.mutate();
+  f.cleanup();const before=f.reports.length;f.flush();
+  assert.equal(f.reports.length,before);assert.equal(f.legend.style.height,'');assert.equal(f.reads,0);
 });
 
-test('a stale completion cannot restore a later gesture after navigation', () => {
-  const f = fixture(); f.resize(130.5);
-  const first = f.start(); f.pan.cancel(first);
-  f.select({from: 90 * 3_600_000, to: 91 * 3_600_000});
-  assert.equal(f.legend.style.height, '', 'navigation restores the first held viewport');
-  const second = f.start(); f.pan.cancel(second);
-  const before = f.reports.length;
-  f.flushOne();
-  assert.equal(f.legend.style.height, '130.5px', 'the first queued release does not own the second held viewport');
-  assert.equal(f.reports.length, before);
-  f.flush();
-  assert.equal(f.legend.style.height, '');
-  assert.equal(f.reports.length - before, 1);
+test('navigation and later completion preserve the CSS shell and plot allocation', () => {
+  const f=fixture();f.resize(130.5);const first=f.start();f.pan.cancel(first);
+  f.select({from:90*3_600_000,to:91*3_600_000});
+  const second=f.start();f.pan.cancel(second);const before=f.reports.length,geometry=f.reports.at(-1);
+  f.flushOne();f.flush();
+  assert.equal(f.legend.style.height,'');assert.equal(f.reports.length,before);assert.deepEqual(f.reports.at(-1),geometry);
+  const css=readFileSync(new URL('../style.css',import.meta.url),'utf8');
+  assert.match(css,/\.panel > \.legend\s*\{[^}]*height:\s*96px/,'the structural legend shell exists before any gesture');
   f.cleanup();
 });

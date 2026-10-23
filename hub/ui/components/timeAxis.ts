@@ -7,6 +7,7 @@ import {periodOf} from '../lib/periods';
 import {useHistoryBegins} from '../lib/history';
 import {useSizing} from './sizing';
 import {axisNavigation, navigationAt, navigationKey, type AxisNavigation} from '../lib/axisNavigation';
+import {tickKeyframes,tickPresentation,tickVisible} from '../lib/axisTicks';
 
 /** How long a finger rests on a chart before it starts a range. */
 const HOLD_MS = 450;
@@ -16,6 +17,8 @@ const SLIDE_MS = 220;
 
 export type DrawingGeometry = {from: number; to: number; end: number};
 type Pose = {a: number; b: number; offset: number};
+type Motion = {key: string; until: number; fold: boolean; start: Pose; end: Pose; boundary: {start: number; end: number}; options: KeyframeAnimationOptions; started: Animation['startTime']};
+type Tick = {element: SVGTextElement; x: number; length: number};
 
 /**
  * How far a chart's content slides in after it steps through time, in pixels: from
@@ -39,7 +42,7 @@ export function slideOf(before: {from: number; end: number}, after: {from: numbe
  * A precise readout also keeps `hoverAt`, the pointer's time inside that cell.
  * A mouse or a pen drags a range across it at once, as in Grafana; a finger sliding along
  * it reads its cells, and held still for a moment starts a range instead. A swipe sideways
- * on a touchpad, Shift with the wheel, or Shift-drag pans both charts through one shared
+ * on a touchpad, Shift with the wheel, or Shift-drag pans all five charts through one shared
  * transaction. Holding Shift also hides readouts before movement starts. HTML owners
  * move the prepared SVG within stationary clips. After an arrow step
  * they slide in from the side it came from. `end` is where
@@ -80,12 +83,13 @@ export function useTimeAxis({
   const [folding, setFolding] = useState(false);
   const [, present] = useState(0);
   const foldTicket = useRef(0);
-  const animations = useRef(new Map<SVGGElement, Animation>());
+  const animations = useRef(new Map<SVGElement, Animation>());
   const animationPoses = useRef(new WeakMap<Animation, {from: Pose; to: Pose}>());
   // The axis owns these animations; finding them through the DOM flushes styles.
-  const animateSlide = (layer: SVGGElement, frames: Keyframe[], options: KeyframeAnimationOptions, owner: Element = layer) => {
+  const animateSlide = (layer: SVGElement, frames: Keyframe[], options: KeyframeAnimationOptions, owner: Element = layer, started: Animation['startTime'] = null) => {
     animations.current.get(layer)?.cancel();
     const animation = owner.animate(frames, options);
+    if (started !== null) animation.startTime = started;
     animations.current.set(layer, animation);
     const release = () => {if (animations.current.get(layer) === animation) animations.current.delete(layer);};
     animation.finished.then(release, release);
@@ -107,11 +111,24 @@ export function useTimeAxis({
   const finalFrame = useRef<number | null>(null);
   const finishPresentation = useRef<(() => void) | null>(null);
   const requestedNavigation: AxisNavigation = {context: `${navigation.context}:${left}:${right}:${width}:${scale}`, range: navigation.range};
-  const wanted = useRef({navigation: requestedNavigation, projection: {from, to, end}});
-  const motion = useRef<{key: string; until: number; fold: boolean} | null>(null);
+  const wanted = useRef({navigation: requestedNavigation, projection: {from, to, end}, positioned: false});
+  const motion = useRef<Motion | null>(null);
   const finished = useRef<{visual: DrawingGeometry; stop: PanStop; navigation: AxisNavigation} | null>(null);
   const wheelBounds = useRef<DOMRect | null>(null);
   const panLayers = useRef<HTMLElement[]>([]);
+  const paintTicks = useRef(() => {});
+  const animateTicks = useRef<(running: Motion) => Animation[]>(() => []);
+  const paintDrawing = useRef<((stop?: PanStop) => void) | undefined>(undefined);
+  // Strips replace nodes; their shared axis font keeps the same shaped glyphs.
+  const tickWidths=useRef(new Map<string,number>());
+  const tickGlyphs=useRef(new WeakMap<SVGTextElement,{x:number;a:number;b:number;transform:string;motion?:Motion;length?:number}>());
+  const tickElements=useRef<Tick[]>([]);
+  useEffect(()=>{
+    const fonts=document.fonts;
+    const changed=()=>{tickWidths.current.clear();present(value=>value+1);};
+    fonts.addEventListener('loadingdone',changed);
+    return()=>fonts.removeEventListener('loadingdone',changed);
+  },[]);
   /** Where a drag across the chart started and where it is now, in chart pixels. */
   const [drag, setDrag] = useState<{start: number; end: number} | null>(null);
   /** A finger held on the chart, before it starts a range. */
@@ -131,7 +148,7 @@ export function useTimeAxis({
     const now = Math.max(hubNow(), end);
     const visual = visualGeometry();
     const length = selected ? selected.to - selected.from : periodOf(prefs().range).ms;
-    return {source: source.current, input, selected, length, semanticEnd: Math.min(now, visual.from + length), now, historyStart, span: visual.to - visual.from, width: (width - left - right) * scale};
+    return {source: source.current, input, selected, length, semanticEnd: Math.min(now, visual.end), now, historyStart, span: visual.to - visual.from, width: (width - left - right) * scale};
   };
   const wheelPan = useRef<(event: WheelEvent) => boolean>(() => false);
   const wheelInput = (event: WheelEvent) => {
@@ -179,17 +196,29 @@ export function useTimeAxis({
     const span = Math.max(60_000, base.to - base.from);
     const inverse = (px: number) => base.from + (((px - offset) / scale - b) / a - left) / (width - left - right) * span;
     const start = inverse(left * scale), finish = inverse((width - right) * scale);
-    return {from: start, to: finish, end: Math.min(base.end, finish)};
+    const owner = captured.current?.visual ?? finished.current?.visual ?? wanted.current.projection;
+    let boundary = finish - Math.max(0, owner.to - owner.end);
+    const running = motion.current;
+    if (running) {
+      // The measurement boundary moves in the same affine plane as the artwork.
+      // Fractions avoid interpolating large epoch timestamps or reading a timer.
+      const da = running.end.a - running.start.a, db = running.end.b - running.start.b;
+      const progress = Math.max(0, Math.min(1, Math.abs(da) > 1e-9 ? (a - running.start.a) / da : Math.abs(db) > 1e-9 ? (b - running.start.b) / db : 1));
+      const at = running.boundary.start + (running.boundary.end - running.boundary.start) * progress;
+      boundary = start + at * (finish - start);
+    }
+    return {from: start, to: finish, end: Math.min(boundary, finish)};
   };
   const freezeSlides = () => {
     const layer = box.current?.querySelector<SVGGElement>('[data-plot-main] .slides');
     if (layer) pose.current = readPose(layer);
     cancelSlides();
     for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) layer.style.transform = `translateX(${pose.current.b}px) scaleX(${pose.current.a})`;
+    paintTicks.current();
   };
   useLayoutEffect(() => pan.register(source.current, () => {
     const visual = visualGeometry();
-    return {end: wanted.current.projection.end, future: Math.max(0, visual.to - visual.from - (timeRange() ? timeRange()!.to - timeRange()!.from : periodOf(prefs().range).ms))};
+    return {end: wanted.current.projection.end, future: Math.max(0, visual.to - visual.end)};
   }), []);
   const paint = () => {
     const element = svg.current;
@@ -197,16 +226,14 @@ export function useTimeAxis({
     const frame = pan.get();
     if (frame && captured.current?.token !== frame.token) {
       if (!finished.current?.stop.canceled) finishPresentation.current?.();
+      const visual = visualGeometry();
       finishPresentation.current = null;
       if (finalFrame.current !== null) {cancelAnimationFrame(finalFrame.current); finalFrame.current = null;}
       finished.current = null;
       foldTicket.current++;
       motion.current = null;
-      const visual = visualGeometry();
       freezeSlides();
-      // A wheel can restart before React publishes the preceding selection.
-      // Its origin already carries that range; the committed callback may not.
-      captured.current = {token: frame.token, ...drawing.current, visual, pose: {...pose.current}, pixelsPerMs: (width - left - right) * scale / (visual.to - visual.from), navigation: navigationAt(wanted.current.navigation, frame.origin), innerWidth: width - left - right, cssScale: scale, left};
+      captured.current = {token: frame.token, ...drawing.current, visual, pose: {...pose.current}, pixelsPerMs: (width - left - right) * scale / (visual.to - visual.from), navigation: navigationAt(wanted.current.navigation,frame.origin), innerWidth: width - left - right, cssScale: scale, left};
       element.dataset.panToken = String(frame.token);
       element.dataset.panOrigin = String(frame.originEnd);
       element.dataset.panScale = String((visual.to - visual.from) / ((width - left - right) * scale));
@@ -218,7 +245,9 @@ export function useTimeAxis({
     const origin = captured.current;
     if (frame && origin) pose.current.offset = origin.pose.offset - (frame.to - frame.originEnd) * origin.pixelsPerMs;
     for (const layer of panLayers.current) layer.style.transform = pose.current.offset ? `translateX(${pose.current.offset}px)` : '';
+    paintTicks.current();
     if (frame) {
+      paintDrawing.current?.();
       element.dataset.panEnd = String(frame.to);
       if (!element.classList.contains('is-panning')) element.classList.add('is-panning');
       element.classList.toggle('is-grabbing', frame.source === source.current && frame.input === 'pointer');
@@ -253,8 +282,8 @@ export function useTimeAxis({
   useLayoutEffect(() => pan.onStop(stop => {
     const origin = captured.current;
     if (!origin || origin.token !== stop.draft.token) return;
-    const delta = stop.draft.to - stop.draft.originEnd;
-    finished.current = {visual: {...origin.visual, from: origin.visual.from + delta, to: origin.visual.to + delta}, stop, navigation: navigationAt(origin.navigation, stop.range)};
+    const delta = stop.canceled ? 0 : stop.draft.to - stop.draft.originEnd;
+    finished.current = {visual: {from: origin.visual.from + delta, to: origin.visual.to + delta, end: origin.visual.end + delta}, stop, navigation: navigationAt(origin.navigation, stop.range)};
     setFolding(true);
     // A new gesture can consume this final pose before its scheduled RAF.
     const finish = () => {
@@ -272,6 +301,8 @@ export function useTimeAxis({
       }
       for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) layer.style.transform = `translateX(${pose.current.b}px) scaleX(${pose.current.a})`;
       for (const layer of panLayers.current) layer.style.transform = pose.current.offset ? `translateX(${pose.current.offset}px)` : '';
+      paintTicks.current();
+      paintDrawing.current?.(stop);
       present(value => value + 1);
     };
     finishPresentation.current = finish;
@@ -423,6 +454,7 @@ export function useTimeAxis({
     pose.current = projectionOf(drawing.current, target);
     for (const layer of panLayers.current) layer.style.transform = '';
     for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) layer.style.transform = `translateX(${pose.current.b}px) scaleX(${pose.current.a})`;
+    paintTicks.current();
   };
   const retirePresentation = () => {
     foldTicket.current++;
@@ -443,34 +475,74 @@ export function useTimeAxis({
     const moving: Animation[] = [];
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (!reduced && duration > 0 && (Math.abs(start.a - end.a) > 1e-9 || Math.abs(start.b - end.b) > 1e-9)) {
+      const options = {duration, easing: fold ? 'ease-out' : 'cubic-bezier(.2, .7, .3, 1)'};
+      const boundary = {start: (visual.end - visual.from) / Math.max(60_000, visual.to - visual.from), end: (target.end - target.from) / Math.max(60_000, target.to - target.from)};
+      const running: Motion = {key, until: performance.now() + duration, fold, start, end, boundary, options, started: document.timeline.currentTime};
       for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) {
-        const owner = fold ? layer.closest<HTMLElement>('.plot-move') : null;
+        // Dates animate independently of the drawing so their glyphs never scale.
+        const owner = fold && !layer.parentElement?.querySelector('.time-ticks') ? layer.closest<HTMLElement>('.plot-move') : null;
         const a = start.a / end.a, b = (start.b - a * end.b) * scale;
         const frames = owner ? [{transform: `translateX(${b}px) scaleX(${a})`}, {transform: 'none'}]
           : [{transform: `translateX(${start.b}px) scaleX(${start.a})`}, {transform: `translateX(${end.b}px) scaleX(${end.a})`}];
-        const animation = animateSlide(layer, frames, {duration, easing: fold ? 'ease-out' : 'cubic-bezier(.2, .7, .3, 1)'}, owner ?? layer);
+        const animation = animateSlide(layer, frames, options, owner ?? layer, running.started);
         animationPoses.current.set(animation, {from: start, to: end});
         moving.push(animation);
       }
+      if (moving.length) {
+        motion.current = running;
+        moving.push(...animateTicks.current(running));
+        // An inactive document starts all effects when its timeline becomes
+        // available. Replacement labels inherit that same original start.
+        if (running.started === null) moving[0].ready.then(() => {
+          if (motion.current !== running) return;
+          running.started = moving[0].startTime;
+          if (running.started !== null) for (const animation of animations.current.values()) animation.startTime = running.started;
+        }, () => {});
+      }
     }
     if (!moving.length) {motion.current = null; setFolding(false); return;}
-    motion.current = {key, until: performance.now() + duration, fold};
     setFolding(fold);
     Promise.allSettled(moving.map(animation => animation.finished)).then(() => {
       if (foldTicket.current === ticket && !pan.active() && navigationKey(wanted.current.navigation) === key) {motion.current = null; setFolding(false);}
     });
   };
+  const wantedProjection = () => {
+    const key = navigationKey(requestedNavigation);
+    const previous = wanted.current;
+    const changed = navigationKey(previous.navigation) !== key;
+    const held = finished.current && navigationKey(finished.current.navigation) === key ? finished.current : null;
+    // History arriving after a gesture may have a different numeric extent. The
+    // reader's final time-to-pixel mapping outlives that replacement.
+    const range = held?.stop.range;
+    const positioned = held ? !!range && Math.abs(held.visual.from - range.from) <= 1 && Math.abs(held.visual.end - range.to) <= 1 : !changed && previous.positioned;
+    const projection = positioned ? held?.visual ?? previous.projection : {from, to, end};
+    return {navigation: requestedNavigation, projection, positioned};
+  };
+  /** The viewport this commit presents, independently of its paths' numeric basis. */
+  const presentation = (ready: boolean): {from: number; to: number} => {
+    const key = navigationKey(requestedNavigation), frame = pan.get();
+    const origin = captured.current, held = finished.current;
+    if (frame && origin?.token === frame.token && navigationKey(origin.navigation) === key ||
+      held && navigationKey(held.navigation) === key && (!ready || finalFrame.current !== null)) {
+      // These held/native poses have no animation. Cancellation's restored pose
+      // becomes visible only on its final RAF, even when data is already ready.
+      const {from, to} = visualGeometry();
+      return {from, to};
+    }
+    const {from, to} = wantedProjection().projection;
+    return {from, to};
+  };
   const publishWanted = () => {
     const key = navigationKey(requestedNavigation);
     const previous = wanted.current;
     const changed = navigationKey(previous.navigation) !== key;
-    const projection = {from, to, end};
-    wanted.current = {navigation: requestedNavigation, projection};
     if (pan.active() && captured.current && navigationKey(captured.current.navigation) !== key) pan.cancel();
     const held = finished.current;
+    const next = wantedProjection(), projection = next.projection;
+    wanted.current = next;
     const superseded = !!held && navigationKey(held.navigation) !== key || !!motion.current && motion.current.key !== key;
     if (superseded) retirePresentation();
-    if (!pan.active() && !finished.current && (changed || superseded || previous.projection.from !== from || previous.projection.to !== to)) {
+    if (!pan.active() && !finished.current && (changed || superseded || previous.projection.from !== projection.from || previous.projection.to !== projection.to)) {
       // Navigation places the already drawn data in its new frame immediately.
       // Readiness only swaps data/basis and cannot replay a superseded final pose.
       const running = motion.current;
@@ -480,7 +552,8 @@ export function useTimeAxis({
   };
   useLayoutEffect(publishWanted);
 
-  const commitDrawing = (next: DrawingGeometry, ready: boolean) => {
+  const commitDrawing = (next: DrawingGeometry, ready: boolean, afterPose?: (stop?: PanStop) => void) => {
+    paintDrawing.current = afterPose;
     const before = drawing.current;
     const movedBasis = before.from !== next.from || before.to !== next.to;
     const visual = movedBasis ? visualGeometry() : null;
@@ -499,7 +572,14 @@ export function useTimeAxis({
     const previous = finished.current;
     if (previous) {
       if (!ready || finalFrame.current !== null) {if (visual) projectTo(visual); return;}
+      const positioned = wantedProjection().positioned;
       finished.current = null;
+      if (previous.stop.range && positioned) {
+        wanted.current = {...wanted.current, projection: previous.visual, positioned: true};
+        cancelSlides(); motion.current = null; foldTicket.current++;
+        projectTo(previous.visual); setFolding(false);
+        return;
+      }
       animateProjection(previous.visual, wanted.current.projection, 160, true);
       return;
     }
@@ -515,5 +595,51 @@ export function useTimeAxis({
     animateProjection(visual, wanted.current.projection, SLIDE_MS, false);
   };
 
-  return {box, svg, width, scale, commitDrawing, visualGeometry, screenX: (at: number) => {if (animations.current.size) {const visible = visualGeometry(); return left + (at - visible.from) / (visible.to - visible.from) * (width - left - right);} const base = drawing.current; return pose.current.a * (left + (at - base.from) / Math.max(60_000, base.to - base.from) * (width - left - right)) + pose.current.b + pose.current.offset / scale;}, get held() {return finished.current !== null;}, hover: shifting || panning || folding || finished.current !== null || hover === null ? null : Math.floor(hover / cellMs) * cellMs, hoverAt: hover,rawHover: hover, drag, x, drawX, timeAt, clip, handlers, basis, active: panning !== null, panning: shifting || panning !== null || folding || finished.current !== null};
+  useLayoutEffect(() => {
+    // Measure only after DOM commit. Native input reuses these widths without
+    // reading layout, and hides a whole edge date instead of clipping its digits.
+    const ticks=[...(box.current?.querySelectorAll<SVGTextElement>('.time-ticks text.tick')??[])].map(element=>{
+      const text=element.textContent??'';let length=tickWidths.current.get(text);
+      if(length===undefined){
+        length=element.getComputedTextLength();
+        if(tickWidths.current.size>=128)tickWidths.current.delete(tickWidths.current.keys().next().value!);
+        tickWidths.current.set(text,length);
+      }
+      return {element,x:Number(element.getAttribute('x')),length};
+    });
+    const retained=new Set(ticks.map(tick=>tick.element));
+    for(const {element} of tickElements.current)if(!retained.has(element)){
+      animations.current.get(element)?.cancel();
+      animations.current.delete(element);
+    }
+    tickElements.current=ticks;
+    paintTicks.current=()=>{
+      for(const {element,x,length} of ticks){
+        const visibility=tickVisible(x,length,pose.current,scale,left,width-right)?'':'hidden';
+        if(element.style.visibility!==visibility)element.style.visibility=visibility;
+        // CSS rounds fractional transforms; comparing its serialization would
+        // parse the same glyph transform again on every translated frame.
+        const glyph=tickGlyphs.current.get(element);
+        if(glyph?.a!==pose.current.a||glyph.b!==pose.current.b||glyph.x!==x){
+          const transform=tickPresentation(x,length,pose.current,scale,left,width-right).transform;
+          if(glyph?.transform!==transform)element.style.transform=transform;
+          tickGlyphs.current.set(element,{x,a:pose.current.a,b:pose.current.b,transform});
+        }
+      }
+    };
+    paintTicks.current();
+    animateTicks.current=running=>{
+      const moving:Animation[]=[];
+      for(const {element,x,length} of ticks){
+        const glyph=tickGlyphs.current.get(element)!;
+        if(glyph.motion===running&&glyph.length===length)continue;
+        moving.push(animateSlide(element,tickKeyframes(x,length,running.start,running.end,left,width-right),running.options,element,running.started));
+        tickGlyphs.current.set(element,{...glyph,motion:running,length});
+      }
+      return moving;
+    };
+    if(motion.current)animateTicks.current(motion.current);
+  });
+
+  return {box, svg, width, scale, commitDrawing, visualGeometry, presentation, screenX: (at: number) => {if (animations.current.size) {const visible = visualGeometry(); return left + (at - visible.from) / (visible.to - visible.from) * (width - left - right);} const base = drawing.current; return pose.current.a * (left + (at - base.from) / Math.max(60_000, base.to - base.from) * (width - left - right)) + pose.current.b + pose.current.offset / scale;}, get held() {return finished.current !== null;}, hover: shifting || panning || folding || finished.current !== null || hover === null ? null : Math.floor(hover / cellMs) * cellMs, hoverAt: hover,rawHover: hover, drag, x, drawX, timeAt, clip, handlers, basis, active: panning !== null, panning: shifting || panning !== null || folding || finished.current !== null};
 }
