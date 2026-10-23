@@ -1725,7 +1725,9 @@ const activity: DemoSet = {
   ],
 };
 
+export const MONEY_SELECTION_SCENES=[{id:'capacity',expect:['money.selectionFull']}] as const;
 const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter and DeepSeek wallets, partial readings and private access failures',entries:all.entries.map(entry=>entry.kind==='person'&&entry.id==='ana'?{...entry,look:[...(entry.look??[]),
+  'Expand Resources → OpenRouter keys → Key series. The automatic wallet selection exceeds the shared 32-series bound: available unselected keys explain how to free a choice, while selected balances and caps remain removable. Turn off unused choices until 31 remain, select a new key, and compare the explanation at 32. Check both languages without moving the cards; a missing cap or a refresh never claims a capacity failure.',
   'Select several OpenRouter key allowances, including a key beyond the preview. Move the common historical endpoint before its first observation and between observations: the balance disclosure keeps the selected count, full names and unavailable values beside any known caps. Current amounts never fill an older gap. Check both languages; compact opens the same full detail layout.',
   'Exclude balance and select two allowances. The first in current name order stays primary when its historical cap is missing; another arrived amount never takes its place. Turn balance and all allowances off, then move before the first observation: the existing filter action remains available.',
   'Open a monetary table value with keyboard or touch, in a wide table and narrow list. Its shared disclosure gives the exact amount and currency provenance, including when the rounded number fits without an ellipsis.',

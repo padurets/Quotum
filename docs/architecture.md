@@ -2117,7 +2117,10 @@ has no permanent settings button.
 The common Resources filter selects accounts, key caps and subscription funds
 across cards, charts and tables. An account selects its total balance; a key selects
 its reported remaining cap within the shared 32-meter bound. Balance components
-remain in card details. Board opening defaults are saved separately from each tab's
+remain in card details. When capacity blocks an available key, its expanded list
+explains how to free a choice; selected rows remain removable. Loading, stale rows
+and keys without a reported cap do not receive that explanation.
+Board opening defaults are saved separately from each tab's
 current selection. Existing per-unit data subsets retain their shared-filter semantics;
 old legend hiding and its monetary visibility fallbacks are no longer read.
 

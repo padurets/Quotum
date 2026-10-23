@@ -1159,6 +1159,7 @@ export const en = {
   "money.changed": "The key list changed. Reloaded the first page.",
   "money.select": "Show in analytics",
   "money.limit": "At most 32 series. {count} omitted.",
+  "money.selectionFull": "Select up to {count} money series across all resources in this currency. Turn off unused balances or key limits to select another.",
   "money.removed": 'Unavailable choices: {count}',
   "money.value": "Value",
   "money.topup": "Top-ups",
