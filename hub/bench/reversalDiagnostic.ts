@@ -165,6 +165,7 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
           }
         }
         if (diagnostic||postmortem&&!nativeIntervention) {
+          if(options.renderer&&!options.renderer.valid()){report.nativeBinding=false;return;}
           if(postmortem)report.postmortem=true;
           if (!intervention) await enable(pending);
           await send('Debugger.pause', pending);
