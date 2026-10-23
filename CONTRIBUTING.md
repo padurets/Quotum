@@ -50,6 +50,8 @@ normal warmup, chart-grid alignment and budgets.
 Manual CI without diagnostic inputs runs the same ordinary checks. A diagnostic
 mode still requires an immutable source SHA and the expected compiled-client hash;
 missing identity cannot turn a diagnostic request into a successful ordinary run.
+Chrome readiness has one twenty-second window starting immediately before the launcher
+is spawned, including its work and endpoint validation.
 DevTools commands keep their thirty-second response deadline. An explicit renderer
 crash or target-detach event fails pending commands immediately, even if the socket
 stays open, and retains the original failure before cleanup. It does not retry work.

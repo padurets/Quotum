@@ -158,17 +158,18 @@ export async function launchChrome(file: string, sandbox: boolean, signal?: Abor
   const profile = mkdtempSync(path.join(os.tmpdir(), 'quotum-bench-chrome-'));
   const group = process.platform !== 'win32';
   let child: ChildProcess;
+  const startedAt = performance.now();
   try {
     child = spawn(file, [...FLAGS, ...(sandbox ? [] : ['--no-sandbox']), '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], {
       stdio: ['ignore', 'pipe', 'pipe'], detached: group,
     });
   } catch (error) {rmSync(profile, {recursive: true, force: true}); throw error;}
-  return launchedChrome(child, profile, group, signal, file, progress);
+  return launchedChrome(child, profile, group, signal, file, progress, startedAt);
 }
 
 /** Ownership begins before the first readiness await, including failed spawn and cancellation. */
-export async function launchedChrome(child: ChildProcess, profile: string, group = false, signal?: AbortSignal, executable = 'stand-in', progress?: (report: LaunchReport) => void): Promise<Browser> {
-  const started = performance.now(), processOwner = browserProcess(child, group), spans = new StartupSpans();
+export async function launchedChrome(child: ChildProcess, profile: string, group = false, signal?: AbortSignal, executable = 'stand-in', progress?: (report: LaunchReport) => void, startedAt = performance.now()): Promise<Browser> {
+  const started = startedAt, processOwner = browserProcess(child, group), spans = new StartupSpans();
   const stdout = safeStream(), stderr = safeStream();
   child.stdout?.on('data', stdout.add); child.stderr?.on('data', stderr.add);
   const state: LaunchReport = {executable: path.basename(executable).replace(/[^a-zA-Z0-9._-]/g, '_'), platform: process.platform, pid: child.pid,
@@ -207,7 +208,9 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
   };
   try {
     progress?.(snapshot());
-    const endpoint = await deadline(20_000, async pending => {
+    const remaining = 20_000 - (performance.now() - started);
+    if (!Number.isFinite(remaining) || remaining <= 0 || remaining > 20_000) {startup.abort(new Error('deadline exceeded')); startup.signal.throwIfAborted();}
+    const endpoint = await deadline(remaining, async pending => {
       try {
         // A publication wakes validation; polling still covers missing filesystem events.
         portWatch = watch(profile, {persistent: false}, (_event, file) => {
@@ -258,6 +261,7 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
             const url = new URL(typeof reply.webSocketDebuggerUrl === 'string' ? reply.webSocketDebuggerUrl : '');
             if (url.protocol !== 'ws:' || url.port !== String(published.port) || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
               || url.pathname !== published.browserPath || url.username || url.password || url.search || url.hash) throw new Error('mismatched DevTools endpoint');
+            if (performance.now() - started >= 20_000) startup.abort(new Error('deadline exceeded'));
             pending.throwIfAborted();
             state.version = typeof reply.Browser === 'string' && /^[a-zA-Z][a-zA-Z0-9 -]{0,40}\/[a-zA-Z0-9.-]{1,64}$/.test(reply.Browser) ? reply.Browser : 'unavailable';
             delete probe.reason;

@@ -57,8 +57,8 @@ function fixture(t: TestContext, mode = 'ready', holdPort = false) {
   return {profile, child, publishPort: () => {
     const port = readFileSync(profile+'/started','utf8');
     writeFileSync(profile+'/DevToolsActivePort', port+'\n/devtools/browser/fixture\n');
-  }, launch: async(signal?: AbortSignal, progress?: (report: LaunchReport) => void) => {
-    const browser=await launchedChrome(child, profile, process.platform !== 'win32', signal, 'stand-in', progress);
+  }, launch: async(signal?: AbortSignal, progress?: (report: LaunchReport) => void, startedAt?:number) => {
+    const browser=await launchedChrome(child, profile, process.platform !== 'win32', signal, 'stand-in', progress, startedAt);
     if(existsSync(profile+'/worker'))workers.add(Number(readFileSync(profile+'/worker','utf8')));
     return browser;
   }};
@@ -86,6 +86,32 @@ test('silent real DevTools readiness and idempotent cleanup close the endpoint a
   await browser.close(); await browser.close();
   assert.equal(existsSync(profile), false);
   await assert.rejects(fetch(browser.endpoint + '/json/version'));
+});
+
+test('prior startup work leaves only the remainder of the original twenty seconds',async t=>{
+  const {profile,launch}=fixture(t,'headers-delay');
+  const startedAt=performance.now()-19_500;
+  await assert.rejects(launch(undefined,undefined,startedAt),error=>{
+    assert.ok(error instanceof ChromeLaunchError);assert.equal(error.report.cleanup?.status,'closed');
+    assert.ok(error.report.elapsedMs>=19_900);return true;
+  });
+  assert.equal(existsSync(profile),false);
+});
+
+test('an already expired startup window cannot receive a fresh readiness allowance',async t=>{
+  const {profile,launch}=fixture(t);
+  await assert.rejects(launch(undefined,undefined,performance.now()-20_001),error=>{
+    assert.ok(error instanceof ChromeLaunchError);assert.equal(error.report.cleanup?.status,'closed');return true;
+  });
+  assert.equal(existsSync(profile),false);
+});
+
+test('a future startup timestamp cannot extend the fixed readiness budget',async t=>{
+  const {profile,launch}=fixture(t);
+  await assert.rejects(launch(undefined,undefined,performance.now()+5_000),error=>{
+    assert.ok(error instanceof ChromeLaunchError);assert.equal(error.report.cleanup?.status,'closed');return true;
+  });
+  assert.equal(existsSync(profile),false);
 });
 
 for (const mode of ['headers-delay', 'body-delay']) test(`finite slow ${mode} readiness uses the remaining startup budget`, async t => {
