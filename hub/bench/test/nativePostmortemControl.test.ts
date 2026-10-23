@@ -15,7 +15,7 @@ const declaration=file.statements.find(node=>ts.isFunctionDeclaration(node)&&nod
 const code=ts.transpileModule(declaration.getText(file).replace('import.meta.dirname',"'/fixture/hub/bench'")+'\nglobalThis.run=nativePostmortemControl;',{
   compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022},
 }).outputText;
-type Fault='early rejection'|'changed error'|'wrong saved id'|'native unavailable'|'still traced'|'unreaped'|'open pipes'|'wrong main tid'|'observer close'|'browser close'|'dirty source'|'wrong source'|'wrong client'|'wrong uid'|'missing held request'|'fixture release'|'non-condition main'|'missing native locations'|'wrong location tid'|'short native chain'|'invalid native caller';
+type Fault='early rejection'|'changed error'|'wrong saved id'|'native unavailable'|'still traced'|'unreaped'|'open pipes'|'wrong main tid'|'observer close'|'browser close'|'dirty source'|'wrong source'|'wrong client'|'wrong uid'|'missing held request'|'fixture release'|'non-condition main'|'missing native locations'|'wrong location tid'|'short native chain'|'invalid native caller'|'unknown renderer'|'renderer invalidated'|'wrong renderer pid'|'wrong renderer birth'|'multiple renderer candidates';
 
 /** Leaf IO is synthetic; this tests that qualification refuses false positives and drains its owner. */
 async function run(fault?:Fault){
@@ -24,14 +24,14 @@ async function run(fault?:Fault){
   const failure={id:196,method:'Runtime.evaluate',started,deadline:started+30_000,elapsedMs:fault==='early rejection'?1:30_000,
     reason:fault==='early rejection'?'rejected':undefined};
   const original=new Error('control: Runtime.evaluate: no browser response in 30 s');
-  let browserClosed=0,launched=0,fixtureClosed=false,owner:RunOwner|undefined;
-  const native={status:fault==='native unavailable'?'unavailable':'observed',pid:101,
+  let browserClosed=0,launched=0,fixtureClosed=false,identityDisposed=false,identityChecks=0,owner:RunOwner|undefined,capturedCandidates:unknown;
+  const native={status:fault==='native unavailable'?'unavailable':'observed',pid:fault==='wrong renderer pid'?102:101,birth:fault==='wrong renderer birth'?'201':'200',candidateCount:1,
     released:fault!=='still traced',reaped:fault!=='unreaped',pipesClosed:fault!=='open pipes',
     threads:[{tid:fault==='wrong main tid'?102:101,frames:[{symbol:true,kind:fault==='non-condition main'?'poll':'condition'}]}],
     mainLocations:{status:fault==='missing native locations'?'unavailable':'observed',tid:fault==='wrong location tid'?102:101,
       frames:Array.from({length:fault==='short native chain'?3:4},(_,index)=>({index,status:fault==='invalid native caller'&&index===3?'unknown':'file-location'}))}};
   const browser={owned:true,endpoint:'fixture',close:async()=>{browserClosed++;if(fault==='browser close')throw Error('close failed');},
-    launchReport:()=>({cleanup:{status:'closed',reaped:true,pipesClosed:true}}),nativePostmortem:async()=>native};
+    launchReport:()=>({cleanup:{status:'closed',reaped:true,pipesClosed:true}}),nativePostmortem:async(candidates?:unknown)=>{capturedCandidates=candidates;return native;}};
   const pageEvents=new Map<string,()=>void>();
   const page={at(){},snapshot:()=>({failure}),
     on:(name:string,listener:()=>void)=>pageEvents.set(name,listener),off:(name:string)=>pageEvents.delete(name),
@@ -42,12 +42,16 @@ async function run(fault?:Fault){
     clientIdentity:()=>({status:'available',sha256:fault==='wrong client'?'3'.repeat(64):hash}),safeEvidence,RunOwner:Owner,deadline,
     nativeWaitFixture:async(value:RunOwner)=>{value.resource(async()=>{fixtureClosed=true;});return {url:'http://fixture',
       requests:()=>({received:fault==='missing held request'?0:1,active:fixtureClosed&&fault!=='fixture release'?0:1})};},
+    rendererIdentity:async()=>({pid:101,birth:'200',valid:()=>fault!=='unknown renderer'&&(fault!=='renderer invalidated'||++identityChecks===1),
+      evidence:()=>({status:fault==='unknown renderer'?'unknown':'known',pid:101,birth:'200'}),dispose:async()=>{identityDisposed=true;}}),
     process:{platform:'linux',getuid:()=>fault==='wrong uid'?1001:65534,once:(name:string,callback:()=>void)=>listeners.set(name,callback),removeListener:(name:string)=>listeners.delete(name)},
     performance:{now:()=>30_000},console:{log:(line:string)=>logs.push(line)},
     launchChrome:async()=>{launched++;return browser;},openTab:async()=>({cdp:page,close:async()=>{}}),
     observeReversal:async()=>({watch:async(_label:string,work:()=>Promise<unknown>)=>{
       try{await work();}catch(error){
-        await browser.nativePostmortem();
+        const candidates=[{pid:101,cpuTime:1},{pid:102,cpuTime:100}];
+        if(fault==='multiple renderer candidates')candidates.push({pid:101,cpuTime:2});
+        try{await browser.nativePostmortem(candidates);}catch{/* Diagnostic failure retains the original rejection. */}
         owner!.evidence!.save('cdp-1',{command:{failure:{...failure,id:fault==='wrong saved id'?197:failure.id}}});
         throw fault==='changed error'?new Error('replacement error'):error;
       }
@@ -56,7 +60,7 @@ async function run(fault?:Fault){
   runInNewContext(code,context);
   let result:boolean|undefined,error:unknown;
   try{result=await (context as unknown as {run:(s:string,h:string,c:string)=>Promise<boolean>}).run(source,hash,'fixture');}catch(value){error=value;}
-  return {result,error,launched,browserClosed,listeners,report:logs.length?JSON.parse(logs.at(-1)!):undefined};
+  return {result,error,launched,browserClosed,identityDisposed,capturedCandidates,listeners,report:logs.length?JSON.parse(logs.at(-1)!):undefined};
 }
 
 test('native qualification accepts preserved timeout evidence and closes its owned browser',async()=>{
@@ -64,11 +68,13 @@ test('native qualification accepts preserved timeout evidence and closes its own
   assert.equal(r.report.status,'qualified');assert.equal(r.report.originalErrorPreserved,true);
   assert.equal(r.report.client.clientHash,'2'.repeat(64));
   assert.equal(r.browserClosed,1);assert.equal(r.listeners.size,0);
+  assert.equal(r.identityDisposed,true);
+  assert.deepEqual(JSON.parse(JSON.stringify(r.capturedCandidates)),[{pid:101,cpuTime:1,birth:'200'}]);
 });
-for(const fault of ['early rejection','changed error','wrong saved id','native unavailable','still traced','unreaped','open pipes','wrong main tid','observer close','browser close','missing held request','fixture release','non-condition main','missing native locations','wrong location tid','short native chain','invalid native caller'] as const)test('native qualification refuses '+fault+' and drains the browser',async()=>{
+for(const fault of ['early rejection','changed error','wrong saved id','native unavailable','still traced','unreaped','open pipes','wrong main tid','observer close','browser close','missing held request','fixture release','non-condition main','missing native locations','wrong location tid','short native chain','invalid native caller','unknown renderer','renderer invalidated','wrong renderer pid','wrong renderer birth','multiple renderer candidates'] as const)test('native qualification refuses '+fault+' and drains the browser',async()=>{
   const r=await run(fault);assert.equal(r.error,undefined);assert.equal(r.result,false);
   assert.equal(r.report.status,'failed');assert.equal(r.browserClosed,1);assert.equal(r.listeners.size,0);
-  const phase=['early rejection','changed error','wrong saved id','missing held request'].includes(fault)?'command':['observer close','browser close','fixture release'].includes(fault)?'cleanup':'native-capture';
+  const phase=fault==='unknown renderer'?'renderer-identity':['early rejection','changed error','wrong saved id','missing held request'].includes(fault)?'command':['observer close','browser close','fixture release'].includes(fault)?'cleanup':'native-capture';
   assert.equal(r.report.phase,phase);
 });
 for(const fault of ['dirty source','wrong source','wrong client','wrong uid'] as const)test('native qualification refuses '+fault+' before launch',async()=>{

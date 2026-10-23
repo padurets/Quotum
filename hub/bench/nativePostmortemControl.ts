@@ -10,6 +10,7 @@ import {clientIdentity,safeEvidence} from './evidence.js';
 import {observeReversal} from './reversalDiagnostic.js';
 import {RunOwner} from './runOwner.js';
 import {deadline} from './deadline.js';
+import {rendererIdentity,type RendererIdentity} from './rendererIdentity.js';
 
 /** An unanswered own HTTP request keeps sync XHR in a native condition wait. */
 export async function nativeWaitFixture(owner:RunOwner){
@@ -62,6 +63,7 @@ export async function nativePostmortemControl(source:string,expectedClient:strin
   let browser:Browser|undefined,observer:Awaited<ReturnType<typeof observeReversal>>|undefined;
   let native:Awaited<ReturnType<NonNullable<Browser['nativePostmortem']>>>|undefined;
   let fixture:Awaited<ReturnType<typeof nativeWaitFixture>>|undefined;
+  let identity:RendererIdentity|undefined;
   let primary:unknown,primaryAt=0,calls=0,passed=false;
   try{
     browser=await owner.start(signal=>launchChrome(chrome,false,signal));
@@ -80,11 +82,18 @@ export async function nativePostmortemControl(source:string,expectedClient:strin
       }finally{page.off('Page.loadEventFired',complete);signal.removeEventListener('abort',cancel);reject(new Error('fixture navigation ended'));}
     },owner.signal);
     assert.equal(await page.evaluate('location.origin'),url);
+    result.phase='renderer-identity';identity=await rendererIdentity(page,browser);
+    result.rendererIdentity=identity.evidence();
+    assert.ok(identity.valid());
+    const rendererPid=identity.pid,rendererBirth=identity.birth;
+    assert.ok(typeof rendererPid==='number');assert.ok(typeof rendererBirth==='string');
     assert.ok(browser.nativePostmortem);
     const capture=browser.nativePostmortem;
     browser.nativePostmortem=async(candidates,signal)=>{
       assert.ok(primary);calls++;
-      native=await capture(candidates,signal);return native;
+      result.rendererIdentityAtCapture=identity!.evidence();assert.ok(identity!.valid());
+      const selected=candidates.filter(candidate=>candidate.pid===rendererPid);assert.equal(selected.length,1);
+      native=await capture([{...selected[0],birth:rendererBirth}],signal);return native;
     };
     observer=await observeReversal(page,browser,{postmortem:true,closeTarget:tab.close});
     result.phase='command';page.at('native-postmortem-control');
@@ -106,6 +115,8 @@ export async function nativePostmortemControl(source:string,expectedClient:strin
     result.phase='native-capture';
     assert.ok(native);assert.equal(native.status,'observed');assert.equal(native.released,true);
     assert.equal(native.reaped,true);assert.equal(native.pipesClosed,true);
+    assert.ok(identity.valid());assert.equal(native.pid,rendererPid);assert.equal(native.birth,rendererBirth);
+    assert.equal(native.candidateCount,1);
     const captured=native;
     assert.ok(captured.threads.some(thread=>thread.tid===captured.pid&&thread.frames.some(frame=>frame.symbol)));
     assert.ok(captured.threads.some(thread=>thread.tid===captured.pid&&thread.frames.some(frame=>frame.kind==='condition')));
@@ -115,9 +126,12 @@ export async function nativePostmortemControl(source:string,expectedClient:strin
     passed=true;result.phase='cleanup';
   }catch(error){result.failure=error instanceof Error?error.name:'unknown';}
   finally{
+    result.rendererIdentityBeforeCleanup=identity?.evidence();
     result.fixture??=fixture?{kind:'sync-xhr-native-wait',...fixture.requests()}:undefined;
     result.native=native;result.nativeCalls=calls;result.receipts=[...receipts].map(([name,value])=>({name,value}));
     try{await observer?.close();}
+    catch{passed=false;result.cleanup='incomplete';}
+    try{await identity?.dispose();}
     catch{passed=false;result.cleanup='incomplete';}
     try{await owner.close();}
     catch{passed=false;result.cleanup='incomplete';}

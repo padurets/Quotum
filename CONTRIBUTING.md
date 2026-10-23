@@ -77,6 +77,10 @@ pipe closure fails cleanup. Missing GDB falls back to the existing page debugger
 attached browsers and successful commands receive no native intervention.
 The manual CI `native_postmortem_control` qualifies this collector on the requested
 source and built-client hash using a separate runtime UID and matching unwind tables.
+Before the forced command, a completed metadata trace binds the page's primary frame
+to an owned renderer and its process birth. Missing or invalidated identity fails the
+control; capture receives only that pinned process and rechecks its birth before attach.
+This preparation is diagnostic and does not run in ordinary benchmarks.
 It holds one synchronous HTTP request from its own fixture page until the original
 30-second command timeout, then requires native main-thread frames and confirmed
 cleanup, including the fixture's pending connection. This exercises native unwinding;

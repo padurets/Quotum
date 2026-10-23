@@ -5,7 +5,7 @@ import {setTimeout as wait} from 'node:timers/promises';
 import {browserProcess, processIdentity, type ProcessIdentity} from './browserProcess.js';
 import {deadline} from './deadline.js';
 
-export type NativeCandidate = {pid:number;cpuTime:number};
+export type NativeCandidate = {pid:number;cpuTime:number;birth?:string};
 export type NativeScope = {root:number;live():boolean;observe(signal:AbortSignal):Promise<ProcessIdentity[]>;
   resource?(close:()=>Promise<void>):()=>Promise<void>};
 const MAX_OUTPUT = 64 * 1024;
@@ -133,7 +133,8 @@ export async function nativePostmortem(scope:NativeScope,candidates:NativeCandid
       .sort((a,b)=>b.cpuTime-a.cpuTime||a.pid-b.pid);
     report.candidateCount=owned.length;report.omittedCandidates=Math.max(0,owned.length-1);
     const selected=first.find(row=>row.pid===owned[0]?.pid);
-    if(!root||!selected||selected.pid===scope.root)return report;
+    if(!root||!selected||selected.pid===scope.root
+      ||owned[0].birth!==undefined&&owned[0].birth!==selected.birth)return report;
     const second=await scope.observe(signal),now=await current(selected.pid,signal);
     if(!scope.live()||!second.some(row=>row.pid===root.pid&&row.birth===root.birth)
       ||!second.some(row=>row.pid===selected.pid&&row.birth===selected.birth&&row.group===scope.root&&row.session===scope.root)

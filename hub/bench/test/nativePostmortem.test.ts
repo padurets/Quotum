@@ -2,6 +2,32 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {nativeFrames,nativeMainLocations,nativePostmortem,nativeProgress} from '../nativePostmortem.js';
 import {safeEvidence} from '../evidence.js';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import ts from 'typescript';
+
+test('a remembered renderer birth cannot authorize capture of a reused PID',async()=>{
+  const source=ts.createSourceFile('native.ts',readFileSync(new URL('../nativePostmortem.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
+  const declaration=source.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='nativePostmortem')!;
+  const code=ts.transpileModule(declaration.getText(source).replace('import.meta.url',JSON.stringify('file:///fixture/native.js'))+'\nglobalThis.capture=nativePostmortem;',{
+    compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022},
+  }).outputText;
+  for(const birth of ['199','200',undefined]){
+    let scriptReads=0;
+    const renderer={pid:101,parent:100,group:100,session:100,birth:'200',state:'S',uid:1000,tracer:0,
+      minorFaults:null,majorFaults:null,userTicks:null,systemTicks:null,blockIoTicks:null};
+    const root={...renderer,pid:100,birth:'100'};
+    const context={exports:{},performance,URL,process:{platform:'linux',getuid:()=>1000},
+      nativeProgress:()=>({}),nativeDebugger:async()=>'/usr/bin/gdb',current:async()=>renderer,
+      readFile:async()=>{scriptReads++;throw Error('stop before helper creation');}};
+    runInNewContext(code,context);
+    const capture=(context as unknown as {capture:typeof nativePostmortem}).capture;
+    const report=await capture({root:100,live:()=>true,observe:async()=>[root,renderer],resource:()=>async()=>{}},
+      [{pid:101,cpuTime:1,...(birth===undefined?{}:{birth})}],new AbortController().signal);
+    assert.equal(scriptReads,birth==='199'?0:1);
+    assert.equal(report.intervened,false);
+  }
+});
 
 test('native receipts retain thread identity and fixed wait classes without native symbol text',()=>{
   const receipt=nativeFrames(`QGDB_ATTACHED
