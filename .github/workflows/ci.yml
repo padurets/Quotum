@@ -374,8 +374,6 @@ jobs:
       QUOTUM_C1_ARM: ${{ matrix.arm }}
       QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
       QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ inputs.expected_client_sha256 }}
-      QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-startup-io-${{ matrix.arm }}
-      QUOTUM_C1_RECEIPT: ${{ runner.temp }}/quotum-startup-io-${{ matrix.arm }}/shim-first.json
     steps:
       - name: Require the isolated pinned startup control
         working-directory: ${{ runner.temp }}
@@ -404,7 +402,9 @@ jobs:
           JS
       - name: Prepare the identical owned launcher shim
         run: |
-          mkdir -p "$QUOTUM_BENCH_DIAGNOSTICS_DIR"
+          startup_dir="$RUNNER_TEMP/quotum-startup-io-$QUOTUM_C1_ARM"
+          mkdir -p "$startup_dir"
+          printf 'QUOTUM_BENCH_DIAGNOSTICS_DIR=%s\nQUOTUM_C1_RECEIPT=%s\n' "$startup_dir" "$startup_dir/shim-first.json" >> "$GITHUB_ENV"
           printf 'QUOTUM_C1_REAL_CHROME=%s\nQUOTUM_CHROME=%s\n' "$(command -v google-chrome)" "$RUNNER_TEMP/quotum-c1-launcher.py" >> "$GITHUB_ENV"
           cat > "$RUNNER_TEMP/quotum-c1-launcher.py" <<'PY'
           #!/usr/bin/env python3
