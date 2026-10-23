@@ -77,6 +77,9 @@ export class HistoryStore {
   private financialVersion=-1;
   private nativePresentation=0;
   private activityPresentation=0;
+  // Work adoption and drawing preparation complete independently.
+  private activityRevision=0;
+  private shownActivityRevision=-1;
   private snapshotEvidence:string|undefined;
   private windowsKey = '';
   private windows = new Set<string>();
@@ -183,6 +186,7 @@ export class HistoryStore {
     this.presentation++;
     this.nativePresentation++;
     this.activityPresentation++;
+    this.activityRevision++;
     this.epoch++;
     this.board = null;
     this.workAuthority = undefined;
@@ -282,7 +286,7 @@ export class HistoryStore {
     const available=!filter||executableWorkFilters(filter);
     const initialized=this.workKey!==undefined;this.workKey=key;this.workAvailable=available;
     if(!initialized&&!this.grids.size&&!this.flights.size)return false;
-    this.presentation++;this.activityPresentation++;this.epoch++;
+    this.presentation++;this.activityPresentation++;this.activityRevision++;this.epoch++;
     this.cancelProjection();this.abortFlights();
     for(const tiles of this.grids.values())for(const [id,tile] of tiles)tiles.set(id,tile.retireActivity());
     this.plotIdentity='';this.plotVersion=-1;this.version++;
@@ -291,8 +295,9 @@ export class HistoryStore {
     this.schedule();this.publish();return true;
   }
 
-  news(since: number, workAuthority?: string) {
+  news(since: number, workAuthority?: string, activitySince=Infinity) {
     const authorityChanged=this.workAuthority!==undefined&&workAuthority!==undefined&&workAuthority!==this.workAuthority;
+    if(authorityChanged||activitySince<(this.selected?.to??this.env.now()+CLOCK_TOLERANCE_MS))this.activityRevision++;
     if (workAuthority || since === 0) this.workAuthority = workAuthority;
     this.newsSeq++;
     this.cutTo = null;
@@ -358,6 +363,8 @@ export class HistoryStore {
 
   get = () => {if(this.expirePlans())this.publish();return this.state;};
   getActivityPresentation=()=>this.activityPresentation;
+  /** Only a completed selected drawing can join the current work summary. */
+  isActivityCurrent=(history:History|null)=>!!history&&history===this.shown&&this.shownActivityRevision===this.activityRevision;
   getFinancial=()=>{if(this.expirePlans())this.publish();return this.financialState;};
   subscribeFinancial=(listener:()=>void)=>{this.financialListeners.add(listener);return()=>{this.financialListeners.delete(listener);};};
   getPlot = () => {if(this.expirePlans())this.publish();return this.plot;};
@@ -437,6 +444,7 @@ export class HistoryStore {
   }
 
   private invalidate() {
+    this.activityRevision++;
     this.deferredNews=null;
     this.cancelProjection();
     this.activityError=null;this.clear('activityRetry');
@@ -470,7 +478,7 @@ export class HistoryStore {
   private retirePresentation(scope:'all'|'native'='all') {
     this.presentation++;
     this.nativePresentation++;
-    if(scope==='all')this.activityPresentation++;
+    if(scope==='all'){this.activityPresentation++;this.activityRevision++;}
     this.shown=null;
     this.cancelProjection();this.strip=null;this.plotChunks.clear();this.setPlot(null);
   }
@@ -533,13 +541,13 @@ export class HistoryStore {
     return tiles.get(n)!;
   }
 
-  private full(target: Target) {
+  private full(target: Target, fresh=false) {
     if(this.scope==='quota'&&!this.wantsActivity)return this.nativeFull(target.cell,target.k0*target.cell,(target.k1+1)*target.cell);
     for (let k = target.k0; k <= target.k1; k++) {
       const at = k * target.cell;
       if (this.cutTo !== null && at >= this.cutTo) continue;
       const tile = this.grids.get(target.cell)?.get(tileOf(at, target.cell));
-      if (!tile || at < tile.readFrom || at >= tile.readTo) return false;
+      if (!tile || at < tile.readFrom || at >= (fresh?tile.validTo:tile.readTo)) return false;
     }
     return true;
   }
@@ -702,14 +710,14 @@ export class HistoryStore {
   private prepareCompose(target: Target) {
     // Evicting other cached cells cannot invalidate work on this frame's pinned entries.
     if (this.composeCurrent?.(target)) return;
-    const meta = this.meta!, board = this.board!, epoch = this.epoch, version = this.version, windows = this.windows;
+    const meta = this.meta!, board = this.board!, epoch = this.epoch, version = this.version, windows = this.windows, activityRevision=this.activityRevision;
     const identity = `${epoch}:${version}:${target.key}:${target.k0}:${target.k1}`;
     if (identity === this.composeIdentity && !this.composeCurrent) return;
     this.composeIdentity = identity;
     const native=this.scope==='quota'&&!this.wantsActivity;
     const tiles = [...(this.grids.get(target.cell)?.values() ?? [])].filter(t => native?t.nativeTo>t.nativeFrom&&t.nativeTo>target.k0*target.cell&&t.nativeFrom<=target.k1*target.cell:t.readTo > t.readFrom && t.readTo > target.k0 * target.cell && t.readFrom <= target.k1 * target.cell).sort((a, b) => a.from - b.from);
     const pins = this.pins(tiles);
-    const valid = () => !this.interest && this.board === board && this.epoch === epoch && this.meta === meta && this.windows === windows && this.composeIdentity === identity && this.target().key === target.key && this.pinsValid(pins);
+    const valid = () => !this.interest && this.board === board && this.epoch === epoch && (native||this.activityRevision===activityRevision) && this.meta === meta && this.windows === windows && this.composeIdentity === identity && this.target().key === target.key && this.pinsValid(pins);
     this.composeCurrent = next => next.key === target.key && next.cell === target.cell && next.k0 === target.k0 && next.k1 === target.k1 && valid();
     const owner=this;
     const work = function* (): Preparation<History> {
@@ -728,6 +736,7 @@ export class HistoryStore {
       this.composeCurrent = null;
       if(this.composedNativeVersion!==this.nativeVersion||this.shown?.range!==history.range||this.shown.cellMs!==history.cellMs||this.shown.historyStart!==history.historyStart)this.shownNativeVersion++;
       this.shown = history;
+      this.shownActivityRevision=!native&&this.full(target,true)?activityRevision:-1;
       this.composedNativeVersion=this.nativeVersion;
       this.needsCompose = false;
       if (this.plotPending) {this.plotPending = false; this.strip = null; this.plotChunks.clear(); this.preparations?.cancel(this.plotOwner); this.setPlot(null);}
@@ -1190,9 +1199,9 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>,
         const meters=selection(state),selected=new Set(scope==='budget'?meters?.ids.map(([source])=>source):meters?.sources??state.board?.lineup??[]);
         const changes=hub.data.changes?.filter(change=>change.scope===scope&&selected.has(change.source)&&(scope!=='budget'||change.workSince===undefined||change.since<change.workSince));
         const workSince = scope==='quota'?hub.data.workSince : undefined;
-        const retired=scope==='quota'&&workChange(hub.data,[...selected]).retired;
-        if(retired||changes?.length || workSince !== undefined)loader.news(retired?0:Math.min(...(changes ?? []).map(change=>change.since), workSince ?? Infinity), hub.data.workAuthority);
-        else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since, hub.data.workAuthority);
+        const work=scope==='quota'?workChange(hub.data,[...selected]):{retired:false,since:Infinity};
+        if(work.retired||changes?.length || workSince !== undefined)loader.news(work.retired?0:Math.min(...(changes ?? []).map(change=>change.since), workSince ?? Infinity), hub.data.workAuthority,work.since);
+        else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since, hub.data.workAuthority,work.since);
       }
     }
     if(state.board){loader.setWorkFilter(selectedWorkKey(state),effectiveFilters()??undefined);loader.setMeters(selection(state));}
@@ -1277,7 +1286,7 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false,acti
       if(panning!==null&&retained.current)return {...shownNow,history:retained.current.history,loading:false,error:shownNow.error};
       if(!shownNow.history)return activityOnly&&retained.current?{...shownNow,history:retained.current.history}:shownNow;
       const scope=loader===fundsHistory?'funds':loader.scope??'quota',state=workState??boardPeriod.projectionState(shownNow.history,scope);
-      if(!state.ready)return {...shownNow,history:retained.current?.history??null,loading:!folding&&!state.error&&!shownNow.error,error:state.error??shownNow.error};
+      if(!state.ready||activityOnly&&!loader.isActivityCurrent(shownNow.history))return {...shownNow,history:retained.current?.history??null,loading:!folding&&!state.error&&!shownNow.error,error:state.error??shownNow.error};
       const projected=boardPeriod.project(shownNow.history,scope,at,activityOnly),deadline=activityOnly?Infinity:held?.history.events===projected.events?held.deadline:planEventsDeadline(projected.events);
       const events=validAt>=deadline?planEventsAt(projected.events,validAt):projected.events,history=events===projected.events?projected:{...projected,events};
       retained.current={board,history,deadline:events===projected.events?deadline:planEventsDeadline(events)};

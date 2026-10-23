@@ -187,6 +187,8 @@ export const SESSION_ACTIVITY_SCENES=[
  * Calendar prefix reuse across fresh revisions, missing live-tail evidence and
  * genuinely late work are held by ui/test/workCalendar.test.ts.
  * Activity's atomic X/Y cancellation frame is held by ui/test/activityAxisCancel.test.ts.
+ * Selected-work summaries and cells adopt one revision through filter changes and
+ * delayed drawing preparation in ui/test/activityCohortAdoption.test.ts.
  * Same-run frame refresh and new-run retirement are held by ui/test/activityFrame.test.ts
  * and ui/test/workRunLifetime.test.ts.
  * Native catalogue changes retain selected work in ui/test/activityCoherence.test.ts;

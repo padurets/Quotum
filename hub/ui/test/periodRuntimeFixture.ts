@@ -199,7 +199,7 @@ export function consumer(h: any, options:{now?:()=>number;focus?:{get:()=>string
 }
 
 
-import {HistoryStore,follow} from '../lib/history';
+import {HistoryStore,follow,type HistoryEnv} from '../lib/history';
 import {expandHistory} from '../../server/domain/history';
 
 export async function drawings(h:any,activity=true,scope:'quota'|'budget'='quota'){
@@ -210,7 +210,8 @@ export async function drawings(h:any,activity=true,scope:'quota'|'budget'='quota
  const workKey=source.split('\n').find(line=>line.startsWith('const selectedWorkKey='));assert.ok(workKey);
  const readerContext={read:null as any,retry:null as any,selected:null as any,workKey:null as any,boardPeriod:h.period,scope,family:'budget',pan:h.pan,expandHistory,prefs:()=>h.settings,subscriptionSelection,moneyReadSelection,...filterModelBindings,...filterRuntimeBindings};
  runInNewContext(ts.transpileModule(adapter+'\n'+workKey+'\nglobalThis.read=({'+read+'}).read;globalThis.retry=({'+retry+'}).retry;globalThis.selected=selectedMeters;globalThis.workKey=selectedWorkKey;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,readerContext);
- const loader=new HistoryStore({sharedTransport:true,workInPresentation:scope!=='budget',now:()=>NOW,preparations:null,read:readerContext.read,retry:readerContext.retry,setTimeout:(run,ms)=>{const token={};scheduled.set(token,{run,ms});return token;},clearTimeout:token=>{scheduled.delete(token as object);},dropTimeRange:()=>{}},undefined,scope,h.pool);
+ const env:HistoryEnv={sharedTransport:true,workInPresentation:scope!=='budget',now:()=>NOW,preparations:null,read:readerContext.read,retry:readerContext.retry,setTimeout:(run,ms)=>{const token={};scheduled.set(token,{run,ms});return token;},clearTimeout:token=>{scheduled.delete(token as object);},dropTimeRange:()=>{}};
+ const loader=new HistoryStore(env,undefined,scope,h.pool);
  const stop=follow(loader,h.page);loader.setActivityActive(activity);loader.choose(h.settings.range,h.selectedRange());loader.open(h.board);loader.setWorkFilter(readerContext.workKey(h.page.get()),filterRuntimeBindings.effectiveFilters()??undefined);loader.hello(h.events.epoch);
  loader.setMeters(readerContext.selected(h.page.get(),scope));
  const board=h.page.get().board;loader.snapshot(board.lineup,Object.values(board.cards).flatMap((c:any)=>c.windows.map((w:any)=>`${c.id} ${w.id}`)),board.historyStart,board.workAuthority);await flush();
@@ -223,7 +224,7 @@ export async function drawings(h:any,activity=true,scope:'quota'|'budget'='quota
  const renderFinancial=()=>{slots=financialSlots;cursor=0;return context.read(loader,false,true);};
  const renderActivity=()=>{slots=activitySlots;cursor=0;return context.read(loader,true,false,true);};
  const renderForecast=()=>{slots=forecastSlots;cursor=0;return context.read(loader,false);};
- return {loader,render,renderFinancial,renderActivity,renderForecast,runScheduled:()=>{const timers=[...scheduled];for(const [token,timer] of timers){scheduled.delete(token);timer.run();}return timers.map(([,timer])=>timer.ms);},close:()=>{stop();loader.close();}};
+ return {loader,render,renderFinancial,renderActivity,renderForecast,prepareWith:(value:Preparations|null)=>{env.preparations=value;},syncFilters:()=>{loader.setWorkFilter(readerContext.workKey(h.page.get()),filterRuntimeBindings.effectiveFilters()??undefined);loader.setMeters(readerContext.selected(h.page.get(),scope));},runScheduled:()=>{const timers=[...scheduled];for(const [token,timer] of timers){scheduled.delete(token);timer.run();}return timers.map(([,timer])=>timer.ms);},close:()=>{stop();loader.close();}};
 }
 import {subscriptionLinesOf} from '../lib/subscription';
 import {lineWork,workText} from '../lib/work';
