@@ -192,7 +192,7 @@ test('pointer setup sends native released mouse input and waits for cleanup befo
 
 test('pointer setup preserves the native failure and avoids probing a failed or pending renderer',async()=>{
   type ParkCdp=Parameters<typeof fixedActivityPointerPark>[0];type Command=ReturnType<ParkCdp['snapshot']>;
-  const clean:Command={context:'fixed-activity/pointer-setup',socketState:1,lastAck:null,lastEvent:null,terminal:null,failure:null,pending:[]};
+  const clean:Command={context:'fixed-activity/pointer-setup',socketState:1,lastReply:null,lastEvent:null,terminal:null,failure:null,pending:[]};
   const failed={id:1,method:'Input.dispatchMouseEvent',context:clean.context,started:10,deadline:30010,elapsedMs:30000};
   for(const command of [clean,{...clean,failure:failed},{...clean,pending:[failed]},{...clean,socketState:3},{...clean,terminal:{method:'Inspector.targetCrashed' as const,at:10}}]){
     const h=pointerParkFixture(),error=Error('original native failure');let evaluations=0,settlements=0;
@@ -463,7 +463,7 @@ test('work at the fixed exclusive endpoint leaves calendar and Activity evidence
 test('native Activity failure cleanup never probes a failed or pending renderer',async()=>{
   type GestureCdp=Parameters<typeof fixedActivityGestureReceipt>[0];
   type Command=ReturnType<GestureCdp['snapshot']>;
-  const clean:Command={context:'fixed-activity/gesture',socketState:1,lastAck:null,lastEvent:null,terminal:null,failure:null,pending:[]};
+  const clean:Command={context:'fixed-activity/gesture',socketState:1,lastReply:null,lastEvent:null,terminal:null,failure:null,pending:[]};
   const unavailable:Command[]=[
     {...clean,failure:{id:1,method:'Input.dispatchMouseEvent',context:clean.context,started:10,deadline:30010,elapsedMs:30000}},
     {...clean,pending:[{id:1,method:'Input.dispatchMouseEvent',started:10,deadline:30010}]},
