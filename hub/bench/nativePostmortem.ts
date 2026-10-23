@@ -1,5 +1,5 @@
 import {spawn} from 'node:child_process';
-import {access, readFile} from 'node:fs/promises';
+import {access, readFile, readdir} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {browserProcess, processIdentity, type ProcessIdentity} from './browserProcess.js';
 import {deadline} from './deadline.js';
@@ -9,6 +9,17 @@ export type NativeScope = {root:number;live():boolean;observe(signal:AbortSignal
   resource?(close:()=>Promise<void>):()=>Promise<void>};
 const MAX_OUTPUT = 64 * 1024;
 const wait = (ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
+
+/** Distribution packages may expose only versioned names, without an lldb alias. */
+export async function nativeDebugger(){
+  const names=await readdir('/usr/bin').catch(()=>[]);
+  const versions=names.filter(name=>/^lldb-\d{1,2}$/.test(name))
+    .sort((a,b)=>Number(b.slice(5))-Number(a.slice(5))).map(name=>'/usr/bin/'+name);
+  for(const file of [...versions,'/usr/bin/lldb','/usr/share/swift/usr/bin/lldb']){
+    try{await access(file,constants.X_OK);return file;}catch{}
+  }
+  return null;
+}
 
 /** Function classes, never native arguments, addresses, paths or arbitrary symbols. */
 function frameKind(name:string) {
@@ -70,7 +81,7 @@ const current = async(pid:number,signal?:AbortSignal)=>{
 /** Only a failed owned browser grants this authority; the selected renderer is not a page binding. */
 export async function nativePostmortem(scope:NativeScope,candidates:NativeCandidate[],signal:AbortSignal) {
   const fromMs=performance.now();
-  const report={status:'unavailable',kind:'owned-renderer-after-failure',reason:'largest-cumulative-renderer-cpu',
+  const report={status:'unavailable',kind:'owned-renderer-after-failure',reason:'largest-cumulative-renderer-cpu',executable:'unavailable',
     fromMs,toMs:null as number|null,intervened:false,released:false,reaped:false,pipesClosed:false,
     candidateCount:0,omittedCandidates:0,pid:0,birth:'',outputBytes:0,diagnosticBytes:0,outputLimited:false,
     progress:nativeProgress(''),
@@ -79,8 +90,9 @@ export async function nativePostmortem(scope:NativeScope,candidates:NativeCandid
   try {
     if(process.platform!=='linux'||!scope.live()||!scope.resource)return report;
     signal.throwIfAborted();
-    const executable=await (async()=>{for(const file of ['/usr/share/swift/usr/bin/lldb','/usr/bin/lldb'])try{await access(file,constants.X_OK);return file;}catch{}return null;})();
+    const executable=await nativeDebugger();
     if(!executable)return report;
+    report.executable=executable.slice(executable.lastIndexOf('/')+1);
     const first=await scope.observe(signal),root=first.find(row=>row.pid===scope.root);
     const owned=candidates.filter(row=>Number.isSafeInteger(row.pid)&&Number.isFinite(row.cpuTime)&&row.cpuTime>=0)
       .filter(row=>first.some(value=>value.pid===row.pid&&value.group===scope.root&&value.session===scope.root))

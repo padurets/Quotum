@@ -301,12 +301,16 @@ jobs:
           receipt="$RUNNER_TEMP/quotum-native-postmortem-control"
           mkdir -p "$receipt"
           printf 'unavailable\n' > "$receipt/debugger-first.txt"
-          for debugger in /usr/share/swift/usr/bin/lldb /usr/bin/lldb; do
-            if [ -x "$debugger" ]; then
-              { sha256sum "$debugger"; "$debugger" --version; } > "$receipt/debugger-first.txt" 2>&1
-              break
-            fi
-          done
+          node --import tsx --input-type=module <<'JS' > "$receipt/debugger-first.txt" 2>&1
+          import {nativeDebugger} from './bench/nativePostmortem.ts';
+          import {execFileSync} from 'node:child_process';
+          import {createHash} from 'node:crypto';
+          import {readFileSync} from 'node:fs';
+          const file=await nativeDebugger();
+          if(!file){console.log('unavailable');process.exit(0);}
+          console.log(createHash('sha256').update(readFileSync(file)).digest('hex')+'  '+file);
+          console.log(execFileSync(file,['--version'],{encoding:'utf8',timeout:2000}));
+          JS
       - uses: actions/upload-artifact@v7
         if: always()
         with:
