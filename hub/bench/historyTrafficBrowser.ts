@@ -284,12 +284,14 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
 }
 
 /** Separate tabs use the fixed-codec proxy; this never changes the native perf route. */
-export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProxy, cookie: string, board: string, evidence?: Pick<Evidence, 'save'>) {
+export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProxy, cookie: string, board: string, evidence?: Pick<Evidence, 'save'>, suffix?:{pair:number;cohort:'history'|'activity'}) {
+  if(suffix&&(!Number.isInteger(suffix.pair)||suffix.pair<1||suffix.pair>12||!['history','activity'].includes(suffix.cohort)))throw new Error('Unknown history suffix cohort');
   const reports = [], invalidated = [], problems: string[] = [];
   for (const length of [DAY, 30 * DAY]) for (const future of [DAY, 0]) for (const latency of [0, 100, 400]) for (const fraction of [.5, .04]) {
-    for (let take = 1; take <= HISTORY_COHORT_TAKES; take++) {
-      const name = `browser/${length / DAY}d/${future ? 'history' : 'activity'}/${latency}ms/${fraction}/take${take}`;
-      evidence?.save('traffic-stage', {name, stage: 'seed'});
+    if(suffix&&!(fraction===.5&&(suffix.cohort==='history'?length===DAY&&future===DAY&&latency===0:length===30*DAY&&future===0&&latency===100)))continue;
+    for (let take = 1; take <= (suffix?1:HISTORY_COHORT_TAKES); take++) {
+      const name = (suffix?`suffix/${suffix.pair}/${suffix.cohort}/`:'')+`browser/${length / DAY}d/${future ? 'history' : 'activity'}/${latency}ms/${fraction}/take${take}`;
+      evidence?.save(suffix?`suffix-stage-${suffix.pair}-${suffix.cohort}`:'traffic-stage', {name, stage: 'seed'});
       const poolTarget=length===DAY&&!future&&[100,400].includes(latency)&&fraction===.5&&take===1;
       const poolEvidence=process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL==='1'&&poolTarget?evidence:undefined;
       const {cdp, bodies, settled, geometry, cell, seeds, close,capturePool,renderer} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence,evidence);
@@ -362,8 +364,10 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
           console.error(`bench: ${report.name}: ${report.attempts} requests, ${warm.length} warm requests, decoded ratio ${report.decoded === null ? 'unknown' : report.decoded / report.referenceDecoded}, encoded ratio ${report.encodedUpper === null ? 'unknown' : report.encodedUpper / report.referenceEncoded}`);
         }
         status=reports.filter(report=>report.name.startsWith(name+'/')).some(report=>trafficProblems(report).length)?'over-budget':'passed';
+        if(suffix&&problems.length)throw new Error('History suffix exceeded its original traffic budget');
         break;
       } catch (error) {
+        if(suffix){status='failed';throw error;}
         const cut=historyCutInvalidation(error,name,take);
         status='invalidated';
         invalidated.push({...cut,reads:bodies.reads.map(read=>({phase:read.phase,from:read.from,to:read.to,count:read.count}))});

@@ -697,8 +697,12 @@ source tables are discarded before Chrome starts. GDB still has its two-second l
 and saved frame positions are symbolized offline. Preparation does not execute Chrome
 or GDB; its effects on the OS file cache are not qualified. A completed diagnostic is
 an observation, never a canonical benchmark pass or proof that a hang was repaired.
-Ordinary history checks
-retain the same full matrix without diagnostic package preparation.
+After retaining the successful original result, this direct control runs twelve fixed
+pairs of the original 1d/history/0ms/0.5/take1 and 30d/activity/100ms/0.5/take1 cohorts
+in fresh tabs of the same Chrome, with separate evidence and the original gestures and
+guards. The first failure, including a reference-cut change, stops without retry. The
+twenty-minute limit stays; an unfinished suffix remains inconclusive. Startup, compositor
+and ordinary checks omit this suffix; ordinary checks need no diagnostic preparation.
 
 The manual `startup_io_control` input observes a fixed A1/B/A2 startup-only sequence
 on one runner before running the unchanged full history control once, within the same

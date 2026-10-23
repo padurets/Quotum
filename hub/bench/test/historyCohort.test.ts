@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import * as budget from '../historyTrafficBudget';
-import {historyScroll,stableHistoryReads} from '../historyTrafficBrowser';
+import {historyScroll,stableHistoryReads,trafficReadEvidence} from '../historyTrafficBrowser';
 import {cellStart} from '../../server/domain/history';
 
 const source=readFileSync(new URL('../historyTrafficBrowser.ts',import.meta.url),'utf8');
@@ -98,11 +98,11 @@ const coldCode=ts.transpileModule(source.slice(coldStart,coldEnd).replace('expor
   {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 
 /** Stand in browser IO while running the complete production traffic cohort. */
-async function coldReplay(mode:'stable'|'cross-only'|'bad-first'|'bad-second'|'physical-only-body'|'later-run'|'later-known'|'optional'|'attempts'|'fresh-closed'|'fresh-open'|'fresh-open-stable'|'mixed-seed'|'cdp-timeout') {
-  let pages=0,closed=0,observersClosed=0;
+async function coldReplay(mode:'stable'|'cross-only'|'bad-first'|'bad-second'|'physical-only-body'|'later-run'|'later-known'|'optional'|'attempts'|'fresh-closed'|'fresh-open'|'fresh-open-stable'|'mixed-seed'|'cdp-timeout',suffix?:{pair:number;cohort:'history'|'activity'},cleanupFault=false) {
+  let pages=0,closed=0,observersClosed=0;const names:string[]=[],files:string[]=[],tuples:{length:number;future:number}[]=[];
   const primary=new Error('original CDP timeout');
   const proxy={transfers:[] as any[],phase(){},async settled(){}};
-  const context={DAY:86_400_000,assert,...budget,cellStart,historyScroll,stableHistoryReads,URLSearchParams,
+  const context={DAY:86_400_000,assert,...budget,cellStart,historyScroll,stableHistoryReads,trafficReadEvidence,URLSearchParams,
     process:{env:{}},console:{error(){}},writeFileSync(){},
     observeReversal:async()=>({watch:async(_name:string,work:()=>Promise<unknown>)=>work(),async close(){observersClosed++;}}),
     historyBody:async(_url:string,_cookie:string,_signal:unknown,onBody?:(body:unknown)=>void)=>{
@@ -110,6 +110,7 @@ async function coldReplay(mode:'stable'|'cross-only'|'bad-first'|'bad-second'|'p
       return {run:'r',now:mode!=='stable'&&mode!=='fresh-open-stable'&&pages===1?after:before,known,chunks:[]};
     },
     historyPage:async(_browser:unknown,_proxy:unknown,_cookie:string,_name:string,length:number,future:number)=>{
+      names.push(_name);tuples.push({length,future});
       assert.equal(pages,closed,'a replacement must await previous-page cleanup');
       const page=++pages,origin=before,geometry={x:0,y:0,width:1000,series:12},reads:any[]=[];
       const selections=['board=b&scope=quota','board=b&scope=budget'];
@@ -147,11 +148,11 @@ async function coldReplay(mode:'stable'|'cross-only'|'bad-first'|'bad-second'|'p
         if(expression.includes('new URLSearchParams'))return false;
         throw new Error('Unexpected evaluation: '+expression);
       }};
-      return {cdp,bodies,settled:async()=>{},geometry,cell,seeds,capturePool:async()=>{},close:async()=>{closed++;}};
+      return {cdp,bodies,settled:async()=>{},geometry,cell,seeds,capturePool:async()=>{},close:async()=>{closed++;if(cleanupFault)throw Error('cleanup-secondary');}};
     },execute:null as any};
   runInNewContext(coldCode,context);
-  try{return {result:await context.execute({},proxy,'cookie','b'),pages,closed,observersClosed,primary,error:null};}
-  catch(error){return {error,pages,closed,observersClosed,primary};}
+  try{return {result:await context.execute({},proxy,'cookie','b',{save:(name:string)=>files.push(name)},suffix),pages,closed,observersClosed,primary,names,files,tuples,error:null};}
+  catch(error){return {error,pages,closed,observersClosed,primary,names,files,tuples};}
 }
 
 test('native history preserves the original CDP failure as its cause without retrying the cohort',async()=>{
@@ -195,4 +196,33 @@ test('a stable cutoff still rejects rereading the open seed cell',async()=>{
   const failed=await coldReplay('fresh-open-stable');
   assert.ok(failed.error);assert.ok(!((failed.error as Error).cause instanceof budget.HistoryCutChanged));
   assert.equal(failed.pages,1);assert.equal(failed.closed,1);assert.equal(failed.observersClosed,1);
+});
+
+test('each suffix selector runs exactly its original take1 tuple and private namespace',async()=>{
+  const day=86_400_000;
+  for(const [cohort,pair,length,future,ending] of [['history',1,day,day,'1d/history/0ms/0.5/take1'],['activity',12,30*day,0,'30d/activity/100ms/0.5/take1']] as const){
+    const out=await coldReplay('stable',{pair,cohort});
+    assert.equal(out.error,null);assert.equal(out.pages,1);assert.equal(out.closed,1);assert.equal(out.observersClosed,1);
+    assert.deepEqual(out.tuples,[{length,future}]);assert.deepEqual(out.names,[`suffix/${pair}/${cohort}/browser/${ending}`]);
+    assert.equal(out.result.reports.length,3);assert.equal(out.result.problems.length,0);
+    assert.ok(out.files.includes(`suffix-stage-${pair}-${cohort}`));assert.ok(!out.files.includes('traffic-stage'));
+  }
+});
+test('suffix cut changes and native errors never create replacement takes or lose their identity',async()=>{
+  const cut=await coldReplay('cross-only',{pair:1,cohort:'history'});
+  assert.ok(cut.error instanceof budget.HistoryCutChanged);assert.equal(cut.pages,1);assert.equal(cut.closed,1);assert.equal(cut.observersClosed,1);
+  const failed=await coldReplay('cdp-timeout',{pair:1,cohort:'history'},true);
+  assert.equal(failed.error,failed.primary);assert.equal(failed.pages,1);assert.equal(failed.closed,1);assert.equal(failed.observersClosed,1);
+  for(const mode of ['bad-first','bad-second','optional','attempts'] as const){
+    const out=await coldReplay(mode,{pair:1,cohort:'history'});
+    assert.ok(out.error);assert.equal(out.pages,1);assert.equal(out.closed,1);assert.equal(out.observersClosed,1);
+  }
+});
+test('unknown suffix selectors fail before page creation',async()=>{
+  for(const pair of [0,13,1.5,NaN]){
+    const out=await coldReplay('stable',{pair,cohort:'history'});
+    assert.match(String(out.error),/Unknown history suffix cohort/);assert.equal(out.pages,0);
+  }
+  const out=await coldReplay('stable',{pair:1,cohort:'other'} as any);
+  assert.match(String(out.error),/Unknown history suffix cohort/);assert.equal(out.pages,0);
 });

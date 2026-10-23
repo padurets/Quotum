@@ -4,7 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {mkdirSync,realpathSync,writeFileSync} from 'node:fs';
+import {mkdirSync,readFileSync,realpathSync,statSync,writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {MONEY_KEY} from '../demo/money.js';
 import {moneyHistoryReady} from './moneyHistory.js';
@@ -27,9 +27,10 @@ import {panning} from './panning.js';
 import {panningProblems} from './panningBudget.js';
 import {seedPanningBudgets,panningSet} from './fixture.js';
 import {historyTraffic} from './historyTraffic.js';
-import {diagnoseReversal} from './historyTrafficBrowser.js';
+import {browserHistoryTraffic,diagnoseReversal} from './historyTrafficBrowser.js';
+import {historyProxy} from './historyProxy.js';
 import {RunOwner} from './runOwner.js';
-import {Evidence, clientIdentity} from './evidence.js';
+import {Evidence, clientIdentity,safeEvidence} from './evidence.js';
 import {Requests} from './requests.js';
 export {Requests} from './requests.js';
 import {ChromeLaunchError} from './chrome.js';
@@ -119,6 +120,7 @@ async function main() {
   const nativeFrameMode=idleCpuMode==='native-trace'||idleCpuMode==='native-profile';
   const poolDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL;
   const scrollControl=process.env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL;
+  const historySuffix=process.env.QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX;
   evidence.save('scope', {mode: options.scope});
   let idleCpu:IdleCpuDiagnostic|undefined;
   const diagnosticDirectory=path.join('/tmp/quotum-idle-cpu-diagnostic',`${process.env.GITHUB_RUN_ID??'local'}-${process.env.GITHUB_RUN_ATTEMPT??'1'}-${process.pid}`);
@@ -131,6 +133,7 @@ async function main() {
   const bind = process.env.QUOTUM_BIND || '127.0.0.1';
   let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
   try {
+    if(historySuffix&&(historySuffix!=='1'||scrollControl!=='1'||process.env.QUOTUM_C3_CHROME||!process.env.QUOTUM_BENCH_DIAGNOSTICS_DIR))throw new Stop('Unknown or conflicting history suffix');
     if(scrollControl){
       if(scrollControl!=='1'||!options.ci||options.scope!=='history'||options.cdp||idleCpuMode||captionMode||poolDiagnostic||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE||process.env.QUOTUM_BENCH_REVERSAL_PROBE)throw new Stop('Unknown or conflicting history scroll control');
       const source=sourceIdentity(),client=clientIdentity(),expected=process.env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256;
@@ -217,6 +220,29 @@ async function main() {
       if(!traffic)throw new Stop('canonical history traffic readings unavailable');
       const result={mode:scrollControl?'diagnostic':options.scope,...(scrollControl?{kind:'history-scroll-control',status:traffic.problems.length?'failed':'observations-completed'}:{}),historyTraffic:traffic,problems:traffic.problems};
       console.log(JSON.stringify(result,null,2));evidence.save('result',result);
+      if(historySuffix&&!traffic.problems.length){
+        const baseline=path.join(process.env.QUOTUM_BENCH_DIAGNOSTICS_DIR!,evidence.id,'result.json');
+        if(statSync(baseline).size>1024*1024||readFileSync(baseline,'utf8')!==JSON.stringify(safeEvidence(result)))throw new Stop('History suffix baseline was not retained');
+        evidence.begin('history-suffix');
+        const proxy=await historyProxy(address.base,owner);let failed=false,completed=0;
+        try{
+          for(let pair=1;pair<=12;pair++)for(const cohort of ['history','activity'] as const){
+            if(cancelled||finishing)throw new Stop('History suffix cancelled');
+            owner.signal.throwIfAborted();
+            const extra=await browserHistoryTraffic(browser,proxy,ana.cookie,board,evidence,{pair,cohort});
+            evidence.save(`history-suffix-${pair}-${cohort}`,extra);
+            if(extra.problems.length)throw new Stop('History suffix exceeded its original traffic budget');
+            completed++;
+          }
+          evidence.save('history-suffix-result',{mode:'diagnostic',status:'observations-completed',completed,expected:24,canonicalPass:false});
+        }catch(error){
+          failed=true;
+          try{evidence.save('history-suffix-result',{mode:'diagnostic',status:'inconclusive',completed,expected:24,canonicalPass:false});}catch{owner.failures.push('history suffix evidence failed');}
+          throw error;
+        }finally{
+          try{await proxy.close();}catch(error){owner.failures.push('history suffix proxy cleanup failed');if(!failed)throw error;}
+        }
+      }
       await finish(traffic.problems.length?1:0);return;
     }
     tab = await openTab(browser);

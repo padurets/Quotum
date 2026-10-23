@@ -230,6 +230,7 @@ jobs:
         env:
           QUOTUM_C3_CHROME: ${{ inputs.compositor_guard_control && format('{0}/quotum-c3-guard-{1}/chrome', runner.temp, matrix.arm) || '' }}
           QUOTUM_BENCH_HISTORY_SCROLL_CONTROL: ${{ (inputs.history_scroll_control || inputs.compositor_guard_control) && '1' || '' }}
+          QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX: ${{ inputs.history_scroll_control && !inputs.compositor_guard_control && '1' || '' }}
           QUOTUM_BENCH_SOURCE_SHA: ${{ (inputs.history_scroll_control || inputs.compositor_guard_control) && inputs.diagnostic_ref || '' }}
           QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ (inputs.history_scroll_control || inputs.compositor_guard_control) && inputs.expected_client_sha256 || '' }}
           QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ inputs.compositor_guard_control && format('{0}/quotum-bench-history-{1}', runner.temp, matrix.arm) || format('{0}/quotum-bench-history', runner.temp) }}

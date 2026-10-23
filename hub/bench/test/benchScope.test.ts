@@ -24,11 +24,11 @@ const declarations=['parseArgs','main'].map(name=>{
 const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={main,parseArgs};',{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},
 }).outputText;
-type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'fixed-activity'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace';
+type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'fixed-activity'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace'|'suffix-throw'|'suffix-budget'|'suffix-cancel'|'suffix-cleanup'|'suffix-error-cleanup'|'suffix-returned-problems';
 async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),diagnosticFiles=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
   const listeners=new Map<string,()=>void>(),waits:number[]=[];let now=startedAt,phaseStart=now,metricReads=0,retentionReads=0;
-  let terminal!:()=>void;const exited=new Promise<void>(resolve=>{terminal=resolve;});let cancellationStarted=false;
+  let terminal!:()=>void;const exited=new Promise<void>(resolve=>{terminal=resolve;});let cancellationStarted=false,suffixCalls=0;const suffixError=new Error('suffix-original');
   const mark=(name:string)=>{calls.push(name);};
   const red=(name:string)=>fault===name||fault==='all-red';
   const problems=(name:string)=>red(name)?[name+'-red']:[];
@@ -65,6 +65,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     async stop(){mark('demo-stop');if(fault==='demo-stop')throw Error('demo-stop-red');}
   }
   class Evidence {
+    readonly id='fixture-id';
     begin(name:string){mark('phase:'+name);}save(name:string,value:unknown){saved.set(name,value);}
     finish(status:string){statuses.push(status);}
   }
@@ -90,6 +91,8 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   const context={exports:{},process:{argv:['node','index.ts',...(ci?['--ci']:[]),...args],env:{CI:'1',...env},pid:1,platform:'linux',
       on:(name:string,fn:()=>void)=>{listeners.set(name,fn);},exit:(code:number)=>{exits.push(code);terminal();}},
     Date:class extends Date {static now(){return now;}},console:{log:()=>{},error:(value:unknown)=>{logs.push(String(value));}},path,Buffer,RunOwner,Demo,Evidence,Requests,Stop,ChromeLaunchError,IdleCpuDiagnostic,
+    safeEvidence,statSync:()=>({size:env.TEST_SUFFIX_BIG_BASELINE?1024*1024+1:Buffer.byteLength(JSON.stringify(safeEvidence(saved.get('result'))))}),
+    readFileSync:()=>env.TEST_SUFFIX_BAD_BASELINE?'missing':JSON.stringify(safeEvidence(saved.get('result'))),
     mkdirSync:()=>{},writeFileSync:(file:string,body:string)=>diagnosticFiles.set(path.basename(file,'.json'),JSON.parse(body)),
     sourceIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL?{sourceHead:env.QUOTUM_BENCH_SOURCE_SHA??null,checkoutSha:'1'.repeat(40)}:{checkoutSha:'fixture'},
     execFileSync:()=>env.TEST_CONTROL_DIRTY??'',
@@ -98,6 +101,16 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     addressOf:()=>({base:'http://127.0.0.1:1234'}),prepare:async()=>{mark('prepare');},findChrome:()=>'/unused/chrome',
     seedPanningBudgets:()=>{mark('seed');},hear:async()=>({close:()=>{mark('stream-close');},reset:(window?:{from:number;to:number})=>{events.reset(window);for(let i=0;i<5;i++)events.push('event: ping\ndata: {}\n\n');},counts:()=>events.counts(),boardCounts:()=>events.boardCounts(),calendar:()=>events.calendar(),contacts:()=>events.contacts(),hints:()=>events.hints()}),
     launchChrome:async()=>{mark('launch');return browser;},openTab:async()=>{mark('openTab');return{cdp};},
+    historyProxy:async(_upstream:string,scope:RunOwner)=>{
+      mark('suffix-proxy');const close=scope.resource(async()=>{mark('suffix-close');if(fault==='suffix-cleanup'||fault==='suffix-error-cleanup')throw Error('suffix-close-red');});return{close};
+    },
+    browserHistoryTraffic:async(_browser:unknown,_proxy:unknown,_cookie:unknown,_board:unknown,_evidence:unknown,suffix:{pair:number;cohort:string})=>{
+      assert.ok(saved.has('result')&&saved.has('history-traffic'),'baseline retained before suffix');suffixCalls++;mark(`suffix:${suffix.pair}:${suffix.cohort}`);
+      if(fault==='suffix-throw'||fault==='suffix-error-cleanup')throw suffixError;
+      if(fault==='suffix-cancel'){listeners.get('SIGTERM')!();await exited;}
+      if(fault==='suffix-budget')throw suffixError;
+      return{reports:[],invalidated:[],problems:fault==='suffix-returned-problems'?['returned-suffix-budget']:[]};
+    },
     historyTraffic:async(...args:unknown[])=>{mark('history');if(args[6])mark('scroll-control');if(fault==='throw')throw new Stop('history-original');
       if(fault==='cancel'){listeners.get('SIGTERM')!();await exited;}
       return{reports:[{name:'history-marker'}],problems:red('red')?['history-red']:[]};},
@@ -373,4 +386,68 @@ test('manual native tracing uses only the existing dashboard job and rejects mis
   assert.throws(()=>verify({},'3'.repeat(40)),/mismatch/);
   assert.throws(()=>verify({},source,{status:'unavailable'}),/mismatch/);
   assert.throws(()=>verify({},source,{status:'available',sha256:'3'.repeat(64)}),/mismatch/);
+});
+
+const suffixEnv={QUOTUM_BENCH_HISTORY_SCROLL_CONTROL:'1',QUOTUM_BENCH_SOURCE_SHA:'1'.repeat(40),QUOTUM_BENCH_EXPECTED_CLIENT_SHA256:'2'.repeat(64),QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:'1',QUOTUM_BENCH_DIAGNOSTICS_DIR:'/owned/diagnostics'};
+test('the fixed suffix follows the retained complete baseline and keeps its result separate',async()=>{
+  const out=await run(['--scope','history'],undefined,suffixEnv);
+  assert.equal(out.error,undefined);assert.deepEqual(out.exits,[0]);assert.deepEqual(out.statuses,['diagnostic']);
+  assert.deepEqual(out.calls.filter(name=>name.startsWith('suffix:')),Array.from({length:12},(_,i)=>[`suffix:${i+1}:history`,`suffix:${i+1}:activity`]).flat());
+  const original=out.saved.get('result') as {historyTraffic:{reports:unknown[]};problems:string[]};
+  assert.deepEqual(original.problems,[]);assert.equal(original.historyTraffic.reports.length,1);
+  assert.deepEqual(safeEvidence(out.saved.get('history-suffix-result')),{mode:'diagnostic',status:'observations-completed',completed:24,expected:24,canonicalPass:false});
+  assert.equal((out.saved.get('scroll-control-disposition') as {status:string}).status,'noC3Observed');
+  assert.equal(out.calls.filter(name=>name==='suffix-close').length,1);
+  assert.ok(out.calls.indexOf('phase:history-suffix')>out.calls.indexOf('history'));
+  assert.ok(!out.calls.includes('openTab'));
+});
+test('a failed or unretained original history result cannot start the suffix',async()=>{
+  for(const fault of ['red','throw'] as const){
+    const out=await run(['--scope','history'],fault,suffixEnv);
+    assert.notEqual(out.exits[0],0);assert.ok(!out.calls.includes('suffix-proxy'));
+    if(fault==='red')assert.deepEqual((out.saved.get('result') as {problems:string[]}).problems,['history-red']);
+  }
+  for(const extra of [{TEST_SUFFIX_BAD_BASELINE:'1'},{TEST_SUFFIX_BIG_BASELINE:'1'}] as Record<string,string>[]){
+    const out=await run(['--scope','history'],undefined,{...suffixEnv,...extra});
+    assert.notEqual(out.exits[0],0);assert.ok(!out.calls.includes('suffix-proxy'));assert.ok(out.logs.some(line=>line.includes('baseline was not retained')));
+  }
+});
+test('the suffix stops on thrown or returned first failure and preserves the primary error through cleanup',async()=>{
+  for(const fault of ['suffix-throw','suffix-budget','suffix-returned-problems','suffix-error-cleanup'] as const){
+    const out=await run(['--scope','history'],fault,suffixEnv);
+    assert.notEqual(out.exits[0],0);assert.deepEqual(out.calls.filter(name=>name.startsWith('suffix:')),['suffix:1:history']);
+    assert.equal(out.calls.filter(name=>name==='suffix-close').length,1);
+    assert.equal((out.saved.get('history-suffix-result') as {completed:number}).completed,0);
+    assert.equal((out.saved.get('scroll-control-disposition') as {status:string}).status,'inconclusive');
+    assert.ok(out.logs.some(line=>line.includes(fault==='suffix-returned-problems'?'History suffix exceeded':'suffix-original')));
+    assert.ok(!out.logs.some(line=>line.includes('suffix-close-red')),'cleanup must not replace primary failure');
+  }
+});
+test('suffix cleanup failure and cancellation cannot advertise noC3Observed',async()=>{
+  for(const fault of ['suffix-cleanup','browser-close','suffix-cancel'] as const){
+    const out=await run(['--scope','history'],fault,suffixEnv);
+    assert.notEqual(out.exits[0],0);assert.notEqual((out.saved.get('scroll-control-disposition') as {status:string}).status,'noC3Observed');
+    assert.notEqual((out.saved.get('history-suffix-result') as {status?:string}|undefined)?.status,'noC3Observed');
+    assert.equal(out.calls.filter(name=>name==='suffix-close').length,1);
+    if(fault==='suffix-cancel')assert.deepEqual(out.calls.filter(name=>name.startsWith('suffix:')),['suffix:1:history']);
+  }
+});
+test('the suffix requires its exact internal opt-in and does not alter legacy or Beta callers',async()=>{
+  const {QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:_,...legacy}=suffixEnv;
+  const ordinary=await run(['--scope','history'],undefined,legacy);
+  assert.deepEqual(ordinary.exits,[0]);assert.ok(!ordinary.calls.includes('suffix-proxy'));
+  for(const patch of [{QUOTUM_BENCH_HISTORY_SCROLL_CONTROL:''},{QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:'2'},{QUOTUM_BENCH_DIAGNOSTICS_DIR:''},{QUOTUM_C3_CHROME:'beta'}] as Record<string,string>[]){
+    const out=await run(['--scope','history'],undefined,{...suffixEnv,...patch});
+    assert.match(String(out.error),/history suffix/);assert.ok(!out.calls.includes('prepare'));
+  }
+});
+test('the internal suffix environment exists only on the direct history control route',()=>{
+  const workflow=readFileSync(new URL('../../../.github/workflows/ci.yml',import.meta.url),'utf8');
+  const job=(name:string)=>workflow.split('  '+name+':\n')[1].split(/\n  [\w-]+:/)[0];
+  const expression=job('bench-history').match(/QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX: \$\{\{ (.+) \}\}/)![1];
+  for(const history_scroll_control of [false,true])for(const compositor_guard_control of [false,true]){
+    assert.equal(runInNewContext(expression,{inputs:{history_scroll_control,compositor_guard_control}}),history_scroll_control&&!compositor_guard_control?'1':'');
+  }
+  assert.equal(workflow.match(/QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:/g)?.length,1);
+  assert.ok(!job('startup-io-control').includes('QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX'));
 });
