@@ -135,6 +135,15 @@ within the existing two-second window. A reply records responsiveness through th
 it does not identify the cause of the original timeout.
 An explicit diagnostic replay may also intervene. Neither can provide a passing
 canonical result.
+`native-trace` and `native-profile` observe `activity/24h` by default. With either
+mode, `QUOTUM_BENCH_NATIVE_TARGET=session/30d` selects the five-hour limits chart at
+30d; the manual CI input `native_target` chooses the same cell. All dashboard
+scenarios keep their workloads, budgets and deadlines. The `session/30d` selection
+also writes `native-panning-receipt.json` after its measured report freezes. Movement
+intervals, consumed inputs, wrapped RAF callbacks and preparation slices share a
+4096-entry journal and a 4 MiB artifact bound. Missing coverage or overflow is
+insufficient evidence; trace overlap does not establish causal ownership, and
+instrumented runs cannot satisfy the required benchmark.
 The optional native trace retains fixed raster, tile preparation and activation scopes
 from its existing `cc` category, with numeric preparation IDs and task counts. These
 IDs are local to a tile manager; completed CPU tasks do not prove GPU readiness or

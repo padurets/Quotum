@@ -27,7 +27,7 @@ on:
         type: boolean
         default: false
       native_trace:
-        description: Trace activity at 24h within the complete original dashboard checks
+        description: Trace the selected native chart and period within all dashboard checks
         required: false
         type: boolean
         default: false
@@ -36,6 +36,12 @@ on:
         required: false
         type: boolean
         default: false
+      native_target:
+        description: Native trace cell; all dashboard scenarios still run
+        required: false
+        type: choice
+        default: activity/24h
+        options: [activity/24h, session/30d]
       caption_control:
         description: Compare the previous and current live captions with an A1/B/A2 control
         required: false
@@ -184,6 +190,7 @@ jobs:
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope dashboard
         env:
           QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.native_profile && 'native-profile' || inputs.native_trace && 'native-trace' || '' }}
+          QUOTUM_BENCH_NATIVE_TARGET: ${{ (inputs.native_trace || inputs.native_profile) && inputs.native_target || '' }}
           QUOTUM_BENCH_SOURCE_SHA: ${{ (inputs.native_trace || inputs.native_profile || inputs.caption_control) && inputs.diagnostic_ref || '' }}
           QUOTUM_BENCH_CAPTION_CONTROL: ${{ inputs.caption_control && '1' || '' }}
           QUOTUM_BENCH_CAPTION_BASELINE_DIR: ${{ runner.temp }}/quotum-caption-baseline/hub/dist/client/assets
