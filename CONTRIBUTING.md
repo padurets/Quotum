@@ -61,13 +61,13 @@ reads; missing processes and capped entries remain unknown. Attached browsers ar
 not inspected. Matching process IDs and birth ticks permit counter differences,
 not page attribution, continuous responsiveness or a cause of the timeout.
 After an owned command has failed and its page probe does not respond, Linux may
-capture one native renderer snapshot using an already installed LLDB. The renderer
+capture one native renderer snapshot using an already installed system GDB. The renderer
 with the largest cumulative CPU counter is selected; this does not bind it to the
 failed page. PID, birth, group, session, UID and tracing state are checked before
 attach. Only bounded thread identities and fixed wait classes are retained, never
 raw debugger text. Capture and helper cleanup use the existing five-second
 collection and two-second release windows. An unconfirmed detach, helper exit or
-pipe closure fails cleanup. Missing LLDB falls back to the existing page debugger;
+pipe closure fails cleanup. Missing GDB falls back to the existing page debugger;
 attached browsers and successful commands receive no native intervention.
 The manual CI `native_postmortem_control` qualifies this collector on the requested
 source and built-client hash using a separate runtime UID. It deliberately blocks
@@ -75,6 +75,9 @@ an owned blank page until the original 30-second command timeout, then requires
 native main-thread frames and confirmed cleanup. It does not execute the app client,
 reproduce the original intermittent hang, qualify forced helper failures or replace
 either required benchmark job. Select it without any other diagnostic mode.
+Diagnostic CI controls install GDB during setup and first start it after the original
+command failure. Package installation can affect the OS file cache; this does not
+qualify an untouched runner's cold debugger startup. Ordinary jobs do not install it.
 Page-evaluation exceptions retain their original command and scenario too, without
 page text or source. Later cleanup timeouts or crashes cannot replace the first failure.
 Gesture-completion frames follow each data plot's actual HTML or SVG animation,

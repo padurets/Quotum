@@ -1,5 +1,5 @@
 import {spawn} from 'node:child_process';
-import {access, readFile, readdir} from 'node:fs/promises';
+import {access, readFile} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {setTimeout as wait} from 'node:timers/promises';
 import {browserProcess, processIdentity, type ProcessIdentity} from './browserProcess.js';
@@ -10,15 +10,9 @@ export type NativeScope = {root:number;live():boolean;observe(signal:AbortSignal
   resource?(close:()=>Promise<void>):()=>Promise<void>};
 const MAX_OUTPUT = 64 * 1024;
 
-/** Distribution packages may expose only versioned names, without an lldb alias. */
+/** Use the fixed system debugger only; never search client-controlled paths. */
 export async function nativeDebugger(){
-  const names=await readdir('/usr/bin').catch(()=>[]);
-  const versions=names.filter(name=>/^lldb-\d{1,2}$/.test(name))
-    .sort((a,b)=>Number(b.slice(5))-Number(a.slice(5))).map(name=>'/usr/bin/'+name);
-  for(const file of [...versions,'/usr/bin/lldb','/usr/share/swift/usr/bin/lldb']){
-    try{await access(file,constants.X_OK);return file;}catch{}
-  }
-  return null;
+  try{await access('/usr/bin/gdb',constants.X_OK);return '/usr/bin/gdb';}catch{return null;}
 }
 
 /** Function classes, never native arguments, addresses, paths or arbitrary symbols. */
@@ -35,38 +29,43 @@ function frameKind(name:string) {
 
 export function nativeFrames(text:string) {
   const threads:{index:number;tid:number;frames:{index:number;kind:string;symbol:boolean}[]}[]=[];
-  let reading=false, current:typeof threads[number]|undefined, omitted=0;
-  for(const raw of text.split('\n')) {
+  let reading=false,started=false,ended=false,current:typeof threads[number]|undefined,omitted=0,partial=false;
+  for(const raw of text.split('\n')){
     const line=raw.replace(/\x1b\[[0-9;]*m/g,'');
-    if(line.startsWith('(lldb) thread backtrace ')){reading=true;continue;}
-    if(line.startsWith('(lldb) process detach'))reading=false;
+    if(line==='QGDB_BT_BEGIN'){if(started||ended)partial=true;started=true;reading=true;continue;}
+    if(line==='QGDB_BT_DONE'){if(!reading)partial=true;ended=true;reading=false;continue;}
     if(!reading)continue;
-    const thread=/^\s*\*?\s*quotum-thread=(\d+) tid=(0x[\da-f]+|\d+)\s*$/i.exec(line);
+    if(/Backtrace stopped:|Cannot access memory|Unable to read|No stack\.|Error while/i.test(line))partial=true;
+    const thread=/^Thread (\d+) \(.*\bLWP (\d+)\)/.exec(line);
     if(thread){
       current=undefined;
-      if(threads.length===32){omitted++;continue;}
       const index=Number(thread[1]),tid=Number(thread[2]);
-      if(Number.isSafeInteger(index)&&Number.isSafeInteger(tid)&&tid>0){current={index,tid,frames:[]};threads.push(current);}
+      if(threads.length===32){omitted++;partial=true;continue;}
+      if(!Number.isSafeInteger(index)||!Number.isSafeInteger(tid)||tid<=0||threads.some(t=>t.index===index||t.tid===tid)){partial=true;continue;}
+      current={index,tid,frames:[]};threads.push(current);continue;
+    }
+    if(/^Thread /.test(line))partial=true;
+    const frame=/^#(\d+)\s+(.*)$/.exec(line);
+    if(frame){
+      if(!current){partial=true;continue;}
+      if(current.frames.length===16){omitted++;partial=true;continue;}
+      const index=Number(frame[1]);
+      if(index!==current.frames.length){partial=true;continue;}
+      current.frames.push({index,kind:frameKind(frame[2]),symbol:!/^\s*(?:0x[\da-f]+\s+in\s+)?\?\?/i.test(frame[2])});
       continue;
     }
-    const frame=/^\s*\*?\s*quotum-frame=(\d+) function=(.*)$/.exec(line);
-    if(frame&&current){
-      if(current.frames.length===16){omitted++;continue;}
-      const index=Number(frame[1]);
-      if(Number.isSafeInteger(index))current.frames.push({index,kind:frameKind(frame[2]),symbol:!!frame[2]});
-    }
+    if(line.trim()&&!/^\s*(?:at |from |\(More stack frames follow\.\.\.\)$)/.test(line))partial=true;
   }
-  return {threads,omitted};
+  partial ||= !started||!ended||reading||!threads.length||threads.some(thread=>!thread.frames.length);
+  return {threads,omitted,partial};
 }
 
-/** Command echoes mark entry, not completion. Native text remains private. */
+/** Fixed debugger markers identify boundaries without returning native text. */
 export function nativeProgress(text:string){
-  return {settingsCommandSeen:/^\(lldb\) settings set /m.test(text),
-    attachCommandSeen:/^\(lldb\) process attach /m.test(text),
-    stopAcknowledged:/^Process \d+ stopped/m.test(text),
-    backtraceCommandSeen:/^\(lldb\) thread backtrace /m.test(text),
-    detachCommandSeen:/^\(lldb\) process detach/m.test(text),
-    detachAcknowledged:/^Process \d+ detached/m.test(text)};
+  const markers=text.match(/^QGDB_(?:SETTINGS|ATTACH|ATTACHED|BT_BEGIN|BT_DONE|DETACHED)$/gm)??[];
+  return {ordered:markers.join(',')==='QGDB_SETTINGS,QGDB_ATTACH,QGDB_ATTACHED,QGDB_BT_BEGIN,QGDB_BT_DONE,QGDB_DETACHED',settingsCommandSeen:/^QGDB_SETTINGS$/m.test(text),attachCommandSeen:/^QGDB_ATTACH$/m.test(text),
+    stopAcknowledged:/^QGDB_ATTACHED$/m.test(text),backtraceCommandSeen:/^QGDB_BT_BEGIN$/m.test(text),
+    detachCommandSeen:/^QGDB_BT_DONE$/m.test(text),detachAcknowledged:/^QGDB_DETACHED$/m.test(text)};
 }
 
 const current = async(pid:number,signal?:AbortSignal)=>{
@@ -89,6 +88,7 @@ export async function nativePostmortem(scope:NativeScope,candidates:NativeCandid
       firstStop:null as {fromMs:number;toMs:number;state:string}|null},
     helperSample:null as {fromMs:number;toMs:number;processes:ProcessIdentity[];omitted:number}|null,
     exit:null as number|null,cleanup:{term:false,kill:false,killExit:null as number|null},
+    partial:false,
     threads:[] as ReturnType<typeof nativeFrames>['threads'],omitted:0};
   try {
     if(process.platform!=='linux'||!scope.live()||!scope.resource)return report;
@@ -110,20 +110,21 @@ export async function nativePostmortem(scope:NativeScope,candidates:NativeCandid
       ||!['R','S'].includes(now.state)||now.tracer!==0||now.uid!==process.getuid?.())return report;
     signal.throwIfAborted();
     report.pid=now.pid;report.birth=now.birth;
-    const format='quotum-thread=${thread.index} tid=${thread.id}\\n';
-    const settings=['target.load-script-from-symbol-file false','target.load-cwd-lldbinit false',
-      'symbols.enable-external-lookup false','use-color false',`thread-format "${format}"`,
-      `thread-stop-format "${format}"`,'frame-format "quotum-frame=${frame.index} function=${function.name-without-args}\\n"'];
+    const settings=['set auto-load off','set debuginfod enabled off','set print frame-arguments none',
+      'set print entry-values no','set print frame-info location','set libthread-db-search-path $sdir',
+      'echo QGDB_SETTINGS\\n','echo QGDB_ATTACH\\n'];
     const args=['-c','IFS= read -r gate && [ "$gate" = capture ] && exec /usr/bin/timeout "$@"','native-postmortem',
-      '--foreground','--signal=TERM','--kill-after=0.2s','2s',executable,'--no-lldbinit','--batch',
-      ...settings.flatMap(value=>['-O','settings set '+value]),'--attach-pid',String(now.pid),
-      '-o','thread backtrace all -c 16','-o','process detach'];
+      '--foreground','--signal=TERM','--kill-after=0.2s','2s',executable,'-nx','-batch',
+      ...settings.flatMap(value=>['-iex',value]),'--pid',String(now.pid),
+      '-ex','echo QGDB_ATTACHED\\n','-ex','echo QGDB_BT_BEGIN\\n',
+      '-ex','thread apply all -c bt 16','-ex','echo QGDB_BT_DONE\\n',
+      '-ex','detach','-ex','echo QGDB_DETACHED\\n'];
     const environment={...process.env,DEBUGINFOD_URLS:''};
     const child=process.getuid?.()===0?spawn('/bin/sh',args,{detached:true,stdio:['pipe','pipe','pipe'],env:environment})
       :spawn('/usr/bin/sudo',['-n','--','/bin/sh',...args],{detached:true,stdio:['pipe','pipe','pipe'],env:environment});
     const helperOwner=browserProcess(child,true);
     report.intervened=child.pid!==undefined;
-    const chunks:Buffer[]=[];
+    const chunks:Buffer[]=[],diagnostics:Buffer[]=[];let retainedBytes=0;
     let failed=false;
     const terminate=()=>{if(child.exitCode===null&&child.signalCode===null)try{report.cleanup.term=child.kill('SIGTERM');}catch{}};
     const closed=new Promise<void>(resolve=>{
@@ -132,11 +133,15 @@ export async function nativePostmortem(scope:NativeScope,candidates:NativeCandid
       child.once('close',()=>{report.pipesClosed=true;resolve();});
     });
     child.stdout.on('data',(value:Buffer)=>{
-      const room=Math.max(0,MAX_OUTPUT-report.outputBytes);report.outputBytes+=value.length;
+      const room=Math.max(0,MAX_OUTPUT-retainedBytes);report.outputBytes+=value.length;retainedBytes+=Math.min(room,value.length);
       if(room)chunks.push(value.subarray(0,room));
-      if(report.outputBytes>MAX_OUTPUT){report.outputLimited=true;void stop();}
+      if(report.outputBytes+report.diagnosticBytes>MAX_OUTPUT){report.outputLimited=true;void stop();}
     });
-    child.stderr.on('data',(value:Buffer)=>{report.diagnosticBytes+=value.length;});
+    child.stderr.on('data',(value:Buffer)=>{
+      const room=Math.max(0,MAX_OUTPUT-retainedBytes);report.diagnosticBytes+=value.length;retainedBytes+=Math.min(room,value.length);
+      if(room)diagnostics.push(value.subarray(0,room));
+      if(report.outputBytes+report.diagnosticBytes>MAX_OUTPUT){report.outputLimited=true;void stop();}
+    });
     child.stdin.on('error',()=>{failed=true;});
     let stopping:Promise<void>|undefined;
     const stop=()=>stopping??=deadline(1000,async cleanup=>{
@@ -219,7 +224,8 @@ export async function nativePostmortem(scope:NativeScope,candidates:NativeCandid
     const transcript=Buffer.concat(chunks).toString('utf8');
     report.progress=nativeProgress(transcript);
     const parsed=nativeFrames(transcript);
-    report.threads=parsed.threads;report.omitted=parsed.omitted;
+    parsed.partial ||= Buffer.concat(diagnostics).toString('utf8').trim().length>0;
+    report.threads=parsed.threads;report.omitted=parsed.omitted;report.partial=parsed.partial;
     // A debugger frontend can exit before its native tracing backend detaches.
     await deadline(200,async pending=>{
       for(;;){
@@ -230,7 +236,7 @@ export async function nativePostmortem(scope:NativeScope,candidates:NativeCandid
       }
     }).catch(()=>{});
     report.status=!failed&&report.exit===0&&!report.outputLimited&&report.released&&report.reaped&&report.pipesClosed
-      &&report.threads.some(row=>row.frames.length)?'observed':'incomplete';
+      &&!report.partial&&Object.values(report.progress).every(Boolean)&&report.threads.some(row=>row.frames.length)?'observed':'incomplete';
   } catch {report.status=report.intervened?'incomplete':'unavailable';}
   finally {report.toMs=performance.now();}
   return report;

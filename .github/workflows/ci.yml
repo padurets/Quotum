@@ -144,6 +144,9 @@ jobs:
         env:
           CONFLICTING_MODE: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control }}
         run: node -e 'if(process.env.CONFLICTING_MODE==="true")throw Error("Choose only the history scroll control")'
+      - name: Prepare the diagnostic native debugger
+        if: ${{ inputs.history_scroll_control }}
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gdb
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope history
         env:
           QUOTUM_BENCH_HISTORY_SCROLL_CONTROL: ${{ inputs.history_scroll_control && '1' || '' }}
@@ -299,6 +302,8 @@ jobs:
         run: node -e 'if(["TRACE","PROFILE","NATIVE_TRACE","NATIVE_PROFILE","CAPTION","HISTORY_SCROLL"].some(k=>process.env[k]==="true"))throw Error("Choose only the native postmortem control")'
       - run: npm ci
       - run: npm run build
+      - name: Prepare the diagnostic native debugger
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gdb
       - name: Run the owned native control under a separate UID
         env:
           SOURCE_SHA: ${{ inputs.diagnostic_ref }}
@@ -332,7 +337,7 @@ jobs:
           console.log(createHash('sha256').update(readFileSync(file)).digest('hex')+'  '+file);
           console.log(execFileSync(file,['--version'],{encoding:'utf8',timeout:2000}));
           const started=performance.now();
-          const probe=spawnSync('/usr/bin/sudo',['-n','--','/usr/bin/timeout','--signal=TERM','--kill-after=0.2s','2s',file,'--no-lldbinit','--batch','-o','quit'],{encoding:'utf8',timeout:2500,maxBuffer:65536});
+          const probe=spawnSync('/usr/bin/sudo',['-n','--','/usr/bin/timeout','--signal=TERM','--kill-after=0.2s','2s',file,'-nx','-batch','-ex','quit'],{encoding:'utf8',timeout:2500,maxBuffer:65536});
           console.log(JSON.stringify({kind:'debugger-startup-after-capture',cold:false,elapsedMs:performance.now()-started,exit:probe.status,signal:probe.signal,
             outputBytes:Buffer.byteLength(probe.stdout??''),diagnosticBytes:Buffer.byteLength(probe.stderr??'')}));
           JS
