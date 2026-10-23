@@ -48,6 +48,16 @@ export function nativeFrames(text:string) {
   return {threads,omitted};
 }
 
+/** Command echoes mark entry, not completion. Native text remains private. */
+export function nativeProgress(text:string){
+  return {settingsCommandSeen:/^\(lldb\) settings set /m.test(text),
+    attachCommandSeen:/^\(lldb\) process attach /m.test(text),
+    stopAcknowledged:/^Process \d+ stopped/m.test(text),
+    backtraceCommandSeen:/^\(lldb\) thread backtrace /m.test(text),
+    detachCommandSeen:/^\(lldb\) process detach/m.test(text),
+    detachAcknowledged:/^Process \d+ detached/m.test(text)};
+}
+
 const current = async(pid:number,signal?:AbortSignal)=>{
   const [stat,status]=await Promise.all([
     readFile(`/proc/${pid}/stat`,{encoding:'utf8',signal}),
@@ -62,7 +72,8 @@ export async function nativePostmortem(scope:NativeScope,candidates:NativeCandid
   const fromMs=performance.now();
   const report={status:'unavailable',kind:'owned-renderer-after-failure',reason:'largest-cumulative-renderer-cpu',
     fromMs,toMs:null as number|null,intervened:false,released:false,reaped:false,pipesClosed:false,
-    candidateCount:0,omittedCandidates:0,pid:0,birth:'',stdoutBytes:0,stderrBytes:0,outputLimited:false,
+    candidateCount:0,omittedCandidates:0,pid:0,birth:'',outputBytes:0,diagnosticBytes:0,outputLimited:false,
+    progress:nativeProgress(''),
     exit:null as number|null,cleanup:{term:false,kill:false,killExit:null as number|null},
     threads:[] as ReturnType<typeof nativeFrames>['threads'],omitted:0};
   try {
@@ -106,11 +117,11 @@ export async function nativePostmortem(scope:NativeScope,candidates:NativeCandid
       child.once('close',()=>{report.pipesClosed=true;resolve();});
     });
     child.stdout.on('data',(value:Buffer)=>{
-      const room=Math.max(0,MAX_OUTPUT-report.stdoutBytes);report.stdoutBytes+=value.length;
+      const room=Math.max(0,MAX_OUTPUT-report.outputBytes);report.outputBytes+=value.length;
       if(room)chunks.push(value.subarray(0,room));
-      if(report.stdoutBytes>MAX_OUTPUT){report.outputLimited=true;void stop();}
+      if(report.outputBytes>MAX_OUTPUT){report.outputLimited=true;void stop();}
     });
-    child.stderr.on('data',(value:Buffer)=>{report.stderrBytes+=value.length;});
+    child.stderr.on('data',(value:Buffer)=>{report.diagnosticBytes+=value.length;});
     child.stdin.on('error',()=>{failed=true;});
     let stopping:Promise<void>|undefined;
     const stop=()=>stopping??=deadline(1000,async cleanup=>{
@@ -169,7 +180,9 @@ export async function nativePostmortem(scope:NativeScope,candidates:NativeCandid
       signal.removeEventListener('abort',cancel);
       await release();
     }
-    const parsed=nativeFrames(Buffer.concat(chunks).toString('utf8'));
+    const transcript=Buffer.concat(chunks).toString('utf8');
+    report.progress=nativeProgress(transcript);
+    const parsed=nativeFrames(transcript);
     report.threads=parsed.threads;report.omitted=parsed.omitted;
     // A debugger frontend can exit before its native tracing backend detaches.
     await deadline(200,async pending=>{

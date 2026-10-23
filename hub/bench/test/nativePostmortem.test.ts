@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {nativeFrames,nativePostmortem} from '../nativePostmortem.js';
+import {nativeFrames,nativePostmortem,nativeProgress} from '../nativePostmortem.js';
 import {safeEvidence} from '../evidence.js';
 
 test('native receipts retain thread identity and fixed wait classes without native symbol text',()=>{
@@ -29,4 +29,14 @@ test('a missing run owner or a terminated browser cannot grant native attach aut
     const report=await nativePostmortem(value,[{pid:101,cpuTime:1}],new AbortController().signal);
     assert.equal(report.status,'unavailable');assert.equal(report.intervened,false);
   }
+});
+
+test('native command progress and byte counts survive evidence filtering without treating an echo as completion',()=>{
+  const progress=nativeProgress('(lldb) settings set private-canary\n(lldb) process attach --pid 101\nprivate-canary\n');
+  const saved=safeEvidence({progress,outputBytes:123,diagnosticBytes:45});
+  assert.deepEqual(saved,{progress:{settingsCommandSeen:true,attachCommandSeen:true,stopAcknowledged:false,
+    backtraceCommandSeen:false,detachCommandSeen:false,detachAcknowledged:false},outputBytes:123,diagnosticBytes:45});
+  assert.doesNotMatch(JSON.stringify(saved),/private-canary|--pid/);
+  assert.deepEqual(nativeProgress('Process 101 stopped\n(lldb) thread backtrace all -c 16\n(lldb) process detach\nProcess 101 detached'),
+    {settingsCommandSeen:false,attachCommandSeen:false,stopAcknowledged:true,backtraceCommandSeen:true,detachCommandSeen:true,detachAcknowledged:true});
 });
