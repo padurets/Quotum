@@ -673,8 +673,14 @@ It runs one owned benchmark process with the original controlled traffic prefix,
 24 native history cohorts and the six native cancellation cohorts, with every original
 assertion, reference-cut rule and deadline. The diagnostic prefix must complete without
 invalidations or budget failures. GDB is prepared before the run and first used only
-after an original failed command. A completed diagnostic is an observation, never a
-canonical benchmark pass or proof that a hang was repaired. Ordinary history checks
+after an original failed command. This control also downloads the official debug archive
+for the installed Chrome version and installs only its unwind tables under the matching
+system build ID. Build IDs and the retained table bytes must agree; full symbol and
+source tables are discarded before Chrome starts. GDB still has its two-second limit,
+and saved frame positions are symbolized offline. Preparation does not execute Chrome
+or GDB; its effects on the OS file cache are not qualified. A completed diagnostic is
+an observation, never a canonical benchmark pass or proof that a hang was repaired.
+Ordinary history checks
 retain the same full matrix without diagnostic package preparation.
 
 ## Pull requests
