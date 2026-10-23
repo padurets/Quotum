@@ -216,6 +216,12 @@ class QuotaIndex {
 
   sharesWork(activity:WorkTimeline|undefined,known:number){return this.activity===activity&&Object.is(this.known,known);}
   get bytes(){return [this.deadlines,this.spent,this.covered,this.worked,this.during].reduce((n,c)=>n+numberBytes(c),0)+(this.times instanceof Float64Array?numberBytes(this.times):0);}
+  /** A retained prior still owns every borrowed column during preparation. */
+  newBytes(prior?:QuotaIndex){
+    const before=prior?[prior.deadlines,prior.spent,prior.covered,prior.worked,prior.during]:[];
+    return [this.deadlines,this.spent,this.covered,this.worked,this.during].reduce((n,c,i)=>n+(c===before[i]?0:numberBytes(c)),0)
+      +(this.times instanceof Float64Array&&this.times!==prior?.times?numberBytes(this.times):0);
+  }
   /** Zero spending is distinguished by whether measured time remains. */
   spendingStateChangesAt(now:number,period:number){
     const count=this.times.length;if(!count)return Infinity;
@@ -512,9 +518,11 @@ export class PeriodAccounting {
     for(const series of tape.quota) {
       const activity=workCurves?.groups.source.get(series.source);
       const key=series.source+'\n'+series.window,old=prior?.quota.get(key),reuse=old?.series===series&&!changedWork.has(series.source);
-      if(!reuse)progress?.(preparedBytes+sampleCount(series.samples)*88+1024);
-      const index=reuse?old!:yield*QuotaIndex.prepare(series,activity,series.workFrom===null?Infinity:Math.max(known,series.workFrom??0),old?.series===series?old:undefined,batchQuota);
-      if(!reuse){preparedBytes+=index.bytes;progress?.(preparedBytes);}
+      const cutoff=series.workFrom===null?Infinity:Math.max(known,series.workFrom??0);
+      // Work-only rebuilds borrow native prefixes; only two work columns need scratch and packing.
+      if(!reuse)progress?.(preparedBytes+sampleCount(series.samples)*(old?.series===series?(activity&&cutoff!==Infinity?32:0):88)+1024);
+      const index=reuse?old!:yield*QuotaIndex.prepare(series,activity,cutoff,old?.series===series?old:undefined,batchQuota);
+      if(!reuse){preparedBytes+=index.newBytes(old);progress?.(preparedBytes);}
       value.quota.set(key,index);value.sampleTimes.set(key,index.times);
     }
     for(const group of tape.money){

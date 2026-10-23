@@ -725,7 +725,9 @@ class BoardPeriod {
             charge('work',base);
             if(index)index=yield*index.retain(work,bytes=>{scratch+=bytes;charge('work',base+scratch);});
             else {charge('work',workBytes(work,0)+workPreparationBytes(work));index=yield*PeriodIndex.prepare(work);}
-            activity=yield*PeriodActivity.prepare(work,index.curves);charge('work',workBytes(work,index.curves.bytes));
+            activity=yield*PeriodActivity.prepare(work,index.curves);
+            const borrowed=previousIndex&&previousWork?.packed&&work.packed?index.curves.borrowedBytes:0;
+            charge('work',workBytes(work,index.curves.bytes)-borrowed);
           }else sizes.delete('work');
         }
         const changedWork=new Set<string>(),tapes=new Map(previousTapes);let changedBytes=0;

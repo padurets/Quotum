@@ -24,6 +24,7 @@ test('retained work curves keep exact intervals, membership and ordering after r
     for(const from of [H+6,H+101,2*H+50,3*H+12,4*H+23,5*H+90]){
       const next=drain(retainWork(work,from));index=drain(index.retain(next,()=>{}));work=next;
       const fresh=new PeriodIndex(work),activity=new PeriodActivity(work,index.curves),freshActivity=new PeriodActivity(work,fresh.curves);
+      assert.equal(fresh.curves.borrowedBytes,0);
       assert.equal(index.trace,work);assert.equal(index.curves.trace,work);
       for(const dimension of ['source','project','device'] as const)assert.deepEqual([...index.curves.groups[dimension].keys()],[...fresh.curves.groups[dimension].keys()]);
       for(const start of [from,from+1,from+37,H+100,2*H+17,3*H,5*H].filter(at=>at>=from))for(const end of [start,start+1,start+101,start+H,6*H].filter(at=>at>=start)){
@@ -52,7 +53,11 @@ test('prefix retention copies only trimmed timeline buffers and counts shared cu
   for(const curve of buffers(trimmed).curves)assert.ok(buffers(curves.contexts[1]).curves.includes(curve),'surviving patterns are immutable and shared');
   const unique=timelines(next),patterns=new Set([...unique].flatMap(timeline=>buffers(timeline).curves));
   assert.equal(next.bytes,[...unique].reduce((sum,timeline)=>sum+timeline.bytes,0)+[...patterns].reduce((sum,curve)=>sum+curve.bytes,0));
-  const allocated=[...unique].filter(timeline=>!timelines(curves).has(timeline)).reduce((sum,timeline)=>sum+timeline.bytes,0);
+  const previous=timelines(curves),allocated=[...unique].filter(timeline=>!previous.has(timeline)).reduce((sum,timeline)=>sum+timeline.bytes,0);
+  const borrowed=[...unique].filter(timeline=>previous.has(timeline)).reduce((sum,timeline)=>sum+timeline.bytes,0)+[...patterns].reduce((sum,curve)=>sum+curve.bytes,0);
+  assert.equal(curves.borrowedBytes,0,'a fresh build owns its full retained size');
+  assert.equal(next.borrowedBytes,borrowed,'only exact old object identities are borrowed, counted once');
+  assert.equal(next.bytes-next.borrowedBytes,allocated,'copied timeline buffers remain charged');
   assert.ok(reserved>=allocated,'new buffers and preparation metadata are admitted before allocation');
   const allGone=drain(retainWork(work,6*H)),empty=drain(next.retain(allGone,()=>{}));
   assert.deepEqual(empty.contexts,[]);assert.equal(buffers(empty.all).hours.length,0);assert.deepEqual(buffers(empty.all).curves,[]);
@@ -69,4 +74,17 @@ test('cancelling or refusing retained curve preparation leaves the authoritative
     assert.deepEqual([...timelines(index.curves)].map(timeline=>Array.from(buffers(timeline).agents)),owned);
   }
   assert.deepEqual(drain(index.retain(retained,()=>{})).advance({from:H+6,to:6*H},6*H).rows,new PeriodIndex(retained).advance({from:H+6,to:6*H},6*H).rows);
+});
+
+test('borrowed curve bytes are relative to the immediate previous owner after repeated cuts',()=>{
+  let work=packWork(trace()),curves=new PeriodCurves(work);
+  for(const from of [H+6,2*H+50,4*H+23,6*H]){
+    const before=curves,owned=timelines(before),patterns=new Set([...owned].flatMap(timeline=>buffers(timeline).curves));
+    work=drain(retainWork(work,from));curves=drain(before.retain(work,()=>{}));
+    const kept=timelines(curves),shared=new Set([...kept].flatMap(timeline=>buffers(timeline).curves));
+    for(const curve of shared)assert.ok(patterns.has(curve),'retirement creates no replacement Curve');
+    const borrowed=[...kept].filter(timeline=>owned.has(timeline)).reduce((sum,timeline)=>sum+timeline.bytes,0)+[...shared].reduce((sum,curve)=>sum+curve.bytes,0);
+    assert.equal(curves.borrowedBytes,borrowed,'prior borrowed counters are not accumulated');
+    assert.ok(curves.borrowedBytes>=0&&curves.borrowedBytes<=curves.bytes);
+  }
 });

@@ -243,3 +243,34 @@ test('a real pool refusal after spent copy preserves committed quota evidence an
     assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes);
   }finally{h.pool.reserve=reserve;c.stopReads();await h.close();c.preparer.dispose();}
 });
+
+for(const packed of [false,true])test(`work-only quota preparation charges new prefixes and retains native ownership (${packed?'packed':'flat'})`,async()=>{
+  const {packSamples,retainSamplesPrepared,numberBytes}=await import('../../server/domain/periodTape');
+  const {drain}=await import('../../server/domain/prepare');
+  const count=4096,cut=count*1000,fields=['times','deadlines','spent','covered','worked','during'];
+  const flat=packSamples(Array.from({length:count},(_,i)=>({at:i*1000,used:i*.005,resetAt:1e9,staleAfterMs:2000})));
+  const series={source:'s',window:'w',samples:packed?drain(retainSamplesPrepared(flat)):flat};
+  const tape:import('../../server/domain/periodTape').PeriodTape={from:0,cut,replaceFrom:0,cursor:'fixture',quota:[series],money:[]};
+  const work:import('../../server/domain/periodWork').WorkTrace={anchor:0,cut,knownFrom:0,refs:[{ref:'r',source:'s',device:{id:'d',name:'fixture'},origin:'terminal',project:null,folder:null,startedAt:0}],spans:[[0,0,cut]]};
+  const prior=new PeriodAccounting(tape,work,new PeriodIndex(work).curves),old=(prior as any).quota.get('s\nw');
+  assert.ok(old.spent.values instanceof Float64Array);assert.ok(old.covered.runs);
+  const before=fields.map(field=>Array.from({length:count},(_,i)=>numberAt(old[field],i)));
+  for(const mode of ['removed','trimmed','unavailable','unchanged','new-series']){
+    const nextWork:typeof work=mode==='removed'?{...work,refs:[],spans:[]}:mode==='trimmed'?{...work,spans:[[0,cut/2,cut]]}:mode==='unavailable'?{...work,available:false}:work;
+    const nextTape=mode==='new-series'?{...tape,quota:[{...series}]}:tape,curves=new PeriodIndex(nextWork).curves,charges:number[]=[];
+    const next=drain(PeriodAccounting.prepare(nextTape,nextWork,curves,prior,mode==='unchanged'?new Set():new Set(['s']),bytes=>charges.push(bytes)));
+    const index=(next as any).quota.get('s\nw'),fresh=new PeriodAccounting(nextTape,nextWork,curves),oracle=(fresh as any).quota.get('s\nw');
+    for(const [j,field] of fields.entries()){
+      assert.deepEqual(Array.from({length:count},(_,i)=>numberAt(index[field],i)),Array.from({length:count},(_,i)=>numberAt(oracle[field],i)),mode+' '+field);
+      assert.deepEqual(Array.from({length:count},(_,i)=>numberAt(old[field],i)),before[j],'old prefix remains immutable');
+    }
+    for(const range of [{from:0,to:cut},{from:1,to:cut-1},{from:cut/2,to:cut}])assert.deepEqual(next.quotaSummary('s','w',range),fresh.quotaSummary('s','w',range));
+    if(mode==='unchanged'){assert.equal(index,old);assert.deepEqual(charges,[]);continue;}
+    const owned=fields.reduce((bytes,field)=>bytes+(index[field]===old[field]||field==='times'&&!(index.times instanceof Float64Array)?0:numberBytes(index[field])),0);
+    assert.equal(charges.at(-1),owned,'borrowed buffers stay charged to their prior owner');
+    if(mode==='new-series'){assert.equal(charges[0],count*88+1024);assert.equal(owned,index.bytes);continue;}
+    for(const field of fields.slice(0,4))assert.equal(index[field],old[field]);
+    assert.equal(charges[0],mode==='trimmed'?count*32+1024:1024);assert.ok(owned<=charges[0]);
+    if(mode!=='trimmed')assert.equal(owned,64,'no available work needs only two constant columns');
+  }
+});

@@ -200,6 +200,7 @@ export class PeriodCurves {
   readonly groups={source:new Map<string,WorkTimeline>(),project:new Map<string,WorkTimeline>(),device:new Map<string,WorkTimeline>()};
   all!:WorkTimeline;
   private retainedBytes=0;
+  private borrowedRetainedBytes=0;
   constructor(readonly trace:WorkTrace,deferred=false){if(!deferred)drain(this.build());}
   static *prepare(trace:WorkTrace):Preparation<PeriodCurves>{const value=new PeriodCurves(trace,true);yield*value.build();return value;}
   /** retainWork preserves reference objects and removes only evidence before its new anchor. */
@@ -211,7 +212,8 @@ export class PeriodCurves {
     const keep=function*(timeline:WorkTimeline):Preparation<WorkTimeline>{
       const known=timelines.get(timeline);if(known)return known;
       reserve(64);const next=timeline.retain(trace.anchor,reserve);timelines.set(timeline,next);
-      value.retainedBytes+=yield*next.measure(curves,reserve);return next;
+      const bytes=yield*next.measure(curves,reserve);value.retainedBytes+=bytes;
+      value.borrowedRetainedBytes+=bytes-(next===timeline?0:next.bytes);return next;
     };
     value.all=yield*keep(this.all);
     for(const ref of trace.refs){const id=refs.get(ref);if(id===undefined)throw new Error('retained work changed its context');value.contexts.push(yield*keep(this.contexts[id]));yield;}
@@ -247,4 +249,6 @@ export class PeriodCurves {
     this.retainedBytes=retained;
   }
   get bytes(){return this.retainedBytes;}
+  /** Bytes still owned by the immediate prior while this retained copy is prepared. */
+  get borrowedBytes(){return this.borrowedRetainedBytes;}
 }
