@@ -721,13 +721,15 @@ class BoardPeriod {
         if(work){
           work=yield*retention.retainWork(work,from,bytes=>{scratch+=bytes;charge('work',scratch);});
           if(work!==previousWork){
-            const base=workBytes(work,0)+work.refs.length*512;let scratch=0;
+            // The committed trace still owns every surviving raw pattern.
+            const borrowedPatterns=previousIndex&&previousWork?.packed&&work.packed?work.packed.patterns.reduce((bytes,pattern)=>bytes+pattern.length*8+32,0):0;
+            const base=workBytes(work,0)-borrowedPatterns+work.refs.length*512;let scratch=0;
             charge('work',base);
             if(index)index=yield*index.retain(work,bytes=>{scratch+=bytes;charge('work',base+scratch);});
             else {charge('work',workBytes(work,0)+workPreparationBytes(work));index=yield*PeriodIndex.prepare(work);}
             activity=yield*PeriodActivity.prepare(work,index.curves);
             const borrowed=previousIndex&&previousWork?.packed&&work.packed?index.curves.borrowedBytes:0;
-            charge('work',workBytes(work,index.curves.bytes)-borrowed);
+            charge('work',workBytes(work,index.curves.bytes)-borrowed-borrowedPatterns);
           }else sizes.delete('work');
         }
         const changedWork=new Set<string>(),tapes=new Map(previousTapes);let changedBytes=0;

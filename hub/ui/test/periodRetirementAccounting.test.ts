@@ -274,3 +274,48 @@ for(const packed of [false,true])test(`work-only quota preparation charges new p
     if(mode!=='trimmed')assert.equal(owned,64,'no available work needs only two constant columns');
   }
 });
+
+
+test('clock retirement reserves new packed blocks without charging borrowed raw patterns twice',async t=>{
+  const {readFileSync}=await import('node:fs'),{runInNewContext}=await import('node:vm'),{default:ts}=await import('typescript');
+  const {PeriodActivity}=await import('../../server/domain/periodActivity');
+  let now=NOW;t.mock.method(Date,'now',()=>now);const start=NOW-24*H;
+  const h=await fixture({personal:true,periodName:'24h',clocked:true,creditFrom:start+2*M,creditTo:start+5*M});
+  const reserve=h.pool.reserve.bind(h.pool),calls:{owner:object;bytes:number}[]=[];
+  let base:{owner:object;bytes:number}|undefined,final:typeof base,retained:any,nextCurves:any,afterActivity=false;
+  try{
+    h.store.creditWork(h.device,start+H+10*M,start+H+30*M,[{source:h.source,client:'codex',origin:'terminal',startedAt:start-H,project:'Work project',folder:'Private folder',identity:{kind:'stable',sessionId:'d'.repeat(32)}}]);
+    h.events.flush();await flush();
+    const previous=h.period.get().value,priorIndex=h.period.index,oldTape=h.period.tapes.get('quota'),oldJson=JSON.stringify(previous),requests=h.requests.length;
+    assert.ok(previous.packed);assert.equal(previous.refs.length,2);
+    h.pool.reserve=(owner,bytes)=>{if(h.period.retirementPreparing){const call={owner,bytes};calls.push(call);if(afterActivity&&!final)final=call;}return reserve(owner,bytes);};
+    const retain=priorIndex.retain.bind(priorIndex),prepare=PeriodActivity.prepare;
+    t.mock.method(priorIndex,'retain',function*(work:any,grow:any):Generator<void|16,any,void>{
+      retained=work;base=calls.at(-1);return yield*retain(work,grow);
+    });
+    t.mock.method(PeriodActivity,'prepare',function*(...args:Parameters<typeof prepare>):Generator<void|16,any,void>{
+      const value=yield*Reflect.apply(prepare,PeriodActivity,args);nextCurves=args[1];afterActivity=true;return value;
+    });
+    now=NOW+5*M+1;h.jump(now);await flush();
+    assert.ok(base&&final&&retained?.packed&&nextCurves);assert.equal(base.owner,final.owner);
+    assert.notEqual(retained,previous);assert.notEqual(retained.packed.blocks,previous.packed.blocks);assert.notEqual(retained.packed.patterns,previous.packed.patterns);
+    for(const pattern of retained.packed.patterns)assert.ok(previous.packed.patterns.includes(pattern),'every surviving raw pattern remains owned by the prior trace');
+    for(const ref of retained.refs)assert.ok(previous.refs.includes(ref));
+    const borrowed=retained.packed.patterns.reduce((bytes:number,pattern:number[])=>bytes+pattern.length*8+32,0);assert.ok(borrowed>0);
+    // Use the unchanged production retained-size model; exercise the actual coordinator reserve chain.
+    const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
+    const model=runInNewContext(ts.transpileModule(source.slice(source.indexOf('const workBytes='),source.indexOf('const quotaTapeBytes='))+'workBytes;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText);
+    assert.equal(base.bytes,model(retained,0)+retained.refs.length*512-borrowed);
+    assert.equal(final.bytes,model(retained,nextCurves.bytes)-nextCurves.borrowedBytes-borrowed);
+    assert.equal(JSON.stringify(previous),oldJson,'retirement cannot mutate the prior owner');
+    assert.equal(h.period.get().value,retained);assert.equal(h.requests.length,requests);assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes,'all staging is released after commit');
+    assert.notEqual(h.period.tapes.get('quota').accounting,oldTape.accounting);
+    const range={from:now-24*H,to:now},queries=h.period.queries(h.page.get().board,range);
+    const fresh=expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,{version:1,selection:{mode:'live',periodMs:24*H},evaluatedAt:now,...queries,sessions:{}})));
+    assert.ok(fresh.sessions&&fresh.sessions.state!=='error'&&fresh.quota?.state==='complete'&&fresh.quota.value.tape);
+    const tape=fresh.quota.value.tape;for(const series of tape.quota)if(series.samplesEncoding==='delta'){series.samples=decodeSamples(series.samples);delete series.samplesEncoding;}
+    const index=new PeriodIndex(fresh.sessions.value),oracle=new PeriodAccounting(tape,fresh.sessions.value,index.curves),actual=h.period.tapes.get('quota').accounting;
+    for(const selected of [range,{from:range.from+1,to:range.to-1},{from:start+H,to:start+2*H}])assert.deepEqual(actual.quotaSummary(h.source,'w',selected),oracle.quotaSummary(h.source,'w',selected));
+    assert.deepEqual(actual.fixed(range,10*M),oracle.fixed(range,10*M));
+  }finally{h.pool.reserve=reserve;await h.close();}
+});
