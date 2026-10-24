@@ -542,73 +542,208 @@ jobs:
           PY
           cat > "$RUNNER_TEMP/quotum-c1-aba.mjs" <<'JS'
           import assert from 'node:assert/strict';
-          import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
+          import {mkdirSync,readFileSync,writeFileSync,writeSync} from 'node:fs';
           import {execFileSync} from 'node:child_process';
+          import {createServer} from 'node:net';
           import path from 'node:path';
           import {pathToFileURL} from 'node:url';
 
+
           const write=(file,value)=>{const text=JSON.stringify(value,null,2)+'\n';if(Buffer.byteLength(text)>1024*1024)throw Error('Diagnostic file cap');writeFileSync(file,text,{flag:'wx'});};
-          export async function runABA({chrome,shim,directory},{launch,Owner,pins}){
-            mkdirSync(directory,{recursive:true});const before=pins();write(path.join(directory,'source-before.json'),before);
-            const trials=[];let current,cancelled=false,historyReady=false;
-            const keys=['QUOTUM_C1_REAL_CHROME','QUOTUM_C1_TRIAL','QUOTUM_C1_RECEIPT'],previous=Object.fromEntries(keys.map(key=>[key,process.env[key]]));
-            const cancel=()=>{cancelled=true;void current?.close().catch(()=>{});};
+
+          /** Exactly one trial per CLI process; prefix and browser lifetimes belong to it. */
+          export async function runTrial({trial,chrome,shim,directory},{launch,Owner,pins,preparePrefix,save=write}){
+            assert.ok(['A1','B','A2'].includes(trial));mkdirSync(directory,{recursive:true});
+            const before=pins(),owner=new Owner(),keys=['QUOTUM_C1_REAL_CHROME','QUOTUM_C1_TRIAL','QUOTUM_C1_RECEIPT'];
+            const previous=Object.fromEntries(keys.map(key=>[key,process.env[key]]));
+            let prefix,browser,report,first,prefixFailure,ownerFailure,prefixStopFailure,cancelled=false;
+            const cancel=()=>{cancelled=true;void owner.close().catch(()=>{});};
             const signals=['SIGINT','SIGTERM','SIGHUP'];for(const signal of signals)process.once(signal,cancel);
             try{
-              for(const trial of ['A1','B','A2']){
-                if(cancelled)break;
-                const dir=path.join(directory,trial);mkdirSync(dir);current=new Owner();let browser,report,first;
-                process.env.QUOTUM_C1_REAL_CHROME=chrome;process.env.QUOTUM_C1_TRIAL=trial;process.env.QUOTUM_C1_RECEIPT=path.join(dir,'shim-first.json');
+              save(path.join(directory,'source-before.json'),before);
+              process.env.QUOTUM_C1_REAL_CHROME=chrome;process.env.QUOTUM_C1_TRIAL=trial;process.env.QUOTUM_C1_RECEIPT=path.join(directory,'shim-first.json');
+              try{
+                prefix=await preparePrefix({signal:owner.signal,onExit:cancel});owner.signal.throwIfAborted();
+                save(path.join(directory,'prefix-first.json'),prefix.evidence);
                 try{
-                  browser=await current.start(signal=>launch(shim,false,signal));report=browser.launchReport?.();
+                  browser=await owner.start(signal=>launch(shim,false,signal));report=browser.launchReport?.();
                   first={status:report?.stage==='ready'?'ready':'unknown',report};
                 }catch(error){report=error.report;first={status:'failed',failure:error.name,report};}
-                write(path.join(dir,'startup-first.json'),first);let ownerFailure;
-                try{await current.close();}catch(error){ownerFailure=error.name;}
-                const last=browser?.launchReport?.()??report,cleanup=last?.cleanup;
-                const clean=cleanup?.status==='closed'&&cleanup.reaped===true&&cleanup.pipesClosed===true&&current.failures.length===0&&!ownerFailure;
-                const value={trial,first,cleanup,last,ownerFailures:current.failures,ownerFailure,clean,cancelled,shimReceipt:null};
-                try{value.shimReceipt=JSON.parse(readFileSync(path.join(dir,'shim-first.json'),'utf8'));}catch{}
-                write(path.join(dir,'cleanup-first.json'),value);trials.push(value);current=undefined;
-                if(!clean||cancelled||value.shimReceipt?.phase==='conditioning-failed')break;
+                save(path.join(directory,'startup-first.json'),first);
+              }catch(error){prefixFailure=error.name;}
+              finally{
+                // The backend must remain alive until the browser and its owned helpers close.
+                try{await owner.close();}catch(error){ownerFailure=error.name;}
+                try{await prefix?.stop();}catch(error){prefixStopFailure=error.name;}
               }
-              const after=pins();write(path.join(directory,'source-after.json'),after);
-              assert.deepEqual(after,before,'Source/client changed');
-              historyReady=!cancelled&&trials.length===3&&trials.every(value=>value.clean);
-              const result={kind:'startup-io-aba-mechanism',mode:'diagnostic',canonicalPass:false,C1RepairProven:false,
-                exactDemoPrefixReproduction:false,source:before,sourceAfter:after,originalStartupDeadlineMs:20000,
-                conditioning:'readonly ELF DONTNEED advice, not guaranteed eviction',trials,historyReady};
-              write(path.join(directory,'result-first.json'),result);return result;
+              const after=pins();save(path.join(directory,'source-after.json'),after);assert.deepEqual(after,before,'Source/client changed');
+              const last=browser?.launchReport?.()??report,cleanup=last?.cleanup;
+              const clean=!!prefix&&!prefixFailure&&!prefixStopFailure&&!ownerFailure&&!cancelled&&owner.failures.length===0&&cleanup?.status==='closed'&&cleanup.reaped===true&&cleanup.pipesClosed===true;
+              let shimReceipt=null;try{shimReceipt=JSON.parse(readFileSync(path.join(directory,'shim-first.json'),'utf8'));}catch{}
+              const result={kind:'startup-io-prefix-trial',trial,workerPid:process.pid,mode:'diagnostic',canonicalPass:false,C1RepairProven:false,
+                canonicalFixturePreparation:!!prefix,exactHistoricalStartReproduction:false,originalStartupDeadlineMs:20000,
+                source:before,sourceAfter:after,first,last,clean,cancelled,prefixFailure,prefixStopFailure,prefixStopOutcome:prefix?(prefixStopFailure?'failed':'completed'):'unknown',ownerFailure,ownerFailures:owner.failures,shimReceipt};
+              save(path.join(directory,'result-first.json'),result);return result;
             }finally{
-              try{await current?.close();}catch{} // A failed evidence write still releases the owned browser.
+              try{await owner.close();}catch{}
+              try{await prefix?.stop();}catch{}
               for(const signal of signals)process.removeListener(signal,cancel);
               for(const key of keys)if(previous[key]===undefined)delete process.env[key];else process.env[key]=previous[key];
             }
           }
 
-          if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
-            const [repository,chrome,shim,directory,...extra]=process.argv.slice(2);assert.equal(extra.length,0);assert.ok(directory);
+          /** The ordinary benchmark's current preparation, before it starts its browser. */
+          export async function preparePrefix(repository,{signal,onExit},dependencies){
+            const url=file=>pathToFileURL(path.join(repository,'hub',file)).href;
+            const [{addressOf,Demo,prepare},{SETS},{people},{fixtureTiming},{panningSet,seedPanningBudgets},{hear}]=dependencies??await Promise.all([
+              import(url('demo/index.ts')),import(url('demo/catalogue.ts')),import(url('demo/model.ts')),import(url('bench/still.ts')),import(url('bench/fixture.ts')),import(url('bench/stream.ts'))]);
+            signal.throwIfAborted();
+            const bind=process.env.QUOTUM_BIND||'127.0.0.1';
+            const port=await new Promise((resolve,reject)=>{const server=createServer();server.once('error',reject);server.listen({host:bind,port:0},()=>{const {port}=server.address();server.close(()=>resolve(port));});});
+            const address=addressOf({...process.env,QUOTUM_PORT:String(port)});await prepare(address);signal.throwIfAborted();
+            const set=panningSet(SETS[0]),timing=fixtureTiming(Date.now()),started=performance.now();
+            const demo=new Demo({set,scene:set.scene,still:true,idleAgents:true,money:false,start:timing.start,address,onExit});
+            let heard,stopping;
+            const stop=()=>stopping??=(async()=>{heard?.close();await demo.stop();})();
+            try{
+              const stand=await demo.run(signal);signal.throwIfAborted();
+              const aborted=()=>{void stop().catch(()=>{});};
+              signal.addEventListener('abort',aborted,{once:true});
+              try{
+                signal.throwIfAborted();
+                seedPanningBudgets(path.join(demo.dir,'quotum.sqlite'),stand);signal.throwIfAborted();
+                const ana=stand.people.get(people(set)[0].id),board=ana.personalBoard;
+                heard=await hear(address.base,ana.cookie,board);signal.throwIfAborted();
+                return{stop,evidence:{kind:'canonical-startup-prefix',prepared:true,fixtureTiming:timing,elapsedMs:performance.now()-started,hubPid:demo.pid,streamClosure:'worker-exit-required'}};
+              }finally{signal.removeEventListener('abort',aborted);}
+            }catch(error){try{await stop();}catch{/* Preserve the primary rejection; no prefix lease was confirmed. */}throw error;}
+          }
+
+
+
+          /** Pin only source and built client; no Chrome image content is read here. */
+          export function sourcePins(repository,clientIdentity,git=args=>execFileSync('git',['-C',repository,...args],{encoding:'utf8',timeout:1000}).trim()){
+            return()=>{
+              assert.match(process.env.QUOTUM_BENCH_SOURCE_SHA??'',/^[a-f0-9]{40}$/);
+              assert.match(process.env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256??'',/^[a-f0-9]{64}$/);
+              const sha=git(['rev-parse','HEAD']),tree=git(['rev-parse','HEAD^{tree}']),client=clientIdentity();
+              assert.equal(sha,process.env.QUOTUM_BENCH_SOURCE_SHA);assert.match(tree,/^[a-f0-9]{40}$/);
+              assert.equal(git(['status','--porcelain']),'');assert.equal(client.status,'available');
+              assert.equal(client.sha256,process.env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256);
+              return{sha,tree,client,dirty:false,run:process.env.GITHUB_RUN_ID??null,attempt:process.env.GITHUB_RUN_ATTEMPT??null};
+            };
+          }
+
+          export async function realDependencies({repository}){
             const url=file=>pathToFileURL(path.join(repository,'hub/bench',file)).href;
             const [{launchChrome},{RunOwner},{clientIdentity}]=await Promise.all([import(url('cdp.ts')),import(url('runOwner.ts')),import(url('evidence.ts'))]);
-            const git=args=>execFileSync('git',['-C',repository,...args],{encoding:'utf8',timeout:1000}).trim();
-            const pins=()=>{
-              assert.match(process.env.QUOTUM_BENCH_SOURCE_SHA??'',/^[a-f0-9]{40}$/);assert.match(process.env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256??'',/^[a-f0-9]{64}$/);
-              const sha=git(['rev-parse','HEAD']),tree=git(['rev-parse','HEAD^{tree}']),client=clientIdentity();
-              assert.equal(sha,process.env.QUOTUM_BENCH_SOURCE_SHA);assert.equal(git(['status','--porcelain']),'');
-              assert.equal(client.status,'available');assert.equal(client.sha256,process.env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256);
-              return {sha,tree,client,dirty:false,run:process.env.GITHUB_RUN_ID??null,attempt:process.env.GITHUB_RUN_ATTEMPT??null};
-            };
-            let result;
-            try{result=await runABA({chrome,shim,directory},{launch:launchChrome,Owner:RunOwner,pins});}
+            return{launch:launchChrome,Owner:RunOwner,pins:sourcePins(repository,clientIdentity),preparePrefix:args=>preparePrefix(repository,args)};
+          }
+
+          /** One fixed trial per process. A cleaned original startup failure is still retained. */
+          export async function workerMain(args,deps){
+            let options,result,errorKind,code=2;
+            try{
+              assert.equal(args.length,5);
+              const [repository,trial,chrome,shim,directory]=args;
+              assert.ok(['A1','B','A2'].includes(trial));
+              for(const value of [repository,chrome,shim,directory])assert.ok(typeof value==='string'&&path.isAbsolute(value));
+              options={repository,trial,chrome,shim,directory};
+              result=await runTrial(options,deps??await realDependencies(options));
+              code=result.clean===true&&result.shimReceipt?.phase==='exec-ready'?0:2;
+            }catch(error){errorKind=['AssertionError','TypeError','RangeError','AbortError','Error'].includes(error?.name)?error.name:'other';}
+            const summary={kind:'startup-io-prefix-worker',workerPid:process.pid,trial:options?.trial??null,code,canonicalPass:false,C1RepairProven:false,
+              clean:result?.clean===true,firstStatus:result?.first?.status??null,shimPhase:result?.shimReceipt?.phase??null,errorKind};
+            if(options)try{
+              mkdirSync(options.directory,{recursive:true});
+              writeFileSync(path.join(options.directory,'worker-first.json'),JSON.stringify(summary)+'\n',{flag:'wx',mode:0o600});
+            }catch{code=summary.code=2;summary.errorKind??='evidence';}
+            return{code,result,summary};
+          }
+
+          /** Exit after cleanup even if a closed event reader still owns a process handle. */
+          export async function workerEntry(args,deps){
+            const value=await workerMain(args,deps);
+            try{writeSync(1,JSON.stringify(value.summary)+'\n');}catch{value.code=2;}
+            process.exit(value.code);
+          }
+
+
+
+          export function rollup(directory){
+            assert.match(process.env.QUOTUM_BENCH_SOURCE_SHA??'',/^[a-f0-9]{40}$/);assert.match(process.env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256??'',/^[a-f0-9]{64}$/);
+            const trials=[],failures=[];
+            for(const trial of ['A1','B','A2']){
+              try{
+                const value=JSON.parse(readFileSync(path.join(directory,trial,'result-first.json'),'utf8'));
+                const exited=JSON.parse(readFileSync(path.join(directory,trial,'worker-exit-first.json'),'utf8'));
+                if(value.trial!==trial||!value.clean||value.cancelled||!value.canonicalFixturePreparation||value.exactHistoricalStartReproduction!==false||value.originalStartupDeadlineMs!==20000||value.shimReceipt?.phase!=='exec-ready'||!Number.isSafeInteger(value.workerPid)||value.workerPid<=0||exited.pid!==value.workerPid||exited.status!=='reaped'||exited.exit!==0)throw Error('Trial admission');
+                assert.deepEqual(value.sourceAfter,value.source);trials.push(value);
+              }catch{failures.push(trial);}
+            }
+            let bound=trials.length===3;
+            if(bound){
+              const first=trials[0].source;
+              bound=trials.every(value=>JSON.stringify(value.source)===JSON.stringify(first));
+              bound&&=new Set(trials.map(value=>value.workerPid)).size===3;
+              bound&&=first?.sha===process.env.QUOTUM_BENCH_SOURCE_SHA&&first?.client?.sha256===process.env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256&&first.dirty===false;
+            }
+            const historyReady=bound&&!failures.length;
+            const result={kind:'startup-io-prefix-aba',mode:'diagnostic',canonicalPass:false,C1RepairProven:false,
+              canonicalFixturePreparation:'fresh-process-per-arm',exactHistoricalStartReproduction:false,originalStartupDeadlineMs:20000,
+              conditioning:'readonly ELF DONTNEED advice, not guaranteed eviction',source:trials[0]?.source,sourceAfter:trials.at(-1)?.sourceAfter,trials,failures,historyReady};
+            const text=JSON.stringify(result,null,2)+'\n';if(Buffer.byteLength(text)>1024*1024)throw Error('Diagnostic file cap');
+            writeFileSync(path.join(directory,'result-first.json'),text,{flag:'wx'});return result;
+          }
+
+          if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
+           const args=process.argv.slice(2);
+           if(args.length===5)await workerEntry(args);
+           else{
+            assert.equal(args.length,1);let result;
+            try{result=rollup(args[0]);}
             finally{if(process.env.GITHUB_OUTPUT)writeFileSync(process.env.GITHUB_OUTPUT,'history_ready='+String(result?.historyReady===true)+'\n',{flag:'a'});}
-            console.log(JSON.stringify({kind:'startup-io-aba-mechanism',historyReady:result.historyReady,canonicalPass:false,C1RepairProven:false}));
-            if(!result.historyReady||result.trials.some(value=>value.first.status!=='ready'))process.exitCode=1;
+            if(!result.historyReady||result.trials.some(value=>value.first?.status!=='ready'))process.exitCode=1;
+           }
           }
           JS
           chmod 0700 "$RUNNER_TEMP/quotum-c1-advice.py"
-      - name: Observe the fixed startup-only ABA mechanism sequence
+      - name: Observe the fixed ABA sequence with fresh benchmark preparation
         id: probe
-        run: node --import tsx "$RUNNER_TEMP/quotum-c1-aba.mjs" "$GITHUB_WORKSPACE" "$QUOTUM_C1_REAL_CHROME" "$RUNNER_TEMP/quotum-c1-advice.py" "$QUOTUM_BENCH_DIAGNOSTICS_DIR/probe"
+        run: |
+          set -euo pipefail
+          c1_repository="$GITHUB_WORKSPACE"
+          c1_node="$(command -v node)"
+          c1_chrome="$QUOTUM_C1_REAL_CHROME"
+          c1_shim="$RUNNER_TEMP/quotum-c1-advice.py"
+          c1_directory="$QUOTUM_BENCH_DIAGNOSTICS_DIR/probe"
+          c1_worker="$RUNNER_TEMP/quotum-c1-aba.mjs"
+          c1_rollup="$c1_worker"
+          c1_child=
+          c1_cancel() {
+            trap - INT TERM HUP
+            if [[ -n "$c1_child" ]]; then
+              kill -TERM "$c1_child" 2>/dev/null || true
+              wait "$c1_child" || true
+            fi
+            exit 130
+          }
+          trap c1_cancel INT TERM HUP
+          cd "$c1_repository/hub"
+          for c1_trial in A1 B A2; do
+            "$c1_node" --import tsx "$c1_worker" "$c1_repository" "$c1_trial" "$c1_chrome" "$c1_shim" "$c1_directory/$c1_trial" &
+            c1_child=$!
+            if wait "$c1_child"; then
+              (set -o noclobber; printf '{"status":"reaped","exit":0,"pid":%s}\n' "$c1_child" > "$c1_directory/$c1_trial/worker-exit-first.json")
+              c1_child=
+            else
+              c1_status=$?
+              c1_child=
+              exit "$c1_status"
+            fi
+          done
+          trap - INT TERM HUP
+          "$c1_node" "$c1_rollup" "$c1_directory"
       - name: Run the unchanged complete history scroll control once
         if: ${{ always() && !cancelled() && steps.probe.outputs.history_ready == 'true' }}
         id: startup
@@ -625,7 +760,7 @@ jobs:
           python3 - <<'PY'
           import hashlib,json,os,pathlib,re,subprocess,time
           root=pathlib.Path(os.environ['QUOTUM_BENCH_DIAGNOSTICS_DIR']);root.mkdir(parents=True,exist_ok=True)
-          out={'kind':'startup-io-aba-control','canonicalPass':False,'C1RepairProven':False,'exactDemoPrefixReproduction':False,'fullHistoryStep':os.environ['BENCH_OUTCOME'],'postStepStartedWallMs':int(time.time()*1000)}
+          out={'kind':'startup-io-aba-control','canonicalPass':False,'C1RepairProven':False,'exactDemoPrefixReproduction':False,'canonicalFixturePreparation':'fresh-process-per-arm','fullHistoryStep':os.environ['BENCH_OUTCOME'],'postStepStartedWallMs':int(time.time()*1000)}
           out['checkoutWorkflowHash']=hashlib.sha256(pathlib.Path('../.github/workflows/ci.yml').read_bytes()).hexdigest()
           out['workflowRef']=os.environ['CONTROL_WORKFLOW_REF'];out['workflowSha']=os.environ['CONTROL_WORKFLOW_SHA']
           def save():
