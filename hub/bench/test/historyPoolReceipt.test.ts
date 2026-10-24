@@ -47,6 +47,18 @@ function fixture(realTransport:boolean|((pool:HistoryPool)=>PeriodTransport)=fal
   return {context,pool,run,read:()=>context.__quotumHistoryPoolReceipt.read()};
 }
 
+test('staging operations survive evidence filtering without admitting arbitrary operation text',()=>{
+  for(const operation of ['calendar-projection','values','restore','adoption','retirement']){
+    const h=fixture();h.context.operation=operation;
+    h.run(`pool.reserve({role:'visible',historyMember:period,operation},pool.budget+1);`);
+    const receipt=h.read(),saved=safeEvidence(receipt) as typeof receipt;
+    assert.equal(receipt.ordinaryByFlight[0].peak.owner.kind,'period-staging');
+    assert.equal(receipt.ordinaryByFlight[0].peak.owner.operation,operation);
+    assert.equal(saved.ordinaryByFlight[0].peak.owner.operation,operation);
+  }
+  assert.deepEqual(safeEvidence({operation:'canary-private-operation'}),{operation:'[text omitted]'});
+});
+
 test('the fixed Activity wrapper retains dense complete evidence while both journal capacities stay bounded',()=>{
   const ordinary=fixture(),fixed=fixture(false,fixedActivityScript('30d'));
   const seed=`
