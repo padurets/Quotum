@@ -136,13 +136,16 @@ export class PeriodReader {
     try{input.add(periodInputBytes(raw));admitted=true;
     for(let attempt=0;;attempt++){
       let check=()=>{};
-      try{return await this.preparation.run(()=>this.prepareRead(board,user,raw,guard=>{check=guard;}),signal,()=>check());}
+      // The final check runs after the generator releases its projection.
+      const validation=this.history.reservation();
+      try{return await this.preparation.run(()=>this.prepareRead(board,user,raw,guard=>{check=guard;},validation),signal,()=>check());}
       catch(error){if(!(error instanceof PeriodChanged))throw error;if(attempt===1)fail(503,'unavailable');}
+      finally{validation.close();}
     }
     }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit',{stage:admitted?'preparation':'input',cause:error});throw error;}
     finally{input.close();}
   }
-  private *prepareRead(board:string,user:string,raw:unknown,guard?:(check:()=>void)=>void):Preparation<string> {
+  private *prepareRead(board:string,user:string,raw:unknown,guard?:(check:()=>void)=>void,validation?:{add(bytes:number):void}):Preparation<string> {
     const self=this;
     if(!object(raw)||raw.version!==1||!number(raw.evaluatedAt)||Object.keys(raw).some(k=>!['version','selection','evaluatedAt','quota','budget','funds','values','sessions','workFilter','facets','sourceWork','calendar'].includes(k)))fail(400,'invalid_request');
     const selection=parsePeriod(raw.selection);if(!selection)fail(400,'invalid_request');
@@ -172,7 +175,8 @@ export class PeriodReader {
       workRange=ordinaryWork;
       return ordinaryWork.some(range=>range.from<=from&&range.to>=to);
     };
-    const work:import('./store/store.js').WorkRead=request.calendar||request.sessions||request.facets||request.quota||request.budget?.work==='1'?sharedWork(self.hub,shown,()=>workRange,bytes=>reservation.add(bytes),bytes=>reservation.remove(bytes),owner,now,board,workLimit):()=>[],access=work.access;
+    let validationBytes=0;
+    const work:import('./store/store.js').WorkRead=request.calendar||request.sessions||request.facets||request.quota||request.budget?.work==='1'?sharedWork(self.hub,shown,()=>workRange,bytes=>reservation.add(bytes),bytes=>reservation.remove(bytes),owner,now,board,workLimit,validation?bytes=>{validation.add(bytes);validationBytes=bytes;}:undefined):()=>[],access=work.access;
     if(request.values?.some(id=>!shown.has(id)))fail(404,'not_found');
     const views={sourceWide:work,selected:filter?selectedWork(work,filter):work};
     const workRequested=!!(request.calendar||request.sessions||request.facets||request.quota||request.budget?.work==='1');
@@ -270,12 +274,15 @@ export class PeriodReader {
         if(changes.get()!.value!==checkedChanges||store.retentionRevision!==checkedRetention){
           if(!directory.boards(user).some(part=>part.id===board))fail(404,'board_not_found');
           if(workRequested&&access){
-            let bytes=0;
+            let used=0;
+            const checking={
+              add:(bytes:number)=>{const next=used+bytes;if(next>validationBytes){validation!.add(next-validationBytes);validationBytes=next;}used=next;},
+              remove:(bytes:number)=>{used-=bytes;},
+            };
             try{
-              const current=store.workAccess(board,now,size=>{reservation.add(size);bytes+=size;});
-              if(self.identity(board,user,current,reservation,undefined,filter)!==identity)throw new PeriodChanged();
+              const current=store.workAccess(board,now,checking.add);
+              if(self.identity(board,user,current,checking,undefined,filter)!==identity)throw new PeriodChanged();
             }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit',{stage:'work-access',cause:error});throw error;}
-            finally{reservation.remove(bytes);}
           }
           if(resourceKey()!==capturedResources||currency()!==currencyKey)throw new PeriodChanged();
           checkedChanges=changes.get()!.value;checkedRetention=store.retentionRevision;

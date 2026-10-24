@@ -1979,6 +1979,9 @@ abandoned request can release its reservation while the hub serves other routes.
 The same protected work capture supplies its authority key to nested readers. Retained
 project names and device labels enter that key one row at a time; temporary hashing
 buffers share the request reservation, including detail and access revalidation reads.
+Asynchronous reads reserve the initial access capture's peak again before preparing
+dependent sections, keeping that capacity for later authority checks under the same
+ceiling. A larger current capture admits its extra bytes before allocating them.
 An authority buffer that cannot fit returns the existing history-limit error while
 independent financial sections can still complete.
 Before resuming or publishing a response, the reader checks access, currency context

@@ -28,11 +28,16 @@ export function selectedWork(sourceWide:WorkRead,filter:WorkFilter):WorkRead {
 }
 
 /** A composite read extracts work once for charts and the temporal index. */
-export function sharedWork(hub:Pick<Hub,'store'>,_shown:Shown,range:PeriodRange|null|(()=>PeriodRange|PeriodRange[]|null),reserve:(bytes:number)=>void,release:(bytes:number)=>void,_owner:string|null=null,now=Date.now(),board:string,onLimit?:(from:number,to:number)=>boolean):WorkRead {
+export function sharedWork(hub:Pick<Hub,'store'>,_shown:Shown,range:PeriodRange|null|(()=>PeriodRange|PeriodRange[]|null),reserve:(bytes:number)=>void,release:(bytes:number)=>void,_owner:string|null=null,now=Date.now(),board:string,onLimit?:(from:number,to:number)=>boolean,reserveValidation?:(bytes:number)=>void):WorkRead {
   let kept:{ranges:PeriodRange[];rows:Stretch[]}|null=null,bytes=0;
-  let access:import('./domain/workAccess.js').WorkAccess|undefined,authority:string|undefined,accessError:unknown,snapshotBytes=0;
-  try{access=hub.store.workAccess(board,now,size=>{reserve(size);snapshotBytes+=size;});authority=hub.store.workKey(board,undefined,access,reserve,release);}
-  catch(error){access=undefined;release(snapshotBytes);accessError=error;}
+  let access:import('./domain/workAccess.js').WorkAccess|undefined,authority:string|undefined,accessError:unknown,captured=0,peak=0;
+  const capture=(size:number)=>{reserve(size);captured+=size;peak=Math.max(peak,captured);};
+  const drop=(size:number)=>{release(size);captured-=size;};
+  try{
+    access=hub.store.workAccess(board,now,capture);authority=hub.store.workKey(board,undefined,access,capture,drop);
+    // An async reader must still validate this authority when its projection is full.
+    reserveValidation?.(peak);
+  }catch(error){access=undefined;authority=undefined;release(captured);accessError=error;}
   const ensureAccess=()=>{if(accessError)throw accessError;return access!;};
   const read:WorkRead=(from,to)=>{
     from=Math.max(from,now-config.retention.sampleDays*86_400_000);to=Math.min(to,now);if(to<=from)return [];

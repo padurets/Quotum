@@ -8,6 +8,8 @@ import {readHistory,ReadError} from '../historyRead.js';
 import {Store} from '../store/store.js';
 import {Directory} from '../store/directory.js';
 import {PeriodAccounting} from '../domain/periodAccounting.js';
+import {PeriodPreparation} from '../periodPrepare.js';
+import type {Preparation} from '../domain/prepare.js';
 import {createHash} from 'node:crypto';
 const M=60_000,H=60*M;
 
@@ -131,11 +133,66 @@ test('a failed work capture errors every dependent section without fallback allo
  const reservation=h.tiles.reservation();try{reservation.add(5000);}finally{reservation.close();}
 });
 
+test('refused validation capacity preserves independent financial sections and releases the capture',async t=>{
+ const h=await fixture(t,undefined,20);let used=0,peak=0;
+ const add=(bytes:number)=>{used+=bytes;peak=Math.max(peak,used);},remove=(bytes:number)=>{used-=bytes;};
+ const access=h.store.workAccess(h.board,at+2*H,add);h.store.workKey(h.board,undefined,access,add,remove);
+ const body={...h.body,quota:{...h.quota,cells:'skip'},budget:{...h.quota,unit:'USD',meters:'[]'}};
+ const input=periodInputBytes(body),ceiling=input+used+peak-1;
+ assert.ok(input+peak<=ceiling,'the initial access capture fits before admitting validation capacity');
+ const tiles=new HistoryTiles(h.store,ceiling),reader=new PeriodReader(h.hub,tiles,h.events);h.calls.length=0;
+ const reply=JSON.parse(await reader.readAsync(h.board,h.owner.id,body));
+ for(const scope of ['quota','sessions'])assert.deepEqual(reply[scope],{state:'error',error:'history_limit'},scope);
+ assert.equal(reply.budget.state,'complete');assert.deepEqual(h.calls,[true],'a refused bank never rebuilds an unreserved capture');
+ const reservation=tiles.reservation();try{reservation.add(ceiling);}finally{reservation.close();}
+});
+
+test('the final authority check retains its capacity after the projection closes',async t=>{
+ const ceiling=32*1024*1024,h=await fixture(t,ceiling),queue=(h.period as unknown as {preparation:PeriodPreparation}).preparation,run=queue.run.bind(queue);
+ let completions=0,pressure:ReturnType<HistoryTiles['reservation']>|undefined;
+ t.mock.method(queue,'run',<T>(factory:()=>Preparation<T>,signal?:AbortSignal,check?:()=>void)=>run(function*(){
+   const result=yield*factory();
+   if(++completions===1){
+     assert.ok((h.tiles as unknown as {reserved:number}).reserved>periodInputBytes(h.body),'validation capacity remains charged after the projection closes');
+     const policy=h.store.sessionDevices(h.board,h.owner.id)[0];h.store.setDeviceSessions(h.board,h.device.id,h.owner.id,false,policy.revision,at+2*H);
+     pressure=h.tiles.reservation();pressure.add(ceiling-(h.tiles as unknown as {reserved:number}).reserved);
+   }
+   return result;
+ },signal,()=>{try{check?.();}finally{pressure?.close();pressure=undefined;}}));
+ try{
+   const reply=JSON.parse(await h.period.readAsync(h.board,h.owner.id,h.body));
+   assert.equal(completions,2,'the final guard discards the revoked captured response');
+   assert.equal(reply.sessions.state,'complete');assert.deepEqual(reply.sessions.value.refs,[]);
+ }finally{pressure?.close();}
+ const reservation=h.tiles.reservation();try{reservation.add(ceiling);}finally{reservation.close();}
+});
+
+test('unrelated writes revalidate work while admitted accounting scratch occupies the ceiling',async t=>{
+ const ceiling=32*1024*1024,h=await fixture(t,ceiling),original=PeriodAccounting.prepare;let preparations=0;
+ t.mock.method(PeriodAccounting,'prepare',function*(...args:Parameters<typeof original>){
+   preparations++;
+   const progress=args[5];assert.ok(progress);
+   // Keep admitted accounting scratch across a real cooperative yield. A write
+   // must not steal validation capacity from this already admitted projection.
+   const reserved=(h.tiles as unknown as {reserved:number}).reserved;
+   progress(ceiling-reserved-1024);
+   setImmediate(()=>h.store.db.prepare('UPDATE meta SET value=value WHERE key=(SELECT key FROM meta LIMIT 1)').run());
+   const until=performance.now()+12;do{yield;}while(performance.now()<until);
+   progress(0);return yield*original(...args);
+ });
+ const reply=JSON.parse(await h.period.readAsync(h.board,h.owner.id,{...h.body,selection:{mode:'range',from:at,to:at+H},quota:{...h.quota,cells:'skip'}}));
+ assert.equal(preparations,1,'an unrelated write does not restart the admitted projection');
+ assert.equal(reply.sessions.state,'complete');assert.equal(reply.sessions.value.fixed.totals[0][1],10*M);
+ assert.equal(reply.quota.state,'complete');assert.equal(reply.quota.value.tape.fixed.quota[0].remainingAtEnd,90);
+ assert.ok(h.calls.length>=2,'the changed connection was actually revalidated');
+ const reservation=h.tiles.reservation();try{reservation.add(ceiling);}finally{reservation.close();}
+});
+
 for(const overflow of [false,true])test(`actual database changes revalidate work through a reserved current snapshot ${overflow?'and fail bounded':'before retrying a revoke'}`,async t=>{
  const body={version:1,selection:{mode:'range',from:at,to:at+H},evaluatedAt:at+2*H,sessions:{},quota:{cell:String(M),from:String(at),to:String(at+H),cells:'skip'}};
- // Keep the original preparation capacity while ingress owns its separate charge
- // under the same ceiling; otherwise the test never reaches the late guard.
- const ceiling=overflow?10_000+periodInputBytes(body):32*1024*1024,h=await fixture(t,ceiling),original=PeriodAccounting.prepare;let changes=0;
+ // Admit the initial work and validation captures before testing a late cohort
+ // that cannot fit; an earlier section refusal would never exercise this guard.
+ const ceiling=overflow?32_000+periodInputBytes(body):32*1024*1024,h=await fixture(t,ceiling),original=PeriodAccounting.prepare;let changes=0;
  t.mock.method(PeriodAccounting,'prepare',function*(...args:Parameters<typeof original>){
    if(changes++===0)setImmediate(()=>{
      const policy=h.store.sessionDevices(h.board,h.owner.id)[0];h.store.setDeviceSessions(h.board,h.device.id,h.owner.id,false,policy.revision,at+2*H);
@@ -144,12 +201,13 @@ for(const overflow of [false,true])test(`actual database changes revalidate work
    const until=performance.now()+12;do{yield;}while(performance.now()<until);return yield*original(...args);
  });
  if(overflow)await assert.rejects(h.period.readAsync(h.board,h.owner.id,body),(e:unknown)=>{
-   assert.ok(e instanceof ReadError);assert.equal(e.statusCode,413);assert.equal(e.code,'history_limit');
+   assert.ok(e instanceof ReadError,String(e));assert.equal(e.statusCode,413);assert.equal(e.code,'history_limit');
    assert.equal(e.limitStage,'work-access');assert.ok(e.cause instanceof HistoryLimit);
    const snapshot=e.cause.snapshot;assert.ok(snapshot);assert.equal(snapshot.budget,ceiling);
    assert.ok(snapshot.requested>0&&snapshot.reserved+snapshot.requested>snapshot.budget);
    return true;
  });
  else{const result=JSON.parse(await h.period.readAsync(h.board,h.owner.id,body));assert.equal(result.sessions.state,'complete');assert.deepEqual(result.sessions.value.refs,[],'revoked captured access is never reused by the current guard');}
+ assert.ok(changes>0,'the mutation must run after the initial capture');
  assert.ok(h.calls.length>=2);assert.ok(h.calls.every(Boolean),'each actual-change revalidation is bounded');const reservation=h.tiles.reservation();try{reservation.add(ceiling);}finally{reservation.close();}
 });
