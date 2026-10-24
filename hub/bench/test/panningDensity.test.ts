@@ -19,7 +19,8 @@ test('the native fixture retains twelve visible subscriptions of each period bey
 });
 
 test('the actual settled probe counts distinct series intersecting the visible plot',()=>{
-  const source=readFileSync(new URL('../panning.ts',import.meta.url),'utf8'),probe=source.match(/const density = \(\) => cdp.evaluate[^`]+`([\s\S]+?)`\);/)![1];
+  const source=readFileSync(new URL('../panning.ts',import.meta.url),'utf8'),template=source.match(/const density = \([^)]*\) => cdp.evaluate[^`]+`([\s\S]+?)`\);/)![1];
+  const probe=runInNewContext('`'+template+'`',{segment:undefined});
   const path=(left:number,right:number,d='M0,0L1,1')=>({d,getBoundingClientRect:()=>({left,right})});
   const groups=Array.from({length:12},(_,i)=>({dataset:{series:'source-'+i},paths:[path(100,200)],querySelectorAll(){return this.paths.filter(path=>path.d);}}));
   groups[0].paths.push({d:'M0,0',getBoundingClientRect:()=>{throw new Error('a later fragment must not add a layout read after an intersection');}});

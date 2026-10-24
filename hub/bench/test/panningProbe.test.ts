@@ -7,7 +7,7 @@ import {panTransactionsScript, panPartialScript, type PanTransactions} from '../
 import {deadline} from '../deadline.js';
 import {panningSettlement} from '../panningFailure.js';
 import {safeEvidence} from '../evidence.js';
-import {panningProblems, type PanReading,type NativePanReceipt} from '../panningBudget';
+import {panningProblems, type PanReading,type NativePanReceipt,type PanSettlements} from '../panningBudget';
 import {Preparations} from '../../ui/lib/prepare';
 const edgeSeries=():PanReading['edgeSeries']=>['wheel','drag'].map(stage=>({stage:stage as 'wheel'|'drag',series:12,sessionSeries:12,budgetSeries:12,fundsSeries:12}));
 
@@ -88,7 +88,7 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quo
   const paintFold = (owner:{style:{transform:string}},transform:string) => {if (typed) computed.set(owner,transform);else owner.style.transform=transform;};
   const script = runInNewContext('`' + probe + '`', {initiator, period: detailed?'30d':'24h', panTransactionsScript, detailed, evidence: diagnostic ? {selection: 'quota24'} : undefined});
   runInNewContext(script, context);
-  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {running:boolean; feeding: boolean; cleanup(): void; readTransactions(): PanTransactions; pending: object[]; readDiagnostic?():NativePanReceipt;samples: NonNullable<PanReading['outliers']>}}).__quotumPan;
+  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {running:boolean; feeding: boolean; cleanup(): void; readTransactions(): PanTransactions; pending: object[]; readDiagnostic?():NativePanReceipt;readSettlements?():PanSettlements;markSettlement?:unknown;samples: NonNullable<PanReading['outliers']>}}).__quotumPan;
   for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg, sessionSvg]) Object.assign(svg.dataset, {panMinEnd: '-1000000000', panMaxEnd: '1000000000'});
   const limits = (min: number, max: number) => {for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg, sessionSvg]) Object.assign(svg.dataset, {panMinEnd: String(min), panMaxEnd: String(max)});};
   const wheel = (stamp: number, delivered: number, deltaMode = 0, handled = () => {}, deltaX = initiator==='activity'?7:12) => {
@@ -791,11 +791,72 @@ test('selected native receipt observes actual preparation slices and preserves p
   const d=receipt(f);assert.equal(d.status,'complete');assert.equal(d.preparationAttached,true);assert.equal(d.preparationRestored,true);assert.equal(d.preparations.length,4);assert.deepEqual(Array.from(d.preparations.slice(0,2),row=>[row.jobsBefore,row.jobsAfter]),[[1,1],[1,0]]);
 });
 
-test('selected native receipt caps retained observations while preserving canonical arrays and refusal counts',()=>{
+test('selected native receipt caps retained observations while preserving canonical arrays and refusal counts',async()=>{
   const tasks:(()=>unknown)[]=[],env={now:()=>0,post:(run:()=>unknown)=>{tasks.push(run);}},scheduler=new Preparations(env),f=fixture('session',true,false,true,scheduler);
-  for(let i=0;i<4096;i++){env.post(()=>{});tasks.shift()!();}let d=receipt(f);assert.equal(d.count,4096);assert.equal(d.omitted,0);assert.equal(d.preparations.length,4096);
-  env.post(()=>{});tasks.shift()!();d=f.freeze().nativeDiagnostic!;assert.equal(d.count,4096);assert.equal(d.omitted,1);assert.equal(d.status,'insufficient-evidence');assert.equal(d.preparations.length,4096);
+  for(let i=0;i<4093;i++){env.post(()=>{});tasks.shift()!();}let d=receipt(f);assert.equal(d.count,4096);assert.equal(d.omitted,0);assert.equal(d.preparations.length,4093);assert.equal(d.settlements.rows.length,3);
+  const ready=readinessFixture(true,f);for(const segment of ['wheel','drag','return'] as const){ready.reset();await ready.settled(segment);if(segment!=='return')await ready.density(segment);}
+  d=receipt(f);assert.equal(d.count,4096);assert.equal(d.omitted,0);assert.equal(d.settlements.status,'complete');
+  env.post(()=>{});tasks.shift()!();d=f.freeze().nativeDiagnostic!;assert.equal(d.count,4096);assert.equal(d.omitted,1);assert.equal(d.status,'insufficient-evidence');assert.equal(d.preparations.length,4093);
+  assert.equal(d.settlements.status,'complete','a complete channel cannot upgrade an omitted journal');
   assert.equal(f.reading.frames.length,0);assert.equal(f.reading.latency.length,0);assert.equal(f.reading.inputs,0);
+});
+
+// Execute the existing settlement and density helpers against the same ordered DOM reads.
+function readinessFixture(detailed=true,f=detailed?nativeFixture():fixture('session',true)) {
+  let phase=0,hold=false,clocks=0,original:Error|undefined,densityError:Error|undefined,onWait:((ms:number)=>void)|undefined;
+  const reads:string[]=[],waits:number[]=[],wanted='30d';
+  const svg={localName:'svg',hasAttribute:()=>{reads.push('panEnd');if(original)throw original;return phase<=1;},getAttribute:()=>{reads.push('drawReady');return phase<=2?'false':'true';},classList:{contains:()=>{reads.push('isPanning');return phase<=3;}}};
+  const groups=['forecast','budget-table','agents-panel'].map((name,index)=>[{dataset:{get historyRange(){reads.push(name);return phase<=index+4?'pending':wanted;}}}]);
+  const rect=()=>{reads.push('rect');if(densityError)throw densityError;f.setTime(f.now()+1);return{left:100,right:200,width:900};};
+  const densitySvg={getBoundingClientRect:rect,viewBox:{baseVal:{width:900}}},densityPanel={querySelector:()=>densitySvg,querySelectorAll:()=>[{dataset:{series:'one'},querySelectorAll:()=>[{getBoundingClientRect:rect}]}]};
+  const document={getElementsByClassName:(name:string)=>{reads.push('collection:'+name);return name==='is-loading'?{*[Symbol.iterator](){if(phase===0)yield{classList:{contains:(name:string)=>{reads.push('loading:'+name);return name==='history';}}};}}:name==='chart'?[{children:[svg]}]:groups[['forecast','budget-table','agents-panel'].indexOf(name)];},querySelectorAll:()=>[],querySelector:()=>densityPanel};
+  f.context.performance.now=()=>{clocks++;return f.now();};
+  const globals={...f.context,document,Date:{now:()=>f.now()},localStorage:{getItem:()=>JSON.stringify({range:wanted})},setTimeout:(run:()=>void,ms:number)=>{waits.push(ms);f.setTime(f.now()+ms);if(ms===20&&!hold)phase++;onWait?.(ms);run();}};
+  const ast=ts.createSourceFile('panning.ts',source,ts.ScriptTarget.Latest,true),fn=ast.statements.find((node):node is ts.FunctionDeclaration=>ts.isFunctionDeclaration(node)&&node.name?.text==='panning')!;
+  const helpers=fn.body!.statements.filter(node=>ts.isVariableStatement(node)&&node.declarationList.declarations.some(d=>['settled','density'].includes(d.name.getText(ast))));
+  const sandbox={cdp:{evaluate:(expression:string)=>runInNewContext(expression,globals)}};
+  runInNewContext(ts.transpileModule(`${helpers.map(node=>node.getText(ast)).join('\n')}globalThis.settled=settled;globalThis.density=density;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,sandbox);
+  const api=sandbox as typeof sandbox&{settled(segment?:'wheel'|'drag'|'return'):Promise<void>;density(segment?:'wheel'|'drag'):Promise<object>};
+  return{f,reads,waits,settled:api.settled,density:api.density,clocks:()=>clocks,reset:()=>{phase=0;},clear:()=>{phase=7;},hold:()=>{hold=true;},fail:(error:Error)=>{original=error;},failDensity:(error:Error)=>{densityError=error;},onWait:(run:(ms:number)=>void)=>{onWait=run;}};
+}
+
+test('selected readiness observes all first blockers and density on the same three rows without extra DOM reads',async()=>{
+  const on=readinessFixture(),off=readinessFixture(false);
+  for(const f of [on,off])for(const segment of ['wheel','drag','return'] as const){f.reset();await f.settled(f===on?segment:undefined);if(segment!=='return')assert.deepEqual(JSON.parse(JSON.stringify(await f.density(f===on?segment:undefined))),{series:1,sessionSeries:1,budgetSeries:1,fundsSeries:1});}
+  assert.deepEqual(on.reads,off.reads,'every original selector and short-circuit getter remains in the same order');assert.deepEqual(on.waits,off.waits);assert.equal(off.clocks(),0);assert.equal(off.f.reading.readSettlements,undefined);assert.equal(off.f.reading.markSettlement,undefined);
+  const d=on.f.freeze().nativeDiagnostic!,rows=d.settlements.rows;assert.equal(d.status,'complete');assert.equal(d.settlements.status,'complete');assert.equal(rows.length,3);assert.equal(on.clocks(),14,'thirteen bookends plus the existing diagnostic stop');
+  for(const row of rows){assert.equal(row.polls,8);assert.deepEqual(Object.values(row.blockers),[1,1,1,1,1,1,1]);assert.equal(row.ready!-row.begin!,140);assert.equal(row.end!-row.ready!,250);if(row.segment==='return'){assert.equal(row.densityBegin,null);assert.equal(row.densityEnd,null);}else{assert.equal(row.densityBegin,row.end);assert.equal(row.densityEnd!-row.densityBegin!,8);}}
+  assert.deepEqual(JSON.parse(JSON.stringify(safeEvidence(d.settlements))),JSON.parse(JSON.stringify(d.settlements)));
+  const untagged=readinessFixture();await untagged.settled();assert.equal(untagged.clocks(),0);assert.ok(untagged.f.reading.readSettlements!().rows.every(row=>row.begin===null));
+});
+
+test('readiness retains the original strict timeout and thrown error without false completion',async()=>{
+  const on=readinessFixture(),off=readinessFixture(false);on.hold();off.hold();
+  let message='';for(const f of [on,off])await assert.rejects(f.settled(f===on?'wheel':undefined),(error:Error)=>{assert.ok(error.message.startsWith('charts and complete totals did not settle: '));if(message)assert.equal(error.message,message);message=error.message;return true;});
+  assert.deepEqual(on.waits,off.waits);assert.equal(on.waits.length,751);assert.ok(on.waits.every(ms=>ms===20));assert.equal(on.f.now(),15020);
+  const partial=runInNewContext(panPartialScript('session','30d'),on.f.context);assert.equal(partial.settlements.status,'insufficient-evidence');assert.equal(partial.settlements.rows[0].polls,752);assert.equal(partial.settlements.rows[0].ready,null);assert.equal(partial.settlements.rows[0].end,null);
+  const f=readinessFixture(),original=new Error('original DOM failure');f.fail(original);await assert.rejects(f.settled('drag'),error=>error===original);assert.equal(f.f.reading.readSettlements!().rows[1].end,null);
+  const density=readinessFixture(),error=new Error('original layout failure');await density.settled('wheel');density.failDensity(error);await assert.rejects(async()=>density.density('wheel'),value=>value===error);const row=density.f.reading.readSettlements!().rows[0];assert.equal(row.densityBegin,row.end);assert.equal(row.densityEnd,null);assert.equal(density.f.reading.readSettlements!().status,'insufficient-evidence');
+});
+
+test('immediate readiness and repeated settlement keep exactly three fixed rows',async()=>{
+  const f=readinessFixture();f.clear();await f.settled('wheel');const first=f.f.reading.readSettlements!();assert.equal(first.rows[0].begin,first.rows[0].ready);assert.equal(first.rows[0].polls,1);assert.ok(Object.values(first.rows[0].blockers).every(value=>value===0));
+  f.reset();await f.settled('wheel');assert.deepEqual(f.f.reading.readSettlements!(),first);assert.equal(receipt(f.f).count,3);assert.equal(receipt(f.f).settlements.rows.length,3);
+});
+
+test('partial readiness copies only fixed rows and cleanup prevents late asynchronous upgrades',async()=>{
+  const f=readinessFixture();f.onWait(ms=>{if(ms===20&&f.f.reading.running)f.f.reading.cleanup();});
+  const before=f.f.reading.readSettlements!();await f.settled('wheel');const stopped=f.f.reading.readSettlements!();assert.equal(before.rows[0].begin,null);assert.equal(stopped.rows[0].begin,0);assert.equal(stopped.rows[0].polls,1);assert.equal(stopped.rows[0].ready,null);assert.equal(stopped.rows[0].end,null);assert.equal(stopped.status,'insufficient-evidence');assert.equal(f.waits.at(-1),250,'the original settling wait still completes');
+  await f.density('wheel');assert.deepEqual(f.f.reading.readSettlements!(),stopped);assert.equal(runInNewContext(panPartialScript('session','30d'),f.f.context).status,'unavailable');
+  const live=readinessFixture();await live.settled('wheel');live.f.reading.readDiagnostic=()=>{throw new Error('whole journal must not be copied');};
+  const partial=runInNewContext(panPartialScript('session','30d'),live.f.context);assert.equal(partial.settlements.rows.length,3);assert.equal(partial.nativeDiagnostic,undefined);assert.ok(JSON.stringify(partial.settlements).length<4096);assert.deepEqual(JSON.parse(JSON.stringify(partial.settlements)),JSON.parse(JSON.stringify(live.f.reading.readSettlements!())));
+});
+
+test('only the three measured settlement calls and two density calls receive explicit diagnostic stages',()=>{
+  const ast=ts.createSourceFile('panning.ts',source,ts.ScriptTarget.Latest,true),calls=new Map<string,string[]>();
+  const visit=(node:ts.Node)=>{if(ts.isCallExpression(node)&&['settled','density'].includes(node.expression.getText(ast))){const name=node.expression.getText(ast),rows=calls.get(name)??[];rows.push(node.arguments.map(arg=>arg.getText(ast)).join(','));calls.set(name,rows);}ts.forEachChild(node,visit);};visit(ast);
+  assert.deepEqual(calls.get('settled')!.filter(Boolean),["detailed?'wheel':undefined","detailed?'drag':undefined","detailed?'return':undefined"]);assert.equal(calls.get('settled')!.filter(row=>!row).length,5);
+  assert.deepEqual(calls.get('density')!.filter(Boolean),["detailed?'wheel':undefined","detailed?'drag':undefined"]);assert.equal(calls.get('density')!.filter(row=>!row).length,1);
 });
 
 test('selected native receipt leaves busy/missing scheduler coverage explicit and never overwrites a newer post',()=>{

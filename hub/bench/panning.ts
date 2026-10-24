@@ -22,25 +22,29 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
     await mouse('mousePressed', point.x, point.y);
     await mouse('mouseReleased', point.x, point.y);
   };
-  const settled = () => cdp.evaluate(`(async()=>{const until=Date.now()+15000,p=new URLSearchParams(location.search),wanted=p.has('from')?p.get('from')+'-'+p.get('to'):JSON.parse(localStorage.getItem('quotum.prefs')||'{}').range||'24h';
+  const settled = (segment?:'wheel'|'drag'|'return') => cdp.evaluate(`(async()=>{const until=Date.now()+15000,p=new URLSearchParams(location.search),wanted=p.has('from')?p.get('from')+'-'+p.get('to'):JSON.parse(localStorage.getItem('quotum.prefs')||'{}').range||'24h';
+    ${segment?`const probe=window.__quotumPan,mark=(key,blocker)=>probe?.markSettlement?.(${JSON.stringify(segment)},key,blocker),blocked=key=>{mark('blocked',key);return true;};mark('begin');`:''}
     // Live collections avoid whole-board selector scans during measured movement.
     const loading=document.getElementsByClassName('is-loading'),charts=document.getElementsByClassName('chart'),tables=['forecast','budget-table','agents-panel'].map(name=>document.getElementsByClassName(name));
     const pending=()=>{
-      for(const node of loading)if(['history','activity','budget-history','subscription-funds','agents-panel'].some(name=>node.classList.contains(name)))return true;
-      for(const chart of charts)for(const svg of chart.children)if(svg.localName==='svg'&&(svg.hasAttribute('data-pan-end')||svg.getAttribute('data-draw-ready')==='false'||svg.classList.contains('is-panning')))return true;
-      for(const group of tables)for(const table of group)if(table.dataset.historyRange!==wanted)return true;
+      ${segment?"mark('poll');":''}
+      for(const node of loading)if(['history','activity','budget-history','subscription-funds','agents-panel'].some(name=>node.classList.contains(name)))return ${segment?"blocked('loading')":'true'};
+      for(const chart of charts)for(const svg of chart.children)if(svg.localName==='svg'&&(${segment?"svg.hasAttribute('data-pan-end')&&blocked('panEnd')||svg.getAttribute('data-draw-ready')==='false'&&blocked('drawReady')||svg.classList.contains('is-panning')&&blocked('isPanning')":"svg.hasAttribute('data-pan-end')||svg.getAttribute('data-draw-ready')==='false'||svg.classList.contains('is-panning')"}))return true;
+      ${segment?"for(let index=0;index<tables.length;index++)for(const table of tables[index])if(table.dataset.historyRange!==wanted)return blocked(['forecastRange','budgetTableRange','agentsRange'][index]);":"for(const group of tables)for(const table of group)if(table.dataset.historyRange!==wanted)return true;"}
       return false;
     };
-    while(pending()){if(Date.now()>until)throw new Error('charts and complete totals did not settle: '+JSON.stringify({wanted,period:window.__quotumPeriodState?.(),panels:[...document.querySelectorAll('.history,.activity,.budget-history,.subscription-funds,.forecast,.budget-table,.agents-panel')].map(panel=>({class:panel.className,range:panel.dataset.historyRange,error:panel.querySelector('.history-error')?.textContent,panning:panel.querySelector('.chart>svg')?.classList.contains('is-panning')??null,plot:panel.querySelector('.chart>svg')?.dataset})),flights:window.__quotumPan?[...window.__quotumPan.flights.values()]:[]}));await new Promise(r=>setTimeout(r,20));}await new Promise(r=>setTimeout(r,250));})()`);
+    while(pending()){if(Date.now()>until)throw new Error('charts and complete totals did not settle: '+JSON.stringify({wanted,period:window.__quotumPeriodState?.(),panels:[...document.querySelectorAll('.history,.activity,.budget-history,.subscription-funds,.forecast,.budget-table,.agents-panel')].map(panel=>({class:panel.className,range:panel.dataset.historyRange,error:panel.querySelector('.history-error')?.textContent,panning:panel.querySelector('.chart>svg')?.classList.contains('is-panning')??null,plot:panel.querySelector('.chart>svg')?.dataset})),flights:window.__quotumPan?[...window.__quotumPan.flights.values()]:[]}));await new Promise(r=>setTimeout(r,20));}${segment?"mark('ready');":''}await new Promise(r=>setTimeout(r,250));${segment?"mark('end');":''}})()`);
   const reports: PanReading[] = [];
   // Count independent measured series intersecting the visible plot, never path parts.
   // These layout reads happen after settling, outside the moving-frame probe.
-  const density = () => cdp.evaluate<Omit<PanReading['edgeSeries'][number],'stage'>>(`(() => {
+  const density = (segment?:'wheel'|'drag') => cdp.evaluate<Omit<PanReading['edgeSeries'][number],'stage'>>(`(() => {
+    ${segment?`const probe=window.__quotumPan;probe?.markSettlement?.(${JSON.stringify(segment)},'densityBegin');`:''}
     const count=id=>{const panel=document.querySelector('[data-widget="'+id+'"]'),svg=panel.querySelector('.chart>svg'),r=svg.getBoundingClientRect(),box=svg.viewBox.baseVal.width,left=r.left+(id.startsWith('quota')?40:76)*r.width/box,right=r.right-12*r.width/box;
       return new Set([...panel.querySelectorAll('[data-series]')].filter(group=>
         [...group.querySelectorAll('.series[d]:not([d=""])')].some(path=>{const p=path.getBoundingClientRect();return p.right>left&&p.left<right;})
       ).map(group=>group.dataset.series)).size;};
-    return {series:count('quota-history'),sessionSeries:count('quota-session-history'),budgetSeries:count('budget-history'),fundsSeries:count('subscription-funds')};
+    ${segment?'const result =':'return'} {series:count('quota-history'),sessionSeries:count('quota-session-history'),budgetSeries:count('budget-history'),fundsSeries:count('subscription-funds')};
+    ${segment?`probe?.markSettlement?.(${JSON.stringify(segment)},'densityEnd');return result;`:''}
   })()`);
   const originalHorizon = await cdp.evaluate<string>(`JSON.parse(localStorage.getItem('quotum.prefs')||'{}').horizon||'auto'`);
   let interception = false, failed = false;
@@ -102,9 +106,12 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         const connected=()=>layers.every((layer,i)=>layer.isConnected!==false&&slides[i].isConnected!==false)&&clips.every(clip=>clip.isConnected!==false);
         const probe=window.__quotumPan={initiator,period,frames:[],latency:[],responses:[],inputs:0,updated:0,chartUpdates:Array(5).fill(0),synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,mutationSamples:[],undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[],wheelGapMs:0,lastWheel:null};
         ${detailed?`// One bounded journal extends the existing probe only in the selected diagnostic cell.
-        const detail={limit:4096,count:0,omitted:0,startedAt:performance.now(),stoppedAt:0,preparationAttached:false,preparationRestored:false,preparationJobsAtAttach:null,preparationPendingAtAttach:null,frames:[],inputs:[],callbacks:[],preparations:[]};
-        let sampleSerial=0,activeSample=0,rafSerial=0,activeRaf=0;
+        const detail={limit:4096,count:3,omitted:0,startedAt:performance.now(),stoppedAt:0,preparationAttached:false,preparationRestored:false,preparationJobsAtAttach:null,preparationPendingAtAttach:null,frames:[],inputs:[],callbacks:[],preparations:[],settlements:['wheel','drag','return'].map(segment=>({segment,begin:null,ready:null,end:null,densityBegin:null,densityEnd:null,polls:0,blockers:{loading:0,panEnd:0,drawReady:0,isPanning:0,forecastRange:0,budgetTableRange:0,agentsRange:0}}))};
+        let sampleSerial=0,activeSample=0,rafSerial=0,activeRaf=0,diagnosticStopped=false;
         const keep=(kind,row)=>{if(detail.count>=detail.limit){detail.omitted++;return false;}detail.count++;detail[kind].push(row);return true;};
+        // Three fixed rows share the journal cap; polling never allocates another row.
+        probe.markSettlement=(segment,key,blocker)=>{if(!probe.running||diagnosticStopped)return;const row=detail.settlements.find(row=>row.segment===segment);if(!row||row.end!==null&&key!=='densityBegin'&&key!=='densityEnd')return;if(key==='poll')row.polls++;else if(key==='blocked')row.blockers[blocker]++;else if(row[key]===null)row[key]=performance.now();};
+        probe.readSettlements=()=>({status:detail.settlements.every(row=>row.begin!==null&&row.ready!==null&&row.end!==null&&(row.segment==='return'||row.densityBegin!==null&&row.densityEnd!==null))?'complete':'insufficient-evidence',rows:detail.settlements.map(row=>({...row,blockers:{...row.blockers}}))});
         const scheduler=window.__quotumPanPreparations,env=scheduler?.env,post=env?.post;
         const observedPost=typeof post!=='function'?null:function(run){return post.call(this,()=>{
           if(!probe.running)return run();
@@ -112,8 +119,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
           try{return run();}finally{keep('preparations',{at,to:performance.now(),jobsBefore,jobsAfter:scheduler.size});}
         });};
         if(observedPost){detail.preparationJobsAtAttach=scheduler.size;detail.preparationPendingAtAttach=typeof scheduler.pending==='boolean'?scheduler.pending:null;env.post=observedPost;detail.preparationAttached=true;}
-        probe.stopDiagnostic=()=>{detail.stoppedAt=performance.now();if(observedPost&&env.post===observedPost){env.post=post;detail.preparationRestored=true;}};
-        probe.readDiagnostic=()=>({status:!probe.running&&!detail.omitted&&detail.preparationAttached&&detail.preparationRestored&&detail.preparationJobsAtAttach===0&&detail.preparationPendingAtAttach===false&&detail.frames.length===probe.frames.length&&detail.inputs.length===probe.inputs?'complete':'insufficient-evidence',initiator,period,timeOrigin:performance.timeOrigin,...detail});
+        probe.stopDiagnostic=()=>{diagnosticStopped=true;detail.stoppedAt=performance.now();if(observedPost&&env.post===observedPost){env.post=post;detail.preparationRestored=true;}};
+        probe.readDiagnostic=()=>({status:!probe.running&&!detail.omitted&&detail.preparationAttached&&detail.preparationRestored&&detail.preparationJobsAtAttach===0&&detail.preparationPendingAtAttach===false&&detail.frames.length===probe.frames.length&&detail.inputs.length===probe.inputs?'complete':'insufficient-evidence',initiator,period,timeOrigin:performance.timeOrigin,...detail,settlements:probe.readSettlements()});
         `:''}const originalPush=history.pushState.bind(history);probe.originalPush=originalPush;
         history.pushState=(...args)=>{if(probe.feeding){probe.pushesDuring++;transactions.push(probe.segment,root.dataset.panToken===undefined?NaN:Number(root.dataset.panToken));}else probe.pushesAfter++;originalPush(...args);};
         probe.returnSnapshot=()=>({now:Date.now(),url:location.search,charts:charts.map((svg,i)=>{
@@ -300,8 +307,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
       interception = false;
       progress(`${initiator}/${period}/wheel-settle`);
-      await settled();
-      edgeSeries.push({stage:'wheel',...await density()});
+      await settled(detailed?'wheel':undefined);
+      edgeSeries.push({stage:'wheel',...await density(detailed?'wheel':undefined)});
       // Shift-drag keeps capture when the pointer leaves the SVG, without extra inertia.
       at('drag');
       progress(`${initiator}/${period}/drag`);
@@ -317,8 +324,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       await mouse('mouseReleased', geometry.x + 720, geometry.y, 8);
       await key(false, 'Shift', 16);
       progress(`${initiator}/${period}/drag-settle`);
-      await settled();
-      edgeSeries.push({stage:'drag',...await density()});
+      await settled(detailed?'drag':undefined);
+      edgeSeries.push({stage:'drag',...await density(detailed?'drag':undefined)});
       // Native Shift deltaX returns to live, then Back/Forward restore complete gestures.
       at('return');
       progress(`${initiator}/${period}/return-live`);
@@ -336,7 +343,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       })()`);
       await scroll(-Math.max(0, returnPixels - 4));
       await cdp.evaluate('window.__quotumPan.feeding=false');
-      await wait(240); await settled();
+      await wait(240); await settled(detailed?'return':undefined);
       await cdp.evaluate('window.__quotumPan.returnAfter=window.__quotumPan.returnSnapshot()');
       at('report');
       const report = await cdp.evaluate<PanReading>(`(() => {

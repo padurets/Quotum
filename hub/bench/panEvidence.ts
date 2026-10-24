@@ -35,6 +35,7 @@ export function panPartialScript(initiator?: string, period?: string): string {
     if(!p||p.initiator!==${JSON.stringify(initiator??null)}||p.period!==${JSON.stringify(period??null)}||!p.running)return {status:'unavailable'};
     const outliers=p.samples.filter(sample=>sample.ms>50);
     return {status:'partial',inputs:p.inputs,updated:p.updated,frames:p.frames,latency:p.latency,
+      ...(p.readSettlements?{settlements:p.readSettlements()}:{}),
       responses:p.responses,transactions:p.readTransactions(),outliers:outliers.slice(0,64),outliersOmitted:Math.max(0,outliers.length-64),
       pushesDuring:p.pushesDuring,forbiddenMutations:p.forbiddenMutations,
       pending:p.pending.map(input=>({inputId:input.id,stamp:input.at,delivered:input.delivered,pixels:input.pixels}))};
