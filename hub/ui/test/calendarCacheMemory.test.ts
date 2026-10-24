@@ -43,6 +43,21 @@ function fixture(t:TestContext){
   return {calendar,cache,pool,flight,reserve,configure,receive,evictions};
 }
 
+test('calendar readings charge shared boundary arrays once across retained aliases',t=>{
+  const h=fixture(t),current=h.calendar.get(),baseline=h.calendar.bytes,edges=current.window.edges;
+  assert.ok(current.value);assert.equal(current.value.edges,edges,'actual adoption shares the boundary array');
+  const retainedBytes=(copied:boolean)=>{
+    const reading={...current,window:{...current.window,edges:copied?[...edges]:edges}};
+    const releases=[h.calendar.retain(reading),h.calendar.retain({...reading})];
+    try{return h.calendar.bytes;}
+    finally{for(const release of releases)release();assert.equal(h.calendar.bytes,baseline);}
+  };
+  const borrowed=retainedBytes(false),copied=retainedBytes(true);
+  assert.equal(copied-borrowed,edges.length*16,'equal numbers in a different array own one additional payload');
+  assert.equal(h.calendar.get(),current);assert.equal(current.value.edges,edges);
+  assert.deepEqual(current.value.cells,section(cold).value.cells,'shared accounting preserves every decoded calendar cell');
+});
+
 test('a cache HIT borrows each resident curve once and preserves the shifted repeat under the real 15 MiB pool',t=>{
   const h=fixture(t),at=now+8801,window=calendarWindow(at,'UTC',live),projection=1024+window.edges.length*256+window.dates.length*256;
   const curves=h.cache.bytes,headroom=Math.floor(curves/2);let padding=h.pool.budget-h.calendar.bytes-projection-headroom;

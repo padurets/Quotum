@@ -90,6 +90,11 @@ export class WorkCalendar {
         if(windows.has(reading.window))bytes-=windowBytes(reading.window);else windows.add(reading.window);
         if(reading.value){if(values.has(reading.value))bytes-=valueBytes(reading.value);else values.add(reading.value);}
       }
+      // Adopted and retained readings can share this numeric boundary payload.
+      const edges=new Set<number[]>();
+      for(const window of windows){bytes-=window.edges.length*16;edges.add(window.edges);}
+      for(const value of values){bytes-=value.edges.length*16;edges.add(value.edges);}
+      for(const edge of edges)bytes+=edge.length*16;
       this.accountedBytes=bytes;
     }
     return this.accountedBytes+this.cache.bytes;
