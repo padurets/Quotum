@@ -4,21 +4,28 @@ import {SETS} from '../../demo/catalogue.js';
 import {cards, DAY, MIN, historyTimes} from '../../demo/model.js';
 import {STILL_FOR} from '../../demo/setup.js';
 import {panningSet} from '../fixture.js';
-import {DOT_STILL_AFTER,fixtureTiming,idleWindow,warmUntil} from '../still.js';
+import {DOT_STILL_AFTER,fixtureTiming,idleWindow,SETTLE_MS,stillProblems,stillSnapshot,warmUntil} from '../still.js';
 import {drain} from '../../server/domain/prepare.js';
 import {packSamples,sampleAt,sampleCount,type PeriodTape} from '../../server/domain/periodTape.js';
 import {retainTape,retirementEdge} from '../../server/domain/periodRetention.js';
 import {PageClock} from '../../ui/lib/clock.js';
 
-test('the ten-second fixture anchor preserves both the legacy warm floor and its actual fade',()=>{
+test('the aged fixture keeps its grid anchor and waits for actual freshness and page settle',()=>{
   const crossing=Date.parse('2026-10-15T10:34:10Z');
   const before=fixtureTiming(crossing-1),after=fixtureTiming(crossing);
-  assert.equal(before.start,crossing-5*MIN);
-  assert.equal(after.start,crossing);
-  assert.equal(before.warmAt,after.warmAt);
-  assert.equal(after.warmAt,crossing-10_000+DOT_STILL_AFTER);
-  const cards=[{id:'fixture',successAt:after.start,staleAfterMs:STILL_FOR,windows:[],forecast:undefined}];
-  assert.equal(Math.max(after.warmAt,warmUntil(cards,crossing)),crossing+DOT_STILL_AFTER);
+  assert.equal(before.start,crossing-15*MIN);
+  assert.equal(after.start,crossing-10*MIN);
+  assert.equal(before.warmAt,before.start+DOT_STILL_AFTER);
+  assert.equal(after.warmAt,after.start+DOT_STILL_AFTER);
+  const card=cards(panningSet(SETS[0])).find(card=>card.id==='antigravity')!;
+  const observation=(at:number)=>{const wire=stillSnapshot(card,after.start,at);return{id:card.id,successAt:Date.parse(wire.observedAt),staleAfterMs:wire.staleAfterMs,windows:wire.windows.map(window=>({resetAt:window.resetsAt===null?null:Date.parse(window.resetsAt)})),forecast:undefined};};
+  const seeded=observation(after.start);
+  assert.equal(Math.max(after.warmAt,warmUntil([seeded],crossing)),crossing+SETTLE_MS);
+  assert.deepEqual(stillProblems([seeded],crossing,crossing+20*MIN),[]);
+  const freshAt=crossing+MIN,fresh=observation(freshAt);
+  assert.equal(fresh.successAt!+fresh.staleAfterMs,after.start+STILL_FOR,'a later sample keeps the original absolute deadline');
+  assert.equal(warmUntil([fresh],crossing),freshAt+DOT_STILL_AFTER,'a new observation cannot borrow the aged seed deadline');
+  assert.ok(stillProblems([fresh],freshAt,freshAt+2*MIN).includes(card.id+"'s dot still fades"));
 });
 
 test('each launch-minute phase includes regular quota retirement in the measured chart transition',()=>{
@@ -27,8 +34,9 @@ test('each launch-minute phase includes regular quota retirement in the measured
   const seed=Date.parse('2026-10-15T10:30:00Z');
   for(let phase=0;phase<5;phase++)for(const offset of [0,9999,10000,59999]){
     const now=seed+phase*MIN+offset,timing=fixtureTiming(now);
-    assert.equal(timing.warmAt,Math.floor(now/MIN)*MIN+DOT_STILL_AFTER,'alignment keeps the original fade deadline');
-    assert.ok(timing.start<=now);
+    assert.equal(timing.warmAt,timing.start+DOT_STILL_AFTER,'warmth follows the actual seed rather than the launch minute');
+    assert.ok(timing.start<=now-10*MIN);
+    assert.equal((timing.start+50_000)%(5*MIN),0,'aging preserves the quota/grid phase');
     for(let cell=0;cell<3;cell++){
       const boundary=Date.parse('2026-10-15T13:00:00Z')+cell*5*MIN;
       const planned=idleWindow(boundary-115000,120,5*MIN);

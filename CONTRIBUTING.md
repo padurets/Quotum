@@ -639,14 +639,16 @@ focus in the card's menu and fails otherwise. It needs Chrome:
 one already running. CI runs it on every push; run it when you change the dashboard
 and have Chrome.
 
-The history traffic matrix runs first, while the seeded measurements age, and closes
-its temporary pages before the idle board opens. The same warmup requirements still
-apply. Idle measurement starts at a planned grid phase with its endpoints away from
+The history traffic matrix runs first and closes its temporary pages before the idle
+board opens. Quota, work and money seeds share an anchor ten minutes before the
+benchmark's aligned seed time. Warmup still checks actual observations: a fresh
+measurement requires its full fade, and the idle board settles for at least thirty seconds.
+Idle measurement starts at a planned grid phase with its endpoints away from
 minute ticks and includes one real five-minute cell transition in each chart.
 The benchmark anchors regular quota retirement fifty seconds before the chart grid
 transition, keeping their deadlines separate while admitting the warm deadline one
 minute before that grid edge. Planning includes both in the
-same observation window, retaining the original fade deadline, minimum settle wait
+same observation window, retaining the actual fade deadline, minimum settle wait
 and job limits. Sparse and eco histories keep their own cadence.
 Reports retain planned and observed bounds, inner CPU counter bounds, transition counts and actual
 performance duration; missing coverage is a failure and the 1 ms/s budget includes

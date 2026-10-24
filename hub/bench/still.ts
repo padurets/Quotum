@@ -1,7 +1,7 @@
 import {hourShift} from '../server/forecasts.js';
 import type {Snapshot} from '../server/projection.js';
 import {FADE_FOR, PULSE_FOR} from '../ui/lib/quota.js';
-import {snapshot, DAY, MIN, type Card} from '../demo/model.js';
+import {snapshot, DAY, type Card} from '../demo/model.js';
 import {STILL_FOR} from '../demo/setup.js';
 import {cellOf} from '../server/domain/history.js';
 
@@ -85,10 +85,10 @@ export const SETTLE_MS = 30_000;
 /** A card's dot stops changing this long after its last measurement: it pulsed and faded out (ui/lib/quota.ts), with some to spare. */
 export const DOT_STILL_AFTER = PULSE_FOR + FADE_FOR + 30_000;
 
-/** Separate quota retirement from the axis while admitting the original warm deadline. */
+/** Seed faded observations while keeping quota retirement separate from the axis. */
 export function fixtureTiming(now:number) {
-  const seededAt=Math.floor(now/MIN)*MIN,cell=cellOf(DAY);
-  return {start:Math.floor((now+QUOTA_LEAD_MS)/cell)*cell-QUOTA_LEAD_MS,warmAt:seededAt+DOT_STILL_AFTER};
+  const cell=cellOf(DAY),start=Math.floor((now+QUOTA_LEAD_MS)/cell)*cell-QUOTA_LEAD_MS-2*cell;
+  return {start,warmAt:start+DOT_STILL_AFTER};
 }
 
 /** When the page may be counted: every dot has faded out, and it has been open `SETTLE_MS`. */

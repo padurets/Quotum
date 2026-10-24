@@ -34,7 +34,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   const problems=(name:string)=>red(name)?[name+'-red']:[];
   const reading={commits:0,instrumentMs:0,renders:[],mutations:[]};
   const events=new EventCounts(()=>now);for(let i=0;i<5;i++)events.push('event: ping\ndata: {}\n\n');
-  const source={id:'fixture',successAt:now-600_000,staleAfterMs:3_600_000,windows:[]};
+  const source={id:'fixture',successAt:env.TEST_FRESH_OBSERVATION?now:now-600_000,staleAfterMs:3_600_000,windows:[]};
   const overview={sources:[source],forecast:{},board:{id:'board'}};
   const person={personalBoard:'board',cookie:'session=fixture',get:async()=>overview};
   const set={id:'all',scene:'still'},stand={set,start:now,people:new Map([['ana',person]])};
@@ -142,15 +142,23 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
 }
 const tail=['measure','work','observed-work','private-work','frequency','panning','credits','money','fixed-activity','measurement-details'];
 const order=(calls:string[])=>calls.filter(call=>call==='history'||call==='openTab'||tail.includes(call));
-test('actual main passes the aligned fixture anchor and keeps the legacy warm wait',async()=>{
+test('actual main ages the whole fixture and still waits for the opened page to settle',async()=>{
   const cell=300_000,minute=60_000,base=Date.parse('2026-10-15T12:00:10Z');
   for(let phase=0;phase<5;phase++){
     const at=base+phase*minute,result=await run(['--scope','dashboard'],undefined,{},true,at);
     assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0],JSON.stringify({logs:result.logs}));
-    assert.equal(result.fixtureStart,Math.floor((at+50_000)/cell)*cell-50_000);
-    assert.equal(result.waits[0],Math.floor(at/minute)*minute+DOT_STILL_AFTER-at);
-    assert.deepEqual(result.saved.get('fixture-timing'),{start:result.fixtureStart,warmAt:Math.floor(at/minute)*minute+DOT_STILL_AFTER});
+    assert.equal(result.fixtureStart,Math.floor((at+50_000)/cell)*cell-50_000-2*cell);
+    assert.equal(result.waits[0],30_000);
+    assert.deepEqual(result.saved.get('fixture-timing'),{start:result.fixtureStart,warmAt:result.fixtureStart+DOT_STILL_AFTER});
   }
+});
+test('actual main waits for a fresh observation even with an already faded seed deadline',async()=>{
+  const at=Date.parse('2026-10-15T12:03:59Z');
+  const result=await run(['--scope','dashboard'],undefined,{TEST_FRESH_OBSERVATION:'1'},true,at);
+  assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);
+  assert.ok((result.saved.get('fixture-timing') as {warmAt:number}).warmAt<at);
+  assert.equal(result.waits[0],DOT_STILL_AFTER,'actual overview freshness owns the wait after a new measurement');
+  assert.deepEqual(order(result.calls),['openTab',...tail]);
 });
 test('actual main rejects quota retirement before the opening CPU counter even without DOM work',async()=>{
   const result=await run(['--scope','dashboard'],'opening-metrics');
