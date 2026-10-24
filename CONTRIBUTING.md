@@ -54,8 +54,10 @@ dashboard phase in the same order as `--scope dashboard`. CPU diagnostics (`trac
 requires `dashboard`. The optional `history_pool_control` manual CI input runs the full
 history matrix in its existing job with the existing bounded cache observer. It requires
 an exact `diagnostic_ref`, compiled-client hash and clean checkout, and rejects other
-diagnostic inputs. It adds no debugger preparation, retries or budget allowance; its
-artifacts are diagnostic and cannot satisfy the required `bench` check. The observer
+diagnostic inputs. CI prepares the existing native debugger and matching unwind tables
+for capture after a failed command. Passive navigation listeners add no commands; late
+renderer binding and native capture keep their existing postfailure deadlines. It adds no retries
+or budget allowance; its artifacts cannot satisfy the required `bench` check. The observer
 can identify cache eviction and reservation pressure in this instrumented attempt. It
 does not preserve fixed-summary shift proofs or every gesture's scale, so a different
 repeat range can remain unexplained. Locally this mode also accepts `--scope history`

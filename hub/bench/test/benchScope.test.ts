@@ -401,8 +401,12 @@ test('manual pool diagnostics select one pinned history job without changing ord
   const dev=job('dev-tooling'),missing=Boolean(evaluate(dev.match(/HAS_DIAGNOSTIC_MODE: \$\{\{ (.+) \}\}/)![1],noRef));
   assert.equal(missing,true);assert.throws(()=>runInNewContext(dev.match(/run: node -e '([^']+)'/)![1],{process:{env:{HAS_DIAGNOSTIC_MODE:String(missing)}}}),/require diagnostic_ref/);
   for(const name of ['bench','bench-history','bench-dashboard','hub','dev-tooling'])assert.equal(selected(name,{}),true,name);
-  for(const block of history.split('      - name: ').filter(block=>/^Prepare the diagnostic native debugger|^Prepare matching renderer unwind tables/.test(block))){
-    assert.equal(Boolean(evaluate(block.match(/if: \$\{\{ (.+) \}\}/)![1],inputs)),false,'pool-only installs no debugger');
+  const preparation=history.split('      - name: ').filter(block=>/^Prepare the diagnostic native debugger|^Prepare matching renderer unwind tables/.test(block));
+  assert.equal(preparation.length,2);
+  for(const block of preparation){
+    const condition=block.match(/if: \$\{\{ (.+) \}\}/)![1];
+    for(const selected of [inputs,{history_scroll_control:true},{compositor_guard_control:true}])assert.equal(Boolean(evaluate(condition,selected)),true,'native capture must be prepared for each history control');
+    assert.equal(Boolean(evaluate(condition,{})),false,'ordinary CI keeps its existing preparation');
   }
 });
 

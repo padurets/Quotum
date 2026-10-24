@@ -15,7 +15,7 @@ function caller(name:string,bindings:Record<string,unknown>):Call {
   return runInNewContext(ts.transpileModule(declarations.join('\n')+'\n'+name+';',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,bindings);
 }
 
-test('both actual history callers route passive binding only for ordinary owned Chrome',async()=>{
+test('both actual history callers retain passive binding for ordinary and pool-observed owned Chrome',async()=>{
   const flags=['QUOTUM_BENCH_HISTORY_SCROLL_CONTROL','QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL','QUOTUM_BENCH_DIAGNOSE_NATIVE','QUOTUM_BENCH_REVERSAL_PROBE','QUOTUM_BENCH_DIAGNOSE_IDLE_CPU'];
   const environments=[{},Object.fromEntries(flags.map(key=>[key,''])),...flags.map(key=>({[key]:'1'}))];
   const hooks={owner:{},observeProcesses:async()=>[],launchReport:()=>({pid:1})};
@@ -24,7 +24,7 @@ test('both actual history callers route passive binding only for ordinary owned 
   for(const name of ['browserHistoryTraffic','browserCancellationTraffic'])for(const browser of browsers)for(const env of environments){
     const seen:unknown[][]=[],original=new Error('original seed stop'),run=caller(name,{DAY:86400000,HISTORY_COHORT_TAKES:1,process:{env},console:{error(){}},historyPage:async(...args:unknown[])=>{seen.push(args);throw original;}});
     await assert.rejects(name==='browserHistoryTraffic'?run(browser.value,{},'','board'):run(browser.value,{},'',false,false),error=>error===original);
-    assert.equal(seen.length,1);assert.equal(seen[0].length,11);assert.equal(seen[0][10],browser.eligible&&!flags.some(key=>env[key as keyof typeof env]));
+    assert.equal(seen.length,1);assert.equal(seen[0].length,11);assert.equal(seen[0][10],browser.eligible&&!flags.filter(key=>key!=='QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL').some(key=>env[key as keyof typeof env]));
   }
   for(const diagnostic of [true,false])for(const profile of [true,false]){
     const seen:unknown[][]=[],original=new Error('original cancellation stop'),run=caller('browserCancellationTraffic',{DAY:86400000,HISTORY_COHORT_TAKES:1,process:{env:{}},console:{error(){}},historyPage:async(...args:unknown[])=>{seen.push(args);throw original;}});

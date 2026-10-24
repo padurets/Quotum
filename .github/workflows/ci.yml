@@ -214,10 +214,10 @@ jobs:
           CONFLICTING_MODE: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control || inputs.history_scroll_control || inputs.compositor_guard_control || inputs.startup_io_control }}
         run: node -e 'if(process.env.CONFLICTING_MODE==="true")throw Error("Choose only the history pool control")'
       - name: Prepare the diagnostic native debugger
-        if: ${{ inputs.history_scroll_control || inputs.compositor_guard_control }}
+        if: ${{ inputs.history_scroll_control || inputs.compositor_guard_control || inputs.history_pool_control }}
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gdb
       - name: Prepare matching renderer unwind tables
-        if: ${{ inputs.history_scroll_control || inputs.compositor_guard_control }}
+        if: ${{ inputs.history_scroll_control || inputs.compositor_guard_control || inputs.history_pool_control }}
         env:
           COMPOSITOR_GUARD: ${{ inputs.compositor_guard_control }}
         run: |
