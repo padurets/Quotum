@@ -2301,6 +2301,9 @@ that cannot fit fails losslessly without evicting the other reader's visible fra
 discard. Projections pin the current tile entry and its write sequence. Eviction outside
 the complete target preserves its pending composition; its board, epoch, metadata,
 selected series, target bounds and pinned entries still decide whether that work is current.
+Clock-driven storage compaction uses only free headroom. If its copies cannot fit,
+it keeps the committed indexes and waits for the next retention boundary without
+evicting reusable history. New evidence keeps ordinary admission and eviction.
 Financial and work ledgers share their immutable native observations only when every
 reading agrees. Retention preserves that shared suffix, and the pool charges its storage
 once; differing observations and each ledger's spans retain their own charges.

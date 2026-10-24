@@ -221,6 +221,48 @@ test('canceling a real quota retirement between posted slices clears proof owner
   }finally{c.stopReads();await h.close();c.preparer.dispose();}
 });
 
+test('optional retirement preserves cached data when copying cannot fit and resumes after headroom returns',async t=>{
+  const c=await retirementControl(t),{h}=c;
+  let pinned=new Uint8Array(0),cold:Uint8Array|null=new Uint8Array(64*1024),drops=0;
+  const other={get estimatedBytes(){return pinned.byteLength+(cold?.byteLength??0);},evictionCandidates:()=>cold?[{bytes:cold.byteLength,shownAt:0,drop:()=>{drops++;cold=null;}}]:[]};
+  try{
+    await c.startRetirement();await c.insideCopy();
+    // A second owner fills the pool while a real prefix copy is between slices.
+    // Its cached allocation must survive a housekeeping reservation that cannot fit.
+    pinned=new Uint8Array(h.pool.budget-h.pool.estimatedBytes-cold!.byteLength-128);h.pool.register(other);
+    assert.equal(h.pool.estimatedBytes,h.pool.budget-128);
+    await c.drain();
+    assert.equal(drops,0,'optional compaction must refuse growth before evicting reusable data');
+    assert.ok(cold);assert.equal(h.period.tapes.get('quota'),c.before);assert.equal(h.period.get().value,c.work);
+    assert.equal(c.tails?.size,0);assert.equal(c.active.size,0);assert.equal(c.preparer.size,0);
+    assert.equal(h.period.get().error,null);assert.equal(h.requests.length,c.requests);c.unchanged();
+    assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes+other.estimatedBytes,'all refused staging is released');
+    const next=h.period.retirementAt,attempts=c.preparations;assert.ok(Number.isFinite(next)&&next>c.clock.now);
+    h.jump(c.clock.now+1);await flush();await c.drain();assert.equal(c.preparations,attempts,'a refusal cannot retry the consumed edge');
+
+    pinned=new Uint8Array(0);c.clock.now=next+1;h.jump(c.clock.now);await flush();await c.drain();c.stopReads();
+    const after=h.period.tapes.get('quota');assert.notEqual(after,c.before,'later free headroom admits actual retirement');
+    assert.equal(drops,0);assert.ok(cold);
+    const range={from:c.clock.now-24*H,to:c.clock.now},queries=h.period.queries(h.page.get().board,range);
+    const reply=expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,{version:1,selection:{mode:'live',periodMs:24*H},evaluatedAt:c.clock.now,...queries,sessions:{}})));
+    assert.ok(reply.sessions&&reply.sessions.state!=='error'&&reply.quota?.state==='complete'&&reply.quota.value.tape);
+    const tape=reply.quota.value.tape;for(const series of tape.quota)if(series.samplesEncoding==='delta'){series.samples=decodeSamples(series.samples);delete series.samplesEncoding;}
+    const fresh=new PeriodAccounting(tape,reply.sessions.value,new PeriodIndex(reply.sessions.value).curves);
+    for(const source of c.sources){
+      const index=after.accounting.quota.get(source+'\nw'),expected=(fresh as any).quota.get(source+'\nw');
+      for(const field of quotaColumns)assert.deepEqual(columnValues(index[field]),columnValues(expected[field]),field+' stays exact after deferred retirement');
+      assert.ok(sampleCount(index.series.samples)<256);
+    }
+    assert.equal(h.requests.length,c.requests);assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes+other.estimatedBytes);
+    assert.equal(c.preparer.size,0);assert.equal(h.period.get().error,null);c.unchanged();
+
+    pinned=new Uint8Array(h.pool.budget-h.pool.estimatedBytes-128);
+    const foreground={role:'visible' as const};
+    try{assert.equal(h.pool.reserve(foreground,1024),true);assert.equal(drops,1,'new foreground data keeps ordinary eviction admission');}
+    finally{h.pool.release(foreground);}
+  }finally{h.pool.unregister(other);c.stopReads();await h.close();c.preparer.dispose();}
+});
+
 test('a real pool refusal after spent copy preserves committed quota evidence and advances the retirement deadline',async t=>{
   const c=await retirementControl(t),{h}=c,reserve=h.pool.reserve.bind(h.pool);
   let refused:any,refusals=0;

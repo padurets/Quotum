@@ -1,5 +1,5 @@
 // Interactive admission can differ from the member that owns retained bytes.
-type Flight = {role: 'visible' | 'ahead';admission?:object};
+type Flight = {role: 'visible' | 'ahead';admission?:object;evict?:boolean};
 type Candidate = {bytes: number; shownAt: number; drop(): void};
 export type HistoryMember = {readonly estimatedBytes: number; evictionCandidates(): Candidate[]};
 type Waiting = {owner: HistoryMember; flight: Flight; start(): void; cancel(): void};
@@ -75,7 +75,8 @@ export class HistoryPool {
   reserve(flight: Flight, bytes: number) {
     const previous = this.reservations.get(flight) ?? 0;
     this.reservations.set(flight, bytes);
-    if (this.trim()) return true;
+    // Optional compaction must not discard useful cache to copy a smaller ledger.
+    if (flight.evict===false?this.estimatedBytes<=this.budget:this.trim()) return true;
     this.reservations.set(flight, previous);
     return false;
   }

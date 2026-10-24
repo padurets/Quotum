@@ -134,7 +134,7 @@ class BoardPeriod {
   private readonly retained=new Map<string,{bytes:number;storage:Map<object,number>;metadata:number;activity:PeriodActivity|null;activityBytes:number;copyBytes:number;at:number;invalidate:(data:Extract<import('./board').HubEvent,{type:'history'}>['data'])=>boolean;valid:(selection:PeriodSelection)=>boolean;fits:(selection:PeriodSelection)=>boolean;restore:(selection:PeriodSelection)=>boolean}>();
   readonly transport=new PeriodTransport(historyPool,()=>this.intent(),(reply,intent,reserve)=>this.receive(reply,intent,reserve),fetchPeriod,()=>{page.dispatch({type:'board-close'});if(typeof window!=='undefined')window.dispatchEvent(new Event(UNAUTHORIZED));});
   constructor(){historyPool.register(this);clock.subscribe(this.watch,()=>this.tick());}
-  private staging(operation:'calendar-projection'|'values'|'restore'|'adoption'|'retirement'){return {role:'visible' as const,historyMember:this,operation};}
+  private staging(operation:'calendar-projection'|'values'|'restore'|'adoption'|'retirement'){return {role:'visible' as const,historyMember:this,operation,evict:operation!=='retirement'};}
   private configureCalendar(visible:boolean,context:string,now:number,limited:boolean,selection:PeriodSelection){
     const staging=this.staging('calendar-projection');
     try{return this.calendar.configure(visible,context,now,limited,selection,bytes=>historyPool.reserve(staging,bytes));}
