@@ -838,7 +838,8 @@ them), kept for 90 days.
   estimated 15 MiB, protecting the frame on screen and removing dictionaries no retained
   cell uses after replacement. A fixed frame proven reusable for an incoming selection
   becomes recently used before calendar preparation; it remains evictable under the
-  same bound. Session references are opaque and
+  same bound. An exact, valid live cache entry receives the same priority.
+  Session references are opaque and
   change with the hub's run, so answers cannot mix runs. A machine's list credits work
   with its next list or after five minutes of silence (`KEEP_MS`, up to 200 seconds of
   work); each credit tells history its actual start. The chart begins where the history

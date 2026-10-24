@@ -563,9 +563,9 @@ class BoardPeriod {
     if(changedFinancial)this.retireFinancialValues();
     const cacheKey=JSON.stringify([identity,scopeKeys,nextFilter,financialIdentity]);
     // Calendar preparation must see the reusable incoming frame as recently used.
-    if(!event&&selection.mode==='range'&&periodKey(selection)!==periodKey(this.selection)&&!changedWork&&!changedRun&&!selectedChanged&&!changedScopes.length&&!changedFinancial){
+    if(!event&&periodKey(selection)!==periodKey(this.selection)&&!changedWork&&!changedRun&&!selectedChanged&&!changedScopes.length&&!changedFinancial){
       const saved=this.retained.get(cacheKey)?.valid(selection)?this.retained.get(cacheKey):[...this.retained.values()].find(entry=>entry.fits(selection));
-      if(saved?.fits(selection))saved.at=hubNow();
+      if(saved&&(selection.mode==='live'||saved.fits(selection)))saved.at=hubNow();
     }
     const calendarChanged=this.configureCalendar(widgetVisible(board.view,AGENT_HOURS_HEATMAP,board.lineup.length),JSON.stringify([board.id,board.workAuthority,nextFilter,this.workLimit]),hubNow(),this.workLimit,selection);
     if(calendarChanged){this.resetFacets();this.revision++;if(this.identity)this.transport.change();}
