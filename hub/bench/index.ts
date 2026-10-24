@@ -227,22 +227,24 @@ async function main() {
         const baseline=path.join(process.env.QUOTUM_BENCH_DIAGNOSTICS_DIR!,evidence.id,'result.json');
         if(statSync(baseline).size>1024*1024||readFileSync(baseline,'utf8')!==JSON.stringify(safeEvidence(result)))throw new Stop('History suffix baseline was not retained');
         evidence.begin('history-suffix');
-        const proxy=await historyProxy(address.base,owner);let failed=false,completed=0;
+        const proxy=await historyProxy(address.base,owner);let failed=false,completed=0;const alignment:import('./historyPoolReceipt.js').RetirementAlignment={used:false,status:'inconclusive',reason:'no-eligible-page'};
         try{
           for(let pair=1;pair<=12;pair++)for(const cohort of ['history','activity'] as const){
             if(cancelled||finishing)throw new Stop('History suffix cancelled');
             owner.signal.throwIfAborted();
-            const extra=await browserHistoryTraffic(browser,proxy,ana.cookie,board,evidence,{pair,cohort});
+            const extra=await browserHistoryTraffic(browser,proxy,ana.cookie,board,evidence,{pair,cohort},alignment);
             evidence.save(`history-suffix-${pair}-${cohort}`,extra);
             if(extra.problems.length)throw new Stop('History suffix exceeded its original traffic budget');
             completed++;
           }
+          if(alignment.status!=='exposed')throw new Stop('History suffix retirement was not exposed');
           evidence.save('history-suffix-result',{mode:'diagnostic',status:'observations-completed',completed,expected:24,canonicalPass:false});
         }catch(error){
           failed=true;
           try{evidence.save('history-suffix-result',{mode:'diagnostic',status:'inconclusive',completed,expected:24,canonicalPass:false});}catch{owner.failures.push('history suffix evidence failed');}
           throw error;
         }finally{
+          try{evidence.save('history-suffix-retirement',{mode:'diagnostic',canonicalPass:false,...alignment});}catch{owner.failures.push('history suffix retirement evidence failed');}
           try{await proxy.close();}catch(error){owner.failures.push('history suffix proxy cleanup failed');if(!failed)throw error;}
         }
       }

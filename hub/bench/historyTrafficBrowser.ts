@@ -10,7 +10,8 @@ import {HISTORY_COHORT_TAKES, historyCutInvalidation, historyIdentity, bodyTotal
 import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from './historyProxy';
 import {observeReversal} from './reversalDiagnostic';
 import {rendererIdentity,rendererDocument,type RendererIdentity} from './rendererIdentity';
-import {historyPoolReceiptScript} from './historyPoolReceipt';
+import {historyPoolReceiptScript,claimRetirementAlignment,type RetirementAlignment,type retirementBoundary} from './historyPoolReceipt';
+import {setTimeout as delay} from 'node:timers/promises';
 import {ScriptBinding} from './scriptBinding';
 import {clientIdentity} from './evidence';
 import {deadline} from './deadline';
@@ -185,7 +186,7 @@ export function historyScroll(geometry: {x: number; y: number; width: number}, f
 }
 
 /** Diagnostic boundaries keep exact selections beside the readers that still own work. */
-export function historyCheckpointScript(length:number,label:string) {
+export function historyCheckpointScript(length:number,label:string,retirement=false) {
   return `(() => {
     const params=new URLSearchParams(location.search),traffic=window.__historyTraffic;
     const selection=params.has('from')&&params.has('to')?{mode:'range',from:Number(params.get('from')),to:Number(params.get('to'))}:{mode:'live',periodMs:${length}};
@@ -193,7 +194,7 @@ export function historyCheckpointScript(length:number,label:string) {
       const svg=panel.querySelector('.chart>svg'),fields=['panEnd','panOrigin','panToken','panScale','panBase','drawFrom','drawTo','drawReady'];
       return {index,family:['history','activity','budget-history','subscription-funds'].find(name=>panel.classList.contains(name)),range:panel.dataset.historyRange??null,loading:panel.classList.contains('is-loading'),svg:!!svg,...Object.fromEntries(fields.map(key=>[key,svg?.dataset[key]??null]))};
     });
-    return {label:${JSON.stringify(label)},at:performance.now(),wallAt:Date.now(),selection,drawings,movement:traffic?{tokens:[...traffic.tokens],poses:traffic.poses.map(pose=>({...pose})),pushes:traffic.pushes}:null,pool:window.__quotumHistoryPoolReceipt?.checkpoint?.(${JSON.stringify(label)})??{status:'unavailable'}};
+    return {${retirement?'retirement:window.__quotumHistoryPoolReceipt?.retirementBoundary()??null,':''}label:${JSON.stringify(label)},at:performance.now(),wallAt:Date.now(),selection,drawings,movement:traffic?{tokens:[...traffic.tokens],poses:traffic.poses.map(pose=>({...pose})),pushes:traffic.pushes}:null,pool:window.__quotumHistoryPoolReceipt?.checkpoint?.(${JSON.stringify(label)})??{status:'unavailable'}};
   })()`;
 }
 
@@ -210,7 +211,7 @@ export async function prepareHistoryTarget(cdp: Pick<Cdp, 'send' | 'evaluate'>, 
 
 type TrafficProxy = {url: string; transfers: Transfer[]; phase(value: string, latency?: number): void; settled(value: string): Promise<void>};
 
-async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number, poolEvidence?:Pick<Evidence, 'save'>,evidence?:Pick<Evidence,'save'>,receiptScenario?:{latency:number;fraction:number}) {
+async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number, poolEvidence?:Pick<Evidence, 'save'>,evidence?:Pick<Evidence,'save'>,receiptScenario?:{latency:number;fraction:number},alignment?:RetirementAlignment) {
   const tab = await openTab(browser), cdp = tab.cdp, bodies = new HistoryBodies(cdp);
   const checkpoints:unknown[]=[];
   const poolScenario:{length:number;future:number;latency?:number;fraction?:number;cell:number|null;geometry:unknown}={length,future,...receiptScenario,cell:null,geometry:null};
@@ -219,7 +220,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
     const boundary={label,phase:bodies.phase,stage:bodies.stage,at:Date.now(),http:{active:bodies.activeCount,pending:bodies.pending.size,attempts:bodies.reads.length}};
     const command=cdp.snapshot();
     if(command.socketState!==1||command.terminal||command.failure||command.pending.length){checkpoints.push({...boundary,status:'insufficient-evidence',reason:'original renderer unavailable'});return;}
-    try{checkpoints.push({...boundary,page:await deadline(2000,signal=>cdp.evaluate(historyCheckpointScript(length,label),signal))});}
+    try{checkpoints.push({...boundary,page:await deadline(2000,signal=>cdp.evaluate(historyCheckpointScript(length,label,!!alignment&&(!alignment.used&&name.includes('/activity/')&&label==='seed/settled/seed'||alignment.used&&name.startsWith('suffix/'+alignment.pair+'/activity/')&&label==='cached return/settled')),signal))});}
     catch{checkpoints.push({...boundary,status:'insufficient-evidence',reason:'checkpoint unavailable'});}
   };
   const poolName=name.replace(/[^a-zA-Z0-9_-]/g,'-');
@@ -314,7 +315,8 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
       evidence?.save('traffic-renderer-'+poolName,renderer.evidence());
       assert.ok(renderer.valid(),`${name}: renderer identity unavailable`);
     }
-    return {cdp, bodies, settled, geometry, cell, seeds, close,capturePool,renderer,lateRenderer,checkpoint};
+    const retirementAt=(label:string)=>(checkpoints.find((value:any)=>value.label===label) as {page?:{retirement?:ReturnType<typeof retirementBoundary>}}|undefined)?.page?.retirement??null;
+    return {cdp, bodies, settled, geometry, cell, seeds, close,capturePool,renderer,lateRenderer,checkpoint,retirementSeed:()=>retirementAt('seed/settled/seed'),retirementReturn:()=>retirementAt('cached return/settled')};
   } catch (error) {
     try{evidence?.save('traffic-seed-failure-'+poolName,{name,stage:bodies.stage,...bodies.diagnostic(`${name}/seed`)});}
     catch{browser.owner?.failures.push('history seed evidence failed');}
@@ -325,7 +327,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
 }
 
 /** Separate tabs use the fixed-codec proxy; this never changes the native perf route. */
-export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProxy, cookie: string, board: string, evidence?: Pick<Evidence, 'save'>, suffix?:{pair:number;cohort:'history'|'activity'}) {
+export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProxy, cookie: string, board: string, evidence?: Pick<Evidence, 'save'>, suffix?:{pair:number;cohort:'history'|'activity'},alignment?:RetirementAlignment) {
   if(suffix&&(!Number.isInteger(suffix.pair)||suffix.pair<1||suffix.pair>12||!['history','activity'].includes(suffix.cohort)))throw new Error('Unknown history suffix cohort');
   const reports = [], invalidated = [], problems: string[] = [];
   for (const length of [DAY, 30 * DAY]) for (const future of [DAY, 0]) for (const latency of [0, 100, 400]) for (const fraction of [.5, .04]) {
@@ -336,7 +338,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
       const poolTarget=length===DAY&&!future&&[100,400].includes(latency)&&fraction===.5&&take===1||length===30*DAY&&future===DAY||name==='browser/30d/activity/0ms/0.5/take1';
       const suffixPool=process.env.QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX==='1'&&suffix?.cohort==='activity'&&length===30*DAY&&!future&&latency===100&&fraction===.5&&take===1;
       const poolEvidence=(process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL==='1'&&poolTarget||suffixPool)?evidence:undefined;
-      const {cdp, bodies, settled, geometry, cell, seeds, close,capturePool,renderer,lateRenderer,checkpoint} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence,evidence,{latency,fraction});
+      const {cdp, bodies, settled, geometry, cell, seeds, close,capturePool,renderer,lateRenderer,checkpoint,retirementSeed,retirementReturn} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence,evidence,{latency,fraction},alignment);
       let observer:Awaited<ReturnType<typeof observeReversal>>|null=null, status='failed';
       let movement:unknown;
       try {
@@ -395,6 +397,12 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         const aggregate={name:name+'/all-accounting',attempts:physical.length,...physicalTotals,referenceDecoded:families.reduce((n,f)=>n+f.referenceDecoded,0),referenceEncoded:families.reduce((n,f)=>n+f.referenceEncoded,0),ratios:fraction===.5};
         problems.push(...trafficProblems(aggregate));reports.push(aggregate);
         console.error(`bench: ${aggregate.name}: ${JSON.stringify(aggregate)}`);
+        const seed=alignment&&!alignment.used&&suffix?.cohort==='activity'?retirementSeed():null;
+        const wait=alignment&&suffix?.cohort==='activity'?claimRetirementAlignment(alignment,seed,Date.now(),suffix.pair):null;
+        if(wait!==null){
+          const before=bodies.reads.length;bodies.phase=`${name}/alignment`;proxy.phase(bodies.phase);cdp.at(bodies.phase);
+          await delay(wait,undefined,{signal:browser.owner?.signal});alignment!.reads=bodies.reads.length-before;
+        }
         const warmPhase = `${name}/warm`; bodies.phase = warmPhase; proxy.phase(warmPhase);
         // A selected chart has no future, so its return uses the captured time delta.
         await scroll(-(pose.poses[0].origin - pose.to) / length * geometry.width,'cached return'); await settled();
@@ -403,6 +411,8 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         const warm = bodies.reads.filter(read => read.phase === warmPhase);
         if(warm.length)console.error('bench: warm history diagnostic '+JSON.stringify({name,...bodies.diagnostic(warmPhase)}));
         assert.equal(warm.length, 0, 'browser cached return/repeat started history');
+        if(wait!==null){assert.equal(alignment!.reads,0,'retirement alignment started history');const returned=retirementReturn();alignment!.returned=returned;
+          if(returned&&seed&&seed.edge!==null&&returned.periodMs===seed.periodMs&&returned.at>=seed.edge+seed.periodMs&&returned.anchor>=seed.edge&&returned.anchor>seed.anchor&&returned.blocks<seed.blocks)Object.assign(alignment!,{status:'exposed',reason:'packed-prefix-retired'});}
         const metrics = await cdp.send<{metrics: {name: string; value: number}[]}>('Performance.getMetrics');
         for (const family of families) {
           const report = {...family, ratios:false, warmAttempts: warm.length, series: geometry.series, movement: {tokens: pose.tokens.length, samples: pose.poses.length, pushes: pose.pushes, from: pose.from, to: pose.to}, heapBytes: metrics.metrics.find(m => m.name === 'JSHeapUsedSize')?.value};

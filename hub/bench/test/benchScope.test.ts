@@ -24,7 +24,7 @@ const declarations=['parseArgs','main'].map(name=>{
 const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={main,parseArgs};',{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},
 }).outputText;
-type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'fixed-activity'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace'|'suffix-throw'|'suffix-budget'|'suffix-cancel'|'suffix-cleanup'|'suffix-error-cleanup'|'suffix-returned-problems'|'reversal-throw'|'measurement-details-throw';
+type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'fixed-activity'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace'|'suffix-throw'|'suffix-budget'|'suffix-cancel'|'suffix-cleanup'|'suffix-error-cleanup'|'suffix-returned-problems'|'reversal-throw'|'measurement-details-throw'|'suffix-no-exposure';
 async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),diagnosticFiles=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
   const listeners=new Map<string,()=>void>(),waits:number[]=[];let now=startedAt,phaseStart=now,metricReads=0,retentionReads=0;
@@ -104,11 +104,12 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     historyProxy:async(_upstream:string,scope:RunOwner)=>{
       mark('suffix-proxy');const close=scope.resource(async()=>{mark('suffix-close');if(fault==='suffix-cleanup'||fault==='suffix-error-cleanup')throw Error('suffix-close-red');});return{close};
     },
-    browserHistoryTraffic:async(_browser:unknown,_proxy:unknown,_cookie:unknown,_board:unknown,_evidence:unknown,suffix:{pair:number;cohort:string})=>{
+    browserHistoryTraffic:async(_browser:unknown,_proxy:unknown,_cookie:unknown,_board:unknown,_evidence:unknown,suffix:{pair:number;cohort:string},alignment?:{used:boolean;status:string;reason:string;pair?:number})=>{
       assert.ok(saved.has('result')&&saved.has('history-traffic'),'baseline retained before suffix');suffixCalls++;mark(`suffix:${suffix.pair}:${suffix.cohort}`);
       if(fault==='suffix-throw'||fault==='suffix-error-cleanup')throw suffixError;
       if(fault==='suffix-cancel'){listeners.get('SIGTERM')!();await exited;}
       if(fault==='suffix-budget')throw suffixError;
+      if(alignment&&!alignment.used&&suffix.cohort==='activity'&&fault!=='suffix-no-exposure')Object.assign(alignment,{used:true,status:'exposed',reason:'packed-prefix-retired',pair:suffix.pair});
       return{reports:[],invalidated:[],problems:fault==='suffix-returned-problems'?['returned-suffix-budget']:[]};
     },
     diagnoseReversal:async()=>{mark('reversal-replay');throw Error('secondary-replay-red');},
@@ -483,4 +484,15 @@ test('native target refuses unknown or non-native selection before preparation a
     assert.match(String(result.error),/native trace target/i);assert.ok(!result.calls.includes('prepare'));assert.ok(!result.calls.includes('launch'));
   }
   for(const mode of ['native-trace','native-profile']){const result=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode});assert.equal(result.error,undefined);assert.ok(result.calls.includes('native-target:activity/24h'));}
+});
+
+
+test('an unexposed alignment fails after all24 suffix cases while retaining the baseline and cleanup',async()=>{
+  const out=await run(['--scope','history'],'suffix-no-exposure',suffixEnv);
+  assert.notEqual(out.exits[0],0);assert.deepEqual(out.statuses,['failed']);assert.ok(out.logs.some(line=>line.includes('History suffix retirement was not exposed')));
+  assert.deepEqual(out.calls.filter(name=>name.startsWith('suffix:')),Array.from({length:12},(_,i)=>[`suffix:${i+1}:history`,`suffix:${i+1}:activity`]).flat());
+  const baseline=out.saved.get('result') as {historyTraffic:{reports:unknown[]};problems:string[]};assert.deepEqual(baseline.problems,[]);assert.equal(baseline.historyTraffic.reports.length,1);assert.ok(out.saved.has('history-traffic'));
+  assert.deepEqual(safeEvidence(out.saved.get('history-suffix-result')),{mode:'diagnostic',status:'inconclusive',completed:24,expected:24,canonicalPass:false});
+  const alignment=out.saved.get('history-suffix-retirement') as {used:boolean;status:string;canonicalPass:boolean};assert.equal(alignment.used,false);assert.equal(alignment.status,'inconclusive');assert.equal(alignment.canonicalPass,false);
+  assert.equal(out.calls.filter(name=>name==='suffix-close').length,1);assert.equal(out.calls.filter(name=>name==='browser-close').length,1);assert.equal(out.calls.filter(name=>name==='demo-stop').length,1);
 });

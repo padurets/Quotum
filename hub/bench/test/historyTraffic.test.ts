@@ -91,6 +91,18 @@ test('pool capture retains exact checkpoints and stops debugger collection after
   }
 });
 
+test('retirement metadata reuses the existing checkpoint and leaves ordinary snapshots unchanged',()=>{
+  const boundary={periodMs:30*86400000,at:1000,anchor:1,blocks:6,patterns:1,edge:150};let marks=0,samples=0;
+  const context={URLSearchParams,location:{search:'?board=private-board'},performance:{now:()=>1},Date:{now:()=>2},document:{querySelectorAll:()=>[]},
+    window:{__quotumHistoryPoolReceipt:{checkpoint:()=>{marks++;return{status:'complete'};},retirementBoundary:()=>{samples++;return boundary;}}}};
+  const ordinary=runInNewContext(historyCheckpointScript(boundary.periodMs,'seed/settled/seed'),context);
+  assert.equal(ordinary.retirement,undefined);assert.equal(samples,0);
+  const selected=runInNewContext(historyCheckpointScript(boundary.periodMs,'seed/settled/seed',true),context);
+  assert.equal(selected.retirement,boundary);assert.equal(samples,1);assert.equal(marks,2);
+  assert.equal(selected.selection.mode,'live');assert.equal(selected.selection.periodMs,boundary.periodMs);
+  assert.doesNotMatch(JSON.stringify(selected),/private-board/);
+});
+
 test('traffic evidence retains attempted ranges and body uncertainty without selection text or payloads', () => {
   const read={selection:'board=private-canary',id:'1',phase:'cold',from:0,to:60,cell:1,lower:12,
     before:Promise.resolve(['private-canary']),payload:'private-canary',count:{complete:false,lower:12,coding:'br'}};

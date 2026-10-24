@@ -460,3 +460,35 @@ for(const plane of ['all','native','activity'] as const)test(`release entry reco
     assert.ok(!JSON.stringify(released).includes('synthetic-'),'source identities and payload stay private');
   }finally{h.close();}
 });
+
+
+test('retirement boundary comes from actual packed work endpoints and remains numeric and readonly',async()=>{
+  const {packWork}=await import('../../server/domain/periodWork');
+  const {retirementBoundary}=await import('../historyPoolReceipt');
+  const work=packWork({anchor:0,knownFrom:0,cut:7_200_000,refs:[{ref:'private-ref',source:'private-source',device:{id:'private-device',name:'Private'},origin:'terminal',project:'Private',folder:null,startedAt:0}],spans:[[0,0,80],[0,3_600_100,3_600_150],[0,7_199_000,7_200_000]]});
+  const before=JSON.stringify(work),value={selection:{mode:'live',periodMs:2_592_000_000},evaluatedAt:2_592_000_080,work:{value:work}};
+  const state=retirementBoundary(value)!;assert.equal(state.edge,7_200_000,'a packed hour expires after its final interval');assert.equal(state.anchor,0);assert.equal(state.blocks,6);assert.equal(state.blocks,work.packed!.blocks.length);
+  assert.equal(JSON.stringify(work),before);assert.doesNotMatch(JSON.stringify(state),/private-|Private|source|device|refs|folder/);
+  const {retainWork}=await import('../../server/domain/periodRetention'),{drain}=await import('../../server/domain/prepare');
+  const retained=drain(retainWork(work,state.edge!)),returned=retirementBoundary({...value,evaluatedAt:value.selection.periodMs+state.edge!,work:{value:retained}})!;
+  assert.equal(returned.anchor,state.edge);assert.ok(returned.anchor>state.anchor&&returned.blocks<state.blocks);assert.equal(JSON.stringify(work),before);
+  assert.equal(retirementBoundary({...value,selection:{mode:'range'}}),null);
+  assert.equal(retirementBoundary({...value,work:{value:{...work,fixed:{} as any}}}),null);
+  assert.equal(retirementBoundary({...value,evaluatedAt:2_592_000_000+7_200_000})!.edge,null);
+});
+
+test('one eligible natural hold is claimed globally, with no retry or relaxed time cap',async()=>{
+  const {claimRetirementAlignment,retirementBoundary}=await import('../historyPoolReceipt');
+  const state:import('../historyPoolReceipt').RetirementAlignment={used:false,status:'inconclusive',reason:'no-eligible-page'};
+  const seed={periodMs:1000,at:1000,anchor:0,blocks:6,patterns:1,edge:150};
+  for(const now of [0,1150,1200,1400,NaN]){const candidate=now===0?{...seed,edge:60_000}:seed;assert.equal(claimRetirementAlignment(state,candidate,now,1),null);assert.equal(state.used,false);}
+  assert.equal(claimRetirementAlignment(state,seed,1000,3),400);assert.equal(state.used,true);assert.equal(state.pair,3);assert.equal(state.status,'inconclusive','waiting does not prove algorithm exposure');
+  assert.equal(claimRetirementAlignment(state,seed,1000,4),null);assert.equal(state.pair,3);
+  const missing={used:false,status:'inconclusive' as const,reason:'no-eligible-page'};assert.equal(claimRetirementAlignment(missing,null,1000,1),null);assert.equal(missing.reason,'no-eligible-page');
+  assert.equal(retirementBoundary(undefined),null);
+});
+
+test('the existing pool observer exposes only numeric live retirement boundary without mutating its owner',()=>{
+  const h=fixture();h.run("period.selection={mode:'live',periodMs:1000};period.evaluatedAt=1100;period.work={value:{anchor:0,refs:[{ref:'secret-ref'}],spans:[],packed:{blocks:[0,0,0],patterns:[[0,150]]}}};before=JSON.stringify(period.work.value);boundary=__quotumHistoryPoolReceipt.retirementBoundary();after=JSON.stringify(period.work.value);");
+  assert.equal(h.context.before,h.context.after);assert.equal(h.context.boundary.edge,150);assert.equal(h.context.boundary.blocks,3);assert.doesNotMatch(JSON.stringify(h.context.boundary),/secret-ref|refs/);
+});

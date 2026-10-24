@@ -730,6 +730,10 @@ alone does not prove that its cells were published. Source binding runs after th
 traffic evidence is saved. This observation does not change retention or readiness.
 Pressure events also retain the period's current byte count and preparation flags.
 These flags describe simultaneous state, not the exclusive caller of a reservation.
+Within that same twenty-minute job, one eligible Activity page may wait up to sixty
+seconds for its captured work-prefix boundary before the cached return. The control
+requires committed prefix retirement and zero additional reads; a missing eligible
+boundary or unconfirmed retirement is inconclusive.
 
 The manual `startup_io_control` input observes a fixed A1/B/A2 startup-only sequence
 on one runner before running the unchanged full history control once, within the same
