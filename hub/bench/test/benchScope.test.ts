@@ -94,7 +94,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     safeEvidence,statSync:()=>({size:env.TEST_SUFFIX_BIG_BASELINE?1024*1024+1:Buffer.byteLength(JSON.stringify(safeEvidence(saved.get('result'))))}),
     readFileSync:()=>env.TEST_SUFFIX_BAD_BASELINE?'missing':JSON.stringify(safeEvidence(saved.get('result'))),
     mkdirSync:()=>{},writeFileSync:(file:string,body:string)=>diagnosticFiles.set(path.basename(file,'.json'),JSON.parse(body)),
-    sourceIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL?{sourceHead:env.QUOTUM_BENCH_SOURCE_SHA??null,checkoutSha:'1'.repeat(40)}:{checkoutSha:'fixture'},
+    sourceIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL||env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL?{sourceHead:env.QUOTUM_BENCH_SOURCE_SHA??null,checkoutSha:'1'.repeat(40)}:{checkoutSha:'fixture'},
     execFileSync:()=>env.TEST_CONTROL_DIRTY??'',
     USAGE:'fixture usage',IDLE:{ci:120,full:300},SHOWN_MS:30_000,MEASURED:'fixture',HISTORY_BYTES_PER_MEASUREMENT,
     SETS:[set],fixtureTiming,panningSet:(value:unknown)=>value,people:()=>[{id:'ana'}],freePort:async()=>{mark('freePort');return 1234;},
@@ -132,7 +132,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     moneyPhase:async()=>{mark('money');return{problems:problems('money')};},
     fixedActivity:async()=>{mark('fixed-activity');return{reports:[],problems:problems('fixed-activity')};},
     measurementDetails:async(actualBrowser:unknown,actualOwner:unknown)=>{assert.equal(actualBrowser,browser);assert.equal(actualOwner,person);mark('measurement-details');if(fault==='measurement-details-throw')throw new Error('measurement-details-original');return Array.from({length:16},(_,index)=>({index}));},
-    clientIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL?{status:'available',sha256:'2'.repeat(64)}:{status:'unavailable'},
+    clientIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL||env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL?{status:'available',sha256:'2'.repeat(64)}:{status:'unavailable'},
   };
   runInNewContext(code,context);
   const selected=(context as unknown as {selected:{main():Promise<void>;parseArgs(args:string[]):unknown}}).selected;
@@ -239,7 +239,7 @@ test('retired aligned idle mode rejects before preparing or launching a browser'
 const diagnostics={QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'profile',QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'1',QUOTUM_BENCH_DIAGNOSE_NATIVE:'1',QUOTUM_BENCH_REVERSAL_PROBE:'1'};
 for(const scope of ['history','dashboard'])for(const [key,value] of Object.entries(diagnostics))if(scope!=='dashboard'||key!=='QUOTUM_BENCH_DIAGNOSE_IDLE_CPU')test('partial '+scope+' rejects '+key,async()=>{
   const result=await run(['--scope',scope],undefined,{[key]:value});
-  assert.match(String(result.error),/scope/i);assert.deepEqual(result.calls,[]);assert.deepEqual(result.exits,[]);
+  assert.match(String(result.error),scope==='history'&&key==='QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL'?/source or client mismatch/:/scope/i);assert.deepEqual(result.calls,[]);assert.deepEqual(result.exits,[]);
 });
 for(const mode of ['trace','profile'])test('idle '+mode+' dashboard shares the canonical idle window and retains its guards',async()=>{
   const canonical=await run(['--scope','dashboard']),diagnostic=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode});
@@ -344,6 +344,65 @@ test('the pinned history scroll control is diagnostic and fails before startup o
     [['--scope','history','--cdp','http://fixture'],{},true],[['--scope','history'],{QUOTUM_BENCH_HISTORY_SCROLL_CONTROL:'2'},true],
     [['--scope','history'],{QUOTUM_BENCH_DIAGNOSE_NATIVE:'1'},true],[['--scope','history'],{QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'1'},true]] as [string[],Record<string,string>,boolean][]){
     const bad=await run(args,undefined,{...env,...patch},ci);assert.match(String(bad.error),/conflicting/);assert.ok(!bad.calls.includes('prepare'));
+  }
+});
+
+test('the pinned history pool control runs the original history body and keeps failure verdicts',async()=>{
+  const env={QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'1',QUOTUM_BENCH_SOURCE_SHA:'1'.repeat(40),QUOTUM_BENCH_EXPECTED_CLIENT_SHA256:'2'.repeat(64)};
+  const ok=await run(['--scope','history'],undefined,env);
+  assert.equal(ok.error,undefined);assert.deepEqual(ok.exits,[0]);assert.deepEqual(ok.statuses,['diagnostic']);
+  assert.equal(ok.calls.filter(call=>call==='history').length,1);
+  assert.ok(!ok.calls.some(call=>call==='scroll-control'||call.startsWith('suffix:')||tail.includes(call)));
+  const source=ok.saved.get('history-pool-source') as {sha:string;checkoutHash:string;clientHash:string};
+  assert.equal(source.sha,env.QUOTUM_BENCH_SOURCE_SHA);assert.equal(source.checkoutHash,source.sha);assert.equal(source.clientHash,env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256);
+  for(const fault of ['red','throw','cancel','browser-close','demo-stop'] as const){
+    const failed=await run(['--scope','history'],fault,env);
+    assert.deepEqual(failed.exits,[fault==='throw'?2:1],fault);assert.deepEqual(failed.statuses,[fault==='cancel'?'cancelled':'failed']);
+    if(fault==='throw')assert.ok(failed.logs.includes('history-original'));
+  }
+  for(const patch of [{QUOTUM_BENCH_SOURCE_SHA:''},{QUOTUM_BENCH_SOURCE_SHA:'main'},{QUOTUM_BENCH_SOURCE_SHA:'3'.repeat(40)},
+    {QUOTUM_BENCH_EXPECTED_CLIENT_SHA256:''},{QUOTUM_BENCH_EXPECTED_CLIENT_SHA256:'3'.repeat(64)},{TEST_CONTROL_DIRTY:' M tracked.ts'}] as Record<string,string>[]){
+    const bad=await run(['--scope','history'],undefined,{...env,...patch});assert.match(String(bad.error),/mismatch/);assert.deepEqual(bad.calls,[]);
+  }
+  for(const [args,patch,ci] of [[['--scope','dashboard'],{},true],[['--scope','history'],{},false],
+    [['--scope','history','--cdp','http://fixture'],{},true],[['--scope','history'],{QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'2'},true],
+    ...['QUOTUM_BENCH_DIAGNOSE_IDLE_CPU','QUOTUM_BENCH_CAPTION_CONTROL','QUOTUM_BENCH_HISTORY_SCROLL_CONTROL','QUOTUM_BENCH_DIAGNOSE_NATIVE','QUOTUM_BENCH_REVERSAL_PROBE'].map(key=>[['--scope','history'],{[key]:key==='QUOTUM_BENCH_DIAGNOSE_IDLE_CPU'?'trace':'1'},true])
+  ] as [string[],Record<string,string>,boolean][]){
+    const bad=await run(args,undefined,{...env,...patch},ci);assert.ok(bad.error);assert.deepEqual(bad.calls,[]);
+  }
+  const legacy=await run([],undefined,{QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'1'});
+  assert.equal(legacy.error,undefined);assert.deepEqual(legacy.statuses,['diagnostic']);
+  for(const phase of ['history',...tail])assert.equal(legacy.calls.filter(call=>call===phase).length,1);
+});
+
+test('manual pool diagnostics select one pinned history job without changing ordinary CI',()=>{
+  const workflow=readFileSync(new URL('../../../.github/workflows/ci.yml',import.meta.url),'utf8');
+  const job=(name:string)=>workflow.split('  '+name+':\n')[1].split(/\n  [\w-]+:/)[0];
+  const evaluate=(expression:string,inputs:object,ref='refs/heads/task')=>runInNewContext(expression,{inputs,github:{event_name:'workflow_dispatch',ref},always:()=>true,startsWith:(value:string,prefix:string)=>value.startsWith(prefix)});
+  const selected=(name:string,inputs:object,ref?:string)=>Boolean(evaluate(job(name).match(/if: \$\{\{ (.+) \}\}/)![1],inputs,ref));
+  const inputs={diagnostic_ref:'1'.repeat(40),expected_client_sha256:'2'.repeat(64),history_pool_control:true};
+  for(const ref of ['refs/heads/task','refs/tags/v1.0.0']){
+    assert.equal(selected('bench-history',inputs,ref),true);
+    for(const name of ['bench','bench-dashboard','idle-cpu-control','native-postmortem-control','startup-io-control','hub','dev-tooling'])assert.equal(selected(name,inputs,ref),false,name);
+  }
+  const history=job('bench-history'),step=history.split('      - name: Require the isolated history pool control\n')[1].split('\n      - ')[0];
+  assert.ok(history.includes('timeout-minutes: 20'));assert.ok(history.includes('--ci --scope history'));
+  const expression=step.match(/CONFLICTING_MODE: \$\{\{ (.+) \}\}/)![1],guard=step.match(/run: node -e '([^']+)'/)![1];
+  const verify=(extra:object)=>runInNewContext(guard,{process:{env:{CONFLICTING_MODE:String(Boolean(evaluate(expression,{...inputs,...extra})))}}});
+  assert.doesNotThrow(()=>verify({}));
+  for(const key of ['trace_only','original_timing','native_trace','native_profile','caption_control','native_postmortem_control','history_scroll_control','compositor_guard_control','startup_io_control'])assert.throws(()=>verify({[key]:true}),/Choose only/);
+  const launch=history.split('      - run: QUOTUM_CHROME=')[1].split('\n      - name:')[0];
+  for(const field of ['QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL','QUOTUM_BENCH_SOURCE_SHA','QUOTUM_BENCH_EXPECTED_CLIENT_SHA256']){
+    const value=launch.match(new RegExp(field+': \\$\\{\\{ (.+) \\}\\}'))![1];
+    assert.equal(evaluate(value,inputs),field==='QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL'?'1':field==='QUOTUM_BENCH_SOURCE_SHA'?inputs.diagnostic_ref:inputs.expected_client_sha256);
+    assert.equal(evaluate(value,{}),'');
+  }
+  const noRef={history_pool_control:true};assert.equal(selected('bench-history',noRef),true);assert.equal(selected('dev-tooling',noRef),true);
+  const dev=job('dev-tooling'),missing=Boolean(evaluate(dev.match(/HAS_DIAGNOSTIC_MODE: \$\{\{ (.+) \}\}/)![1],noRef));
+  assert.equal(missing,true);assert.throws(()=>runInNewContext(dev.match(/run: node -e '([^']+)'/)![1],{process:{env:{HAS_DIAGNOSTIC_MODE:String(missing)}}}),/require diagnostic_ref/);
+  for(const name of ['bench','bench-history','bench-dashboard','hub','dev-tooling'])assert.equal(selected(name,{}),true,name);
+  for(const block of history.split('      - name: ').filter(block=>/^Prepare the diagnostic native debugger|^Prepare matching renderer unwind tables/.test(block))){
+    assert.equal(Boolean(evaluate(block.match(/if: \$\{\{ (.+) \}\}/)![1],inputs)),false,'pool-only installs no debugger');
   }
 });
 

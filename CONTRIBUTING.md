@@ -51,7 +51,16 @@ The `bench` check passes only when both jobs succeed; a failed, skipped or cance
 fails this check. The default `--scope all` runs the history matrix first, then every
 dashboard phase in the same order as `--scope dashboard`. CPU diagnostics (`trace`,
 `profile`, `native-trace`, `native-profile`) support `all` or `dashboard`; caption control
-requires `dashboard`. Other optional diagnostics require `all`. Separate jobs retain
+requires `dashboard`. The optional `history_pool_control` manual CI input runs the full
+history matrix in its existing job with the existing bounded cache observer. It requires
+an exact `diagnostic_ref`, compiled-client hash and clean checkout, and rejects other
+diagnostic inputs. It adds no debugger preparation, retries or budget allowance; its
+artifacts are diagnostic and cannot satisfy the required `bench` check. The observer
+can identify cache eviction and reservation pressure in this instrumented attempt. It
+does not preserve fixed-summary shift proofs or every gesture's scale, so a different
+repeat range can remain unexplained. Locally this mode also accepts `--scope history`
+with the same source and client pins; its default `all` scope remains available.
+Other optional diagnostics require `all`. Separate jobs retain
 normal warmup, chart-grid alignment and budgets.
 Manual CI without diagnostic inputs runs the same ordinary checks. A diagnostic
 mode still requires an immutable source SHA and the expected compiled-client hash;

@@ -57,6 +57,11 @@ on:
         required: false
         type: boolean
         default: false
+      history_pool_control:
+        description: Observe cache ownership in the unchanged full history matrix
+        required: false
+        type: boolean
+        default: false
 
       startup_io_control:
         description: Observe a fixed same-host startup ABA with targeted ELF cache advice
@@ -86,7 +91,7 @@ jobs:
       - name: Require a pinned source for diagnostic modes
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
-          HAS_DIAGNOSTIC_MODE: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control || inputs.history_scroll_control || inputs.compositor_guard_control }}
+          HAS_DIAGNOSTIC_MODE: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control || inputs.history_scroll_control || inputs.history_pool_control || inputs.compositor_guard_control }}
         run: node -e 'if(process.env.HAS_DIAGNOSTIC_MODE==="true")throw Error("Diagnostic modes require diagnostic_ref")'
       - run: make dev-test
         env:
@@ -141,7 +146,7 @@ jobs:
 
   bench-history:
     name: ${{ inputs.compositor_guard_control && format('bench-history ({0})', matrix.arm) || 'bench-history' }}
-    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.compositor_guard_control) || (!startsWith(github.ref, 'refs/tags/') && !inputs.startup_io_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && inputs.history_scroll_control))) }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && (inputs.compositor_guard_control || inputs.history_pool_control)) || (!startsWith(github.ref, 'refs/tags/') && !inputs.startup_io_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && inputs.history_scroll_control))) }}
     strategy:
       fail-fast: false
       matrix:
@@ -170,7 +175,7 @@ jobs:
           CONTROL_EVENT: ${{ github.event_name }}
           CONTROL_ARM: ${{ matrix.arm }}
           FEATURE_STATE: ${{ matrix.feature }}
-          CONFLICT: ${{ inputs.startup_io_control || inputs.history_scroll_control || inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control }}
+          CONFLICT: ${{ inputs.startup_io_control || inputs.history_scroll_control || inputs.history_pool_control || inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control }}
         run: |
           node --import tsx --input-type=module <<'JS'
           import assert from 'node:assert/strict';import {execFileSync} from 'node:child_process';
@@ -201,8 +206,13 @@ jobs:
       - name: Require the isolated history scroll control
         if: ${{ inputs.history_scroll_control }}
         env:
-          CONFLICTING_MODE: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control }}
+          CONFLICTING_MODE: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control || inputs.history_pool_control }}
         run: node -e 'if(process.env.CONFLICTING_MODE==="true")throw Error("Choose only the history scroll control")'
+      - name: Require the isolated history pool control
+        if: ${{ inputs.history_pool_control }}
+        env:
+          CONFLICTING_MODE: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control || inputs.history_scroll_control || inputs.compositor_guard_control || inputs.startup_io_control }}
+        run: node -e 'if(process.env.CONFLICTING_MODE==="true")throw Error("Choose only the history pool control")'
       - name: Prepare the diagnostic native debugger
         if: ${{ inputs.history_scroll_control || inputs.compositor_guard_control }}
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gdb
@@ -237,8 +247,9 @@ jobs:
           QUOTUM_C3_CHROME: ${{ inputs.compositor_guard_control && format('{0}/quotum-c3-guard-{1}/chrome', runner.temp, matrix.arm) || '' }}
           QUOTUM_BENCH_HISTORY_SCROLL_CONTROL: ${{ (inputs.history_scroll_control || inputs.compositor_guard_control) && '1' || '' }}
           QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX: ${{ inputs.history_scroll_control && !inputs.compositor_guard_control && '1' || '' }}
-          QUOTUM_BENCH_SOURCE_SHA: ${{ (inputs.history_scroll_control || inputs.compositor_guard_control) && inputs.diagnostic_ref || '' }}
-          QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ (inputs.history_scroll_control || inputs.compositor_guard_control) && inputs.expected_client_sha256 || '' }}
+          QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL: ${{ inputs.history_pool_control && '1' || '' }}
+          QUOTUM_BENCH_SOURCE_SHA: ${{ (inputs.history_scroll_control || inputs.compositor_guard_control || inputs.history_pool_control) && inputs.diagnostic_ref || '' }}
+          QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ (inputs.history_scroll_control || inputs.compositor_guard_control || inputs.history_pool_control) && inputs.expected_client_sha256 || '' }}
           QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ inputs.compositor_guard_control && format('{0}/quotum-bench-history-{1}', runner.temp, matrix.arm) || format('{0}/quotum-bench-history', runner.temp) }}
       - name: History benchmark evidence
         if: always()
@@ -251,7 +262,7 @@ jobs:
           if-no-files-found: warn
 
   bench-dashboard:
-    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && !startsWith(github.ref, 'refs/tags/') && !inputs.native_postmortem_control && !inputs.history_scroll_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
+    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.history_pool_control && !startsWith(github.ref, 'refs/tags/') && !inputs.native_postmortem_control && !inputs.history_scroll_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
     runs-on: ubuntu-latest
     # Independent traffic checks run on another runner; every dashboard phase stays here.
     timeout-minutes: 20
@@ -316,7 +327,7 @@ jobs:
           if-no-files-found: warn
 
   idle-cpu-control:
-    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control }}
+    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.history_pool_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -389,7 +400,8 @@ jobs:
           NATIVE_PROFILE: ${{ inputs.native_profile }}
           CAPTION: ${{ inputs.caption_control }}
           HISTORY_SCROLL: ${{ inputs.history_scroll_control }}
-        run: node -e 'if(["TRACE","PROFILE","NATIVE_TRACE","NATIVE_PROFILE","CAPTION","HISTORY_SCROLL"].some(k=>process.env[k]==="true"))throw Error("Choose only the native postmortem control")'
+          HISTORY_POOL: ${{ inputs.history_pool_control }}
+        run: node -e 'if(["TRACE","PROFILE","NATIVE_TRACE","NATIVE_PROFILE","CAPTION","HISTORY_SCROLL","HISTORY_POOL"].some(k=>process.env[k]==="true"))throw Error("Choose only the native postmortem control")'
       - run: npm ci
       - run: npm run build
       - name: Prepare the diagnostic native debugger
@@ -454,7 +466,7 @@ jobs:
       - name: Require the isolated pinned startup control
         working-directory: ${{ runner.temp }}
         env:
-          CONFLICT: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control || inputs.history_scroll_control }}
+          CONFLICT: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control || inputs.history_scroll_control || inputs.history_pool_control }}
         run: |
           [[ "$QUOTUM_BENCH_SOURCE_SHA" =~ ^[a-f0-9]{40}$ && "$QUOTUM_BENCH_EXPECTED_CLIENT_SHA256" =~ ^[a-f0-9]{64}$ && "$CONFLICT" != true ]]
       - uses: actions/checkout@v7

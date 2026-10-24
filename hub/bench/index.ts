@@ -136,16 +136,19 @@ async function main() {
   let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
   try {
     if(historySuffix&&(historySuffix!=='1'||scrollControl!=='1'||process.env.QUOTUM_C3_CHROME||!process.env.QUOTUM_BENCH_DIAGNOSTICS_DIR))throw new Stop('Unknown or conflicting history suffix');
+    const historyPoolControl=poolDiagnostic==='1'&&options.ci&&options.scope==='history'&&!options.cdp&&!idleCpuMode&&!captionMode&&!scrollControl&&!process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE&&!process.env.QUOTUM_BENCH_REVERSAL_PROBE;
     if(scrollControl){
       if(scrollControl!=='1'||!options.ci||options.scope!=='history'||options.cdp||idleCpuMode||captionMode||poolDiagnostic||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE||process.env.QUOTUM_BENCH_REVERSAL_PROBE)throw new Stop('Unknown or conflicting history scroll control');
+    }
+    if(scrollControl||historyPoolControl){
       const source=sourceIdentity(),client=clientIdentity(),expected=process.env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256;
-      if(!source.sourceHead||source.checkoutSha!==source.sourceHead||!/^[a-f0-9]{64}$/.test(expected??'')||client.status!=='available'||client.sha256!==expected||execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim())throw new Stop('History scroll control source or client mismatch');
-      evidence.save('history-scroll-source',{mode:'diagnostic',sha:source.sourceHead,checkoutHash:source.checkoutSha,eventHash:source.eventSha,clientHash:client.sha256,expectedClientHash:expected});
+      if(!/^[a-f0-9]{40}$/.test(source.sourceHead??'')||source.checkoutSha!==source.sourceHead||!/^[a-f0-9]{64}$/.test(expected??'')||client.status!=='available'||client.sha256!==expected||execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim())throw new Stop('History control source or client mismatch');
+      evidence.save(historyPoolControl?'history-pool-source':'history-scroll-source',{mode:'diagnostic',sha:source.sourceHead,checkoutHash:source.checkoutSha,eventHash:source.eventSha,clientHash:client.sha256,expectedClientHash:expected});
     }
     if (['PANNING', 'IDLE', 'IDLE_TIMING', 'STARTUP_WAITS'].some(mode => process.env['QUOTUM_BENCH_DIAGNOSE_' + mode])) throw new Stop('Removed benchmark diagnostic mode');
     if (captionMode && (captionMode !== '1' || !options.ci || options.scope !== 'dashboard' || options.cdp || idleCpuMode || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting caption control mode');
     const diagnostics = [idleCpuMode&&options.scope==='dashboard'?undefined:idleCpuMode, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE];
-    if (options.scope !== 'all' && diagnostics.some(Boolean)) throw new Stop('Partial benchmark scopes cannot be combined with diagnostics');
+    if (options.scope !== 'all' && diagnostics.some(Boolean)&&!historyPoolControl) throw new Stop('Partial benchmark scopes cannot be combined with diagnostics');
     address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
     if (idleCpuMode && (!['trace','profile','native-trace','native-profile'].includes(idleCpuMode) || !options.ci || options.cdp || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
     if (poolDiagnostic && (poolDiagnostic !== '1' || !options.ci || options.cdp || idleCpuMode || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting history pool diagnostic mode');
