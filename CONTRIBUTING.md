@@ -84,7 +84,7 @@ Capture and helper cleanup use the existing five-second
 collection and two-second release windows. An unconfirmed detach, helper exit or
 pipe closure fails cleanup. Missing GDB falls back to the existing page debugger;
 attached browsers and successful commands receive no native intervention.
-Ordinary owned history pages retain their original navigation identity passively,
+On Linux, ordinary owned history pages retain their original navigation identity passively,
 without extra commands before failure. Missing identity does not gate successful input.
 After an original failure and an unresponsive page probe, the existing two-second
 resolver may bind capture to that document's renderer. Missing optional metadata keeps

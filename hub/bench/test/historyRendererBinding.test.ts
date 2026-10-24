@@ -18,14 +18,17 @@ function caller(name:string,bindings:Record<string,unknown>):Call {
 test('both actual history callers route passive binding only for ordinary owned Chrome',async()=>{
   const flags=['QUOTUM_BENCH_HISTORY_SCROLL_CONTROL','QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL','QUOTUM_BENCH_DIAGNOSE_NATIVE','QUOTUM_BENCH_REVERSAL_PROBE','QUOTUM_BENCH_DIAGNOSE_IDLE_CPU'];
   const environments=[{},Object.fromEntries(flags.map(key=>[key,''])),...flags.map(key=>({[key]:'1'}))];
-  for(const name of ['browserHistoryTraffic','browserCancellationTraffic'])for(const owned of [true,false,undefined])for(const env of environments){
+  const hooks={owner:{},observeProcesses:async()=>[],launchReport:()=>({pid:1})};
+  const browsers=[{value:{...hooks,owned:true},eligible:true},...[false,undefined].map(owned=>({value:{...hooks,owned},eligible:false})),
+    ...['owner','observeProcesses','launchReport'].map(key=>({value:{...hooks,owned:true,[key]:undefined},eligible:false}))];
+  for(const name of ['browserHistoryTraffic','browserCancellationTraffic'])for(const browser of browsers)for(const env of environments){
     const seen:unknown[][]=[],original=new Error('original seed stop'),run=caller(name,{DAY:86400000,HISTORY_COHORT_TAKES:1,process:{env},console:{error(){}},historyPage:async(...args:unknown[])=>{seen.push(args);throw original;}});
-    await assert.rejects(name==='browserHistoryTraffic'?run({owned},{},'','board'):run({owned},{},'',false,false),error=>error===original);
-    assert.equal(seen.length,1);assert.equal(seen[0].length,11);assert.equal(seen[0][10],owned===true&&!flags.some(key=>env[key as keyof typeof env]));
+    await assert.rejects(name==='browserHistoryTraffic'?run(browser.value,{},'','board'):run(browser.value,{},'',false,false),error=>error===original);
+    assert.equal(seen.length,1);assert.equal(seen[0].length,11);assert.equal(seen[0][10],browser.eligible&&!flags.some(key=>env[key as keyof typeof env]));
   }
   for(const diagnostic of [true,false])for(const profile of [true,false]){
     const seen:unknown[][]=[],original=new Error('original cancellation stop'),run=caller('browserCancellationTraffic',{DAY:86400000,HISTORY_COHORT_TAKES:1,process:{env:{}},console:{error(){}},historyPage:async(...args:unknown[])=>{seen.push(args);throw original;}});
-    await assert.rejects(run({owned:true},{},'',diagnostic,profile),error=>error===original);assert.equal(seen[0][10],!diagnostic&&!profile);
+    await assert.rejects(run({...hooks,owned:true},{},'',diagnostic,profile),error=>error===original);assert.equal(seen[0][10],!diagnostic&&!profile);
   }
 });
 

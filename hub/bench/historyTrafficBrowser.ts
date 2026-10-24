@@ -212,7 +212,7 @@ export async function prepareHistoryTarget(cdp: Pick<Cdp, 'send' | 'evaluate'>, 
 type TrafficProxy = {url: string; transfers: Transfer[]; phase(value: string, latency?: number): void; settled(value: string): Promise<void>};
 
 function passiveHistoryBinding(browser:Browser){
-  return browser.owned===true&&!['QUOTUM_BENCH_HISTORY_SCROLL_CONTROL','QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL','QUOTUM_BENCH_DIAGNOSE_NATIVE','QUOTUM_BENCH_REVERSAL_PROBE','QUOTUM_BENCH_DIAGNOSE_IDLE_CPU'].some(key=>process.env[key]);
+  return browser.owned===true&&!!browser.owner&&typeof browser.observeProcesses==='function'&&typeof browser.launchReport==='function'&&!['QUOTUM_BENCH_HISTORY_SCROLL_CONTROL','QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL','QUOTUM_BENCH_DIAGNOSE_NATIVE','QUOTUM_BENCH_REVERSAL_PROBE','QUOTUM_BENCH_DIAGNOSE_IDLE_CPU'].some(key=>process.env[key]);
 }
 
 async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number, poolEvidence?:Pick<Evidence, 'save'>,evidence?:Pick<Evidence,'save'>,receiptScenario?:{latency:number;fraction:number},alignment?:RetirementAlignment,postfailureBinding=false) {
