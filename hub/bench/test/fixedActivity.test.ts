@@ -365,7 +365,9 @@ for(const periodName of ['24h','30d'])for(const change of ['inside work','native
     assert.ok(notices.some(data=>data.changes?.some((row:any)=>row.source===h.source&&row.scope==='quota'&&row.since===to-1)), 'the real producer changed evidence inside the fixed interval');
     if(change==='inside work')assert.ok(notices.some(data=>data.workSince===to-1));
     else if(change==='native measurement')assert.ok(notices.every(data=>data.workSince===undefined),'the native control adds no credited work');
-    else assert.ok(notices.some(data=>data.workSince===to&&data.changes.some((row:any)=>row.since<row.workSince)), 'combined news preserves the earlier native measurement');
+    else assert.ok(notices.some(data=>data.workSince===to
+      &&data.changes.some((row:any)=>row.source===h.source&&row.scope==='quota'&&row.since===to-1&&row.workSince===undefined)
+      &&data.changes.some((row:any)=>row.source===h.source&&row.scope==='quota'&&row.workSince===to&&row.workOnly===true)), 'combined news preserves both independent native and work changes');
     assert.ok(h.requests.some(body=>body.quota),'an inside update must still reach the existing drawing reader');
     assert.equal(total(),change==='inside work'?299_901:299_900,'only the one millisecond before the exclusive endpoint changes selected work');
     assert.equal(native().remainingAtEnd,change==='inside work'?83:82,'the native change must reach the published quota history');

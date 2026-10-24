@@ -678,7 +678,7 @@ class BoardPeriod {
           if(own)this.invalidateFacets();
           const {retired}=workChange(hub.data,sources,selection.mode==='live'?Infinity:selection.to);
           if(retired)this.retireWork();
-          if(selection.mode==='range'&&measurementSince<selection.to)this.valuesNeeded=true;
+          if(selection.mode==='range'&&measurementSince!==Infinity)this.valuesNeeded=true;
           for(const scope of PERIOD_SCOPES){
             const visible=(scope==='quota'?[ACTIVITY,...QUOTA_WIDGETS]:scope==='funds'?[SUBSCRIPTION_FUNDS]:BUDGET_WIDGETS).some(id=>widgetVisible(board.view,id,board.lineup.length));
             if(!visible)continue;

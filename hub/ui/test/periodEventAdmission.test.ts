@@ -4,7 +4,7 @@ import {fixture,flush,NOW,H,M} from './periodRuntimeFixture';
 const total=(h:any)=>h.period.calendar.get().value?.cells.reduce((sum:number,cell:any)=>sum+(cell.agentMs??0),0)??null;
 test('credited work preserves confirmed historical measurements and their cached return',async t=>{
  t.mock.method(Date,'now',()=>NOW);
- const h=await fixture({fixed:true,heatmap:true,personal:true});t.after(()=>h.close());
+ const h=await fixture({fixed:true,heatmap:true,personal:true,transportLive:true});t.after(()=>h.close());
  const range=h.selectedRange()!,value=h.period.getValue(h.source).value,before=total(h)!;
  h.requests.length=0;h.credit(NOW-M,NOW-M+100);h.events.flush();await flush();
  assert.ok(total(h)!>before,'new credited work reaches the actual calendar');
@@ -26,6 +26,21 @@ for(const workFirst of [false,true])test(`coalesced measurements refresh histori
  h.events.flush();await flush();
  assert.ok(h.requests.some(r=>r.values),'an earlier work cutoff cannot hide a newer measurement');
  assert.equal(h.period.getValue(h.source).value.windows[0].remaining,70);
+});
+
+for(const workFirst of [false,true])test(`mixed work preserves native admission after the fixed endpoint (${workFirst})`,async t=>{
+ t.mock.method(Date,'now',()=>NOW);
+ const h=await fixture({fixed:true,personal:true});t.after(()=>h.close());
+ h.selectRange({from:NOW-H,to:NOW-M});await flush();h.requests.length=0;
+ const credit=()=>h.credit(NOW-3*M/2,NOW-3*M/2+100);
+ const measure=()=>h.store.record(h.source,{observedAt:NOW-M/2,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly' as const,label:null,minutes:10080,used:30,remaining:70,resetAt:NOW+H}]});
+ if(workFirst)credit();measure();if(!workFirst)credit();h.events.flush();await flush();
+ assert.ok(h.requests.some(r=>r.values),'native evidence keeps its existing conservative admission');
+ assert.equal(h.period.getValue(h.source).value.windows[0].remaining,83);
+ assert.equal(h.period.get().rows.reduce((sum:number,row:{workedMs:number})=>sum+row.workedMs,0),M+100);
+ assert.equal(h.period.valuesProofEpoch,h.period.proofEpoch);
+ h.selectRange({from:NOW-H,to:NOW});await flush();
+ assert.equal(h.period.getValue(h.source).value.windows[0].remaining,70,'a later target includes the actual new measurement');
 });
 
 for(const detail of ['legacy','missing','unconfirmed'] as const)test(`historical measurements conservatively refresh after ${detail} history news`,async t=>{
