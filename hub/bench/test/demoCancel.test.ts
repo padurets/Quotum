@@ -6,6 +6,7 @@ import {runInNewContext} from 'node:vm';
 import path from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import ts from 'typescript';
+import {HistoryLimitOutput,type HistoryLimitReport} from '../../demo/historyLimit.js';
 
 const repository=fileURLToPath(new URL('../../../',import.meta.url));
 const canonical=path.join(repository,'hub/demo/index.ts'),source=readFileSync(canonical,'utf8');
@@ -29,14 +30,14 @@ function fixture({pendingTrackers=false,pendingReady=false,delayedExit=false,sto
   const subject:any={options:{set:{id:'all'},scene:'synthetic',still:true,idleAgents:true,money:false,address:{port:1,base:'synthetic',hosts:'synthetic'},onExit:()=>trace.push('unexpected-exit')},start:1000,dir:'/synthetic/demo',output:{add(){},toString:()=>''},reporting:Promise.resolve(),reports:new Set(),benchWork:false,stopping:false,
     settled:async()=>{},async stop(){stopCalls++;if(this.stopping)return;this.stopping=true;stops++;trace.push('stop');await exitGate.promise;
       hub.exitCode=0;hub.emit('exit',0);hub.emit('close',0,null);await this.trackers?.close();completedStops++;trace.push('stopped');if(stopFailure)throw cleanupError;}};
-  const context:any={path,fileURLToPath,Buffer,process:{execPath:'/synthetic/node',env:{KEEP:'fixture',QUOTUM_PRIVATE:'must-not-inherit'}},Date:{now:()=>1100},SCENES:[],ADDRESS:[],SETUP_CODE:'synthetic',HUB:'/synthetic/hub',TICK:15000,
+  const context:any={path,fileURLToPath,Buffer,HistoryLimitOutput,process:{execPath:'/synthetic/node',env:{KEEP:'fixture',QUOTUM_PRIVATE:'must-not-inherit',QUOTUM_DEMO_HISTORY_LIMITS:'1'}},Date:{now:()=>1100},SCENES:[],ADDRESS:[],SETUP_CODE:'synthetic',HUB:'/synthetic/hub',TICK:15000,
     Trackers:{start:()=>{trace.push('trackers');trackerEntered.resolve();return pendingTrackers?trackerGate.promise:Promise.resolve(tracker);}},
     spawn:(...args:any[])=>{spawns++;spawnArgs=args;trace.push('spawn');return hub;},ready:async()=>{trace.push('ready');readyEntered.resolve();if(pendingReady)await readyGate.promise;},
     setUp:async()=>{trace.push('setup');return stand;},Store:class{db={};constructor(){trace.push('store');}close(){trace.push('store-close');}},
     seedWork:()=>trace.push('seed'),selfCheck:async()=>{trace.push('self-check');},Live:class{constructor(){trace.push('live');}async report(){trace.push('report');}},
     liveStep:()=>0,setTimeout:()=>{timers++;trace.push('timer');return timers;},console:{error:()=>trace.push('console-error')}};
   runInNewContext(code,context);subject.run=context.actualRun;
-  return{subject,stand,tracker,trace,trackerGate,trackerEntered,readyGate,readyEntered,exitGate,
+  return{subject,stand,tracker,hub,trace,trackerGate,trackerEntered,readyGate,readyEntered,exitGate,
     stats:()=>({trackerCloses,spawns,stops,stopCalls,completedStops,timers}),spawnArgs:()=>spawnArgs,
     dispose:async()=>{trackerGate.resolve(tracker);readyGate.resolve();exitGate.resolve();try{await subject.stop();}catch{}}};
 }
@@ -48,6 +49,18 @@ test('no-argument Demo.run preserves the ordinary preparation and reporting trac
     assert.equal(h.stats().stops,0);assert.equal(h.stats().timers,1);
     const [executable,args,options]=h.spawnArgs();assert.equal(executable,'/synthetic/node');assert.equal(args[0],'--import');assert.equal(args[1],'tsx');assert.equal(path.basename(args[2]),'hub.ts');
     assert.equal(options.env.KEEP,'fixture');assert.equal(options.env.QUOTUM_PRIVATE,undefined);
+  }finally{await h.dispose();}
+});
+for(const enabled of [false,true])test('Demo.run enables bounded backend refusals only through its explicit observer: '+enabled,async()=>{
+  const h=fixture(),reports:HistoryLimitReport[]=[];
+  const report:HistoryLimitReport={event:'history_limit',physicalAttemptBound:false,stage:'input',limit:{requested:11,reserved:90,budget:100},evaluatedAt:1100,selection:{mode:'live',periodMs:86400000},quota:true,wallet:false,funds:false,sessions:true,sourceWork:true,calendar:true};
+  if(enabled)h.subject.options.onHistoryLimit=(value:HistoryLimitReport)=>reports.push(value);
+  try{
+    await h.subject.run();assert.equal(h.spawnArgs()[2].env.QUOTUM_DEMO_HISTORY_LIMITS,enabled?'1':'');
+    const line=Buffer.from(JSON.stringify(report)+'\n');
+    h.hub.stdout.emit('data',line);h.hub.stderr.emit('data',Buffer.from('arbitrary backend text\n'));
+    h.hub.stderr.emit('data',line.subarray(0,17));h.hub.stderr.emit('data',line.subarray(17));
+    assert.deepEqual(reports,enabled?[report]:[]);assert.equal(h.trace.includes('console-error'),false);
   }finally{await h.dispose();}
 });
 test('preaborted Demo.run allocates no tracker, hub, store or reporter',async()=>{

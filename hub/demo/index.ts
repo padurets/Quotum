@@ -23,6 +23,7 @@ import {seedLinks} from './links.js';
 import {seedMeasurementDevices} from './measurementDevices.js';
 import {seedCurrencies} from './currencies.js';
 import {Directory} from '../server/store/directory.js';
+import {HistoryLimitOutput,type HistoryLimitReport} from './historyLimit.js';
 
 /**
  * `npm run demo -- [set] [--resets <scene>] [--still]`: a hub on throwaway data, filled with
@@ -160,7 +161,7 @@ export class Demo {
   }
 
   constructor(
-    private readonly options: {set: DemoSet; scene: string; still: boolean; idleAgents?: boolean;money?:boolean; address: ReturnType<typeof addressOf>; onExit: (code: number, cause?: 'port_in_use') => void; dataDir?: string; hubRoot?: string; start?: number},
+    private readonly options: {set: DemoSet; scene: string; still: boolean; idleAgents?: boolean;money?:boolean; address: ReturnType<typeof addressOf>; onExit: (code: number, cause?: 'port_in_use') => void; dataDir?: string; hubRoot?: string; start?: number; onHistoryLimit?:(report:HistoryLimitReport)=>void},
   ) {
     this.start = options.start ?? Math.floor(Date.now() / MIN) * MIN;
     this.dir = options.dataDir ?? mkdtempSync(path.join(os.tmpdir(), 'quotum-demo-'));
@@ -188,6 +189,7 @@ export class Demo {
       QUOTUM_RESETS_CLAUDE_URL: urls.claude,
       QUOTUM_ALLOWED_HOSTS: address.hosts,
       QUOTUM_SECRET_KEY:Buffer.alloc(32,31).toString('base64url'),
+      QUOTUM_DEMO_HISTORY_LIMITS:this.options.onHistoryLimit?'1':'',
     });
     if (set.id === 'clients' || set.id === 'links' || set.id === 'calendar') {
       // These sets begin with retained work before any native measurement.
@@ -196,7 +198,8 @@ export class Demo {
     }
     const hub = (this.hub = spawn(process.execPath, ['--import','tsx',path.join(path.dirname(fileURLToPath(import.meta.url)),'hub.ts')], {cwd: this.options.hubRoot ?? HUB, env, stdio: ['ignore', 'pipe', 'pipe']}));
     hub.stdout!.on('data', chunk => this.output.add(chunk));
-    hub.stderr!.on('data', chunk => this.output.add(chunk));
+    const limits=this.options.onHistoryLimit?new HistoryLimitOutput(this.options.onHistoryLimit):undefined;
+    hub.stderr!.on('data', chunk => {this.output.add(chunk);limits?.add(chunk);});
     // close follows the output streams too: the hub's port-error line is complete.
     hub.on('close', (code, signal) => {
       if (this.stopping) return;

@@ -16,9 +16,9 @@ import {compactJSON} from './history.js';
 import type {HistoryQuery} from './domain/periodRead.js';
 export type {HistoryQuery} from './domain/periodRead.js';
 export class ReadError extends Error {
-  constructor(readonly statusCode:number, readonly code:string) {super(code);}
+  constructor(readonly statusCode:number, readonly code:string, readonly limitStage?:'input'|'preparation'|'work-access', cause?:unknown) {super(code,cause===undefined?undefined:{cause});}
 }
-export function fail(status:number, code:string):never {throw new ReadError(status,code);}
+export function fail(status:number, code:string, limit?:{stage:NonNullable<ReadError['limitStage']>;cause:unknown}):never {throw new ReadError(status,code,limit?.stage,limit?.cause);}
 
 /** Both transports enforce the same tile, authority and currency contract. */
 export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:string, user:string, query:HistoryQuery, input?:WorkRead|WorkViews, cells=true, capturedAt?:number, workCells=true):string {

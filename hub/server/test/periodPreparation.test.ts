@@ -5,7 +5,7 @@ import {setImmediate as nextTurn} from 'node:timers/promises';
 import {PeriodPreparation} from '../periodPrepare.js';
 import {PeriodReader} from '../periodRead.js';
 import {ReadError} from '../historyRead.js';
-import {HistoryTiles} from '../history.js';
+import {HistoryTiles,HistoryLimit} from '../history.js';
 import {Store} from '../store/store.js';
 import {Directory} from '../store/directory.js';
 import type {Hub} from '../api.js';
@@ -50,12 +50,22 @@ test('waiting period bodies share the finite preparation budget and return capac
   const filters=workFilter(defaultFilters());filters.projects={mode:'include',values:Array.from({length:876},(_,i)=>`${i}`.padStart(83,'p'))};
   const held:{abort:AbortController;done:Promise<void>}[]=[];
   const add=()=>{const abort=new AbortController(),read=h.reader.readAsync(h.board,h.user.id,{...h.request,sessions:{},workFilter:structuredClone(filters)},abort.signal);held.push({abort,done:assert.rejects(read)});};
+  try{
   add();const size=(history as unknown as {reserved:number}).reserved,capacity=Math.floor(32*1024*1024/size);assert.ok(capacity>1&&capacity<100);
   for(let i=1;i<capacity;i++)add();assert.equal((history as unknown as {reserved:number}).reserved,capacity*size);
-  await assert.rejects(h.reader.readAsync(h.board,h.user.id,{...h.request,sessions:{},workFilter:filters}),error=>error instanceof ReadError&&error.statusCode===413);
+  await assert.rejects(h.reader.readAsync(h.board,h.user.id,{...h.request,sessions:{},workFilter:filters}),error=>{
+    assert.ok(error instanceof ReadError);assert.equal(error.statusCode,413);assert.equal(error.code,'history_limit');
+    assert.equal(error.limitStage,'input');assert.ok(error.cause instanceof HistoryLimit);
+    const snapshot=error.cause.snapshot;assert.ok(snapshot);assert.equal(snapshot.budget,32*1024*1024);
+    assert.ok(snapshot.requested>0&&snapshot.reserved+snapshot.requested>snapshot.budget);
+    return true;
+  });
   held[0].abort.abort();await held[0].done;add();assert.equal((history as unknown as {reserved:number}).reserved,capacity*size);
-  for(const item of held)item.abort.abort();await Promise.all(held.map(item=>item.done));assert.equal((history as unknown as {reserved:number}).reserved,0);
-  block.abort();await busyRejected;assert.equal((JSON.parse(await h.read()) as PeriodReply).quota?.state,'complete');h.released();
+  }finally{
+    for(const item of held)item.abort.abort();block.abort();
+    await Promise.all([...held.map(item=>item.done),busyRejected]);h.released();
+  }
+  assert.equal((JSON.parse(await h.read()) as PeriodReply).quota?.state,'complete');h.released();
 });
 
 function fixture(){

@@ -13,6 +13,7 @@ import {idleProblems,chartProblems,measuredProblems,percentile,HISTORY_BYTES_PER
 import {DOT_STILL_AFTER,fixtureTiming,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil} from '../still.js';
 import {delta,round,scriptPerSecond,tally} from '../report.js';
 import {idleRetentionScript,idleRetentionProblems} from '../idleRetention.js';
+import type {HistoryLimitReport} from '../../demo/historyLimit.js';
 
 // Execute the actual caller and parser, not a second implementation of its phase branches.
 // Leaf phases and browser IO are stand-ins; these tests prove routing/failure propagation only.
@@ -60,7 +61,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     }
   }};
   class Demo {
-    constructor(options:{start:number}){stand.start=options.start;}
+    constructor(options:{start:number;onHistoryLimit?:(report:HistoryLimitReport)=>void}){stand.start=options.start;if(env.TEST_SERVER_LIMIT==='1')options.onHistoryLimit?.({event:'history_limit',physicalAttemptBound:false,stage:'work-access',limit:{requested:11,reserved:90,budget:100},evaluatedAt:now,selection:{mode:'live',periodMs:86400000},quota:true,wallet:false,funds:false,sessions:true,sourceWork:true,calendar:true});}
     dir='/unused';async run(){mark('demo');return stand;}async settled(){}
     async stop(){mark('demo-stop');if(fault==='demo-stop')throw Error('demo-stop-red');}
   }
@@ -348,13 +349,15 @@ test('the pinned history scroll control is diagnostic and fails before startup o
 });
 
 test('the pinned history pool control runs the original history body and keeps failure verdicts',async()=>{
-  const env={QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'1',QUOTUM_BENCH_SOURCE_SHA:'1'.repeat(40),QUOTUM_BENCH_EXPECTED_CLIENT_SHA256:'2'.repeat(64)};
+  const env={QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'1',QUOTUM_BENCH_SOURCE_SHA:'1'.repeat(40),QUOTUM_BENCH_EXPECTED_CLIENT_SHA256:'2'.repeat(64),TEST_SERVER_LIMIT:'1'};
   const ok=await run(['--scope','history'],undefined,env);
   assert.equal(ok.error,undefined);assert.deepEqual(ok.exits,[0]);assert.deepEqual(ok.statuses,['diagnostic']);
   assert.equal(ok.calls.filter(call=>call==='history').length,1);
   assert.ok(!ok.calls.some(call=>call==='scroll-control'||call.startsWith('suffix:')||tail.includes(call)));
   const source=ok.saved.get('history-pool-source') as {sha:string;checkoutHash:string;clientHash:string};
   assert.equal(source.sha,env.QUOTUM_BENCH_SOURCE_SHA);assert.equal(source.checkoutHash,source.sha);assert.equal(source.clientHash,env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256);
+  const limit=ok.saved.get('history-server-limit-1') as HistoryLimitReport;assert.equal(limit.stage,'work-access');assert.deepEqual(limit.limit,{requested:11,reserved:90,budget:100});assert.equal(limit.physicalAttemptBound,false);
+  const ordinary=await run(['--scope','history'],undefined,{TEST_SERVER_LIMIT:'1'});assert.equal(ordinary.saved.has('history-server-limit-1'),false);
   for(const fault of ['red','throw','cancel','browser-close','demo-stop'] as const){
     const failed=await run(['--scope','history'],fault,env);
     assert.deepEqual(failed.exits,[fault==='throw'?2:1],fault);assert.deepEqual(failed.statuses,[fault==='cancel'?'cancelled':'failed']);

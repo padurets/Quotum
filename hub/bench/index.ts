@@ -184,7 +184,9 @@ async function main() {
   const set = panningSet(SETS[0]);
   const timing=fixtureTiming(Date.now());
   evidence.save('fixture-timing',timing);
-  const demo = new Demo({set, scene: set.scene, still: true, idleAgents: true,money:false, start:timing.start, address, onExit: () => void finish(1)});
+  let limitReports=0;
+  const demo = new Demo({set, scene: set.scene, still: true, idleAgents: true,money:false, start:timing.start, address, onExit: () => void finish(1),
+    ...(poolDiagnostic==='1'&&options.scope==='history'?{onHistoryLimit:(report:import('../demo/historyLimit.js').HistoryLimitReport)=>{evidence.save('history-server-limit-'+(++limitReports),report);}}:{})});
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => {cancelled = true; void finish(1);});
 
   try {

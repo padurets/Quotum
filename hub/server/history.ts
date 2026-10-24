@@ -5,7 +5,9 @@ import type {Shown, Store, WorkRead} from './store/store.js';
 import type {MeterSelection} from './domain/meterHistory.js';
 import {sharedWork} from './periodWork.js';
 
-export class HistoryLimit extends Error { constructor() {super('history_limit');} }
+export class HistoryLimit extends Error {
+  constructor(readonly snapshot?:{requested:number;reserved:number;budget:number}) {super('history_limit');}
+}
 
 type Kept = {owner:string|null;devices:Set<string>;users:Set<string>;scope?: HistoryScope; sourceWork?:boolean; workKey: string; sources: Set<string>; cell: number; tile: number; json: string; bytes: number;validUntil:number};
 
@@ -65,7 +67,7 @@ export class HistoryTiles {
     let used = 0;
     return {
       add: (bytes: number) => {
-        if (bytes + this.reserved > this.budget) throw new HistoryLimit();
+        if (bytes + this.reserved > this.budget) throw new HistoryLimit({requested:bytes,reserved:this.reserved,budget:this.budget});
         this.makeRoom(bytes);
         this.reserved += bytes; used += bytes;
       },

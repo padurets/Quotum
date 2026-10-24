@@ -143,7 +143,13 @@ for(const overflow of [false,true])test(`actual database changes revalidate work
    });
    const until=performance.now()+12;do{yield;}while(performance.now()<until);return yield*original(...args);
  });
- if(overflow)await assert.rejects(h.period.readAsync(h.board,h.owner.id,body),(e:unknown)=>e instanceof ReadError&&e.statusCode===413&&e.code==='history_limit');
+ if(overflow)await assert.rejects(h.period.readAsync(h.board,h.owner.id,body),(e:unknown)=>{
+   assert.ok(e instanceof ReadError);assert.equal(e.statusCode,413);assert.equal(e.code,'history_limit');
+   assert.equal(e.limitStage,'work-access');assert.ok(e.cause instanceof HistoryLimit);
+   const snapshot=e.cause.snapshot;assert.ok(snapshot);assert.equal(snapshot.budget,ceiling);
+   assert.ok(snapshot.requested>0&&snapshot.reserved+snapshot.requested>snapshot.budget);
+   return true;
+ });
  else{const result=JSON.parse(await h.period.readAsync(h.board,h.owner.id,body));assert.equal(result.sessions.state,'complete');assert.deepEqual(result.sessions.value.refs,[],'revoked captured access is never reused by the current guard');}
  assert.ok(h.calls.length>=2);assert.ok(h.calls.every(Boolean),'each actual-change revalidation is bounded');const reservation=h.tiles.reservation();try{reservation.add(ceiling);}finally{reservation.close();}
 });

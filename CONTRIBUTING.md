@@ -60,7 +60,12 @@ renderer binding and native capture keep their existing postfailure deadlines. I
 or budget allowance; its artifacts cannot satisfy the required `bench` check. The observer
 can identify cache eviction and reservation pressure in this instrumented attempt. It
 does not preserve fixed-summary shift proofs or every gesture's scale, so a different
-repeat range can remain unexplained. Locally this mode also accepts `--scope history`
+repeat range can remain unexplained. Its pinned history-only mode also retains up to
+four server preparation refusals, each from a validated stderr record of at most 2048 bytes.
+They preserve the original reservation and distinguish input admission, preparation
+and work-access revalidation. Numeric request summaries have no physical attempt binding;
+compare them with recorded traffic before attributing a delivered HTTP failure.
+Missing records remain inconclusive. Locally this mode also accepts `--scope history`
 with the same source and client pins; its default `all` scope remains available.
 Other optional diagnostics require `all`. Separate jobs retain
 normal warmup, chart-grid alignment and budgets.

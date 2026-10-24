@@ -132,14 +132,14 @@ export class PeriodReader {
   }
   read(board:string,user:string,raw:unknown):string {return drain(this.prepareRead(board,user,raw));}
   async readAsync(board:string,user:string,raw:unknown,signal?:AbortSignal):Promise<string> {
-    const input=this.history.reservation();
-    try{input.add(periodInputBytes(raw));
+    const input=this.history.reservation();let admitted=false;
+    try{input.add(periodInputBytes(raw));admitted=true;
     for(let attempt=0;;attempt++){
       let check=()=>{};
       try{return await this.preparation.run(()=>this.prepareRead(board,user,raw,guard=>{check=guard;}),signal,()=>check());}
       catch(error){if(!(error instanceof PeriodChanged))throw error;if(attempt===1)fail(503,'unavailable');}
     }
-    }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit');throw error;}
+    }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit',{stage:admitted?'preparation':'input',cause:error});throw error;}
     finally{input.close();}
   }
   private *prepareRead(board:string,user:string,raw:unknown,guard?:(check:()=>void)=>void):Preparation<string> {
@@ -274,7 +274,7 @@ export class PeriodReader {
             try{
               const current=store.workAccess(board,now,size=>{reservation.add(size);bytes+=size;});
               if(self.identity(board,user,current,reservation,undefined,filter)!==identity)throw new PeriodChanged();
-            }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit');throw error;}
+            }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit',{stage:'work-access',cause:error});throw error;}
             finally{reservation.remove(bytes);}
           }
           if(resourceKey()!==capturedResources||currency()!==currencyKey)throw new PeriodChanged();

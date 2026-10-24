@@ -6,6 +6,7 @@ import {QUOTA_KEY,QUOTA_SCENES,quotaFixture} from './quotas.js';
 import {MONEY_KEY} from './money.js';
 import {readFileSync} from 'node:fs';
 import {demoAdditionControls} from './additions.js';
+import {observeHistoryLimits} from './historyLimit.js';
 process.umask(0o077);
 (process.report as typeof process.report & {excludeEnv: boolean}).excludeEnv = true;
 const root=path.resolve(process.cwd(),'dist','server');
@@ -80,4 +81,10 @@ quotaTransport.send=async(_operation,secret)=>{
 };
 (connectors as Map<string,import('../server/connectors/registry.js').Connector>).set('zai',zai(quotaTransport));
 const {runHub}=await load('main.js') as typeof import('../server/main.js');
+if(process.env.QUOTUM_DEMO_HISTORY_LIMITS==='1'){
+  const {PeriodReader}=await load('periodRead.js') as typeof import('../server/periodRead.js');
+  const {ReadError}=await load('historyRead.js') as typeof import('../server/historyRead.js');
+  const {HistoryLimit}=await load('history.js') as typeof import('../server/history.js');
+  observeHistoryLimits(PeriodReader,{ReadError,HistoryLimit},report=>console.error(JSON.stringify(report)));
+}
 await runHub(demoAdditionControls);
