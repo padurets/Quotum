@@ -31,6 +31,9 @@ shared-filter totals and bar values, clean-cell reuse, coalesced late work, canc
 responses and all transport/preparation costs under the existing pool limits.
 Emphasis owns no reader and receives no extra-read allowance.
 Each fixed Activity period saves its bounded pool journal before checking completeness.
+With evidence enabled, its existing final phase sample also retains the journal before
+assertions. A failed page saves that partial snapshot and its phase before closing;
+it adds no recovery command, and its sampling cost stays in the reported CPU duration.
 Its larger diagnostic capacity retains the monthly ownership snapshots; omitted entries
 still fail the check, and the product's memory and transport limits stay the same.
 No browser means the check was not run.
@@ -159,9 +162,16 @@ confirmed. Attached browsers and their existing tabs remain outside that ownersh
 Launch diagnostics contain version, timing, process identity and classified stream
 counters; arbitrary browser output and command arguments are omitted.
 On Linux, the existing ownership reads also retain bounded root-process fault and CPU
-tick samples during startup, and the first observed port publication time. No extra
+tick samples during startup, and the first observed port-read time. No extra
 process reads or sampling timers are added. These counters are not a scheduler trace;
 missing samples and unsupported counters stay explicit.
+After an uncancelled startup deadline, Linux x64 may collect one root-process wait
+sample in an isolated Node helper. Its parent has a 200 ms budget within the existing
+seven-second cleanup window; it adds no wait before TERM. PID, birth, process group,
+session and UID are checked before and after the reads. Only process states, bounded
+kernel symbols, a syscall number and an FD class are retained. Addresses, paths and
+syscall arguments are omitted. Identity bookends are not an atomic wait snapshot;
+missing access stays unknown, and unconfirmed helper cleanup stays a residual failure.
 `QUOTUM_BENCH_DIAGNOSTICS_DIR` keeps a unique run manifest and completed phase reports
 before cleanup, including when a later phase fails. CI retains these artifacts for
 every attempt. The `make bench` wrapper forwards this setting without loading preview

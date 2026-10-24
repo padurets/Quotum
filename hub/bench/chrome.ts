@@ -193,8 +193,8 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
   };
   child.on('exit', exited); child.on('error', errored);
   let stopping: Promise<void> | undefined;
-  const close = () => stopping ??= (async () => {
-    state.cleanup = await processOwner.close();
+  const close = (captureRootWait=false) => stopping ??= (async () => {
+    state.cleanup = await processOwner.close(captureRootWait);
     child.stdout?.off('data', stdout.add); child.stderr?.off('data', stderr.add);
     child.off('exit', exited); child.off('error', errored);
     if (state.cleanup.status === 'closed') rmSync(profile, {recursive: true, force: true});
@@ -301,7 +301,7 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
     state.startupSpans = spans.freeze();
     const original = snapshot();
     progress?.(original);
-    try {await close();} catch { /* The report retains unconfirmed cleanup. */ }
+    try {await close(!signal?.aborted&&performance.now()-started>=20_000&&error instanceof Error&&error.message==='deadline exceeded');} catch { /* The report retains unconfirmed cleanup. */ }
     throw new ChromeLaunchError({...original,cleanup:state.cleanup},startup.signal.aborted ? (error as Error).message : 'DevTools was not ready in 20 s');
   } finally {signal?.removeEventListener('abort', cancel);}
 }

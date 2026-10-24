@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
+import {spawn} from 'node:child_process';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
@@ -42,6 +43,7 @@ function cleanupFixture(block: 'directory'|'stat'|null) {
   const deadlines=compile('../deadline.ts',()=>{throw Error('unexpected dependency');});
   const module=compile('../browserProcess.ts',name=>{
     if(name==='node:fs/promises')return io;
+    if(name==='node:child_process')return {spawn};
     if(name==='./deadline.js')return deadlines;
     throw Error('unexpected dependency');
   }) as unknown as typeof import('../browserProcess.js');
