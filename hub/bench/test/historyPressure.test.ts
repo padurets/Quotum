@@ -3,7 +3,27 @@ import assert from 'node:assert/strict';
 import {runInNewContext} from 'node:vm';
 import {HistoryPool} from '../../ui/lib/historyPool';
 import {historyPressureScript,saveHistoryPressure} from '../historyPressure';
+import {historyPageScript} from '../historyTrafficBrowser';
 import {safeEvidence} from '../evidence';
+
+test('the complete generated history bootstrap applies preferences, tags fetches and installs its pressure hook',async()=>{
+  for(const pressure of [false,true])for(const period of ['24h','30d']){
+    const stored=new Map<string,string>(),requests:{uri:string;headers:Headers}[]=[];
+    const context:any={Map,Set,WeakMap,Headers,Request,URL,JSON,Date,performance,location:{href:'http://fixture.invalid/'},
+      localStorage:{setItem:(key:string,value:string)=>stored.set(key,value),getItem:(key:string)=>stored.get(key)??null},
+      fetch:async(uri:string,init:RequestInit)=>{requests.push({uri,headers:new Headers(init.headers)});return new Response('{}');}};
+    context.window=context;
+    runInNewContext(historyPageScript(period,pressure),context);
+    assert.equal(stored.get('quotum.locale'),'en');
+    assert.deepEqual(JSON.parse(stored.get('quotum.prefs')!),{range:period,horizon:'1d',filtersVisible:true});
+    assert.equal(typeof context.__quotumInspectHistoryPool,pressure?'function':'undefined');
+    assert.equal(typeof context.__quotumHistoryPressure,pressure?'object':'undefined');
+    const response=await context.fetch('/api/boards/synthetic/period',{method:'POST',body:'{}'});
+    assert.equal(await response.text(),'{}');assert.equal(requests.length,1);
+    assert.match(requests[0].headers.get('x-quotum-bench-attempt')??'',/^b[0-9]+:1$/);
+    assert.equal(Object.keys(context.__quotumHistoryAttempts).length,1);
+  }
+});
 
 function fixture(enabled=true,order=['quota','budget','funds']){
   const pool=new HistoryPool(100);let getters=0,json=0,clocks=0,wraps=0;

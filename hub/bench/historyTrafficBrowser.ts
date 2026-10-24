@@ -46,7 +46,7 @@ export function stableHistoryReads(reads: readonly Pick<Read, 'selection' | 'ans
 
 /** Identity is attached before fetch; cancellation need not receive response headers. */
 export function historyPageScript(period: string,pressure=false) {
-  return (pressure?historyPressureScript():'')+`localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d',filtersVisible:true}));`+historyIdentityScript(pressure);
+  return (pressure?historyPressureScript()+';':'')+`localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d',filtersVisible:true}));`+historyIdentityScript(pressure);
 }
 
 /** Tag existing fetches before their observers see them, without changing page preferences. */
