@@ -24,7 +24,7 @@ test('both actual history callers retain passive binding for ordinary and pool-o
   for(const name of ['browserHistoryTraffic','browserCancellationTraffic'])for(const browser of browsers)for(const env of environments){
     const seen:unknown[][]=[],original=new Error('original seed stop'),run=caller(name,{DAY:86400000,HISTORY_COHORT_TAKES:1,process:{env},console:{error(){}},historyPage:async(...args:unknown[])=>{seen.push(args);throw original;}});
     await assert.rejects(name==='browserHistoryTraffic'?run(browser.value,{},'','board'):run(browser.value,{},'',false,false),error=>error===original);
-    assert.equal(seen.length,1);assert.equal(seen[0].length,11);assert.equal(seen[0][10],browser.eligible&&!flags.filter(key=>key!=='QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL').some(key=>env[key as keyof typeof env]));
+    assert.equal(seen.length,1);assert.equal(seen[0].length,name==='browserHistoryTraffic'?12:11);assert.equal(seen[0][11],name==='browserHistoryTraffic'?true:undefined);assert.equal(seen[0][10],browser.eligible&&!flags.filter(key=>key!=='QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL').some(key=>env[key as keyof typeof env]));
   }
   for(const diagnostic of [true,false])for(const profile of [true,false]){
     const seen:unknown[][]=[],original=new Error('original cancellation stop'),run=caller('browserCancellationTraffic',{DAY:86400000,HISTORY_COHORT_TAKES:1,process:{env:{}},console:{error(){}},historyPage:async(...args:unknown[])=>{seen.push(args);throw original;}});
@@ -32,8 +32,8 @@ test('both actual history callers retain passive binding for ordinary and pool-o
   }
 });
 
-async function pageFixture(passive:boolean,observed=true,strict=false,seedFailure?:Error){
-  const order:string[]=[],commands:string[]=[],saved:string[]=[],listeners=new Map<string,(value:any)=>void>(),owner=new RunOwner({save(){}}),navigation={frameId:'main',loaderId:'loader'};
+async function pageFixture(passive:boolean,observed=true,strict=false,seedFailure?:Error,poolMode=false,pressure=true){
+  const order:string[]=[],commands:string[]=[],saved:string[]=[],pressureScripts:boolean[]=[],listeners=new Map<string,(value:any)=>void>(),owner=new RunOwner({save(){}}),navigation={frameId:'main',loaderId:'loader'};
   let targetCloses=0,resolves=0,rendererDisposes=0,removed=0,pinned:unknown;
   const tabClose=owner.resource(async()=>{targetCloses++;});
   const renderer={pid:7,birth:'8',valid:()=>true,evidence:()=>({status:'known'}),dispose:async()=>{}};
@@ -44,12 +44,13 @@ async function pageFixture(passive:boolean,observed=true,strict=false,seedFailur
     phase='';errors:unknown[]=[];reads:unknown[]=[];activeCount=0;pending=new Set();diagnostic(){return{};}
     get resources(){return[{phase:this.phase,count:{complete:true},cell:300000,selection:'quota',answer:{now:0},chunks:[[0,300000]]}];}
   }
-  const run=caller('historyPage',{assert,DAY:86400000,process:{env:strict?{QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:'1'}:{}},openTab:async()=>({cdp,close:tabClose}),HistoryBodies:Bodies,
-    historyPageScript:()=>'',hasSeededHistory:()=>true,prepareHistoryTarget:async()=>{},
+  const run=caller('historyPage',{assert,DAY:86400000,process:{env:{...(strict?{QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:'1'}:{}),...(poolMode?{QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'1'}:{})}},openTab:async()=>({cdp,close:tabClose}),HistoryBodies:Bodies,
+    historyPageScript:(_period:string,pressure:boolean)=>{pressureScripts.push(pressure);return'';},hasSeededHistory:()=>true,prepareHistoryTarget:async()=>{},
+    saveHistoryPressure:async()=>{order.push('pressure-export');},
     rendererDocument:(page:Parameters<typeof rendererDocument>[0])=>{order.push('document');const document=rendererDocument(page),pin=document.pin;document.pin=reply=>{order.push('pin');pinned=reply;pin(reply);};return document;},
     rendererIdentity:async()=>{resolves++;renderer.dispose=owner.resource(async()=>{rendererDisposes++;});return renderer;}});
-  const args=[{owned:true,owner},{url:'http://fixture.invalid',phase(){}},'cookie=fixture','fixture',86400000,0,undefined,{save:(name:string)=>saved.push(name)},undefined,undefined,passive];
-  return{run:()=>run(...args),owner,order,commands,saved,listeners,navigation,pinned:()=>pinned,resolves:()=>resolves,targetCloses:()=>targetCloses,rendererDisposes:()=>rendererDisposes,removed:()=>removed};
+  const args=[{owned:true,owner},{url:'http://fixture.invalid',phase(){}},'cookie=fixture','fixture',86400000,0,undefined,{save:(name:string)=>saved.push(name)},undefined,undefined,passive,pressure];
+  return{run:()=>run(...args),owner,order,commands,saved,pressureScripts,listeners,navigation,pinned:()=>pinned,resolves:()=>resolves,targetCloses:()=>targetCloses,rendererDisposes:()=>rendererDisposes,removed:()=>removed};
 }
 
 test('passive document binding precedes Page.enable, pins the existing seed navigation and adds no preflight command',async()=>{
@@ -58,9 +59,24 @@ test('passive document binding precedes Page.enable, pins the existing seed navi
     const f=await pageFixture(passive,observed),page=await f.run();
     if(!originalCommands)originalCommands=f.commands;else assert.deepEqual(f.commands,originalCommands);
     assert.equal(f.resolves(),0);assert.deepEqual(f.saved,[]);
+    assert.deepEqual(f.pressureScripts,[passive]);assert.ok(!f.order.includes('pressure-export'));
     if(passive){assert.ok(f.order.indexOf('document')<f.order.indexOf('Page.enable'));assert.ok(f.order.indexOf('on:Page.frameNavigated')<f.order.indexOf('Page.navigate'));assert.ok(f.order.indexOf('seed-probe')<f.order.indexOf('pin'));assert.equal(f.pinned(),f.navigation);assert.equal(page.lateRenderer.requireBeforeInput,false);assert.equal(page.lateRenderer.validDocument(),observed);}
     else assert.equal(page.lateRenderer,undefined);
     await page.close();await f.owner.close();assert.equal(f.targetCloses(),1);assert.equal(f.listeners.size,0);assert.equal(f.removed(),passive?5:0);assert.equal(f.resolves(),0);assert.equal(f.rendererDisposes(),0);
+  }
+});
+
+test('only the ordinary owned page can export pressure after failure; the strict route stays unchanged',async()=>{
+  for(const passive of [false,true])for(const strict of [false,true]){
+    const f=await pageFixture(passive,true,strict),page=await f.run();
+    assert.deepEqual(f.pressureScripts,[passive&&!strict]);assert.ok(!f.order.includes('pressure-export'));
+    await page.capturePressure();assert.equal(f.order.filter(value=>value==='pressure-export').length,passive&&!strict?1:0);
+    await page.close();await f.owner.close();
+  }
+  for(const [poolMode,pressure] of [[true,true],[false,false]]){
+    const f=await pageFixture(true,true,false,undefined,poolMode,pressure),page=await f.run();
+    assert.deepEqual(f.pressureScripts,[false]);await page.capturePressure();assert.ok(!f.order.includes('pressure-export'));
+    await page.close();await f.owner.close();
   }
 });
 

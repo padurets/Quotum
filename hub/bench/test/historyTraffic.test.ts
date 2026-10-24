@@ -679,14 +679,16 @@ test('an actual warm assertion retains cold movement and its first error when po
   const attempt=nodes.find(node=>ts.isTryStatement(node)&&node.finallyBlock?.getText(nativeFile).includes('await capturePool()')) as ts.TryStatement;
   const movement=attempt.tryBlock.statements.find(node=>node.getText(nativeFile).startsWith('movement='))!.getText(nativeFile);
   const warm=attempt.tryBlock.statements.find(node=>node.getText(nativeFile).includes("'browser cached return/repeat started history'"))!.getText(nativeFile);
+  const capture=attempt.tryBlock.statements.find(node=>node.getText(nativeFile).startsWith('if(warm.length)'))!.getText(nativeFile);
   const pose={tokens:['one'],poses:[{end:90,origin:100},{end:80,origin:100}],pushes:1,from:50,to:80},saved=new Map<string,unknown>(),order:string[]=[];
   const fixture={assert,pose,warm:[1,2,3],movement:undefined,primary:undefined as unknown,suffix:{pair:6,cohort:'activity'},status:'passed',name:'fixture',geometry:{width:1000},cell:1,
     bodies:{reads:[],diagnostic:()=>({})},reports:[],proxy:{transfers:[]},cdp:{snapshot:()=>({})},trafficReadEvidence,browser:{owner:{failures:[] as string[]}},
     evidence:{save:(name:string,value:unknown)=>saved.set(name,value)},capturePool:async()=>{order.push('pool');throw Error('secondary cleanup');},
+    console:{error(){}},capturePressure:async()=>{order.push('pressure');},warmPhase:'warm',
     observer:{close:async()=>{order.push('observer');}},close:async()=>{order.push('target');},run:null as unknown as ()=>Promise<void>};
-  const code=`globalThis.run=async()=>{${movement}try{${warm}}catch(error)${attempt.catchClause!.block.getText(nativeFile).replace('{','{primary=error;')}finally${attempt.finallyBlock!.getText(nativeFile)}};`;
+  const code=`globalThis.run=async()=>{${movement}try{${capture}${warm}}catch(error)${attempt.catchClause!.block.getText(nativeFile).replace('{','{primary=error;')}finally${attempt.finallyBlock!.getText(nativeFile)}};`;
   runInNewContext(ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,fixture);
   await assert.rejects(fixture.run(),error=>error===fixture.primary&&(error as Error).message.includes('browser cached return/repeat started history'));
   assert.deepEqual(JSON.parse(JSON.stringify((saved.get('traffic-fixture') as {movement:unknown}).movement)),{...pose,tokens:1});
-  assert.deepEqual(order,['pool','observer','target']);assert.equal(fixture.status,'failed');assert.deepEqual(fixture.browser.owner.failures,['history pool cleanup failed']);
+  assert.deepEqual(order,['pressure','pool','observer','target']);assert.equal(fixture.status,'failed');assert.deepEqual(fixture.browser.owner.failures,['history pool cleanup failed']);
 });

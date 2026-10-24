@@ -72,6 +72,12 @@ is spawned, including its work and endpoint validation.
 DevTools commands keep their thirty-second response deadline. An explicit renderer
 crash or target-detach event fails pending commands immediately, even if the socket
 stays open, and retains the original failure before cleanup. It does not retry work.
+Ordinary owned Linux history pages keep a pressure journal in their existing bootstrap.
+It snapshots numeric cache identities when the pool trims and records later tagged
+requests. A known warm-read failure exports at most 64 events and 64 KiB within a
+cancellable two-second window, preserving the original assertion. Truncated or unbound
+evidence remains inconclusive. Its transport binding adds observation work whose timing
+effect is unmeasured; the full pool diagnostics and dashboard keep their existing observers.
 The existing five-second pending-command observation also retains at most 32 owned
 Linux process identities and raw proc counters, followed by one read after failure
 before debugger intervention. Each cancellable read is bounded to one second within
