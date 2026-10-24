@@ -2,6 +2,54 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {fixture,flush,NOW,H,M} from './periodRuntimeFixture';
 const total=(h:any)=>h.period.calendar.get().value?.cells.reduce((sum:number,cell:any)=>sum+(cell.agentMs??0),0)??null;
+test('credited work preserves confirmed historical measurements and their cached return',async t=>{
+ t.mock.method(Date,'now',()=>NOW);
+ const h=await fixture({fixed:true,heatmap:true,personal:true});t.after(()=>h.close());
+ const range=h.selectedRange()!,value=h.period.getValue(h.source).value,before=total(h)!;
+ h.requests.length=0;h.credit(NOW-M,NOW-M+100);h.events.flush();await flush();
+ assert.ok(total(h)!>before,'new credited work reaches the actual calendar');
+ assert.ok(h.requests.some(r=>r.sessions),'work still refreshes its exact summary');
+ assert.ok(h.requests.every(r=>!r.values),'work alone cannot reread supplier measurements');
+ assert.equal(h.period.getValue(h.source).value,value);
+ assert.equal(h.period.valuesProofEpoch,h.period.proofEpoch,'confirmed measurement evidence survives the independent work revision');
+ h.selectRange({from:range.from-H,to:range.to-H});await flush();h.requests.length=0;
+ h.selectRange(range);await flush();
+ assert.ok(h.requests.every(r=>!r.values),'work cannot invalidate the independent measurement cache');
+ assert.deepEqual(h.period.getValue(h.source).value,value);
+});
+
+for(const workFirst of [false,true])test(`coalesced measurements refresh historical values alongside credited work (${workFirst})`,async t=>{
+ t.mock.method(Date,'now',()=>NOW);
+ const h=await fixture({fixed:true,personal:true});t.after(()=>h.close());h.requests.length=0;
+ const measure=()=>h.store.record(h.source,{observedAt:NOW-M/2,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly' as const,label:null,minutes:10080,used:30,remaining:70,resetAt:NOW+H}]});
+ if(workFirst)h.credit(NOW-M,NOW-M+100);measure();if(!workFirst)h.credit(NOW-M,NOW-M+100);
+ h.events.flush();await flush();
+ assert.ok(h.requests.some(r=>r.values),'an earlier work cutoff cannot hide a newer measurement');
+ assert.equal(h.period.getValue(h.source).value.windows[0].remaining,70);
+});
+
+for(const detail of ['legacy','missing','unconfirmed'] as const)test(`historical measurements conservatively refresh after ${detail} history news`,async t=>{
+ t.mock.method(Date,'now',()=>NOW);
+ const h=await fixture({fixed:true,personal:true});t.after(()=>h.close());h.requests.length=0;
+ const since=NOW-M,changes=detail==='legacy'?undefined:detail==='missing'?[]:[{source:h.source,scope:'quota' as const,since,workSince:since}];
+ h.event({type:'history',data:{sources:[h.source],since,workSince:since,...(changes?{changes}:{})}});await flush();
+ assert.ok(h.requests.some(r=>r.values),'only a positive producer assertion can preserve measurement evidence');
+});
+
+test('credited work cannot confirm historical measurements while their native replacement is pending',async t=>{
+ t.mock.method(Date,'now',()=>NOW);
+ const h=await fixture({fixed:true,personal:true});t.after(()=>h.close());
+ const pending=h.hold();
+ h.store.record(h.source,{observedAt:NOW-M/2,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:30,remaining:70,resetAt:NOW+H}]});
+ h.events.flush();await flush();assert.ok(pending.reply?.values);assert.equal(h.period.valuesNeeded,true);
+ const oldEpoch=h.period.valuesProofEpoch;
+ h.credit(NOW-M,NOW-M+100);h.events.flush();
+ assert.equal(h.period.valuesNeeded,true);assert.equal(h.period.valuesProofEpoch,oldEpoch);
+ pending.release();await flush();
+ assert.equal(h.period.getValue(h.source).value.windows[0].remaining,70);
+ assert.equal(h.period.valuesNeeded,false);assert.equal(h.period.valuesProofEpoch,h.period.proofEpoch);
+});
+
 for(const kind of ['after','at','before'] as const)test(`actual historical calendar work notification ${kind} the exclusive endpoint`,async t=>{
  t.mock.method(Date,'now',()=>NOW);
  const h=await fixture({heatmap:true,periodName:'3h',creditFrom:NOW-2*H+M,creditTo:NOW-2*H+2*M});t.after(()=>h.close());

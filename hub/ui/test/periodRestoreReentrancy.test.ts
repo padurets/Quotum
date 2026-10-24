@@ -67,9 +67,10 @@ test('relevant same-context history inside a value listener keeps the restored t
       if(!restored||reentered)return;reentered++;
       assert.equal(h.period.get().value,original,'new evidence arrives after the real cache root is restored');
       const generation=h.period.generation,key=h.period.cacheKey,revision=h.period.revision,proof=h.period.proofEpoch;
-      // The actual producer adds a disjoint minute inside A without changing
-      // its date, source selection or authority. Only its evidence becomes old.
-      h.store.creditWork(h.device,NOW-20*M,NOW-19*M,[{source:h.source,accountBy:'login',client:'codex',origin:'terminal',startedAt:NOW-25*M,project:'Late project',folder:'Late folder',identity:{kind:'stable',sessionId:'d'.repeat(32)}}]);h.events.flush();
+      // Actual work and a measurement change inside A without changing its
+      // date, source selection or authority. Both independent proofs become old.
+      h.store.creditWork(h.device,NOW-20*M,NOW-19*M,[{source:h.source,accountBy:'login',client:'codex',origin:'terminal',startedAt:NOW-25*M,project:'Late project',folder:'Late folder',identity:{kind:'stable',sessionId:'d'.repeat(32)}}]);
+      h.store.record(h.source,{observedAt:NOW-M,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:30,remaining:70,resetAt:NOW+H}]});h.events.flush();
       observed={sameGeneration:h.period.generation===generation,sameKey:h.period.cacheKey===key,revisionAdvanced:h.period.revision>revision,proofAdvanced:h.period.proofEpoch>proof,workNeeded:h.period.workNeeded,valuesNeeded:h.period.valuesNeeded};
     });
     h.requests.length=0;h.selectRange(first);await flush();
@@ -77,6 +78,7 @@ test('relevant same-context history inside a value listener keeps the restored t
     const target=h.requests.filter(request=>request.selection.mode==='range'&&request.selection.from===first.from&&request.selection.to===first.to);
     assert.ok(target.some(request=>request.sessions),'the changed current target still needs a new sessions read after the captured old A was restored');
     assert.ok(target.some(request=>request.values?.includes(h.source)),'the history event must not lose its new values demand');
+    assert.equal(h.period.getValue(h.source).value.windows[0].remaining,70,'the measurement replacement reaches the restored card');
     assert.equal(h.period.activity.summary(first,'source').agentMs,before+M,'the recovered target includes the exact disjoint minute from the producer');
     const latest=JSON.parse(h.reader.read(h.board,h.alice.id,{version:1,selection:{mode:'range',...first},evaluatedAt:NOW,sessions:{},values:[h.source]}));
     assert.equal(h.period.work.basis.revision,latest.basis.revision,'a current proof epoch cannot certify the captured old basis');

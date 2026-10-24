@@ -158,6 +158,11 @@ class BoardPeriod {
     for(const reading of values.values())if(reading.value)storage.set(reading.value,JSON.stringify(reading.value).length*3);
     return storage;
   }
+  private measurementSince(data:Extract<import('./board').HubEvent,{type:'history'}>['data'],sources:readonly string[]){
+    if(!data.changes)return data.sources.some(id=>sources.includes(id))?data.since:Infinity;
+    const unknown=data.sources.some(id=>sources.includes(id)&&!data.changes!.some(change=>change.source===id));
+    return Math.min(unknown?data.since:Infinity,...data.changes.filter(change=>sources.includes(change.source)&&(change.workOnly!==true||change.workSince===undefined)).map(change=>change.since));
+  }
   evictionCandidates(){return [...this.valueCache].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.valueCache.delete(key);}})).concat([...this.retained].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.retained.delete(key);}})),this.calendar.evictionCandidates());}
   private retainCurrent(){
     if(!this.cacheKey)return;
@@ -566,7 +571,7 @@ class BoardPeriod {
     if(history){
       for(const [key,entry] of this.retained)if(!entry.invalidate(history))this.retained.delete(key);
       for(const [key,entry] of this.valueCache){
-        const since=history.sources.some(id=>entry.values.has(id))?history.since:Infinity;
+        const since=this.measurementSince(history,[...entry.values.keys()]);
         if(since<entry.to)this.valueCache.delete(key);else entry.validBefore=Math.min(entry.validBefore,since);
       }
       const since=Math.min(history.sources.some(id=>sources.includes(id))?history.since:Infinity,workSince);
@@ -661,15 +666,19 @@ class BoardPeriod {
         this.tick();
       }else if(hub.type==='history') {
         const included=hub.data.sources.some(id=>sources.includes(id));
+        const measurementSince=this.measurementSince(hub.data,sources);
         const own=hub.data.workSince!==undefined&&(selection.mode==='live'||hub.data.workSince<selection.to);
         const relevant=changedWork||included&&(selection.mode==='live'||hub.data.since<selection.to)||own;
         if(relevant){
-          if(included){this.proofEpoch++;this.validBefore=Infinity;}
+          if(included){
+            const previous=this.proofEpoch++;this.validBefore=Infinity;
+            if(measurementSince===Infinity&&!this.valuesNeeded&&this.valuesProofEpoch===previous)this.valuesProofEpoch=this.proofEpoch;
+          }
           this.resourceGeneration++;
           if(own)this.invalidateFacets();
           const {retired}=workChange(hub.data,sources,selection.mode==='live'?Infinity:selection.to);
           if(retired)this.retireWork();
-          if(included&&selection.mode==='range')this.valuesNeeded=true;
+          if(selection.mode==='range'&&measurementSince<selection.to)this.valuesNeeded=true;
           for(const scope of PERIOD_SCOPES){
             const visible=(scope==='quota'?[ACTIVITY,...QUOTA_WIDGETS]:scope==='funds'?[SUBSCRIPTION_FUNDS]:BUDGET_WIDGETS).some(id=>widgetVisible(board.view,id,board.lineup.length));
             if(!visible)continue;

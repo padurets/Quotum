@@ -1322,6 +1322,19 @@ test('refresh deadlines and terminal expiry reach both boards without polling', 
   assert.equal((await states()).request, null);
 });
 
+for(const workFirst of [false,true])for(const nativeFirst of [false,true])test(`coalesced quota measurement remains distinct from work (${workFirst}, ${nativeFirst})`,async t=>{
+  const clock=new ManualClock(Date.now()),h=await hub({},clock);t.after(()=>{letGo();return h.app.close();});
+  const board=await h.person('alice'),secret=await h.token('alice');await h.measure(secret,clock.now()-MIN);
+  const source=h.store.sources(board)[0].id,s=await reading(h,'alice',board);t.after(s.close);
+  const measurement=clock.now()-(nativeFirst?2:1)*MIN,work=clock.now()-(nativeFirst?1:2)*MIN;
+  for(const credited of workFirst?[true,false]:[false,true])h.events.history(source,credited?work:measurement,['quota'],credited);
+  clock.advance(config.events.smoothMs);
+  const packet=(await s.within()).find(event=>event.type==='history')!.data;
+  assert.deepEqual(packet.sources,[source]);assert.equal(packet.since,Math.min(measurement,work));
+  assert.deepEqual(packet.changes.filter((change:{workSince?:number})=>change.workSince===undefined),[{source,scope:'quota',since:measurement}]);
+  assert.deepEqual(packet.changes.filter((change:{workSince?:number})=>change.workSince!==undefined),[{source,scope:'quota',since:work,workSince:work,workOnly:true}]);
+});
+
 test('history coalesces each resource scope independently and keeps monetary news beside a work refresh',async t=>{
   const clock=new ManualClock(Date.now()),h=await hub({},clock);t.after(()=>{letGo();return h.app.close();});
   const board=await h.person('alice'),secret=await h.token('alice');await h.measure(secret,clock.now()-MIN);

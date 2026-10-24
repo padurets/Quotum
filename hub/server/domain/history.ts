@@ -1,5 +1,5 @@
 export type HistoryScope = 'quota' | 'budget';
-export type HistoryChange = {source: string; scope: HistoryScope; since: number; workSince?:number};
+export type HistoryChange = {source: string; scope: HistoryScope; since: number; workSince?:number; workOnly?:true};
 export const HISTORY_SCOPES: readonly HistoryScope[] = ['quota', 'budget'];
 
 import {sourceKey} from './workAccess.js';

@@ -1184,8 +1184,13 @@ cohort or revoked access. A cold predicate that cannot fit the period/detail bod
 budgets enters `filters_limit` recovery without issuing an oversized work request.
 
 The `history` event's optional `changes` entries are
-`{source, scope:'quota'|'budget', since, workSince?}`. `workSince` identifies actual
+`{source, scope:'quota'|'budget', since, workSince?, workOnly?:true}`. `workSince` identifies actual
 credited-work invalidation; the legacy `sources` and earliest `since` remain present.
+`workOnly:true` confirms that the entry contains no supplier measurement change.
+Work and measurement changes remain separate entries for the same source and scope,
+including when their notifications share a batch. A work-only entry does not invalidate
+historical card measurements. Missing markers, including older replies, remain
+conservative; a work cutoff alone cannot prove that measurements are unchanged.
 A source-free top-level workSince covers all admitted work, even with an empty sources
 array. Its public bound is clipped to the device admission cutoff; scoped source quota
 work is additionally clipped to the source grant. When permitted work or its names
@@ -1647,7 +1652,7 @@ selection errors. Existing cell, tile, meter, response and retention limits rema
 Cache and metadata identities include the read scope. Work-name changes invalidate quota
 and opted-in source-work caches; pure financial caches retain their resource identity.
 Metadata offered by another scope cannot be reused. A `history` event keeps
-its legacy `sources` union and minimum `since`, and adds `changes: [{source, scope, since, workSince?: number}]`.
+its legacy `sources` union and minimum `since`, and adds `changes: [{source, scope, since, workSince?: number, workOnly?: true}]`.
 Each source/scope keeps its own earliest changed time. Native samples, subscription caps
 and credited work affect quota; monetary observations and valuation changes affect budget.
 Work refreshes preserve coalesced budget changes. Clients without `changes` conservatively

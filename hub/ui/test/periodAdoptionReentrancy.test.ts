@@ -239,7 +239,11 @@ for(const scenario of [
     assert.equal(calendarTotal(),M);assert.equal(h.pool.activeFlights,0);
     h.prepareWith(scheduler);
     a=h.hold();
-    if(scenario.envelope==='delta'){h.credit(NOW-2*M,NOW-M);h.events.flush();}
+    if(scenario.envelope==='delta'){
+      // Resource adoption has an actual measurement to prepare independently of work.
+      h.store.record(h.source,{observedAt:NOW-M/2,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:30,remaining:70,resetAt:NOW+H}]});
+      h.credit(NOW-2*M,NOW-M);h.events.flush();
+    }
     else h.selectRange({from:NOW-2*H,to:NOW});
     await flush();
     const range=h.selectedRange();assert.ok(range);

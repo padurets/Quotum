@@ -2369,6 +2369,9 @@ remain visible to their own chart while its last complete frame is retained.
 Financial consumers observe resource readiness and errors alongside native accounting
 authority. A successful retry clears the error even when financial values are
 unchanged; ordinary work-only publications keep financial snapshots stable.
+Confirmed work-only history news also preserves historical card measurements and
+their cache. Supplier measurements remain separate when notifications coalesce;
+missing confirmation retains conservative invalidation for older replies.
 Replacing native quota windows or monetary meter choices retires their own projection;
 it does not retire an authorized Activity frame with the same selected work scope.
 A stored work predicate that exceeds the executable limit makes selected activity

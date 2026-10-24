@@ -318,7 +318,7 @@ export class Events implements Touches {
         let pending=this.histories.get(watched.id);if(!pending)this.histories.set(watched.id,pending=new Map());
         const sourceSince=admittedSince===0?0:Math.max(admittedSince,access.sources.get(source)!.since);
         const scopes:readonly HistoryScope[]=budget.has(source)?['quota','budget']:['quota'];
-        for(const scope of scopes){const key=JSON.stringify([source,scope]);pending.set(key,{source,scope,since:Math.min(pending.get(key)?.since??sourceSince,sourceSince),workSince:Math.min(pending.get(key)?.workSince??sourceSince,sourceSince)});}
+        for(const scope of scopes){const key=JSON.stringify([source,scope,true]);pending.set(key,{source,scope,since:Math.min(pending.get(key)?.since??sourceSince,sourceSince),workSince:Math.min(pending.get(key)?.workSince??sourceSince,sourceSince),workOnly:true});}
       }
     }
     this.schedule();
@@ -340,9 +340,9 @@ export class Events implements Touches {
       let pending = this.histories.get(watched.id);
       if (!pending) this.histories.set(watched.id, (pending = new Map()));
       for(const scope of scopes) {
-        const key=JSON.stringify([source,scope]);
+        const key=JSON.stringify([source,scope,work]);
         const workSince=Math.min(pending.get(key)?.workSince??Infinity,work?since:Infinity);
-        pending.set(key,{source,scope,since:Math.min(pending.get(key)?.since??since,since),...(Number.isFinite(workSince)?{workSince}:{})});
+        pending.set(key,{source,scope,since:Math.min(pending.get(key)?.since??since,since),...(Number.isFinite(workSince)?{workSince}:{}),...(work?{workOnly:true as const}:{})});
       }
     }
     this.schedule();
@@ -608,7 +608,7 @@ export class Events implements Touches {
     const work = projection.workKey(watched.id,roster.access);
     if (watched.work !== null && watched.work !== work) {
       let pending=histories.get(watched.id);if(!pending)histories.set(watched.id,(pending=new Map()));
-      for(const {id:source} of lineup)pending.set(JSON.stringify([source,'quota']),{source,scope:'quota',since:0,workSince:0});
+      for(const {id:source} of lineup)pending.set(JSON.stringify([source,'quota',true]),{source,scope:'quota',since:0,workSince:0,workOnly:true});
       workHistories.set(watched.id,0);
     }
     watched.work = work;
@@ -1161,7 +1161,8 @@ export class Events implements Touches {
         }
         // Keep supplier data distinct from work-only news when several batches collapse.
         const key=JSON.stringify([original.source,original.scope,workOnly]),old=changes.get(key);
-        changes.set(key,{source:original.source,scope:original.scope,since:Math.min(since,old?.since??Infinity),...(from===undefined&&old?.workSince===undefined?{}:{workSince:Math.min(from??Infinity,old?.workSince??Infinity)})});
+        const confirmed=original.workOnly===true&&(!old||old.workOnly===true);
+        changes.set(key,{source:original.source,scope:original.scope,since:Math.min(since,old?.since??Infinity),...(from===undefined&&old?.workSince===undefined?{}:{workSince:Math.min(from??Infinity,old?.workSince??Infinity)}),...(confirmed?{workOnly:true as const}:{})});
       }
     }
     if(!changes.size&&!Number.isFinite(workSince))return [];
