@@ -592,7 +592,7 @@ test('warm failure diagnostics distinguish exact reads and gesture stages withou
   assert.equal(observer.diagnostic('warm').reads.length,64);assert.equal(observer.diagnostic('warm').omitted,8);
 });
 
-test('history renderer binding is opt-in and unknown mapping stops before the first gesture',async()=>{
+test('legacy pre-input renderer binding rejects unknown mapping before the first gesture',async()=>{
   const source=readFileSync(new URL('../historyTrafficBrowser.ts',import.meta.url),'utf8');
   const start=source.indexOf("    if(document){");
   const end=source.indexOf('\n    return {cdp, bodies',start);assert.ok(start>0&&end>start);
@@ -622,7 +622,7 @@ test('direct history requires its document before input and never reports a pre-
   const start=source.indexOf('    if(document){'),end=source.indexOf('\n    return {cdp, bodies',start);assert.ok(start>=0&&end>start);
   for(const ready of [false,true]){
     let pinned=0,calls=0;const saved:unknown[]=[],navigation={frameId:'frame',loaderId:'loader'};
-    const fixture={document:{pin(value:unknown){assert.equal(value,navigation);pinned++;},valid:()=>ready},navigation,
+    const fixture={strictDocument:true,document:{pin(value:unknown){assert.equal(value,navigation);pinned++;},valid:()=>ready},navigation,
       renderer:undefined,rendererIdentity:async()=>{calls++;throw Error('must not bind before input');},process:{env:{QUOTUM_BENCH_HISTORY_SCROLL_CONTROL:'1',QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:'1'}},
       evidence:{save:(_name:string,value:unknown)=>saved.push(value)},name:'fixture',poolName:'fixture',assert,cdp:{},browser:{},run:null as unknown as ()=>Promise<void>};
     runInNewContext(ts.transpileModule(`globalThis.run=async()=>{${source.slice(start,end)}}`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,fixture);
@@ -656,7 +656,8 @@ test('direct history releases its owned target even when document disposal throw
 
 const nativeFile=ts.createSourceFile('traffic.ts',readFileSync(new URL('../historyTrafficBrowser.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
 const nativeFunction=nativeFile.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='browserHistoryTraffic') as ts.FunctionDeclaration;
-const nativeCode=ts.transpileModule(nativeFunction.getText(nativeFile).replace('export async function','async function')+'\nglobalThis.run=browserHistoryTraffic;', {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+const nativeBinding=nativeFile.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='passiveHistoryBinding') as ts.FunctionDeclaration;
+const nativeCode=ts.transpileModule(nativeBinding.getText(nativeFile)+'\n'+nativeFunction.getText(nativeFile).replace('export async function','async function')+'\nglobalThis.run=browserHistoryTraffic;', {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 
 test('pool observation routes only the direct suffix Activity pages before any input',async()=>{
   for(const enabled of [false,true])for(const suffix of [undefined,...Array.from({length:12},(_,i)=>({pair:i+1,cohort:'history'})),...Array.from({length:12},(_,i)=>({pair:i+1,cohort:'activity'}))]){

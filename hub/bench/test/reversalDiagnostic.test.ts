@@ -373,13 +373,16 @@ for(const mode of ['bound','invalidated','missing','duplicate','unknown','invali
   else{assert.equal(report.rendererAtCapture.status,'known');assert.equal(report.rendererAfterCapture.status,mode==='bound'?'known':'unknown');assert.equal(report.nativeBinding,mode==='bound');}
 });
 
-test('late document identity is passive on successful input and rejects an invalid document before input',async t=>{
+for(const requireBeforeInput of [undefined,false])test('late document identity stays passive and applies its pre-input policy: '+requireBeforeInput,async t=>{
   t.mock.timers.enable({apis:['setTimeout']});t.mock.method(console,'error',()=>{});
   let valid=true,resolves=0,ran=0;const {page,commands}=pageFixture();
-  const observer=await observeReversal(page,attachedChrome('fixture'),{postmortem:true,lateRenderer:{validDocument:()=>valid,resolve:async()=>{resolves++;throw Error('must stay passive');}}});
+  const observer=await observeReversal(page,attachedChrome('fixture'),{postmortem:true,lateRenderer:{requireBeforeInput,validDocument:()=>valid,resolve:async()=>{resolves++;throw Error('must stay passive');}}});
   let done!:()=>void;const accepted=observer.watch('original gesture',()=>new Promise<void>(resolve=>{ran++;done=resolve;}));
   t.mock.timers.tick(6000);done();await accepted;assert.equal(resolves,0);assert.deepEqual(commands,[]);
-  valid=false;await assert.rejects(observer.watch('next gesture',async()=>{ran++;}),/renderer identity/);assert.equal(ran,1);await observer.close();
+  valid=false;
+  if(requireBeforeInput===false)assert.equal(await observer.watch('next gesture',async()=>{ran++;return 7;}),7);
+  else await assert.rejects(observer.watch('next gesture',async()=>{ran++;}),/renderer identity/);
+  assert.equal(ran,requireBeforeInput===false?2:1);assert.equal(resolves,0);assert.deepEqual(commands,[]);await observer.close();
 });
 test('late binding is exclusive with preflight identity and pre-input debugger modes',async()=>{
   const lateRenderer={validDocument:()=>true,resolve:async()=>({} as RendererIdentity)}, {page}=pageFixture();
@@ -387,7 +390,7 @@ test('late binding is exclusive with preflight identity and pre-input debugger m
     await assert.rejects(observeReversal(page,attachedChrome('fixture'),{lateRenderer,...options}),/Conflicting renderer identity/);
   }
 });
-for(const mode of ['bound','unknown','missing','duplicate','throw','document-lost','lost-in-resolve','lost-native','lost-before-attach','no-native-unknown','no-native-null-birth','fallback'] as const)test('late renderer intervention guard: '+mode,async t=>{
+for(const requireBeforeInput of [undefined,false])for(const mode of ['bound','unknown','missing','duplicate','throw','document-lost','lost-in-resolve','lost-native','lost-before-attach','no-native-unknown','no-native-null-birth','fallback'] as const)test('late renderer intervention guard: '+mode+', requireBeforeInput='+requireBeforeInput,async t=>{
   t.mock.timers.enable({apis:['setTimeout']});
   const logs:string[]=[],order:string[]=[];t.mock.method(console,'error',(line:string)=>logs.push(line));
   t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({webSocketDebuggerUrl:'ws://fixture.invalid/browser'})));
@@ -400,7 +403,8 @@ for(const mode of ['bound','unknown','missing','duplicate','throw','document-los
   let documentValid=true,identityValid=true,resolves=0,nativeCalls=0,resolutionSignal:AbortSignal|undefined;
   const renderer={get pid(){return identityValid?101:null;},get birth(){return identityValid&&mode!=='no-native-null-birth'?'42':null;},valid:()=>identityValid&&!resolutionSignal?.aborted,
     dispose:async()=>{},evidence:()=>({status:identityValid&&!resolutionSignal?.aborted?'known':'unknown',pid:identityValid?101:null,birth:identityValid?'42':null,frame:1,invalidations:identityValid?0:1})} as RendererIdentity;
-  const lateRenderer={validDocument:()=>documentValid,resolve:async(signal:AbortSignal)=>{
+  const unbound=mode==='document-lost'&&requireBeforeInput===false;
+  const lateRenderer={requireBeforeInput,validDocument:()=>documentValid,resolve:async(signal:AbortSignal)=>{
     resolves++;order.push('resolve');resolutionSignal=signal;assert.equal(signal.aborted,false);
     if(mode==='throw')throw Error('private-resolution-canary');
     if(mode==='unknown'||mode==='no-native-unknown')identityValid=false;
@@ -409,9 +413,9 @@ for(const mode of ['bound','unknown','missing','duplicate','throw','document-los
   }};
   const native=await nativePostmortem({root:100,live:()=>false,observe:async()=>[]},[],new AbortController().signal);
   const browser={owned:true,endpoint:'fixture',close:async()=>{},...(['no-native-unknown','no-native-null-birth'].includes(mode)?{}:{nativePostmortem:async(candidates:unknown)=>{
-    order.push('native');nativeCalls++;assert.deepEqual(candidates,[{pid:101,cpuTime:1,birth:'42'}]);
+    order.push('native');nativeCalls++;assert.deepEqual(candidates,unbound?[{pid:102,cpuTime:999},{pid:101,cpuTime:1}]:[{pid:101,cpuTime:1,birth:'42'}]);
     if(mode==='lost-native'||mode==='lost-before-attach'){documentValid=false;identityValid=false;}
-    return{...native,pid:101,birth:'42',status:'observed' as const,intervened:mode!=='lost-before-attach'&&mode!=='fallback',released:true,reaped:true,pipesClosed:true};
+    return{...native,pid:101,birth:'42',status:'observed' as const,intervened:mode!=='lost-before-attach'&&mode!=='fallback'&&!unbound,released:true,reaped:true,pipesClosed:true};
   }})};
   const observer=await observeReversal(page,browser,{postmortem:true,lateRenderer});
   const original=new Error('original30s input failure');let reject!:(error:Error)=>void;
@@ -420,25 +424,30 @@ for(const mode of ['bound','unknown','missing','duplicate','throw','document-los
   t.mock.timers.tick(25000);page.snapshot=()=>({failure:{id:196,method:'Input.synthesizeScrollGesture'}}) as ReturnType<Cdp['snapshot']>;
   if(mode==='document-lost')documentValid=false;
   reject(original);await flush();t.mock.timers.tick(2000);await failed;await observer.close();
-  const accepted=['bound','lost-native','lost-before-attach','fallback'].includes(mode);
+  const accepted=unbound||['bound','lost-native','lost-before-attach','fallback'].includes(mode);
   assert.equal(nativeCalls,accepted?1:0);assert.equal(resolves,mode==='document-lost'?0:1);
-  if(mode==='fallback'){assert.ok(commands.includes('Debugger.enable'));assert.ok(order.indexOf('resolve')<order.indexOf('Debugger.enable'));}
+  if(mode==='fallback'||unbound){assert.ok(commands.includes('Debugger.enable'));assert.ok(order.indexOf(unbound?'native':'resolve')<order.indexOf('Debugger.enable'));}
   else assert.deepEqual(commands,[]);
   const report=JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));assert.equal(report.command.failure.id,196);
   assert.equal(report.nativeBinding,mode==='bound'||mode==='fallback');
-  if(mode==='bound'){assert.equal(report.rendererAtCapture.status,'known');assert.equal(report.rendererAfterCapture.status,'known');}
+  if(mode==='bound'){for(const mark of [report.rendererAtCapture,report.rendererAfterCapture]){assert.equal(mark.status,'known');assert.equal(mark.pid,101);assert.equal(mark.birth,'42');}}
+  if(unbound){assert.equal(report.rendererAtCapture,undefined);assert.equal(report.rendererAfterCapture,undefined);}
   assert.ok(!logs.join('').includes('private-resolution-canary'));if(resolutionSignal)assert.equal(resolutionSignal.aborted,true);
 });
-test('a pending late binding shares the original collection cancellation and never reaches either intervention',async t=>{
+for(const mode of ['strict deadline','optional deadline','optional abort'] as const)test('a pending late binding follows liveness and shares collection cancellation: '+mode,async t=>{
   t.mock.timers.enable({apis:['setTimeout']});t.mock.method(console,'error',()=>{});
   t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({webSocketDebuggerUrl:'ws://fixture.invalid/browser'})));
   t.mock.method(Cdp,'connect',async()=>({send:async()=>({processInfo:[{type:'renderer',id:101,cpuTime:1}]}),close(){}} as unknown as Cdp));
   const {page,commands}=pageFixture(async(_method,signal)=>new Promise((_,reject)=>signal!.addEventListener('abort',()=>reject(signal!.reason),{once:true})));
   page.snapshot=()=>({failure:{id:196}}) as ReturnType<Cdp['snapshot']>;
   let resolutionSignal:AbortSignal|undefined,calls=0,settled=false;
+  const controller=new AbortController();
   const observer=await observeReversal(page,{owned:true,endpoint:'fixture',close:async()=>{},nativePostmortem:async()=>{calls++;throw Error('must not attach');}},
-    {postmortem:true,lateRenderer:{validDocument:()=>true,resolve:signal=>{resolutionSignal=signal;return new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));}}});
+    {postmortem:true,signal:controller.signal,lateRenderer:{requireBeforeInput:mode==='strict deadline'?undefined:false,validDocument:()=>true,resolve:signal=>{resolutionSignal=signal;return new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));}}});
   const original=new Error('original timeout');const failure=assert.rejects(observer.watch('warm return',async()=>{throw original;}),error=>error===original).then(()=>{settled=true;});
-  await flush();t.mock.timers.tick(2000);await flush();assert.ok(resolutionSignal);assert.equal(settled,false);
-  t.mock.timers.tick(3000);await failure;assert.equal(resolutionSignal.aborted,true);assert.equal(calls,0);assert.deepEqual(commands,[]);await observer.close();
+  await flush();t.mock.timers.tick(1999);await flush();assert.equal(Boolean(resolutionSignal),false);assert.equal(settled,false);
+  t.mock.timers.tick(1);await flush();assert.ok(resolutionSignal);assert.equal(settled,false);
+  if(mode==='optional abort')controller.abort(new Error('parent cancelled'));
+  else{t.mock.timers.tick(2999);await flush();assert.equal(settled,false);t.mock.timers.tick(1);}
+  await failure;assert.equal(resolutionSignal.aborted,true);assert.equal(calls,0);assert.deepEqual(commands,[]);await observer.close();
 });

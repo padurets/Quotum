@@ -13,8 +13,9 @@ function caller(file: string, name: string, bindings: Record<string, unknown>): 
   const source = ts.createSourceFile(file, readFileSync(new URL('../' + file, import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
   const declaration = source.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === name);
   assert.ok(declaration, 'the actual caller must exist');
+  const binding = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'passiveHistoryBinding');
   const context = {...bindings, run: undefined as Caller | undefined};
-  runInNewContext(ts.transpileModule(declaration.getText(source).replace(/^export /, '') + '\nglobalThis.run=' + name + ';', {
+  runInNewContext(ts.transpileModule((binding?.getText(source) ?? '') + '\n' + declaration.getText(source).replace(/^export /, '') + '\nglobalThis.run=' + name + ';', {
     compilerOptions: {target: ts.ScriptTarget.ES2022},
   }).outputText, context);
   assert.ok(context.run);

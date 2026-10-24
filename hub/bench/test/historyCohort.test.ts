@@ -8,9 +8,11 @@ import {historyScroll,stableHistoryReads,trafficReadEvidence} from '../historyTr
 import {cellStart} from '../../server/domain/history';
 
 const source=readFileSync(new URL('../historyTrafficBrowser.ts',import.meta.url),'utf8');
+const file=ts.createSourceFile('historyTrafficBrowser.ts',source,ts.ScriptTarget.Latest,true);
+const binding=file.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='passiveHistoryBinding')!.getText(file);
 const start=source.indexOf('export async function browserCancellationTraffic(');
 const end=source.indexOf('/** An instrumented replay',start);
-const code=ts.transpileModule(source.slice(start,end).replace('export async function','async function')+'\nglobalThis.execute=browserCancellationTraffic;',
+const code=ts.transpileModule(binding+'\n'+source.slice(start,end).replace('export async function','async function')+'\nglobalThis.execute=browserCancellationTraffic;',
   {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 const cell=300_000,before=Date.parse('2026-10-14T12:29:27.773Z'),after=Date.parse('2026-10-14T12:29:33Z');
 const requestFrom=cellStart(before,cell),requestTo=requestFrom+2*cell;
@@ -94,7 +96,7 @@ test('a cutoff crossing cannot mask an independent native movement or cancellati
 
 const coldStart=source.indexOf('export async function browserHistoryTraffic(');
 const coldEnd=source.indexOf('/** Native cancellation/reversal',coldStart);
-const coldCode=ts.transpileModule(source.slice(coldStart,coldEnd).replace('export async function','async function')+'\nglobalThis.execute=browserHistoryTraffic;',
+const coldCode=ts.transpileModule(binding+'\n'+source.slice(coldStart,coldEnd).replace('export async function','async function')+'\nglobalThis.execute=browserHistoryTraffic;',
   {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 
 /** Stand in browser IO while running the complete production traffic cohort. */

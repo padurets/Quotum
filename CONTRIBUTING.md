@@ -84,6 +84,13 @@ Capture and helper cleanup use the existing five-second
 collection and two-second release windows. An unconfirmed detach, helper exit or
 pipe closure fails cleanup. Missing GDB falls back to the existing page debugger;
 attached browsers and successful commands receive no native intervention.
+Ordinary owned history pages retain their original navigation identity passively,
+without extra commands before failure. Missing identity does not gate successful input.
+After an original failure and an unresponsive page probe, the existing two-second
+resolver may bind capture to that document's renderer. Missing optional metadata keeps
+the explicitly unbound capture above; an attempted but incomplete mapping permits no
+native or debugger intervention. Resolution shares the original five-second collection
+window, so insufficient remaining time can still leave capture incomplete.
 The manual CI `native_postmortem_control` qualifies this collector on the requested
 source and built-client hash using a separate runtime UID and matching unwind tables.
 Before the forced command, a completed metadata trace binds the page's primary frame

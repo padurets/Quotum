@@ -211,7 +211,11 @@ export async function prepareHistoryTarget(cdp: Pick<Cdp, 'send' | 'evaluate'>, 
 
 type TrafficProxy = {url: string; transfers: Transfer[]; phase(value: string, latency?: number): void; settled(value: string): Promise<void>};
 
-async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number, poolEvidence?:Pick<Evidence, 'save'>,evidence?:Pick<Evidence,'save'>,receiptScenario?:{latency:number;fraction:number},alignment?:RetirementAlignment) {
+function passiveHistoryBinding(browser:Browser){
+  return browser.owned===true&&!['QUOTUM_BENCH_HISTORY_SCROLL_CONTROL','QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL','QUOTUM_BENCH_DIAGNOSE_NATIVE','QUOTUM_BENCH_REVERSAL_PROBE','QUOTUM_BENCH_DIAGNOSE_IDLE_CPU'].some(key=>process.env[key]);
+}
+
+async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number, poolEvidence?:Pick<Evidence, 'save'>,evidence?:Pick<Evidence,'save'>,receiptScenario?:{latency:number;fraction:number},alignment?:RetirementAlignment,postfailureBinding=false) {
   const tab = await openTab(browser), cdp = tab.cdp, bodies = new HistoryBodies(cdp);
   const checkpoints:unknown[]=[];
   const poolScenario:{length:number;future:number;latency?:number;fraction?:number;cell:number|null;geometry:unknown}={length,future,...receiptScenario,cell:null,geometry:null};
@@ -227,9 +231,10 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
   const poolBinding=poolEvidence?new ScriptBinding(cdp,clientIdentity(),(file,value)=>poolEvidence.save('pool-'+poolName+'-'+file,value)):null;
   let poolCaptured=false;
   let renderer:RendererIdentity|undefined,binding:Promise<RendererIdentity>|undefined;
-  const document=process.env.QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX==='1'?rendererDocument(cdp):undefined;
+  const strictDocument=process.env.QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX==='1';
+  const document=strictDocument||postfailureBinding?rendererDocument(cdp):undefined;
   if(document)browser.owner?.resource(async()=>document.dispose());
-  const lateRenderer=document?{validDocument:()=>document.valid(),resolve:(signal:AbortSignal)=>binding??=rendererIdentity(cdp,browser,signal,document).then(value=>(renderer=value))}:undefined;
+  const lateRenderer=document?{requireBeforeInput:strictDocument,validDocument:()=>document.valid(),resolve:(signal:AbortSignal)=>binding??=rendererIdentity(cdp,browser,signal,document).then(value=>(renderer=value))}:undefined;
   cdp.at(`${name}/seed`);
   const capturePool = async () => {
     if(!poolEvidence||poolCaptured)return;
@@ -308,8 +313,11 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
       const frame=()=>{if(!p.running)return;if(root.dataset.panEnd){const token=root.dataset.panToken;if(p.tokens.at(-1)!==token)p.tokens.push(token);const end=Number(root.dataset.panEnd),origin=Number(root.dataset.panOrigin);if(p.poses.at(-1)?.end!==end)p.poses.push({end,origin});}p.raf=requestAnimationFrame(frame);};p.raf=requestAnimationFrame(frame);
     })()`);
     if(document){
-      document.pin(navigation);assert.ok(document.valid(),`${name}: document identity unavailable`);
-      evidence?.save('traffic-document-'+poolName,{status:'document-ready',frame:1,pid:null,birth:null});
+      document.pin(navigation);
+      if(strictDocument){
+        assert.ok(document.valid(),`${name}: document identity unavailable`);
+        evidence?.save('traffic-document-'+poolName,{status:'document-ready',frame:1,pid:null,birth:null});
+      }
     }else if(process.env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL==='1'){
       renderer=await rendererIdentity(cdp,browser);
       evidence?.save('traffic-renderer-'+poolName,renderer.evidence());
@@ -338,7 +346,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
       const poolTarget=length===DAY&&!future&&[100,400].includes(latency)&&fraction===.5&&take===1||length===30*DAY&&future===DAY||name==='browser/30d/activity/0ms/0.5/take1';
       const suffixPool=process.env.QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX==='1'&&suffix?.cohort==='activity'&&length===30*DAY&&!future&&latency===100&&fraction===.5&&take===1;
       const poolEvidence=(process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL==='1'&&poolTarget||suffixPool)?evidence:undefined;
-      const {cdp, bodies, settled, geometry, cell, seeds, close,capturePool,renderer,lateRenderer,checkpoint,retirementSeed,retirementReturn} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence,evidence,{latency,fraction},alignment);
+      const {cdp, bodies, settled, geometry, cell, seeds, close,capturePool,renderer,lateRenderer,checkpoint,retirementSeed,retirementReturn} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence,evidence,{latency,fraction},alignment,passiveHistoryBinding(browser));
       let observer:Awaited<ReturnType<typeof observeReversal>>|null=null, status='failed';
       let movement:unknown;
       try {
@@ -451,7 +459,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
       const name = `browser/${length / DAY}d/${mode}/take${take}`;
       evidence?.save('traffic-stage', {name,stage:'seed'});
       console.error(`bench: ${name}: opening seed page`);
-      const {cdp, bodies, settled, geometry, cell, seeds, close,renderer,lateRenderer} = await historyPage(browser, proxy, cookie, name, length, DAY,undefined,evidence);
+      const {cdp, bodies, settled, geometry, cell, seeds, close,renderer,lateRenderer} = await historyPage(browser, proxy, cookie, name, length, DAY,undefined,evidence,undefined,undefined,!diagnostic&&!profileBeforeInput&&passiveHistoryBinding(browser));
       let observer:Awaited<ReturnType<typeof observeReversal>>|null=null,status='failed';
       console.error(`bench: ${name}: seed page ready`);
       const phase = `${name}/gesture`, reads = () => bodies.reads.filter(r => r.phase === phase);

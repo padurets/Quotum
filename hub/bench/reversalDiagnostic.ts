@@ -6,7 +6,7 @@ import type {RendererIdentity} from './rendererIdentity.js';
 
 type DocumentMark={atMs:number;frame?:string;loader?:string};
 export type DiagnosticOrigin={startedAt:number;navigation:()=>{requested?:DocumentMark;committed?:DocumentMark;loadAtMs:number|null}};
-type Options = {lateRenderer?:{validDocument():boolean;resolve(signal:AbortSignal):Promise<RendererIdentity>};renderer?:RendererIdentity; mode?: 'canonical' | 'diagnostic'; profileBeforeInput?: boolean; postmortem?:boolean; closeTarget?: () => Promise<void>;signal?:AbortSignal;origin?:DiagnosticOrigin};
+type Options = {lateRenderer?:{requireBeforeInput?:boolean;validDocument():boolean;resolve(signal:AbortSignal):Promise<RendererIdentity>};renderer?:RendererIdentity; mode?: 'canonical' | 'diagnostic'; profileBeforeInput?: boolean; postmortem?:boolean; closeTarget?: () => Promise<void>;signal?:AbortSignal;origin?:DiagnosticOrigin};
 type Process = {type: string; id: number; cpuTime: number};
 type ProcessSample = {status: 'pending' | 'observed' | 'unavailable'; fromMs: number; toMs: number | null; processes?: ProcessIdentity[]; omitted?: number};
 const PAGE_LIVENESS = '({visibility:document.visibilityState,focus:document.hasFocus(),ready:document.readyState})';
@@ -151,11 +151,16 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
         let nativeIntervention=false,renderer=options.renderer;
         if(postmortem&&options.lateRenderer){
           report.nativeBinding=false;
-          if(!options.lateRenderer.validDocument())return;
-          try{renderer=await options.lateRenderer.resolve(pending);}catch{return;}
-          report.rendererAtCapture=renderer.evidence();
-          const pid=renderer.pid,birth=renderer.birth;
-          if(!options.lateRenderer.validDocument()||!renderer.valid()||pid===null||birth===null||renderers.filter(value=>value.pid===pid).length!==1)return;
+          // Missing optional metadata retains the old unbound path. Once mapping
+          // starts, only a complete identity permits either intervention.
+          if(!options.lateRenderer.validDocument()){
+            if(options.lateRenderer.requireBeforeInput!==false)return;
+          }else{
+            try{renderer=await options.lateRenderer.resolve(pending);}catch{return;}
+            report.rendererAtCapture=renderer.evidence();
+            const pid=renderer.pid,birth=renderer.birth;
+            if(!options.lateRenderer.validDocument()||!renderer.valid()||pid===null||birth===null||renderers.filter(value=>value.pid===pid).length!==1)return;
+          }
         }
         if(postmortem&&!diagnostic&&browser.nativePostmortem){
           report.postmortem=true;
@@ -174,7 +179,7 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
           }
         }
         if (diagnostic||postmortem&&!nativeIntervention) {
-          if(renderer&&!renderer.valid()||options.lateRenderer&&!options.lateRenderer.validDocument()){report.nativeBinding=false;return;}
+          if(renderer&&!renderer.valid()||options.lateRenderer&&options.lateRenderer.requireBeforeInput!==false&&!options.lateRenderer.validDocument()){report.nativeBinding=false;return;}
           if(postmortem)report.postmortem=true;
           if (!intervention) await enable(pending);
           await send('Debugger.pause', pending);
@@ -193,7 +198,7 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
     async diagnose(label:string){signal?.throwIfAborted();capture??=collect(label);await capture;signal?.throwIfAborted();},
     async watch<T>(label: string, run: () => Promise<T>) {
       signal?.throwIfAborted();
-      if(options.renderer&&!options.renderer.valid()||options.lateRenderer&&!options.lateRenderer.validDocument())throw new Error('renderer identity invalidated before command');
+      if(options.renderer&&!options.renderer.valid()||options.lateRenderer&&options.lateRenderer.requireBeforeInput!==false&&!options.lateRenderer.validDocument())throw new Error('renderer identity invalidated before command');
       delete report.waiting; delete report.waitingProcesses;
       const passive = new AbortController(), pending = signal ? AbortSignal.any([signal, passive.signal]) : passive.signal;
       let waiting: {scenario: string; command: ReturnType<Cdp['snapshot']>; sample: ProcessSample} | undefined;
