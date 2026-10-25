@@ -249,8 +249,8 @@ export async function runControl(repository,directory){
     const args=[script,String(p.pid),String(e.pid),String(uid),p.birth,e.birth,'100',dev.major,dev.minor,meta.ino,String(f.pid),f.birth];
     trace=owned(spawn('/usr/bin/sudo',['-n','--','/bin/sh','-c','IFS= read -r gate; [ "$gate" = trace ] || exit 2; exec /usr/bin/timeout --foreground --signal=TERM --kill-after=0.2s 240s /usr/bin/bpftrace -v -q -B line "$@"','quotum-owned-tracer',...args],{detached:true,stdio:['pipe','pipe','pipe'],env:{LANG:'C',PATH:'/usr/bin:/bin'}}),'trace');
     await anchor(trace);traceUntil=performance.now()+240000;trace.child.stdin.end('trace\n');
-    try{await poll(()=>{requireValue(!trace.state.bad&&!proto.state.invalid&&!proto.state.omitted&&!trace.state.reaped,'trace-setup');return proto.state.markers.some(r=>r.kind==='QFW_TICK');},traceUntil,'trace-tick-timeout');}
-    catch(error){await deadline(500,()=>trace.closed,cancel.signal).catch(()=>{});throw error;}
+    await poll(()=>trace.state.reaped||proto.state.markers.some(r=>r.kind==='QFW_TICK'),traceUntil,'trace-tick-timeout');
+    requireValue(!trace.state.bad&&!proto.state.invalid&&!proto.state.omitted&&!trace.state.reaped,'trace-setup');
     cancel.signal.throwIfAborted();fixture.child.stdin.write('start\n');
     await poll(()=>{requireValue(!trace.state.bad&&!fixture.state.bad&&!trace.state.reaped&&!fixture.state.reaped,'fixture-capture');return fixtureProof(proto.state,fixtureJSON,f,meta,p.pid,uid);},traceUntil,'fixture-not-qualified');
     requireValue(sameFile(meta,fileIdentity(fs.fstatSync(fd,{bigint:true}))),'fixture-file-changed');report.fixture=fixtureJSON;
