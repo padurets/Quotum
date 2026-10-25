@@ -1,147 +1,37 @@
-import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
-import {existsSync,mkdtempSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
-import {tmpdir} from 'node:os';
-import path from 'node:path';
-import {fileURLToPath,pathToFileURL} from 'node:url';
-
-const repository=fileURLToPath(new URL('../../../',import.meta.url));
-const sha='a'.repeat(40),clientHash='b'.repeat(64),tree='c'.repeat(40);
-const expected={QUOTUM_BENCH_SOURCE_SHA:sha,QUOTUM_BENCH_EXPECTED_CLIENT_SHA256:clientHash};
-const keys=['QUOTUM_C1_REAL_CHROME','QUOTUM_C1_TRIAL','QUOTUM_C1_RECEIPT',...Object.keys(expected)];
-const json=(file:string)=>JSON.parse(readFileSync(file,'utf8'));
-
-async function fixture(){
-  const directory=mkdtempSync(path.join(tmpdir(),'quotum-startup-prefix-'));
-  try{
-    const workflow=readFileSync(path.join(repository,'.github/workflows/ci.yml'),'utf8');
-    const helper=workflow.match(/^          cat > "\$RUNNER_TEMP\/quotum-c1-aba\.mjs" <<'JS'\n([\s\S]*?)^          JS$/m);
-    const sequence=workflow.match(/      - name: Observe the fixed ABA sequence with fresh benchmark preparation\n[\s\S]*?        run: \|\n([\s\S]*?)(?=      - name:)/);
-    assert.ok(helper);assert.ok(sequence);
-    const module=path.join(directory,'actual.mjs'),shell=path.join(directory,'sequence.sh');
-    writeFileSync(module,helper[1].replace(/^          /gm,''));
-    let command=sequence[1].replace(/^          /gm,'');
-    for(const [before,after]of [
-      ['c1_node="$(command -v node)"','c1_node="$C1_TEST_NODE"'],
-      ['c1_worker="$RUNNER_TEMP/quotum-c1-aba.mjs"','c1_worker="$C1_TEST_WORKER"'],
-      ['c1_rollup="$c1_worker"','c1_rollup="$C1_TEST_ROLLUP"'],
-    ]){assert.equal(command.split(before).length,2);command=command.replace(before,after);}
-    writeFileSync(shell,command);
-    return{directory,module,shell,api:await import(pathToFileURL(module).href) as any};
-  }catch(error){rmSync(directory,{recursive:true,force:true});throw error;}
-}
-
-function environment(){
-  const before=Object.fromEntries(keys.map(key=>[key,process.env[key]]));Object.assign(process.env,expected);
-  return()=>{for(const key of keys)if(before[key]===undefined)delete process.env[key];else process.env[key]=before[key];};
-}
-function services(f:any,directory:string,fault='none',client?:any){
-  const order:string[]=[],abort=new AbortController(),report:any={stage:'ready'};let closed=false,stopped=false,launches=0;
-  class Owner{
-    signal=abort.signal;failures:unknown[]=[];
-    async start(run:(signal:AbortSignal)=>Promise<any>){this.signal.throwIfAborted();return run(this.signal);}
-    async close(){if(closed)return;closed=true;abort.abort();order.push('browser-close');report.cleanup={status:'closed',reaped:true,pipesClosed:true};}
-  }
-  const deps={Owner,pins:f.api.sourcePins(repository,()=>({status:'available',sha256:clientHash}),(args:string[])=>args[0]==='status'?(fault==='dirty'?' M file':''):args[1]==='HEAD'?sha:tree),
-    preparePrefix:async()=>{order.push('prefix');if(client)await client.Person.signUp('http://fixture.invalid',{email:'fixture',name:'Fixture',password:'fixture'},{setupCode:'fixture'});
-      if(fault==='cancel')process.emit('SIGHUP');return{evidence:{prepared:true},stop:async()=>{if(stopped)return;assert.equal(closed,true);stopped=true;order.push('prefix-stop');client?.haltRequests();}};},
-    launch:async(shim:string,visible:boolean,signal:AbortSignal)=>{launches++;order.push('launch');assert.equal(shim,path.join(f.directory,'shim'));assert.equal(visible,false);assert.equal(signal,abort.signal);
-      assert.equal(process.env.QUOTUM_C1_REAL_CHROME,path.join(f.directory,'chrome'));assert.equal(process.env.QUOTUM_C1_RECEIPT,path.join(directory,'shim-first.json'));
-      writeFileSync(path.join(directory,'shim-first.json'),JSON.stringify({phase:'exec-ready'}));return{launchReport:()=>report};}};
-  return{deps,order,launches:()=>launches,args:[repository,'A1',path.join(f.directory,'chrome'),path.join(f.directory,'shim'),directory]};
-}
-
-test('the actual worker restores flags and listeners and rejects dirty source or cancellation',async()=>{
-  const f=await fixture(),restore=environment();
-  try{for(const fault of ['none','dirty','cancel']){
-    const directory=path.join(f.directory,fault),h=services(f,directory,fault),before=keys.map(key=>process.env[key]),signals=['SIGINT','SIGTERM','SIGHUP'];
-    const listeners=signals.map(signal=>process.listenerCount(signal)),out=await f.api.workerMain(h.args,h.deps);
-    assert.equal(out.code,fault==='none'?0:2);assert.equal(h.launches(),fault==='none'?1:0);
-    assert.deepEqual(keys.map(key=>process.env[key]),before);assert.deepEqual(signals.map(signal=>process.listenerCount(signal)),listeners);
-    if(fault==='dirty')assert.deepEqual(h.order,[]);else assert.ok(h.order.indexOf('prefix-stop')>h.order.indexOf('browser-close'));
-    assert.equal(json(path.join(directory,'worker-first.json')).code,out.code);
-  }}finally{restore();rmSync(f.directory,{recursive:true,force:true});}
-});
-
-test('actual demo HTTP halt state forbids a second prefix in the same process',async t=>{
-  const f=await fixture(),restore=environment(),client=await import(pathToFileURL(path.join(repository,'hub/demo/client.ts')).href+'?startup-prefix-test');
-  t.mock.method(globalThis,'fetch',async(_uri:any,options:any)=>{options.signal.throwIfAborted();return new Response(JSON.stringify({user:{id:'fixture'},boards:[{id:'fixture',personal:true}]}),{headers:{'content-type':'application/json','set-cookie':'session=fixture'}});});
-  try{
-    const a=services(f,path.join(f.directory,'A1'),'none',client),b=services(f,path.join(f.directory,'B'),'none',client);
-    assert.equal((await f.api.workerMain(a.args,a.deps)).code,0);
-    const out=await f.api.workerMain(b.args,b.deps);assert.equal(out.code,2);assert.equal(b.launches(),0);assert.equal(out.result.canonicalFixturePreparation,false);
-  }finally{restore();rmSync(f.directory,{recursive:true,force:true});}
-});
-
-function standin(f:any,hold:boolean){
-  const file=path.join(f.directory,'standin.mjs');
-  writeFileSync(file,`
-import assert from 'node:assert/strict';import {readFileSync,writeFileSync,writeSync} from 'node:fs';import path from 'node:path';
-import {workerEntry,sourcePins} from ${JSON.stringify(pathToFileURL(f.module).href)};
-import {Person,haltRequests} from ${JSON.stringify(pathToFileURL(path.join(repository,'hub/demo/client.ts')).href)};
-const [repo,trial,chrome,shim,directory]=process.argv.slice(2),abort=new AbortController(),report={stage:trial==='A2'?'spawn':'ready'},order=[];let closed=false,stopped=false;
-globalThis.fetch=async(_uri,options)=>{options.signal.throwIfAborted();return new Response(JSON.stringify({user:{id:'fixture'},boards:[{id:'fixture',personal:true}]}),{headers:{'content-type':'application/json','set-cookie':'session=fixture'}});};
-class Owner{signal=abort.signal;failures=[];async start(run){this.signal.throwIfAborted();return run(this.signal);}async close(){if(closed)return;closed=true;abort.abort();order.push('browser-close');report.cleanup={status:'closed',reaped:true,pipesClosed:true};}}
-await workerEntry([repo,trial,chrome,shim,directory],{Owner,
- pins:sourcePins(repo,()=>({status:'available',sha256:${JSON.stringify(clientHash)}}),args=>args[0]==='status'?'':args[1]==='HEAD'?${JSON.stringify(sha)}:${JSON.stringify(tree)}),
- preparePrefix:async()=>{await Person.signUp('http://fixture.invalid',{email:'fixture',name:'Fixture',password:'fixture'},{setupCode:'fixture'});order.push('prefix');setInterval(()=>{},1000);return{evidence:{prepared:true},stop:async()=>{if(stopped)return;assert.equal(closed,true);stopped=true;order.push('prefix-stop');haltRequests();writeFileSync(path.join(directory,'order.json'),JSON.stringify(order));}};},
- launch:async(value,visible,signal)=>{assert.equal(value,shim);assert.equal(visible,false);assert.equal(signal,abort.signal);order.push('launch');writeFileSync(path.join(directory,'shim-first.json'),JSON.stringify({phase:'exec-ready'}));
- if(${hold}&&trial==='A1'){
-  const pending=new Promise((_resolve,reject)=>{const stop=()=>{writeFileSync(path.join(directory,'launch-aborted.json'),JSON.stringify({pid:process.pid}));reject(signal.reason);};signal.addEventListener('abort',stop,{once:true});if(signal.aborted)stop();});
-  const stat=readFileSync('/proc/self/stat','utf8'),fields=stat.slice(stat.lastIndexOf(')')+2).trim().split(/\\s+/);
-  writeSync(1,JSON.stringify({kind:'held-launch-ready',pid:process.pid,birth:fields[19],group:Number(fields[2])})+'\\n');return await pending;
- }if(trial==='A2'){report.failure='original-deadline';throw Object.assign(new Error('original-startup'),{report});}return{launchReport:()=>report};}});
-`);return file;
-}
-
-function sequence(f:any,hold=false){
-  const child=spawn('/bin/bash',[f.shell],{cwd:path.join(repository,'hub'),detached:true,stdio:['ignore','pipe','pipe'],env:{...process.env,...expected,
-    GITHUB_WORKSPACE:repository,RUNNER_TEMP:f.directory,QUOTUM_C1_REAL_CHROME:'/synthetic/chrome',QUOTUM_BENCH_DIAGNOSTICS_DIR:f.directory,GITHUB_OUTPUT:path.join(f.directory,'output'),
-    C1_TEST_NODE:process.execPath,C1_TEST_WORKER:standin(f,hold),C1_TEST_ROLLUP:f.module}});
-  let closed=false,marker:any,stdout='',stderr='',partial='',yes!:(value:any)=>void,no!:(error:Error)=>void;
-  const ready=new Promise<any>((resolve,reject)=>{yes=resolve;no=reject;});void ready.catch(()=>{});
-  const sameWorker=()=>{try{const stat=readFileSync('/proc/'+marker.pid+'/stat','utf8'),fields=stat.slice(stat.lastIndexOf(')')+2).trim().split(/\s+/);return fields[19]===marker.birth&&Number(fields[2])===child.pid;}catch{return false;}};
-  const stop=()=>{if(child.pid&&(!closed||marker&&sameWorker()))try{process.kill(-child.pid,'SIGKILL');}catch(error){if((error as NodeJS.ErrnoException).code!=='ESRCH')throw error;}};
-  const timer=setTimeout(stop,5000); // Only a failure watchdog; assertions use the explicit launch barrier.
-  const complete=new Promise<{code:number|null;signal:NodeJS.Signals|null;stderr:string}>((resolve,reject)=>{
-    child.once('error',error=>{no(error);reject(error);});
-    child.stdout.on('data',data=>{stdout+=data;partial+=data;if(stdout.length>65536)stop();const lines=partial.split('\n');partial=lines.pop()!;for(const line of lines)try{const value=JSON.parse(line);if(value.kind==='held-launch-ready'){marker=value;yes(value);}}catch{}});
-    child.stderr.on('data',data=>{stderr+=data;if(stderr.length>16384)stop();});
-    child.once('close',(code,signal)=>{closed=true;clearTimeout(timer);if(hold&&!marker)no(Error('Worker exited before launch barrier: '+stderr));resolve({code,signal,stderr});});
-  });void complete.catch(()=>{});
-  return{child,ready,complete,sameWorker,stop:async()=>{stop();await complete.catch(()=>{});}};
-}
-
-test('the actual sequence reaps three fresh workers and retains a clean original startup failure', {skip:process.platform!=='linux'},async()=>{
-  const f=await fixture(),restore=environment(),run=sequence(f);
-  try{
-    const out=await run.complete;assert.equal(out.code,1,out.stderr);assert.equal(out.signal,null);const pids:number[]=[];
-    for(const trial of ['A1','B','A2']){
-      const directory=path.join(f.directory,'probe',trial),result=json(path.join(directory,'result-first.json')),exit=json(path.join(directory,'worker-exit-first.json'));
-      assert.equal(exit.status,'reaped');assert.equal(exit.exit,0);assert.equal(exit.pid,result.workerPid);pids.push(exit.pid);
-      assert.equal(result.clean,true);assert.equal(result.shimReceipt.phase,'exec-ready');assert.deepEqual(json(path.join(directory,'order.json')),['prefix','launch','browser-close','prefix-stop']);
-    }
-    assert.equal(new Set(pids).size,3);const result=json(path.join(f.directory,'probe/result-first.json'));
-    assert.equal(result.historyReady,true);assert.equal(result.canonicalPass,false);assert.equal(result.C1RepairProven,false);
-    assert.equal(result.trials[2].first.status,'failed');assert.equal(result.trials[2].first.report.failure,'original-deadline');
-    assert.equal(json(path.join(f.directory,'probe/A2/startup-first.json')).report.failure,'original-deadline');assert.equal(readFileSync(path.join(f.directory,'output'),'utf8'),'history_ready=true\n');
-    for(const fault of ['source','pid','deadline','shim']){
-      const directory=path.join(f.directory,'probe/B'),file=path.join(directory,'result-first.json'),value=json(file),original=readFileSync(file,'utf8');
-      if(fault==='source')value.sourceAfter={...value.source,sha:'d'.repeat(40)};if(fault==='pid')value.workerPid=result.trials[0].workerPid;if(fault==='deadline')value.originalStartupDeadlineMs=25000;if(fault==='shim')value.shimReceipt.phase='unknown';
-      writeFileSync(file,JSON.stringify(value));rmSync(path.join(f.directory,'probe/result-first.json'));assert.equal(f.api.rollup(path.join(f.directory,'probe')).historyReady,false);writeFileSync(file,original);
-    }
-  }finally{await run.stop();restore();rmSync(f.directory,{recursive:true,force:true});}
-});
-
-test('the actual sequence forwards TERM, joins owned cleanup and starts no next arm', {skip:process.platform!=='linux'},async()=>{
-  const f=await fixture(),run=sequence(f,true);
-  try{
-    const marker=await run.ready;assert.equal(marker.group,run.child.pid);assert.equal(run.sameWorker(),true);assert.equal(run.child.kill('SIGTERM'),true);
-    const out=await run.complete;assert.equal(out.code,130,out.stderr);assert.equal(out.signal,null);assert.equal(run.sameWorker(),false);
-    const directory=path.join(f.directory,'probe/A1'),result=json(path.join(directory,'result-first.json'));
-    assert.equal(result.workerPid,marker.pid);assert.equal(result.cancelled,true);assert.equal(result.clean,false);assert.equal(json(path.join(directory,'launch-aborted.json')).pid,marker.pid);
-    assert.deepEqual(json(path.join(directory,'order.json')),['prefix','launch','browser-close','prefix-stop']);
-    for(const file of ['probe/B','probe/A2','probe/result-first.json','output'])assert.equal(existsSync(path.join(f.directory,file)),false);
-  }finally{await run.stop();rmSync(f.directory,{recursive:true,force:true});}
-});
+import fs from 'node:fs';
+import {PassThrough} from 'node:stream';
+import {once} from 'node:events';
+import {test} from 'node:test';
+const {deviceNumbers,fileIdentity,traceProtocol,fixtureProof,fixtureTermProof,counterCertificate,sameCounterObjects,controllerExitCode,isolatedCI,forwardBenchmark,traceComplete,diagnosticClassifier,runControl}=await import(new URL('../startupWaitControl.mjs',import.meta.url).href);
+const meta={dev:'64768',ino:'123456789123',size:'16777216',mtimeNs:'1730000000000000000',ctimeNs:'1730000000000000001',uid:'1001'};
+const row={pid:1234,birth:'200',parent:1000,group:1234,session:1234,uids:[1001,1001,1001,1001]};
+const sender={pid:1000,birth:'100',uid:1001},bracket={beforeNs:'9000000000',afterNs:'9000000010'};
+const json={status:'fixture-read-complete',pid:1234,birth:'200',group:1234,session:1234,owner:1001,fdmeta:{...meta},mainReads:16,threadReads:16,offsets:16,pageBytes:4096,fdPosition:'0',coldstats:{adviceCalls:1,mincoreCalls:1,pages:4096,residentPages:0}};
+const base=()=>{const p=traceProtocol();p.add('QFW_TICK 3000000000');p.add('QFW_BIND 1 1234 2000000000 1000 1001 3000000010');p.add('QFW_PAIR 1 1234 2000000000 1 253 0 123456789123 0 0 0 4000000000 4000001000');return p;};
+const terms=()=>{const p=base();p.add('QFW_TERM 1 1234 2000000000 9000000005 1000 1000000000 1001 0');p.add('QFW_EXIT 1 1234 2000000000 9000000020');return p;};
+await test('GNU dev_t roundtrip, including high device bits',()=>{for(const [major,minor]of [[0n,0n],[253n,0n],[4095n,1048575n],[0x12345678n,0x23456789n]]){const dev=((major&0xfffn)<<8n)|((major&~0xfffn)<<32n)|(minor&0xffn)|((minor&~0xffn)<<12n);assert.deepEqual(deviceNumbers(dev),{major:String(major),minor:String(minor)});}});
+await test('exact BigInt file metadata keeps decimal precision',()=>{const v={dev:64768n,ino:123456789123456789n,size:16777216n,mtimeNs:1730000000000000001n,ctimeNs:1730000000000000002n,uid:1001n};assert.deepEqual(fileIdentity(v),Object.fromEntries(Object.entries(v).map(([k,v])=>[k,String(v)])));});
+await test('paired own-file wait and fixed fixture JSON qualify',()=>assert.equal(fixtureProof(base().state,json,row,meta,1000,1001),true));
+await test('Python completion without actual kernel pair does not qualify',()=>{const p=base();p.state.markers.pop();assert.equal(fixtureProof(p.state,json,row,meta,1000,1001),false);});
+await test('foreign PID, birth, parent, UID, process group and session refuse',()=>{for(const change of [{pid:99},{birth:'201'},{parent:999},{group:99},{session:99},{uids:[1001,1001,0,1001]}])assert.equal(fixtureProof(base().state,json,{...row,...change},meta,1000,1001),false);});
+await test('pair file identity, bit, range and class are exact',()=>{for(const change of [{inode:'9'},{major:'1'},{minor:'1'},{bit:1},{pageIndex:'4096'},{class:2},{birthNs:'2000000001'},{pid:99}]){const p=base();Object.assign(p.state.markers.at(-1),change);assert.equal(fixtureProof(p.state,json,row,meta,1000,1001),false);}});
+await test('cold/read counts, descriptor and exact schema refuse contamination',()=>{for(const edit of [(v:any)=>v.secret='canary-never-save',(v:any)=>v.fdmeta.path='canary-never-save',(v:any)=>v.coldstats.path='canary-never-save',(v:any)=>v.coldstats.residentPages=1,(v:any)=>v.threadReads=15,(v:any)=>v.fdPosition='4096',(v:any)=>v.fdmeta.ino='123',(v:any)=>v.fdmeta.mtimeNs=Number(v.fdmeta.mtimeNs)]){const v=structuredClone(json);edit(v);assert.equal(fixtureProof(base().state,v,row,meta,1000,1001),false);}});
+await test('actual sender plus shared clock TERM bracket and exit qualify',()=>assert.equal(fixtureTermProof(terms().state,row,bracket,sender),true));
+await test('TERM generation outside bracket, sender, result or birth refuses',()=>{for(const change of [{ns:'8999999999'},{ns:'9000000011'},{senderPid:999},{senderBirthNs:'1010000000'},{senderUid:0},{result:1},{pid:99},{birthNs:'2000000001'}]){const p=terms();Object.assign(p.state.markers.at(-2),change);assert.equal(fixtureTermProof(p.state,row,bracket,sender),false);}});
+await test('missing, repeated or premature exit cannot qualify',()=>{const p=terms();p.state.markers.pop();assert.equal(fixtureTermProof(p.state,row,bracket,sender),false);const q=terms();q.state.markers.push({...q.state.markers.at(-2)});assert.equal(fixtureTermProof(q.state,row,bracket,sender),false);const r=terms();r.state.markers.at(-1).ns='9000000004';assert.equal(fixtureTermProof(r.state,row,bracket,sender),false);});
+await test('fixed maps and censored pending values survive; window is not END',()=>{const p=base();p.add('QFW_WINDOW_CLOSED 25000000000');p.add('@capture_closed: 1');p.add('@max_point[2, 1, 253, 0, 1234, 0, 0]: (100, 2, 50, 150)');p.add('@pending_start[2]: 5');assert.equal(p.state.ended,false);assert.equal(p.state.maps.at(-1).observedUnpairedEntry,true);assert.equal(p.state.maps.at(-1).physicalWaitProof,false);assert.equal('censoredLowerBound'in p.state.maps.at(-1),false);assert.equal(p.state.invalid,0);p.add('QFW_END 25000000001');p.add('@term_sender[1]: (1000, 1000000000, 1001, 0)');assert.equal(p.state.ended,true);assert.equal(p.state.invalid,0);});
+await test('raw paths, pointers, diagnostics, unknown names and malformed numbers are discarded',()=>{for(const line of ['/home/private-canary','0xffffffff81234567','lost 5 events','@private_map[1]: 2','@count[0x123]: 2','QFW_BIND 1 0 1 2 3 4','QFW_BIND 1 1 0 2 3 4','QFW_TICK 18446744073709551616','QFW_TERM 1 1234 2000000000 9000000005','QFW_PAIR 1 1234 2000000000 1 253 0 1 0 64 0 9 10']){const p=traceProtocol();p.add(line);assert.equal(p.state.invalid,1);assert.equal(JSON.stringify(p.state).includes(line),false);}});
+await test('markers use logical time after END; row saturation is bounded',()=>{const p=traceProtocol();p.add('QFW_END 3');p.add('QFW_TICK 2');assert.equal(p.state.invalid,0);assert.equal(traceComplete(p.state),true);p.add('QFW_TICK 4');assert.equal(traceComplete(p.state),false);const q=traceProtocol();for(let i=1;i<=1600;i++)q.add('QFW_TICK '+i);assert.equal(q.state.markers.length,1536);assert.equal(q.state.omitted,64);assert.equal(fixtureProof(q.state,json,row,meta,1000,1001),false);});
+const own=[{pid:4000,birth:'1000',group:3900,session:3900,uid:0}],snapshot={status:'observed',reason:'complete',statsEnabled:0,holder:Object.fromEntries(Object.entries(own[0]).map(([k,v])=>[k,String(v)])),links:[{fd:3,linkId:'41',progId:'51',kprobeCount:1,missed:'0'},{fd:4,linkId:'42',progId:'52',kprobeCount:1,missed:'0'}],programs:[{fd:5,progId:'51',progType:2,runCount:'0',recursionMisses:'0'},{fd:6,progId:'52',progType:2,runCount:'0',recursionMisses:'0'}],elapsedNs:'100'};
+await test('numeric miss counters certify with stats disabled; counts informational',()=>{const a=counterCertificate(snapshot,own);assert.equal(a?.status,'observed');const b=structuredClone(snapshot);b.statsEnabled=1;b.programs[0].runCount='11';const c=counterCertificate(b,own);assert.equal(sameCounterObjects(a,c),true);assert.equal(sameCounterObjects(c,a),true);});
+await test('missing, nonzero, extra or wrong counters and ownership refuse',()=>{for(const edit of [(v:any)=>delete v.programs[0].recursionMisses,(v:any)=>v.programs[0].recursionMisses='1',(v:any)=>v.links[0].missed='1',(v:any)=>v.links[0].kprobeCount=2,(v:any)=>v.programs[0].progType=1,(v:any)=>v.holder.birth='1001',(v:any)=>v.holder.uid='1001',(v:any)=>v.links[1].linkId='41',(v:any)=>v.programs[0].secret='canary-never-save',(v:any)=>v.statsEnabled=2,(v:any)=>v.status='unknown']){const v=structuredClone(snapshot);edit(v);assert.equal(counterCertificate(v,own),null);}});
+await test('post-window requires identical kernel objects, holder and fd bookends',()=>{const a=counterCertificate(snapshot,own);for(const edit of [(v:any)=>v.holder.birth='1001',(v:any)=>v.links[0].linkId=99,(v:any)=>v.links[0].progId=99,(v:any)=>v.programs[0].progId=99,(v:any)=>v.programs[0].fd=99]){const b=structuredClone(a);edit(b);assert.equal(sameCounterObjects(a,b),false);}});
+await test('actual CLI exit selection propagates original nonzero/signal and unknown',()=>{for(const[status,exit,signal,wanted]of [['observed',0,null,0],['observed',1,null,1],['observed',7,null,7],['observed',null,'SIGTERM',1],['unknown',0,null,2],['unknown',1,null,2]])assert.equal(controllerExitCode({status,benchmark:{exit,signal}}),wanted);});
+await test('isolated CI admission requires exact workspace and numeric event identity',()=>{const good={CI:'true',GITHUB_ACTIONS:'true',GITHUB_WORKSPACE:'/isolated/repo',GITHUB_RUN_ID:'1234',GITHUB_RUN_ATTEMPT:'1'};assert.equal(isolatedCI(good,'/isolated/repo'),true);for(const edit of [(v:any)=>delete v.CI,(v:any)=>v.CI='1',(v:any)=>delete v.GITHUB_ACTIONS,(v:any)=>v.GITHUB_WORKSPACE='/other/repo',(v:any)=>v.GITHUB_WORKSPACE='repo',(v:any)=>delete v.GITHUB_RUN_ID,(v:any)=>v.GITHUB_RUN_ID='',(v:any)=>v.GITHUB_RUN_ATTEMPT='not-number']){const v={...good};edit(v);assert.equal(isolatedCI(v,'/isolated/repo'),false);}});
+await test('actual runControl refuses local launch before mkdir/proc/helper work',async()=>{const before={CI:process.env.CI,GITHUB_ACTIONS:process.env.GITHUB_ACTIONS},mkdir=fs.mkdirSync;let calls=0;process.env.CI='false';process.env.GITHUB_ACTIONS='false';fs.mkdirSync=()=>{calls++;throw Error('must-not-run');};try{await assert.rejects(runControl('/isolated/repo','/isolated/new-out'),/isolated-ci/);assert.equal(calls,0);}finally{fs.mkdirSync=mkdir;for(const[k,v]of Object.entries(before))if(v===undefined)delete process.env[k];else process.env[k]=v;}});
+await test('canonical stdout/stderr forwarding is exact and does not cap/end destination',async()=>{const child={stdout:new PassThrough(),stderr:new PassThrough()},output={stdout:new PassThrough(),stderr:new PassThrough()},out:Buffer[]=[],err:Buffer[]=[];output.stdout.on('data',(v:Buffer)=>out.push(v));output.stderr.on('data',(v:Buffer)=>err.push(v));forwardBenchmark(child,output);const a=Buffer.alloc(70000,65),b=Buffer.from('original first failure\n');const ended=Promise.all([once(child.stdout,'end'),once(child.stderr,'end')]);child.stdout.end(a);child.stderr.end(b);await ended;assert.deepEqual(Buffer.concat(out),a);assert.deepEqual(Buffer.concat(err),b);assert.equal(output.stdout.writableEnded,false);assert.equal(output.stderr.writableEnded,false);output.stdout.destroy();output.stderr.destroy();});
+await test('flat and one balanced tuple key serialize identically; nesting and overflow refuse',()=>{const a=traceProtocol(),b=traceProtocol();a.add('@count[1, 1, 253, 0, 99, 0, 0]: 2');b.add('@count[(1, 1, 253, 0, 99, 0, 0)]: 2');assert.deepEqual(a.state,b.state);for(const line of ['@count[((1, 2))]: 2','@count[(1, 2]: 2','@count[1, 2)]: 2','@count[(1, 2), 3]: 2','@count[(1,2,3,4,5,6,7,8)]: 2','@count[1]: (1,2,3,4,5,6,7,8)']){const p=traceProtocol();p.add(line);assert.equal(p.state.invalid,1);}});
+await test('after reap logical END permits late earlier markers; duplicate/missing/future END fail',()=>{const p=base();p.add('QFW_END 9999999999');p.add('QFW_TERM 1 1234 2000000000 9000000005 1000 1000000000 1001 0');assert.equal(traceComplete(p.state),true);p.add('QFW_PAIR 1 1234 2000000000 1 253 0 123456789123 0 0 0 9000000006 10000000000');assert.equal(traceComplete(p.state),false);const q=traceProtocol();q.add('QFW_END 4');q.add('QFW_END 5');assert.equal(traceComplete(q.state),false);assert.equal(traceComplete(base().state),false);});
+await test('stderr classifier retains only safe categories/known bounded coordinates',()=>{const d=diagnosticClassifier();d.add(Buffer.from('/private/path/startupWaitOwner.bt:12:3-4: ERROR: syntax error; permission denied; BTF unknown struct; failed to attach; verifier invalid mem access; cannot allocate; lost 2 events; secret-canary 0xffffffff81234567\n'));d.add(Buffer.from('stdin:1001:4: syntax error\n/private/startupWaitCounters.py:2:1001: other\n'));const result=d.finish();assert.deepEqual(new Set(result.categories),new Set(['syntax','permission','BTF','layout','attach','verifier','resource','lost-events']));assert.deepEqual(result.locations,[{source:'bpf-script',line:12,column:3}]);assert.equal(result.discardedBytes,result.bytes);assert.equal(JSON.stringify(result).includes('secret-canary'),false);assert.equal(JSON.stringify(result).includes('/private'),false);assert.equal(JSON.stringify(result).includes('0xffffffff'),false);const saved=JSON.stringify(result);d.add(Buffer.from('EPERM'));assert.equal(JSON.stringify(d.finish()),saved);});
+await test('stderr classifier cap and chunk boundaries preserve UNKNOWN/other without raw tail',()=>{const d=diagnosticClassifier();d.add(Buffer.from('permission den'));d.add(Buffer.from('ied\nstdin:2:3: ERROR\n'));assert.deepEqual(d.finish().categories,['permission']);const q=diagnosticClassifier();q.add(Buffer.from('x'.repeat(16384)));q.add(Buffer.from('BTF permission denied'));const v=q.finish();assert.deepEqual(v.categories,['other']);assert.equal(v.scannedBytes,16384);assert.equal(v.limited,true);assert.equal(v.unscannedBytes,21);assert.equal(JSON.stringify(v).includes('xxxx'),false);});

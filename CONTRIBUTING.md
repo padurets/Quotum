@@ -776,19 +776,22 @@ seconds for its captured work-prefix boundary before the cached return. The cont
 requires committed prefix retirement and zero additional reads; a missing eligible
 boundary or unconfirmed retirement is inconclusive.
 
-The manual `startup_io_control` input observes a fixed A1/B/A2 startup sequence
-on one runner before running the unchanged full history control once, within the same
-20-minute job limit. Each arm prepares the current benchmark demo, SQLite history and
-event reader in a fresh Node process, then owns a fresh browser profile. Browser cleanup
-precedes backend cleanup; the worker must exit and be reaped before the next arm.
-Its shim advises `DONTNEED` only on the installed Chrome ELF through a read-only
-descriptor; B additionally reads it before exec. Advice, read and exec share the original
-twenty-second startup window. The advice does not guarantee eviction. No privileged
-or global cache reset is used. Source and file-stat pins bracket the probe; image
-content hashes are read only after its outcomes. The current preparation does not
-reproduce an earlier run's clock, cache or host state, and the diagnostic does not
-replace the required benchmark jobs. Missing receipts or unconfirmed cleanup remain
-inconclusive. Select it without any other diagnostic mode.
+The manual `startup_io_control` input observes the file backing a Linux browser's
+kernel page wait on an isolated GitHub runner. A fixed owned-file batch must first
+produce a matching probe observation, identity and SIGTERM generation before the
+unchanged full history benchmark starts. Missing BTF, an unavailable probe or an
+unconfirmed fixture stops this diagnostic; no retry substitutes for qualification.
+The observer admits only the known fixture and the benchmark's detached browser main
+thread, checking parent, birth and UID. It keeps numeric device/inode/page identifiers
+and wait bits, never kernel addresses, paths or stack data. Entry snapshots precede
+reference release. A 21-second observation window does not delay browser termination;
+the original twenty-second launch and twenty-minute job limits remain unchanged.
+Exact single-function multi-probe links and program counters are checked before the
+benchmark and after the window. Missing or nonzero kernel miss counters invalidate
+duration qualification. Unpaired entries do not prove a physical wait duration;
+post-readiness observations are not automatically startup cost. The original benchmark
+verdict and console output survive collection and cleanup, and this optional job
+cannot satisfy the required benchmark gate. Select it without other diagnostic modes.
 
 The manual `compositor_guard_control` input compares the pending-tree compositor
 guard in pinned Google Chrome Beta 157.0.8103.15. Three independent runners execute
