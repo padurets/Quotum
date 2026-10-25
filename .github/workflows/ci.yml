@@ -53,7 +53,7 @@ on:
         type: boolean
         default: false
       history_scroll_control:
-        description: Observe the original full history matrix with postfailure diagnostics
+        description: Observe six fresh Chrome instances through the original first native cohort
         required: false
         type: boolean
         default: false
@@ -250,11 +250,17 @@ jobs:
           chmod 700 "$control_dir/chrome"
           sha256sum "$vendor" "$beta_image" "$control_dir/chrome" > "$control_dir/pins-first.txt"
           cat "$control_dir/pins-first.txt"
-      - run: QUOTUM_CHROME="${QUOTUM_C3_CHROME:-$(command -v google-chrome)}" npm run bench -- --ci --scope history
+      - run: |
+          export QUOTUM_CHROME="${QUOTUM_C3_CHROME:-$(command -v google-chrome)}"
+          if [[ "$FRESH_HISTORY" == 1 ]]; then
+            node --import tsx bench/historyFreshControl.mjs
+          else
+            npm run bench -- --ci --scope history
+          fi
         env:
+          FRESH_HISTORY: ${{ inputs.history_scroll_control && '1' || '' }}
           QUOTUM_C3_CHROME: ${{ inputs.compositor_guard_control && format('{0}/quotum-c3-guard-{1}/chrome', runner.temp, matrix.arm) || '' }}
           QUOTUM_BENCH_HISTORY_SCROLL_CONTROL: ${{ (inputs.history_scroll_control || inputs.compositor_guard_control) && '1' || '' }}
-          QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX: ${{ inputs.history_scroll_control && !inputs.compositor_guard_control && '1' || '' }}
           QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL: ${{ inputs.history_pool_control && '1' || '' }}
           QUOTUM_BENCH_SOURCE_SHA: ${{ (inputs.history_scroll_control || inputs.compositor_guard_control || inputs.history_pool_control) && inputs.diagnostic_ref || '' }}
           QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ (inputs.history_scroll_control || inputs.compositor_guard_control || inputs.history_pool_control) && inputs.expected_client_sha256 || '' }}

@@ -95,7 +95,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     safeEvidence,statSync:()=>({size:env.TEST_SUFFIX_BIG_BASELINE?1024*1024+1:Buffer.byteLength(JSON.stringify(safeEvidence(saved.get('result'))))}),
     readFileSync:()=>env.TEST_SUFFIX_BAD_BASELINE?'missing':JSON.stringify(safeEvidence(saved.get('result'))),
     mkdirSync:()=>{},writeFileSync:(file:string,body:string)=>diagnosticFiles.set(path.basename(file,'.json'),JSON.parse(body)),
-    sourceIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL||env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL?{sourceHead:env.QUOTUM_BENCH_SOURCE_SHA??null,checkoutSha:'1'.repeat(40)}:{checkoutSha:'fixture'},
+    sourceIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL||env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL||env.QUOTUM_BENCH_HISTORY_FIRST_NATIVE?{sourceHead:env.QUOTUM_BENCH_SOURCE_SHA??null,checkoutSha:'1'.repeat(40)}:{checkoutSha:'fixture'},
     execFileSync:()=>env.TEST_CONTROL_DIRTY??'',
     USAGE:'fixture usage',IDLE:{ci:120,full:300},SHOWN_MS:30_000,MEASURED:'fixture',HISTORY_BYTES_PER_MEASUREMENT,
     SETS:[set],fixtureTiming,panningSet:(value:unknown)=>value,people:()=>[{id:'ana'}],freePort:async()=>{mark('freePort');return 1234;},
@@ -114,7 +114,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
       return{reports:[],invalidated:[],problems:fault==='suffix-returned-problems'?['returned-suffix-budget']:[]};
     },
     diagnoseReversal:async()=>{mark('reversal-replay');throw Error('secondary-replay-red');},
-    historyTraffic:async(...args:unknown[])=>{mark('history');if(args[6])mark('scroll-control');if(fault==='throw')throw new Stop('history-original');if(fault==='reversal-throw')throw Error('browser/1d/reversal original-first');
+    historyTraffic:async(...args:unknown[])=>{mark('history');if(args[6])mark('scroll-control');if(args[7])mark('first-native');if(fault==='throw')throw new Stop('history-original');if(fault==='reversal-throw')throw Error('browser/1d/reversal original-first');
       if(fault==='cancel'){listeners.get('SIGTERM')!();await exited;}
       return{reports:[{name:'history-marker'}],problems:red('red')?['history-red']:[]};},
     probeScript:()=>'',sleep:async(ms:number)=>{waits.push(ms);now+=Math.max(0,ms);},say:(value:string)=>{logs.push(value);},
@@ -133,7 +133,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     moneyPhase:async()=>{mark('money');return{problems:problems('money')};},
     fixedActivity:async()=>{mark('fixed-activity');return{reports:[],problems:problems('fixed-activity')};},
     measurementDetails:async(actualBrowser:unknown,actualOwner:unknown)=>{assert.equal(actualBrowser,browser);assert.equal(actualOwner,person);mark('measurement-details');if(fault==='measurement-details-throw')throw new Error('measurement-details-original');return Array.from({length:16},(_,index)=>({index}));},
-    clientIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL||env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL?{status:'available',sha256:'2'.repeat(64)}:{status:'unavailable'},
+    clientIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL||env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL||env.QUOTUM_BENCH_HISTORY_FIRST_NATIVE?{status:'available',sha256:'2'.repeat(64)}:{status:'unavailable'},
   };
   runInNewContext(code,context);
   const selected=(context as unknown as {selected:{main():Promise<void>;parseArgs(args:string[]):unknown}}).selected;
@@ -410,7 +410,7 @@ test('manual pool diagnostics select one pinned history job without changing ord
   const verify=(extra:object)=>runInNewContext(guard,{process:{env:{CONFLICTING_MODE:String(Boolean(evaluate(expression,{...inputs,...extra})))}}});
   assert.doesNotThrow(()=>verify({}));
   for(const key of ['trace_only','original_timing','native_trace','native_profile','caption_control','native_postmortem_control','history_scroll_control','compositor_guard_control','startup_io_control'])assert.throws(()=>verify({[key]:true}),/Choose only/);
-  const launch=history.split('      - run: QUOTUM_CHROME=')[1].split('\n      - name:')[0];
+  const launch=history.split('          export QUOTUM_CHROME=')[1].split('\n      - name:')[0];
   for(const field of ['QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL','QUOTUM_BENCH_SOURCE_SHA','QUOTUM_BENCH_EXPECTED_CLIENT_SHA256']){
     const value=launch.match(new RegExp(field+': \\$\\{\\{ (.+) \\}\\}'))![1];
     assert.equal(evaluate(value,inputs),field==='QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL'?'1':field==='QUOTUM_BENCH_SOURCE_SHA'?inputs.diagnostic_ref:inputs.expected_client_sha256);
@@ -535,15 +535,38 @@ test('the suffix requires its exact internal opt-in and does not alter legacy or
     assert.match(String(out.error),/history suffix/);assert.ok(!out.calls.includes('prepare'));
   }
 });
-test('the internal suffix environment exists only on the direct history control route',()=>{
+test('the existing history control selects fresh prefixes while required history keeps its complete body',()=>{
   const workflow=readFileSync(new URL('../../../.github/workflows/ci.yml',import.meta.url),'utf8');
   const job=(name:string)=>workflow.split('  '+name+':\n')[1].split(/\n  [\w-]+:/)[0];
-  const expression=job('bench-history').match(/QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX: \$\{\{ (.+) \}\}/)![1];
+  const history=job('bench-history');
+  const expression=history.match(/FRESH_HISTORY: \$\{\{ (.+) \}\}/)![1];
   for(const history_scroll_control of [false,true])for(const compositor_guard_control of [false,true]){
-    assert.equal(runInNewContext(expression,{inputs:{history_scroll_control,compositor_guard_control}}),history_scroll_control&&!compositor_guard_control?'1':'');
+    assert.equal(runInNewContext(expression,{inputs:{history_scroll_control,compositor_guard_control}}),history_scroll_control?'1':'');
   }
-  assert.equal(workflow.match(/QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:/g)?.length,1);
-  assert.ok(!job('startup-io-control').includes('QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX'));
+  assert.ok(history.includes('if [[ "$FRESH_HISTORY" == 1 ]]'));
+  assert.ok(history.includes('node --import tsx bench/historyFreshControl.mjs'));
+  assert.ok(history.includes('npm run bench -- --ci --scope history'));
+  assert.ok(!workflow.includes('QUOTUM_BENCH_HISTORY_FIRST_NATIVE:'));
+  assert.ok(!workflow.includes('QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:'));
+});
+
+test('first native prefixes are pinned partial diagnostics and never alter ordinary history routing',async()=>{
+  const env={QUOTUM_BENCH_HISTORY_FIRST_NATIVE:'1',QUOTUM_BENCH_SOURCE_SHA:'1'.repeat(40),QUOTUM_BENCH_EXPECTED_CLIENT_SHA256:'2'.repeat(64),QUOTUM_BENCH_DIAGNOSTICS_DIR:'/owned/diagnostics'};
+  const ok=await run(['--scope','history'],undefined,env);
+  assert.equal(ok.error,undefined);assert.deepEqual(ok.exits,[0]);assert.deepEqual(ok.statuses,['diagnostic']);
+  assert.ok(ok.calls.includes('first-native'));assert.ok(!ok.calls.includes('suffix-proxy'));assert.ok(!ok.calls.includes('openTab'));
+  const result=ok.saved.get('result') as {mode:string;kind:string;canonicalPass:boolean};
+  assert.equal(result.mode,'diagnostic');assert.equal(result.kind,'history-first-native-prefix');assert.equal(result.canonicalPass,false);
+  const ordinary=await run(['--scope','history']);assert.ok(!ordinary.calls.includes('first-native'));assert.deepEqual(ordinary.statuses,['passed']);
+  for(const fault of ['red','throw','browser-close','demo-stop','cancel','reversal-throw'] as const){
+    const bad=await run(['--scope','history'],fault,env);assert.notEqual(bad.exits[0],0);assert.ok(!bad.calls.includes('reversal-replay'));
+  }
+  for(const patch of [{QUOTUM_BENCH_HISTORY_FIRST_NATIVE:'2'},{QUOTUM_BENCH_HISTORY_SCROLL_CONTROL:'1'},{QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:'1'},{QUOTUM_BENCH_DIAGNOSTICS_DIR:''},{QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'1'},{QUOTUM_C3_CHROME:'beta'},{QUOTUM_BENCH_EXPECTED_CLIENT_SHA256:'3'.repeat(64)}] as Record<string,string>[]){
+    const bad=await run(['--scope','history'],undefined,{...env,...patch});assert.ok(bad.error);assert.ok(!bad.calls.includes('prepare'));
+  }
+  for(const args of [[],['--scope','dashboard'],['--scope','history','--cdp','http://fixture']]){
+    const bad=await run(args,undefined,env);assert.ok(bad.error);assert.ok(!bad.calls.includes('prepare'));
+  }
 });
 
 for(const direct of [false,true])test('actual main preserves reversal failure and direct-only first-failure cleanup: '+direct,async()=>{

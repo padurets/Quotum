@@ -94,6 +94,12 @@ normal warmup, chart-grid alignment and budgets.
 Manual CI without diagnostic inputs runs the same ordinary checks. A diagnostic
 mode still requires an immutable source SHA and the expected compiled-client hash;
 missing identity cannot turn a diagnostic request into a successful ordinary run.
+The optional `history_scroll_control` instead runs six independent Chrome processes
+and profiles. Each retains the original 24 model cohorts and six model cancellation
+cohorts, then the complete first native history cohort, including its cached return
+and repeat. It keeps ordinary passive renderer binding and stops at the first failure
+or unconfirmed cleanup. These partial diagnostic results never satisfy `bench`.
+The job still has twenty minutes; fresh processes do not imply a cold OS page cache.
 Chrome readiness has one twenty-second window starting immediately before the launcher
 is spawned, including its work and endpoint validation.
 DevTools commands keep their thirty-second response deadline. An explicit renderer
