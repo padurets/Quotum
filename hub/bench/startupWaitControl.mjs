@@ -48,24 +48,33 @@ export function diagnosticClassifier({toolMessages=false}={}){
     tail='';toolText='';}return sealed;}};
 }
 
-/** bpftrace 0.20 log.cpp prints this one source-bound three-line warning. */
+/** Bind the sole accepted warning to the pinned script and its probe line. */
 export function traceExpectedWarning(file,source){
   const probe='kprobe:folio_wait_bit_common',lines=source.split('\n'),at=lines.indexOf(probe);
-  if(at<0||lines.lastIndexOf(probe)!==at||typeof file!=='string'||file.includes('\n'))throw new TypeError('warning-source');
-  return file+':'+(at+1)+':1-'+(probe.length+1)+': WARNING: folio_wait_bit_common is not traceable (either non-existing, inlined, or marked as "notrace"); attaching to it will likely fail\n'+probe+'\n'+'~'.repeat(probe.length)+'\n';
+  if(at<0||lines.lastIndexOf(probe)!==at||typeof file!=='string'||!file.length||file.length>2048||file.includes('\n'))throw new TypeError('warning-source');
+  return{file,line:at+1,maxLine:lines.length,message:'folio_wait_bit_common is not traceable (either non-existing, inlined, or marked as "notrace"); attaching to it will likely fail'};
 }
 
-/** Unknown bytes fail closed; only counts survive, never raw compiler output. */
+/** Only the known warning and a valid source range are accepted; other text fails. */
 export function traceWarningFilter(expected){
-  if(typeof expected!=='string'||!expected.length||Buffer.byteLength(expected)>4096)throw new TypeError('warning-shape');
-  const allowed=Buffer.from(expected);let bytes=0,matched=0,unrecognized=false,limitExceeded=false,sealed;
+  if(!expected||typeof expected!=='object'||typeof expected.file!=='string'||typeof expected.message!=='string'||!Number.isInteger(expected.line)||!Number.isInteger(expected.maxLine)||expected.line<=0||expected.maxLine<expected.line||expected.maxLine>1000)throw new TypeError('warning-shape');
+  const prefix=expected.file+':',suffix=': WARNING: '+expected.message+'\n';let bytes=0,text='',complete=false,unrecognized=false,limitExceeded=false,sealed;
   return{add(chunk){
     if(sealed)return !sealed.unrecognized;
     bytes+=chunk.length;if(bytes>16384){limitExceeded=true;unrecognized=true;}
-    if(!unrecognized){if(matched+chunk.length>allowed.length||!allowed.subarray(matched,matched+chunk.length).equals(chunk))unrecognized=true;else matched+=chunk.length;}
+    if(!unrecognized){
+      text+=chunk.toString('utf8');
+      if(text.length>4096||!prefix.startsWith(text)&&!text.startsWith(prefix))unrecognized=true;
+      else if(text.includes('\n')){
+        const range=text.startsWith(prefix)&&text.endsWith(suffix)&&text.indexOf('\n')===text.length-1?/^([1-9]\d{0,3})-([1-9]\d{0,3})$/.exec(text.slice(prefix.length,-suffix.length)):null;
+        complete=!!range&&Number(range[1])===expected.line&&Number(range[2])>expected.line&&Number(range[2])<=expected.maxLine;
+        if(!complete)unrecognized=true;
+      }
+      if(unrecognized)text='';
+    }
     return !unrecognized;
-  },get qualified(){return !unrecognized&&(matched===0||matched===allowed.length);},finish(){
-    if(!sealed)sealed={allowedWarnings:!unrecognized&&matched===allowed.length?1:0,unrecognized:unrecognized||matched>0&&matched!==allowed.length,bytes,limitExceeded};
+  },get qualified(){return !unrecognized&&(bytes===0||complete);},finish(){
+    if(!sealed){sealed={allowedWarnings:!unrecognized&&complete?1:0,unrecognized:unrecognized||bytes>0&&!complete,bytes,limitExceeded};text='';}
     return{...sealed};
   }};
 }
