@@ -1,5 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
 import {config} from '../config.js';
 import type {Origin} from '../domain/ingest.js';
 import {agentTime, workTime, type Stretch} from '../domain/work.js';
@@ -44,6 +45,47 @@ const session = (device: string, {sessionId = null, source = 'codex:1', working 
 const seconds = (stretches: Stretch[]) => stretches.map(s => [s.project, s.folder, (s.from - start) / second, (s.to - start) / second]);
 const all = (store: Store) => store.agentWork(0, Number.MAX_SAFE_INTEGER);
 const count = (store: Store, table: string) => (store.db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as {n: number}).n;
+
+test('working sessions read each owner once and observe changes on the next call', t => {
+  const {store, live, ann, bob, laptop, server} = setup();
+  t.after(() => store.close());
+  const directory = new Directory(store.db);
+  const desktop = directory.saveDevice({userId: ann, machine: {id: 'desktop-0123456789', name: 'Desktop', os: 'linux', arch: 'x86_64'}, agent: 'fixture', tokenId: null}, start).id;
+  const source = store.source('codex', 'working-target', start);
+  for (const user of [ann, bob]) store.hold(source, user, start);
+  for (const [device, user] of [[laptop, ann], [desktop, ann], [server, bob]]) {
+    live.report(device, user, [session(device, {source: 'claude:1'})], start);
+  }
+  const owners: string[][] = [], batch = store.links.batch.bind(store.links);
+  t.mock.method(store.links, 'batch', (...args: Parameters<typeof batch>) => {
+    owners.push([...args[0]]);
+    return batch(...args);
+  });
+  assert.equal(live.working(source, start), false);
+  assert.deepEqual(owners, [[ann], [bob]], 'devices of one owner share a single rule read');
+  const link = store.links.mutate(ann, 'create', null, {
+    expectedRevision: store.links.revision(ann), requestId: randomUUID(),
+    clientId: 'claude', deviceId: null, route: null, sourceId: source, from: start + 10, to: start + 20,
+  }, start).body.links[0];
+  assert.equal(live.working(source, start + 9), false);
+  assert.equal(live.working(source, start + 10), true, 'a new call reads a newly added link at its inclusive start');
+  assert.equal(live.working(source, start + 20), false, 'the link ends exclusively');
+  for (const device of [laptop, desktop]) live.report(device, ann, [session(device, {source: 'claude:1', working: false})], start);
+  assert.equal(live.working(source, start + 10), false, 'another owner never uses Ann’s mapping');
+  live.report(laptop, ann, [session(laptop, {source: 'claude:1'})], start);
+  assert.equal(live.working(source, start + 10), true);
+  store.release(source, ann);
+  assert.equal(live.working(source, start + 10), false, 'an unheld source cannot report work');
+  store.hold(source, ann, start);
+  assert.equal(live.working(source, start + 10), true, 'restored holding is visible immediately');
+  store.links.mutate(ann, 'delete', link.id, {expectedRevision: store.links.revision(ann), requestId: randomUUID()}, start);
+  assert.equal(live.working(source, start + 10), false, 'a deleted link is not retained between calls');
+  live.report(server, bob, [session(server, {source})], start);
+  assert.equal(live.working(source, start + CREDIT_MS), true);
+  owners.length = 0;
+  assert.equal(live.working(source, start + CREDIT_MS + 1), false);
+  assert.deepEqual(owners, [], 'expired lists require no rule snapshot');
+});
 
 test('reports and quiet-machine sweeps tell history of exactly the credited work, without readers', () => {
   const {store, live, ann, laptop} = setup();

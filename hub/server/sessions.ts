@@ -284,9 +284,15 @@ export class Sessions {
 
   /** Whether an agent works on a subscription on any machine, by lists that still count as true. */
   working(source: string, now: number): boolean {
+    const contexts = new Map<string, ReturnType<Store['links']['batch']>>();
     for (const [device, machine] of this.machines) {
       if (now - machine.at > CREDIT_MS || !this.store.holds(machine.user, source)) continue;
-      const resolved = this.store.resolveSessions(machine.user, device, keysOf(machine), now);
+      let context = contexts.get(machine.user);
+      if (!context) {
+        context = this.store.links.batch([machine.user]);
+        contexts.set(machine.user, context);
+      }
+      const resolved = this.store.resolveSessions(machine.user, device, keysOf(machine), now, context);
       if (machine.sessions.some((s, i) => s.working && resolved[i].source === source)) return true;
     }
     return false;
