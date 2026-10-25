@@ -662,12 +662,10 @@ mod tests {
             privacy,
         })
         .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while worker.snapshot().is_none() {
+        until(|| {
             assert!(!worker.failed());
-            assert!(Instant::now() < deadline);
-            thread::sleep(Duration::from_millis(5));
-        }
+            worker.snapshot().is_some()
+        });
         stop.request(crate::stop::How::Exit);
         let (tx, rx) = mpsc::sync_channel(1);
         assert!(worker.control(Control::Accounts(BTreeMap::new())));
