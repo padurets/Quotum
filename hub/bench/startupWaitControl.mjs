@@ -97,6 +97,18 @@ export function traceComplete(state){
   return !state.invalid&&!state.omitted&&!state.pendingStack&&ends.length===1&&[...state.markers,...state.waits].every(r=>BigInt(r.ns)<=BigInt(ends[0].ns))&&new Set(state.waits.map(r=>r.cohort)).size===state.waits.length&&state.waits.every(w=>{const b=state.markers.filter(r=>r.kind==='QFW_BIND'&&r.cohort===w.cohort);return b.length===1&&b[0].pid===w.pid&&b[0].birthNs===w.birthNs&&BigInt(w.outNs)>=BigInt(b[0].ns);});
 }
 
+/** END alone cannot certify the automatic numeric dump, which follows it. */
+export function traceInventoryComplete(state){
+  if(!traceComplete(state))return false;
+  const exact=(name,keys,values)=>{const rows=state.maps.filter(r=>r.name===name&&r.keys.join(',')===keys.join(','));return rows.length===1&&(!values||rows[0].values.join(',')===values.join(','));};
+  const windows=state.markers.filter(r=>r.kind==='QFW_WINDOW_CLOSED'),bindings=state.markers.filter(r=>r.kind==='QFW_BIND');
+  if(windows.length!==1||bindings.length!==2||new Set(bindings.map(r=>r.cohort)).size!==2||!exact('capture_closed',[],['1'])||!exact('window_closed_ns',[],[windows[0].ns]))return false;
+  for(const b of bindings){const c=String(b.cohort);for(const[name,values]of [['root',[String(b.pid)]],['birth',[b.birthNs]],['parent',[String(b.parent)]],['bound_ns',[b.ns]]])if(!exact(name,[c],values))return false;if(!exact('cohort',[String(b.pid)],[c]))return false;}
+  const values=name=>state.maps.find(r=>r.name===name&&r.keys.join(',')==='1')?.values??[];
+  const count=values('wait_count'),max=values('wait_max'),bounds=values('wait_bounds');
+  return exact('wait_armed',[],['1'])&&exact('wait_fixture_printed',[],['1'])&&['wait_count','wait_max','wait_bounds'].every(name=>exact(name,['1']))&&count.length===1&&positive(count[0])&&max.length===1&&positive(max[0])&&bounds.length===2&&bounds.every(positive)&&BigInt(bounds[1])>BigInt(bounds[0])&&BigInt(max[0])===BigInt(bounds[1])-BigInt(bounds[0]);
+}
+
 /** A known vfork D interval validates stack capture, not a browser's earlier wait. */
 export function fixtureWaitProof(trace,row,bracket){
   const binds=trace.markers.filter(r=>r.kind==='QFW_BIND'&&r.cohort===1),waits=trace.waits.filter(r=>r.cohort===1);
@@ -272,6 +284,7 @@ export async function runControl(repository,directory){
       requireValue(windows.length===1&&bindings.length===1&&BigInt(windows[0].ns)-BigInt(bindings[0].ns)>=21000000000n,'trace-window');
       trace.state.naturalRequested=true;await stop(trace);
       requireValue(trace.state.released&&traceComplete(proto.state)&&!trace.state.bad&&!trace.state.killRequested&&trace.state.exit===0&&trace.state.signal===null,'trace-release');
+      requireValue(traceInventoryComplete(proto.state),'trace-inventory');
     },async()=>{await stop(trace);return trace.state;});
     report.benchmark.observerReleaseConfirmed=observerReleased;
     if(!observerReleased){report.benchmark.cancelRequestedByObservationResource=!bench.state.reaped;throw Object.assign(new Error('observation-resource-unreleased'),{controlReason:'observation-resource-unreleased'});}

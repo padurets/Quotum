@@ -173,7 +173,6 @@ interval:s:1 {
     printf("QFW_TICK %llu\n", nsecs(monotonic));
     if (@root[2] && nsecs(monotonic) - @bound_ns[2] >= 21000000000) {
       @capture_closed = 1; @window_closed_ns = nsecs(monotonic);
-      printf("QFW_WINDOW_CLOSED %llu\n", @window_closed_ns);
       exit();
     }
   }
@@ -184,5 +183,7 @@ END {
   }
   delete(@wait_stack[1]); delete(@wait_stack[2]);
   delete(@wait_max_stack[1]); delete(@wait_max_stack[2]);
+  /* Detach and END precede the join phase. Retain the actual capture cutoff. */
+  if (@window_closed_ns) { printf("QFW_WINDOW_CLOSED %llu\n", @window_closed_ns); }
   printf("QFW_END %llu\n", nsecs(monotonic));
 } /* Remaining automatic maps contain numeric keys/values only. */
