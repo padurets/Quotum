@@ -21,8 +21,39 @@ const MAX_SEGMENTS: usize = 128;
 const MAX_METADATA: usize = 256;
 const AGE_MS: Millis = 7 * 86_400_000;
 
+#[derive(Debug)]
+struct InvalidState;
+impl std::fmt::Display for InvalidState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("invalid activity state")
+    }
+}
+impl std::error::Error for InvalidState {}
+
 fn invalid() -> io::Error {
-    io::ErrorKind::InvalidData.into()
+    io::Error::new(io::ErrorKind::InvalidData, InvalidState)
+}
+
+fn json_error(error: serde_json::Error) -> io::Error {
+    if error.is_io() {
+        let error: io::Error = error.into();
+        if error.raw_os_error().is_none() { io::Error::new(error.kind(), StorageIo) } else { error }
+    } else {
+        invalid()
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct StorageIo;
+impl std::fmt::Display for StorageIo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("activity storage I/O")
+    }
+}
+impl std::error::Error for StorageIo {}
+
+fn is_corruption(error: &io::Error) -> bool {
+    error.get_ref().is_some_and(|e| e.is::<InvalidState>()) || error.kind() == io::ErrorKind::UnexpectedEof
 }
 
 pub(super) fn plain(path: &Path, write: bool, create: bool) -> io::Result<File> {
@@ -67,6 +98,11 @@ pub(super) fn plain(path: &Path, write: bool, create: bool) -> io::Result<File> 
 }
 
 pub(super) fn directory(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => return Err(invalid()),
+        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+        _ => {}
+    }
     fs::create_dir_all(path)?;
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
@@ -87,7 +123,9 @@ pub(super) fn directory(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn sync_dir(path: &Path) -> io::Result<()> {
+pub(super) fn sync_dir(path: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    super::fault::check("directory-sync")?;
     #[cfg(unix)]
     File::open(path)?.sync_all()?;
     #[cfg(not(unix))]
@@ -114,10 +152,20 @@ pub(super) fn atomic(path: &Path, value: &impl Serialize, cap: usize) -> io::Res
     }
     let mut file = plain(&temp, true, true)?;
     let result = (|| {
+        #[cfg(test)]
+        super::fault::check(if path.file_name().is_some_and(|p| p == "manifest.json") {
+            "manifest-write"
+        } else {
+            "metadata-write"
+        })?;
         file.write_all(&bytes)?;
         #[cfg(all(feature = "activity-bench", target_os = "linux"))]
         super::probe::before_sync();
+        #[cfg(test)]
+        super::fault::check("atomic-sync")?;
         file.sync_all()?;
+        #[cfg(test)]
+        super::fault::check("atomic-rename")?;
         fs::rename(&temp, path)?;
         sync_dir(path.parent().ok_or_else(invalid)?)
     })();
@@ -132,7 +180,15 @@ pub(super) fn read_json<T: serde::de::DeserializeOwned>(path: &Path, cap: usize)
     if file.metadata()?.len() > cap as u64 {
         return Err(invalid());
     }
-    serde_json::from_reader(file.take(cap as u64 + 1)).map_err(|_| invalid())
+    struct Reader(File);
+    impl Read for Reader {
+        fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            #[cfg(test)]
+            super::fault::check("json-read")?;
+            self.0.read(bytes)
+        }
+    }
+    serde_json::from_reader(Reader(file).take(cap as u64 + 1)).map_err(json_error)
 }
 
 fn write_payload(file: &mut File, value: &impl Serialize) -> io::Result<()> {
@@ -141,10 +197,12 @@ fn write_payload(file: &mut File, value: &impl Serialize) -> io::Result<()> {
     file.write_all(&(length.0 as u32).to_be_bytes())?;
     let hashing = PayloadWriter { file, hash: Sha256::new() };
     let mut buffered = BufWriter::with_capacity(length.0.clamp(1, 64 * 1024), hashing);
-    serde_json::to_writer(&mut buffered, value).map_err(|_| invalid())?;
+    serde_json::to_writer(&mut buffered, value).map_err(json_error)?;
     buffered.flush()?;
-    let mut writer = buffered.into_inner().map_err(|_| invalid())?;
+    let mut writer = buffered.into_inner().map_err(|error| error.into_error())?;
     let checksum = std::mem::take(&mut writer.hash).finalize();
+    #[cfg(test)]
+    super::fault::check("checksum-write")?;
     writer.file.write_all(&checksum)
 }
 
@@ -168,6 +226,8 @@ struct PayloadWriter<'a> {
 }
 impl Write for PayloadWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        #[cfg(test)]
+        super::fault::check("payload-write")?;
         let size = self.file.write(bytes)?;
         self.hash.update(&bytes[..size]);
         Ok(size)
@@ -178,19 +238,27 @@ impl Write for PayloadWriter<'_> {
 }
 
 fn read_payload<T: serde::de::DeserializeOwned>(file: &mut File) -> io::Result<Option<T>> {
+    #[cfg(test)]
+    super::fault::check("record-read")?;
     let mut length = [0; 4];
     let at = file.stream_position()?;
     if file.read(&mut length[..1])? == 0 {
         return Ok(None);
     }
+    #[cfg(test)]
+    super::fault::check("record-length")?;
     file.read_exact(&mut length[1..])?;
     let length = u32::from_be_bytes(length) as usize;
     if length > BODY_BYTES {
         return Err(invalid());
     }
     let mut bytes = vec![0; length];
+    #[cfg(test)]
+    super::fault::check("record-payload")?;
     file.read_exact(&mut bytes)?;
     let mut checksum = [0; 32];
+    #[cfg(test)]
+    super::fault::check("record-checksum")?;
     file.read_exact(&mut checksum)?;
     if Sha256::digest(&bytes)[..] != checksum {
         file.seek(SeekFrom::Start(at))?;
@@ -310,8 +378,24 @@ impl Drop for Outbox {
 
 impl Outbox {
     pub fn open_bounded(parent: PathBuf, namespace: String) -> io::Result<Self> {
+        Self::reopen_bounded(parent, namespace, None)
+    }
+
+    pub fn reopen_bounded(parent: PathBuf, namespace: String, expected: Option<&str>) -> io::Result<Self> {
         if namespace.len() != 64 || !namespace.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
             return Err(invalid());
+        }
+        if let Some(expected) = expected {
+            for path in [&parent, &parent.join(&namespace)] {
+                let metadata = fs::symlink_metadata(path)?;
+                if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                    return Err(invalid());
+                }
+            }
+            let saved: Manifest = read_json(&parent.join(&namespace).join("manifest.json"), MANIFEST_BYTES)?;
+            if saved.queue_id != expected {
+                return Err(invalid());
+            }
         }
         directory(&parent)?;
         let budget_path = parent.join("budget.lock");
@@ -365,14 +449,31 @@ impl Outbox {
             old.metadata_gc()?;
             other_bytes = other_bytes - bytes + old.physical_bytes()?;
         }
-        let mut out = Self::open(parent.join(&namespace), namespace)?;
+        let mut out = Self::open_expected(parent.join(&namespace), namespace, expected)?;
         out.limit = QUEUE_BYTES.checked_sub(other_bytes + 4096).ok_or_else(invalid)?;
         out._budget = Some(budget);
         out.make_room(0, 0)?;
         Ok(out)
     }
 
+    pub fn existing_identity(root: &Path) -> io::Result<Option<String>> {
+        match fs::symlink_metadata(root) {
+            Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => return Err(invalid()),
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
+        match read_json::<Manifest>(&root.join("manifest.json"), MANIFEST_BYTES) {
+            Ok(manifest) => Ok(Some(manifest.queue_id)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     pub fn open(root: PathBuf, namespace: String) -> io::Result<Self> {
+        Self::open_expected(root, namespace, None)
+    }
+
+    fn open_expected(root: PathBuf, namespace: String, expected: Option<&str>) -> io::Result<Self> {
         directory(&root)?;
         let lock_path = root.join("writer.lock");
         let lock = match plain(&lock_path, true, true) {
@@ -404,7 +505,7 @@ impl Outbox {
                 m
             }
             Ok(_) => return Err(invalid()),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            Err(e) if e.kind() == io::ErrorKind::NotFound && expected.is_none() => {
                 // A lost manifest cannot silently reuse a sequence in an existing journal.
                 if fs::read_dir(&root)?
                     .any(|entry| entry.is_ok_and(|e| e.file_name().to_string_lossy().ends_with(".segment")))
@@ -431,6 +532,9 @@ impl Outbox {
             }
             Err(e) => return Err(e),
         };
+        if expected.is_some_and(|expected| expected != manifest.queue_id) {
+            return Err(invalid());
+        }
         let metadata = match read_json(&root.join("metadata.json"), METADATA_BYTES) {
             Ok(m) => m,
             Err(e) if e.kind() == io::ErrorKind::NotFound => Metadata::default(),
@@ -580,6 +684,7 @@ impl Outbox {
             }
             let header: Header = match read_payload(&mut file) {
                 Ok(Some(header)) => header,
+                Err(error) if !is_corruption(&error) => return Err(error),
                 _ => {
                     corrupt = Some((index, segment.first, 0, segment.end_tick));
                     break;
@@ -598,6 +703,7 @@ impl Outbox {
             loop {
                 let start = file.stream_position()?;
                 match read_payload::<Raw>(&mut file) {
+                    Err(error) if !is_corruption(&error) => return Err(error),
                     Ok(Some(raw)) if raw.seq == expected && raw.seq <= segment.last => {
                         if let Some(epoch) = self.metadata.clocks.get_mut(&raw.clock_epoch) {
                             epoch.last_tick = epoch.last_tick.max(epoch.zero_tick.saturating_add(raw.to_tick));
@@ -765,6 +871,8 @@ impl Outbox {
         self.manifest.segments.retain(|s| !removed.contains(&s.first));
         self.save()?;
         for first in removed {
+            #[cfg(test)]
+            super::fault::check("reclaim")?;
             match fs::remove_file(self.file(first)) {
                 Ok(()) => {}
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {}
@@ -950,6 +1058,8 @@ impl Outbox {
         }
         let file = self.current.as_mut().ok_or_else(invalid)?;
         write_payload(file, raw)?;
+        #[cfg(test)]
+        super::fault::check("segment-sync")?;
         file.sync_all()?;
         let last = self.manifest.segments.last_mut().ok_or_else(invalid)?;
         last.last = raw.seq;
@@ -1157,6 +1267,129 @@ mod tests {
     use super::*;
     use crate::observed::clock::Reading;
     use crate::observed::{Anchor, Context, Scope};
+
+    #[test]
+    fn storage_read_errors_never_retire_or_truncate_a_verified_prefix() {
+        for (operation, count) in
+            [("record-read", 5), ("record-length", 4), ("record-payload", 4), ("record-checksum", 4)]
+        {
+            for after in 0..count {
+                let stand = Stand::new();
+                let mut queue = stand.open();
+                let epoch = epoch();
+                queue.install_clock(epoch.clone()).unwrap();
+                for index in 0..3 {
+                    queue.append(&state(), raw(&epoch, index), None).unwrap();
+                }
+                let expected = serde_json::to_vec(&queue.prepare().unwrap()).unwrap();
+                drop(queue);
+                let saved = || {
+                    let mut entries = fs::read_dir(&stand.0)
+                        .unwrap()
+                        .map(|entry| {
+                            let path = entry.unwrap().path();
+                            (path.file_name().unwrap().to_owned(), fs::read(path).unwrap())
+                        })
+                        .collect::<BTreeMap<_, _>>();
+                    entries.remove(std::ffi::OsStr::new("writer.lock"));
+                    entries
+                };
+                let bytes = saved();
+                let faults = super::super::fault::Plan::current();
+                for _ in 0..2 {
+                    faults.arm(operation, after, 1, 5);
+                    let error = Outbox::open(stand.0.clone(), "test-namespace".into()).err().unwrap();
+                    assert_eq!(error.raw_os_error(), Some(5));
+                    assert_eq!(saved(), bytes, "a read failure is not corruption at record {after}");
+                }
+                faults.clear();
+                assert_eq!(serde_json::to_vec(&stand.open().prepare().unwrap()).unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn json_streams_preserve_underlying_storage_errors() {
+        struct Unavailable;
+        impl Read for Unavailable {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::InvalidData, "private storage detail"))
+            }
+        }
+        let error = json_error(serde_json::from_reader::<_, serde_json::Value>(Unavailable).unwrap_err());
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(crate::observed::recovery::Failure::new("read", &error).retryable);
+        assert!(!format!("{error:?}").contains("private"));
+        let stand = Stand::new();
+        let queue = stand.open();
+        drop(queue);
+        let faults = super::super::fault::Plan::current();
+        faults.arm("json-read", 0, 1, 5);
+        assert_eq!(
+            read_json::<Manifest>(&stand.0.join("manifest.json"), MANIFEST_BYTES).err().unwrap().raw_os_error(),
+            Some(5)
+        );
+        faults.clear();
+        let mut queue = stand.open();
+        let epoch = epoch();
+        queue.install_clock(epoch.clone()).unwrap();
+        faults.arm("payload-write", 0, 1, 28);
+        assert_eq!(queue.append(&state(), raw(&epoch, 0), None).unwrap_err().raw_os_error(), Some(28));
+        faults.clear();
+    }
+
+    #[test]
+    fn failed_publications_reopen_only_the_published_prefix() {
+        for operation in [
+            "payload-write",
+            "checksum-write",
+            "segment-sync",
+            "manifest-write",
+            "atomic-sync",
+            "atomic-rename",
+            "directory-sync",
+        ] {
+            let stand = Stand::new();
+            let mut queue = stand.open();
+            let epoch = epoch();
+            queue.install_clock(epoch.clone()).unwrap();
+            queue.append(&state(), raw(&epoch, 0), None).unwrap();
+            let first = serde_json::to_value(queue.prepare().unwrap()).unwrap()["frames"][0].clone();
+            let id = queue.queue_id().to_owned();
+            let faults = super::super::fault::Plan::current();
+            faults.arm(operation, 0, 1, 28);
+            assert!(queue.append(&state(), raw(&epoch, 1), None).is_err(), "{operation}");
+            drop(queue);
+            faults.clear();
+            let mut queue = stand.open();
+            assert_eq!(queue.queue_id(), id);
+            let batch = serde_json::to_value(queue.prepare().unwrap()).unwrap();
+            assert_eq!(batch["frames"][0], first);
+            assert_eq!(batch["frames"].as_array().unwrap().len(), if operation == "directory-sync" { 2 } else { 1 });
+            let next = queue.next_sequence();
+            assert_eq!(queue.append(&state(), raw(&epoch, next - 1), None).unwrap(), next);
+        }
+    }
+
+    #[test]
+    fn a_failed_ack_or_reclamation_reopens_with_the_durable_cursor() {
+        for operation in ["manifest-write", "directory-sync", "reclaim"] {
+            let stand = Stand::new();
+            let mut queue = stand.open();
+            let epoch = epoch();
+            queue.install_clock(epoch.clone()).unwrap();
+            queue.append(&state(), raw(&epoch, 0), None).unwrap();
+            let faults = super::super::fault::Plan::current();
+            faults.arm(operation, 0, 1, 28);
+            assert!(queue.acknowledge(1, &[]).is_err());
+            drop(queue);
+            faults.clear();
+            let mut queue = stand.open();
+            assert_eq!(queue.ack(), if operation == "manifest-write" { 0 } else { 1 });
+            queue.acknowledge(1, &[]).unwrap();
+            assert!(queue.prepare().unwrap().frames.is_empty());
+        }
+    }
 
     struct Stand(PathBuf);
     impl Stand {

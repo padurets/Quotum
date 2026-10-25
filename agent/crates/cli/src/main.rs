@@ -164,7 +164,7 @@ const LOG_LIMIT: u64 = 1 << 20;
 fn log(line: &str) {
     let line = format!("{} {line}", clock(now_ms()));
     let Some(file) = LOG_FILE.get() else {
-        eprintln!("{line}");
+        let _ = writeln!(std::io::stderr().lock(), "{line}");
         return;
     };
     if fs::metadata(file).is_ok_and(|m| m.len() > LOG_LIMIT) {
@@ -172,7 +172,7 @@ fn log(line: &str) {
     }
     let written = fs::OpenOptions::new().create(true).append(true).open(file).and_then(|mut f| writeln!(f, "{line}"));
     if written.is_err() {
-        eprintln!("{line}");
+        let _ = writeln!(std::io::stderr().lock(), "{line}");
     }
 }
 
@@ -823,6 +823,30 @@ impl Style {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn logging_remains_best_effort_when_file_and_stderr_are_full() {
+        const FIXTURE: &str = "QUOTUM_LOG_FAILURE_FIXTURE";
+        if let Ok(mode) = std::env::var(FIXTURE) {
+            if mode == "file" {
+                LOG_FILE.set(PathBuf::from("/dev/full")).unwrap();
+            }
+            log("a storage failure must not stop the run while reporting it");
+            return;
+        }
+        for mode in ["file", "stderr"] {
+            let full = fs::OpenOptions::new().write(true).open("/dev/full").unwrap();
+            let status = Process::new(std::env::current_exe().unwrap())
+                .args(["tests::logging_remains_best_effort_when_file_and_stderr_are_full", "--exact", "--nocapture"])
+                .env(FIXTURE, mode)
+                .stdout(Stdio::null())
+                .stderr(full)
+                .status()
+                .unwrap();
+            assert!(status.success(), "failed {mode} logging ended the process: {status}");
+        }
+    }
 
     #[test]
     fn durations_are_short_and_round_up() {

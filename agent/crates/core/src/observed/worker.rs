@@ -11,6 +11,7 @@ use std::time::{Duration, Instant, SystemTime};
 use super::cadence::Cadence;
 use super::clock::{Clock, Epoch, Reading};
 use super::outbox::{Binding, Outbox, Raw};
+use super::recovery::{Failure, Health, Retry};
 use super::{Anchor, BODY_BYTES, Batch, Context, Latest, Scope, Source, State, Witness, digest};
 use crate::activity::{Activity, Session};
 use crate::clients::ClientId;
@@ -35,6 +36,166 @@ pub(crate) use tests::captured_accounts;
 mod tests {
     use super::super::Anchor;
     use super::*;
+
+    fn until(mut ready: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !ready() {
+            assert!(Instant::now() < deadline, "capture lifecycle timed out");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn recovering_worker() -> (PathBuf, Worker) {
+        let root = std::env::temp_dir().join(format!("quotum-auto-recovery-{}", crate::config::random_hex()));
+        let paths = Paths { config: root.join("config"), state: root.join("state"), work: root.join("work") };
+        let worker = Worker::start(Start {
+            paths,
+            home: root.clone(),
+            clients: Vec::new(),
+            scope: Scope { version: 1, clients: vec!["codex".into()], route_disabled: Vec::new(), complete: true },
+            namespace: "a".repeat(64),
+            credential_scope: "b".repeat(64),
+            projects: true,
+            stop: Stop::new(),
+            privacy: String::new(),
+        })
+        .unwrap();
+        (root, worker)
+    }
+
+    fn fallback_pending() -> Stand {
+        let mut s = Stand::new();
+        // The stream is already activated; delayed work remains above its old floor.
+        s.sampler
+            .queue
+            .bind(Binding {
+                hub_id: "a".repeat(32),
+                device_id: "fixture".into(),
+                authority_epoch: "b".repeat(32),
+                floor_at: 0,
+            })
+            .unwrap();
+        let origin = Reading { boot: None, tick: 0, wall: 1_800_000_000_000 };
+        s.epoch = Epoch::new(&origin);
+        s.sampler.queue.install_clock(s.epoch.clone()).unwrap();
+        s.sampler.clock = Arc::new(Clock::fixed(Reading { tick: 15_000, wall: origin.wall + 15_000, ..origin }));
+        s.record(0, s.state(Some(true)), None);
+        s.record(15_000, s.state(Some(true)), None);
+        assert_eq!(s.sampler.queue.next_sequence(), 3);
+        assert_eq!(s.sampler.queue.ack(), 0);
+        assert!(s.epoch.anchor.is_none());
+        assert!(s.epoch.compatible(&s.sampler.clock.read(), false));
+        s
+    }
+
+    #[test]
+    fn same_run_storage_reopen_preserves_uncalibrated_fallback_work() {
+        let mut s = fallback_pending();
+        let clock = s.sampler.clock.clone();
+        let id = s.epoch.id.clone();
+        // The supervisor preserves this exact Clock across an I/O failure and journal reopen.
+        s.reopen_clock(0, Some(&id));
+        assert!(Arc::ptr_eq(&clock, &s.sampler.clock));
+        let batch = s.sampler.queue.prepare().unwrap();
+        assert!(batch.skip.is_none(), "continuous same-run clock retired durable work: {:?}", batch.skip);
+        assert_eq!(s.epoch.id, id);
+        let reading = clock.read();
+        assert!(s.epoch.bind(&reading, reading.wall));
+        s.sampler.queue.install_clock(s.epoch.clone()).unwrap();
+        assert_eq!(s.work(), 15_000);
+    }
+
+    #[test]
+    fn a_real_restart_still_retires_uncalibrated_fallback_work() {
+        let mut s = fallback_pending();
+        let clock = s.sampler.clock.clone();
+        let id = s.epoch.id.clone();
+        // A different process can expose the same numbers from an unrelated fallback origin.
+        s.sampler.clock = Arc::new(Clock::fixed(clock.read()));
+        s.reopen(0);
+        assert!(!Arc::ptr_eq(&clock, &s.sampler.clock));
+        assert_ne!(s.epoch.id, id);
+        let batch = s.sampler.queue.prepare().unwrap();
+        let loss = batch.skip.expect("a process restart cannot prove the old fallback clock basis");
+        assert_eq!((loss.first_seq, loss.last_seq, loss.reason.as_str()), (1, 2, "clock"));
+    }
+
+    #[test]
+    fn initialization_retries_on_the_same_thread_and_stop_cancels_backoff() {
+        let faults = super::super::fault::Plan::current();
+        faults.arm("metadata-write", 0, usize::MAX, 28);
+        let (root, worker) = recovering_worker();
+        let thread_id = worker.thread.as_ref().unwrap().thread().id();
+        until(|| worker.health().unavailable);
+        assert!(!worker.failed() && worker.snapshot().is_none());
+        faults.clear();
+        until(|| worker.snapshot().is_some() && !worker.health().unavailable);
+        assert_eq!(worker.thread.as_ref().unwrap().thread().id(), thread_id);
+        assert_eq!(worker.health().recoveries, 1);
+        faults.arm("manifest-write", 0, usize::MAX, 28);
+        assert!(worker.control(Control::Ack { through: 0, released: Vec::new() }));
+        until(|| worker.health().unavailable);
+        let started = Instant::now();
+        drop(worker);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        faults.clear();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_ack_reopens_the_same_queue_and_rejects_old_generation_controls() {
+        let (root, worker) = recovering_worker();
+        until(|| worker.snapshot().is_some());
+        let before = worker.snapshot().unwrap();
+        let generation = worker.health().generation;
+        let faults = super::super::fault::Plan::current();
+        faults.arm("manifest-write", 0, 1, 28);
+        assert!(worker.control(Control::Ack { through: 0, released: Vec::new() }));
+        until(|| {
+            worker.health().generation > generation && !worker.health().unavailable && worker.snapshot().is_some()
+        });
+        let after = worker.snapshot().unwrap();
+        assert_eq!(before.queue_id, after.queue_id);
+        assert_eq!(after.ack, 0);
+        assert!(after.sequence > before.sequence);
+        let (tx, rx) = mpsc::sync_channel(1);
+        assert!(worker.control_at(generation, Control::Prepare(tx)));
+        assert!(rx.recv_timeout(Duration::from_secs(1)).is_err(), "an old generation cannot prepare a new request");
+        let (tx, rx) = mpsc::sync_channel(1);
+        assert!(worker.control(Control::Prepare(tx)));
+        rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+        drop(worker);
+        faults.clear();
+        let queue = Outbox::open_bounded(root.join("state/activity"), "a".repeat(64)).unwrap();
+        assert_eq!(queue.queue_id(), before.queue_id);
+        drop(queue);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_established_missing_journal_is_not_reinitialized_during_recovery() {
+        for manifest in [false, true] {
+            // Windows pins the directory through writer.lock; its manifest can still disappear.
+            if cfg!(windows) && !manifest {
+                continue;
+            }
+            let (root, worker) = recovering_worker();
+            until(|| worker.snapshot().is_some());
+            let id = worker.snapshot().unwrap().queue_id.clone();
+            let path = root.join("state/activity").join("a".repeat(64));
+            let path = if manifest { path.join("manifest.json") } else { path };
+            let hidden = root.join("saved-journal");
+            std::fs::rename(&path, &hidden).unwrap();
+            assert!(worker.control(Control::Storage(Failure::new("prepare", &io::Error::other("fixture")))));
+            until(|| worker.health().failures >= 2);
+            assert!(!path.exists(), "recovery must wait for the established journal");
+            std::fs::rename(&hidden, &path).unwrap();
+            until(|| worker.snapshot().is_some() && !worker.health().unavailable);
+            assert_eq!(worker.snapshot().unwrap().queue_id, id);
+            drop(worker);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
 
     struct Stand {
         root: PathBuf,
@@ -147,6 +308,9 @@ mod tests {
             total
         }
         fn reopen(&mut self, publication: usize) {
+            self.reopen_clock(publication, None);
+        }
+        fn reopen_clock(&mut self, publication: usize, current: Option<&str>) {
             let temporary = self.root.with_extension("reopen");
             let placeholder = Outbox::open(temporary.clone(), "placeholder".into()).unwrap();
             drop(std::mem::replace(&mut self.sampler.queue, placeholder));
@@ -156,7 +320,7 @@ mod tests {
             self.sampler.previous = None;
             self.sampler.activity.reset_evidence();
             self.sampler.run = crate::config::random_hex();
-            self.epoch = self.sampler.restore_clock(&self.sampler.clock.read()).unwrap();
+            self.epoch = self.sampler.restore_clock(&self.sampler.clock.read(), current).unwrap();
         }
     }
     impl Drop for Stand {
@@ -485,6 +649,7 @@ mod tests {
         let paths = Paths { state: root.join("state"), work: root.join("work"), config: root.join("config") };
         let stop = Stop::new();
         let namespace = "a".repeat(64);
+        let privacy = super::super::privacy::update(&paths, true, true, &[ClientId::Codex], &[]).unwrap();
         let worker = Worker::start(Start {
             paths: paths.clone(),
             home: root.clone(),
@@ -494,15 +659,13 @@ mod tests {
             credential_scope: "c".repeat(64),
             projects: true,
             stop: stop.clone(),
-            privacy: "b".repeat(32),
+            privacy,
         })
         .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while worker.snapshot().is_none() {
+        until(|| {
             assert!(!worker.failed());
-            assert!(Instant::now() < deadline);
-            thread::sleep(Duration::from_millis(5));
-        }
+            worker.snapshot().is_some()
+        });
         stop.request(crate::stop::How::Exit);
         let (tx, rx) = mpsc::sync_channel(1);
         assert!(worker.control(Control::Accounts(BTreeMap::new())));
@@ -525,6 +688,7 @@ mod tests {
             let paths = Paths { config: root.join("config"), work: root.join("work"), state: root.join("state") };
             let namespace = "a".repeat(64);
             let held = Outbox::open_bounded(paths.state.join("activity"), namespace.clone()).unwrap();
+            let privacy = super::super::privacy::update(&paths, true, true, &[ClientId::Codex], &[]).unwrap();
             let stop = Stop::new();
             let worker = Worker::start(Start {
                 paths,
@@ -535,7 +699,7 @@ mod tests {
                 credential_scope: "c".repeat(64),
                 projects: true,
                 stop: stop.clone(),
-                privacy: "b".repeat(32),
+                privacy,
             })
             .unwrap();
             thread::sleep(Duration::from_millis(100));
@@ -549,12 +713,11 @@ mod tests {
                 drop(held);
             } else {
                 drop(held);
-                let deadline = Instant::now() + Duration::from_secs(3);
-                while worker.snapshot().is_none() {
+                // Opening and lock attempts spend CPU before the first capture is admitted.
+                until(|| {
                     assert!(!worker.failed());
-                    assert!(Instant::now() < deadline);
-                    thread::sleep(Duration::from_millis(5));
-                }
+                    worker.snapshot().is_some()
+                });
                 drop(worker);
             }
             std::fs::remove_dir_all(root).unwrap();
@@ -601,6 +764,7 @@ pub(crate) enum Control {
     Legacy(bool),
     Replacement,
     Fence,
+    Storage(Failure),
 }
 
 const PREPARED_HANDOFF: Duration = Duration::from_secs(5);
@@ -624,13 +788,14 @@ impl Prepared {
 }
 
 pub(crate) struct Worker {
-    tx: Option<mpsc::SyncSender<Control>>,
+    tx: Option<mpsc::SyncSender<(u64, Control)>>,
     thread: Option<JoinHandle<()>>,
     snapshot: Arc<Mutex<Option<Arc<Capture>>>>,
     failed: Arc<AtomicBool>,
     retiring: Arc<AtomicBool>,
     paths: Paths,
-    privacy: String,
+    privacy: Arc<Mutex<String>>,
+    health: Arc<Mutex<Health>>,
     pub clock: Arc<Clock>,
 }
 
@@ -660,51 +825,169 @@ impl Worker {
         let time = clock.clone();
         let policy_paths = paths.clone();
         let policy_revision = privacy.clone();
+        let health = Arc::new(Mutex::new(Health::default()));
+        let status = health.clone();
+        let policy_revision = Arc::new(Mutex::new(policy_revision));
+        let revision = policy_revision.clone();
+        #[cfg(test)]
+        let faults = super::fault::Plan::current();
         let thread = thread::Builder::new().name("quotum-activity".into()).spawn(move || {
-            let run = || -> io::Result<()> {
-                let mut initial_accounts = BTreeMap::new();
-                let mut queue = loop {
-                    if stop.requested() || retirement.load(Ordering::Acquire) {
-                        return Ok(());
-                    }
-                    match Outbox::open_bounded(paths.state.join("activity"), namespace.clone()) {
-                        Ok(queue) => break queue,
-                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                            // Handoff releases the run lock before a pending HTTP reply releases its writer.
-                            match rx.recv_timeout(Duration::from_millis(50)) {
-                                Ok(Control::Accounts(accounts)) => initial_accounts = accounts,
-                                Ok(Control::Fence) | Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
-                                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                                Ok(_) => return Err(io::ErrorKind::InvalidData.into()),
-                            }
+            #[cfg(test)]
+            faults.enter();
+            let origin = Instant::now();
+            let mut cadence = Cadence::new();
+            let mut retry = Retry::default();
+            let mut accounts = BTreeMap::new();
+            let mut expected = None;
+            let mut first_sequence = None;
+            let mut current_clock = None;
+            let mut operation = "privacy";
+            let mut generation = 0;
+            loop {
+                if stop.requested() || retirement.load(Ordering::Acquire) {
+                    break;
+                }
+                let started = Instant::now();
+                let cost = super::cost::Cost::start();
+                let opened = (|| -> io::Result<Option<(Sampler, Epoch)>> {
+                    operation = "privacy";
+                    let current = revision.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    let privacy = if current.is_empty() {
+                        let routes = ClientId::ALL
+                            .into_iter()
+                            .filter(|c| scope.route_disabled.iter().any(|id| id == c.id()))
+                            .collect::<Vec<_>>();
+                        super::privacy::try_update(
+                            &paths,
+                            !scope.clients.is_empty(),
+                            projects,
+                            &clients,
+                            &routes,
+                            false,
+                            Some(&stop),
+                        )?
+                    } else {
+                        if expected.is_some() && super::privacy::allow(&paths, &current)?.is_none() {
+                            return Err(io::ErrorKind::InvalidData.into());
                         }
-                        Err(error) => return Err(error),
+                        current
+                    };
+                    if stop.requested() || retirement.load(Ordering::Acquire) {
+                        return Err(io::ErrorKind::Interrupted.into());
                     }
+                    *revision.lock().unwrap_or_else(|e| e.into_inner()) = privacy.clone();
+                    if scope.clients.is_empty() {
+                        return Ok(None);
+                    }
+                    operation = "open";
+                    super::outbox::directory(&paths.state.join("activity"))?;
+                    if expected.is_none() {
+                        expected = Outbox::existing_identity(&paths.state.join("activity").join(&namespace))?;
+                    }
+                    let mut queue = if expected.is_none() {
+                        Outbox::open_bounded(paths.state.join("activity"), namespace.clone())?
+                    } else {
+                        Outbox::reopen_bounded(paths.state.join("activity"), namespace.clone(), expected.as_deref())?
+                    };
+                    expected = Some(queue.queue_id().to_string());
+                    operation = "credentials";
+                    queue.check_credentials(credential_scope.clone())?;
+                    operation = "privacy";
+                    queue.apply_privacy(privacy)?;
+                    let salt = crate::session_identity::salt(&paths);
+                    let mut activity = Activity::new(home.clone(), projects);
+                    activity.track(&clients);
+                    let first_sequence = *first_sequence.get_or_insert(queue.next_sequence());
+                    let mut sampler = Sampler {
+                        activity,
+                        queue,
+                        clock: time.clone(),
+                        scope: scope.clone(),
+                        accounts: accounts.clone(),
+                        salt,
+                        producers: HashMap::new(),
+                        run: crate::config::random_hex(),
+                        previous: None,
+                        legacy: false,
+                        first_sequence,
+                        fenced: false,
+                    };
+                    operation = "restore-clock";
+                    let epoch = sampler.restore_clock(&time.read(), current_clock.as_deref())?;
+                    current_clock = Some(epoch.id.clone());
+                    if sampler.active_witness().is_some_and(|w| w.scope_digest != scope.digest()) {
+                        sampler.queue.install_witness(None)?;
+                    }
+                    Ok(Some((sampler, epoch)))
+                })();
+                cadence.maintenance(origin.elapsed().as_millis() as u64, cost.elapsed_ms(started.elapsed()));
+                let result = match opened {
+                    Ok(Some((mut sampler, epoch))) => {
+                        let now = origin.elapsed().as_millis() as u64;
+                        let wait = cadence.recovery_due(now).saturating_sub(now);
+                        if !wait_for_recovery(
+                            &rx,
+                            &stop,
+                            &retirement,
+                            Instant::now() + Duration::from_millis(wait),
+                            &mut accounts,
+                        ) {
+                            return;
+                        }
+                        sampler.accounts = accounts.clone();
+                        cadence.reset_grid(origin.elapsed().as_millis() as u64);
+                        let result = sampler.run(CaptureRun {
+                            rx: &rx,
+                            stop: &stop,
+                            shared: &shared,
+                            retiring: &retirement,
+                            origin: &origin,
+                            cadence: &mut cadence,
+                            operation: &mut operation,
+                            health: &status,
+                            retry: &mut retry,
+                            generation,
+                            epoch,
+                        });
+                        accounts = std::mem::take(&mut sampler.accounts);
+                        current_clock = sampler.queue.metadata.active_clock.clone();
+                        // Drop the mutated writer before reopening its published manifest.
+                        let cleanup = Instant::now();
+                        let cost = super::cost::Cost::start();
+                        drop(sampler);
+                        cadence.control(origin.elapsed().as_millis() as u64, cost.elapsed_ms(cleanup.elapsed()));
+                        result
+                    }
+                    Ok(None) => {
+                        status.lock().unwrap_or_else(|e| e.into_inner()).observed();
+                        break;
+                    }
+                    Err(error) => Err(error),
                 };
-                queue.check_credentials(credential_scope)?;
-                queue.apply_privacy(privacy)?;
-                let salt = crate::session_identity::salt(&paths);
-                let mut activity = Activity::new(home, projects);
-                activity.track(&clients);
-                let first_sequence = queue.next_sequence();
-                let mut capture = Sampler {
-                    activity,
-                    queue,
-                    clock: time,
-                    scope,
-                    accounts: initial_accounts,
-                    salt,
-                    producers: HashMap::new(),
-                    run: crate::config::random_hex(),
-                    previous: None,
-                    legacy: false,
-                    first_sequence,
-                    fenced: false,
-                };
-                capture.run(rx, &stop, &shared, &retirement)
-            };
-            if run().is_err() {
-                failure.store(true, Ordering::Release);
+                let Err(error) = result else { break };
+                shared.lock().unwrap_or_else(|e| e.into_inner()).take();
+                generation += 1;
+                let cause = Failure::new(operation, &error);
+                let lock_wait = error.kind() == io::ErrorKind::WouldBlock && matches!(operation, "open" | "privacy");
+                {
+                    let mut health = status.lock().unwrap_or_else(|e| e.into_inner());
+                    health.generation = generation;
+                    if !lock_wait {
+                        health.fail(cause);
+                    }
+                }
+                if !cause.retryable {
+                    failure.store(true, Ordering::Release);
+                    break;
+                }
+                // Lock handoff is an interruptible wait, not a failed capture attempt.
+                let delay = if lock_wait { Duration::from_millis(50) } else { retry.failed() };
+                let now = origin.elapsed().as_millis() as u64;
+                let budget = cadence.recovery_due(now).saturating_sub(now);
+                let until = Instant::now() + delay.max(Duration::from_millis(budget));
+                if !wait_for_recovery(&rx, &stop, &retirement, until, &mut accounts) {
+                    return;
+                }
             }
         })?;
         Ok(Self {
@@ -715,11 +998,12 @@ impl Worker {
             retiring,
             paths: policy_paths,
             privacy: policy_revision,
+            health,
             clock,
         })
     }
     pub(crate) fn delivery_guard(&self) -> io::Result<Option<super::privacy::Guard>> {
-        super::privacy::allow(&self.paths, &self.privacy)
+        super::privacy::allow(&self.paths, &self.privacy.lock().unwrap_or_else(|e| e.into_inner()))
     }
     pub fn snapshot(&self) -> Option<Arc<Capture>> {
         self.snapshot.lock().unwrap_or_else(|e| e.into_inner()).clone()
@@ -727,13 +1011,42 @@ impl Worker {
     pub fn failed(&self) -> bool {
         self.failed.load(Ordering::Acquire)
     }
+    pub fn health(&self) -> Health {
+        self.health.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
     pub fn control(&self, control: Control) -> bool {
-        self.tx.as_ref().is_some_and(|tx| tx.try_send(control).is_ok())
+        self.control_at(self.health().generation, control)
+    }
+    pub fn control_at(&self, generation: u64, control: Control) -> bool {
+        self.tx.as_ref().is_some_and(|tx| tx.try_send((generation, control)).is_ok())
     }
     pub fn fence(&self) {
         self.retiring.store(true, Ordering::Release);
         // Wake a parked writer; a full channel cannot postpone the retirement flag.
         let _ = self.control(Control::Fence);
+    }
+}
+
+fn wait_for_recovery(
+    rx: &mpsc::Receiver<(u64, Control)>,
+    stop: &Stop,
+    retiring: &AtomicBool,
+    until: Instant,
+    accounts: &mut BTreeMap<ClientId, Account>,
+) -> bool {
+    loop {
+        if stop.requested() || retiring.load(Ordering::Acquire) {
+            return false;
+        }
+        let wait = until.saturating_duration_since(Instant::now());
+        if wait.is_zero() {
+            return true;
+        }
+        match rx.recv_timeout(wait.min(Duration::from_millis(50))) {
+            Ok((_, Control::Accounts(next))) => *accounts = next,
+            Ok((_, Control::Fence)) | Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+            Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
     }
 }
 
@@ -773,12 +1086,31 @@ struct Sampler {
     fenced: bool,
 }
 
+struct CaptureRun<'a> {
+    rx: &'a mpsc::Receiver<(u64, Control)>,
+    stop: &'a Stop,
+    shared: &'a Mutex<Option<Arc<Capture>>>,
+    retiring: &'a AtomicBool,
+    origin: &'a Instant,
+    cadence: &'a mut Cadence,
+    operation: &'a mut &'static str,
+    health: &'a Mutex<Health>,
+    retry: &'a mut Retry,
+    generation: u64,
+    epoch: Epoch,
+}
+
 impl Sampler {
-    fn restore_clock(&mut self, reading: &Reading) -> io::Result<Epoch> {
+    fn restore_clock(&mut self, reading: &Reading, current: Option<&str>) -> io::Result<Epoch> {
         let saved =
             self.queue.metadata.active_clock.as_ref().and_then(|id| self.queue.metadata.clocks.get(id)).cloned();
         let epoch = match saved {
-            Some(epoch) if self.queue.is_current_clock(&epoch.id) && epoch.compatible(reading, true) => epoch,
+            Some(epoch)
+                if self.queue.is_current_clock(&epoch.id)
+                    && epoch.compatible(reading, current != Some(epoch.id.as_str())) =>
+            {
+                epoch
+            }
             Some(old) => {
                 self.queue.retire_unanchored(&old.id)?;
                 Epoch::new(reading)
@@ -789,21 +1121,9 @@ impl Sampler {
         Ok(epoch)
     }
 
-    fn run(
-        &mut self,
-        rx: mpsc::Receiver<Control>,
-        stop: &Stop,
-        shared: &Mutex<Option<Arc<Capture>>>,
-        retiring: &AtomicBool,
-    ) -> io::Result<()> {
-        let origin = Instant::now();
-        let mut cadence = Cadence::new();
-        let reading = self.clock.read();
-        let mut epoch = self.restore_clock(&reading)?;
-        // A process restart never carries a CPU hold or complete endpoints across its gap.
-        if self.active_witness().is_some_and(|w| w.scope_digest != self.scope.digest()) {
-            self.queue.install_witness(None)?;
-        }
+    fn run(&mut self, context: CaptureRun<'_>) -> io::Result<()> {
+        let CaptureRun { rx, stop, shared, retiring, origin, cadence, operation, health, retry, generation, mut epoch } =
+            context;
         loop {
             if retiring.load(Ordering::Acquire) {
                 self.queue.retire_since(self.first_sequence)?;
@@ -832,19 +1152,23 @@ impl Sampler {
                 break;
             }
             match received {
-                Ok(control) => {
+                Ok((sent_generation, control)) => {
+                    if sent_generation != generation && !matches!(control, Control::Accounts(_) | Control::Fence) {
+                        continue;
+                    }
+                    *operation = match &control {
+                        Control::Prepare(_) => "prepare",
+                        Control::Ack { .. } => "acknowledge",
+                        Control::Bind { .. } => "bind",
+                        Control::Storage(failure) => failure.operation,
+                        _ => "control",
+                    };
                     let control_started = Instant::now();
                     let budget_cost = super::cost::Cost::start();
                     #[cfg(all(feature = "activity-bench", target_os = "linux"))]
                     let control_cpu = super::probe::cpu();
-                    self.control(control, &mut epoch)?;
-                    if self.fenced {
-                        shared.lock().unwrap_or_else(|e| e.into_inner()).take();
-                        break;
-                    }
-                    if self.publish_control(shared, &epoch) {
-                        cadence.reset_grid(origin.elapsed().as_millis() as u64);
-                    }
+                    let result = self.control(control, &mut epoch);
+                    let reset = result.is_ok() && !self.fenced && self.publish_control(shared, &epoch);
                     cadence.control(
                         origin.elapsed().as_millis() as u64,
                         budget_cost.elapsed_ms(control_started.elapsed()),
@@ -855,6 +1179,14 @@ impl Sampler {
                         super::probe::cpu() - control_cpu,
                         control_started.elapsed().as_secs_f64() * 1000.0,
                     );
+                    result?;
+                    if self.fenced {
+                        shared.lock().unwrap_or_else(|e| e.into_inner()).take();
+                        break;
+                    }
+                    if reset {
+                        cadence.reset_grid(origin.elapsed().as_millis() as u64);
+                    }
                     continue;
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -867,107 +1199,132 @@ impl Sampler {
             let budget_cost = super::cost::Cost::start();
             #[cfg(all(feature = "activity-bench", target_os = "linux"))]
             let capture_cpu = super::probe::cpu();
-            let reading = self.clock.read();
-            let now = origin.elapsed().as_millis() as u64;
-            let period = self.previous.as_ref().map(|p| reading.tick.saturating_sub(p.reading.tick));
-            let suspended = self.previous.as_ref().is_some_and(|p| {
-                (i128::from(reading.tick)
-                    - i128::from(p.reading.tick)
-                    - started.duration_since(p.at).as_millis() as i128)
-                    .abs()
-                    > 2000
-            });
-            let late = now.saturating_sub(cadence.deadline()) > 2000.max(period.unwrap_or(0) / 4);
-            let clock_fault = !epoch.compatible(&reading, false);
-            let missed_judgement = now.saturating_sub(cadence.judgement) > 3750;
-            if clock_fault {
-                self.queue.retire_unanchored(&epoch.id)?;
-                epoch = Epoch::new(&reading);
-                self.queue.install_clock(epoch.clone())?;
-            }
-            if late || clock_fault || suspended || missed_judgement {
-                self.previous = None;
-                self.activity.reset_evidence();
-                self.run = crate::config::random_hex();
-                cadence.reset_grid(now);
-            }
-            let judge = cadence.should_judge(now);
-            #[cfg(all(feature = "activity-bench", target_os = "linux"))]
-            let native_started = (super::probe::cpu(), Instant::now());
-            let sessions = self.activity.capture(judge);
-            let roots = sessions.len();
-            #[cfg(all(feature = "activity-bench", target_os = "linux"))]
-            super::probe::cost(
-                "native",
-                super::probe::cpu() - native_started.0,
-                native_started.1.elapsed().as_secs_f64() * 1000.0,
-            );
-            if judge {
-                cadence.judged(now);
-            }
-            #[cfg(all(feature = "activity-bench", target_os = "linux"))]
-            let context_started = (super::probe::cpu(), Instant::now());
-            let (mut state, holds, order, legacy_ids) = self.state(sessions, reading.wall);
-            state.tracking.complete &= self.activity.complete();
-            let complete = state.tracking.complete;
-            let state = Arc::new(state);
-            #[cfg(all(feature = "activity-bench", target_os = "linux"))]
-            super::probe::cost(
-                "context",
-                super::probe::cpu() - context_started.0,
-                context_started.1.elapsed().as_secs_f64() * 1000.0,
-            );
-            #[cfg(all(feature = "activity-bench", target_os = "linux"))]
-            let persistence_started = (super::probe::cpu(), Instant::now());
-            if !self.legacy {
-                self.record(&state, &reading, &epoch, complete, started, holds)?;
-            }
-            #[cfg(all(feature = "activity-bench", target_os = "linux"))]
-            super::probe::cost(
-                "persistence",
-                super::probe::cpu() - persistence_started.0,
-                persistence_started.1.elapsed().as_secs_f64() * 1000.0,
-            );
-            let empty = state.contexts.is_empty() && complete;
-            let idle = !state.contexts.is_empty() && state.contexts.iter().all(|c| c.working == Some(false));
-            let paths = self.activity.client_paths();
-            let latest = Latest { clock_epoch: epoch.id.clone(), tick: epoch.tick(&reading), state };
-            epoch.last_tick = reading.tick;
-            if let Some(saved) = self.queue.metadata.clocks.get_mut(&epoch.id) {
-                saved.last_tick = reading.tick;
-            }
-            let digest = latest.state.digest();
-            let capture = Capture {
-                epoch: epoch.clone(),
-                reading,
-                latest,
-                witness: self.active_witness(),
-                paths,
-                digest,
-                order,
-                legacy_ids,
-                queue_id: self.queue.queue_id().into(),
-                open_id: self.queue.open_id().into(),
-                binding: self.queue.binding().cloned(),
-                ack: self.queue.ack(),
-                sequence: self.queue.next_sequence(),
-                release_pending: !self.queue.metadata.releases.is_empty(),
-            };
-            Self::publish(shared, capture);
+            *operation = "capture";
+            let mut mode = (false, false, false);
+            let result = (|| -> io::Result<(bool, bool, bool)> {
+                let reading = self.clock.read();
+                let now = origin.elapsed().as_millis() as u64;
+                let period = self.previous.as_ref().map(|p| reading.tick.saturating_sub(p.reading.tick));
+                let suspended = self.previous.as_ref().is_some_and(|p| {
+                    (i128::from(reading.tick)
+                        - i128::from(p.reading.tick)
+                        - started.duration_since(p.at).as_millis() as i128)
+                        .abs()
+                        > 2000
+                });
+                let late = now.saturating_sub(cadence.deadline()) > 2000.max(period.unwrap_or(0) / 4);
+                let clock_fault = !epoch.compatible(&reading, false);
+                let missed_judgement = now.saturating_sub(cadence.judgement) > 3750;
+                if clock_fault {
+                    self.queue.retire_unanchored(&epoch.id)?;
+                    epoch = Epoch::new(&reading);
+                    self.queue.install_clock(epoch.clone())?;
+                }
+                if late || clock_fault || suspended || missed_judgement {
+                    self.previous = None;
+                    self.activity.reset_evidence();
+                    self.run = crate::config::random_hex();
+                    cadence.reset_grid(now);
+                }
+                let judge = cadence.should_judge(now);
+                #[cfg(all(feature = "activity-bench", target_os = "linux"))]
+                let native_started = (super::probe::cpu(), Instant::now());
+                let (sessions, captured_complete) = self.capture(judge);
+                let roots = sessions.len();
+                #[cfg(all(feature = "activity-bench", target_os = "linux"))]
+                super::probe::cost(
+                    "native",
+                    super::probe::cpu() - native_started.0,
+                    native_started.1.elapsed().as_secs_f64() * 1000.0,
+                );
+                if judge {
+                    cadence.judged(now);
+                }
+                #[cfg(all(feature = "activity-bench", target_os = "linux"))]
+                let context_started = (super::probe::cpu(), Instant::now());
+                let (mut state, holds, order, legacy_ids) = self.state(sessions, reading.wall);
+                state.tracking.complete &= captured_complete;
+                let complete = state.tracking.complete;
+                let state = Arc::new(state);
+                mode = (
+                    state.contexts.is_empty() && complete,
+                    !state.contexts.is_empty() && state.contexts.iter().all(|c| c.working == Some(false)),
+                    Cadence::pressure(self.activity.contributors(), roots),
+                );
+                #[cfg(all(feature = "activity-bench", target_os = "linux"))]
+                super::probe::cost(
+                    "context",
+                    super::probe::cpu() - context_started.0,
+                    context_started.1.elapsed().as_secs_f64() * 1000.0,
+                );
+                #[cfg(all(feature = "activity-bench", target_os = "linux"))]
+                let persistence_started = (super::probe::cpu(), Instant::now());
+                let recorded =
+                    if !self.legacy { self.record(&state, &reading, &epoch, complete, started, holds) } else { Ok(()) };
+                #[cfg(all(feature = "activity-bench", target_os = "linux"))]
+                super::probe::cost(
+                    "persistence",
+                    super::probe::cpu() - persistence_started.0,
+                    persistence_started.1.elapsed().as_secs_f64() * 1000.0,
+                );
+                recorded?;
+                let empty = state.contexts.is_empty() && complete;
+                let idle = !state.contexts.is_empty() && state.contexts.iter().all(|c| c.working == Some(false));
+                let paths = self.activity.client_paths();
+                let latest = Latest { clock_epoch: epoch.id.clone(), tick: epoch.tick(&reading), state };
+                epoch.last_tick = reading.tick;
+                if let Some(saved) = self.queue.metadata.clocks.get_mut(&epoch.id) {
+                    saved.last_tick = reading.tick;
+                }
+                let digest = latest.state.digest();
+                let capture = Capture {
+                    epoch: epoch.clone(),
+                    reading,
+                    latest,
+                    witness: self.active_witness(),
+                    paths,
+                    digest,
+                    order,
+                    legacy_ids,
+                    queue_id: self.queue.queue_id().into(),
+                    open_id: self.queue.open_id().into(),
+                    binding: self.queue.binding().cloned(),
+                    ack: self.queue.ack(),
+                    sequence: self.queue.next_sequence(),
+                    release_pending: !self.queue.metadata.releases.is_empty(),
+                };
+                Self::publish(shared, capture);
+                Ok((empty, idle, Cadence::pressure(self.activity.contributors(), roots)))
+            })();
             #[cfg(all(feature = "activity-bench", target_os = "linux"))]
             super::probe::cost("capture", super::probe::cpu() - capture_cpu, started.elapsed().as_secs_f64() * 1000.0);
+            let (empty, idle, pressure) = result.as_ref().copied().unwrap_or(mode);
             cadence.completed(
                 origin.elapsed().as_millis() as u64,
                 budget_cost.elapsed_ms(started.elapsed()),
                 empty,
                 idle,
-                Cadence::pressure(self.activity.contributors(), roots),
+                pressure,
             );
+            result?;
+            if !self.legacy {
+                health.lock().unwrap_or_else(|e| e.into_inner()).observed();
+                retry.reset();
+            }
             if self.legacy {
-                cadence.next = (now / 15_000 + 1) * 15_000;
+                cadence.next = (origin.elapsed().as_millis() as u64 / 15_000 + 1) * 15_000;
             }
         }
         Ok(())
+    }
+
+    fn capture(&mut self, judge: bool) -> (Vec<Session>, bool) {
+        #[cfg(test)]
+        if let Some(complete) = super::fault::empty_capture() {
+            return (Vec::new(), complete);
+        }
+        let sessions = self.activity.capture(judge);
+        (sessions, self.activity.complete())
     }
 
     fn publish(shared: &Mutex<Option<Arc<Capture>>>, capture: Capture) {
@@ -998,6 +1355,7 @@ impl Sampler {
 
     fn control(&mut self, control: Control, epoch: &mut Epoch) -> io::Result<()> {
         match control {
+            Control::Storage(failure) => return Err(failure.into_io()),
             Control::Accounts(accounts) => self.accounts = accounts,
             Control::Fence => {
                 self.queue.retire_since(self.first_sequence)?;
@@ -1017,7 +1375,8 @@ impl Sampler {
                         self.queue.expire(now)?;
                     }
                 }
-                let _ = sender.send(self.queue.prepare().map(|batch| Prepared { batch, prepared_at, reading }));
+                let batch = self.queue.prepare()?;
+                let _ = sender.send(Ok(Prepared { batch, prepared_at, reading }));
             }
             Control::Legacy(legacy) => {
                 self.legacy = legacy;
@@ -1367,7 +1726,8 @@ impl Worker {
             failed: Arc::new(AtomicBool::new(false)),
             retiring: Arc::new(AtomicBool::new(false)),
             paths,
-            privacy,
+            privacy: Arc::new(Mutex::new(privacy)),
+            health: Arc::new(Mutex::new(Health::default())),
             clock: Arc::new(Clock::new()),
         }
     }
@@ -1413,7 +1773,7 @@ impl Worker {
 pub(super) struct WriterFixture {
     sampler: Sampler,
     epoch: Epoch,
-    rx: mpsc::Receiver<Control>,
+    rx: mpsc::Receiver<(u64, Control)>,
     shared: Arc<Mutex<Option<Arc<Capture>>>>,
 }
 
@@ -1421,7 +1781,7 @@ pub(super) struct WriterFixture {
 impl WriterFixture {
     pub fn process(&mut self) {
         let control = self.rx.try_recv().expect("queued writer control");
-        self.sampler.control(control, &mut self.epoch).unwrap();
+        self.sampler.control(control.1, &mut self.epoch).unwrap();
         self.sampler.publish_control(&self.shared, &self.epoch);
     }
 

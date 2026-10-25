@@ -13,6 +13,13 @@ use crate::clients::{ClientId, InstalledClient};
 use crate::model::{ClientSession, ClientSource, Provider, RunningSession, SessionReport, Tracking, now_ms};
 use crate::sink::Sink;
 
+#[cfg(test)]
+type AfterHealth = Box<dyn FnOnce(&Worker)>;
+#[cfg(test)]
+thread_local! {
+    static AFTER_HEALTH: std::cell::RefCell<Option<AfterHealth>> = const { std::cell::RefCell::new(None) };
+}
+
 #[derive(Clone, Copy)]
 enum Mode {
     Hello,
@@ -42,6 +49,9 @@ pub(crate) struct Delivery {
     proof_retry: Option<Instant>,
     rollback_probe: bool,
     reported_failure: bool,
+    generation: u64,
+    recovered: u64,
+    unavailable: bool,
 }
 
 impl Delivery {
@@ -67,10 +77,13 @@ impl Delivery {
             proof_retry: None,
             rollback_probe: false,
             reported_failure: false,
+            generation: 0,
+            recovered: 0,
+            unavailable: false,
         }
     }
     pub fn accounts(&mut self, accounts: BTreeMap<ClientId, Account>) {
-        if self.accounts != accounts && self.worker.control(Control::Accounts(accounts.clone())) {
+        if self.accounts != accounts && self.worker.control_at(self.generation, Control::Accounts(accounts.clone())) {
             self.accounts = accounts;
         }
     }
@@ -110,15 +123,44 @@ impl Delivery {
     }
 
     pub fn turn(&mut self, sink: &mut dyn Sink, inventory: &[InstalledClient]) {
-        if self.worker.failed() {
-            if !self.reported_failure {
-                sink.activity_failed();
-                self.reported_failure = true;
+        let health = self.worker.health();
+        #[cfg(test)]
+        AFTER_HEALTH.with(|hook| {
+            if let Some(observe) = hook.borrow_mut().take() {
+                observe(&self.worker);
             }
+        });
+        if health.unavailable != self.unavailable
+            || health.recoveries != self.recovered
+            || health.terminal && !self.reported_failure
+        {
+            sink.activity_health(&health);
+            self.unavailable = health.unavailable;
+            self.recovered = health.recoveries;
+            self.reported_failure = health.terminal;
+        }
+        if health.generation != self.generation {
+            self.generation = health.generation;
+            self.pending = None;
+            self.preparing = None;
+            self.last_state = None;
+            self.last_history = None;
+            self.last_live = None;
+            self.legacy = None;
+            self.legacy_fault = true;
+            if !matches!(self.mode, Mode::Unavailable) {
+                self.mode = Mode::Hello;
+                self.refresh = false;
+                self.replace = None;
+                self.rollback_probe = false;
+            }
+        }
+        if self.worker.failed() || health.unavailable {
             return;
         }
+        let Some(capture) = self.worker.snapshot() else { return };
         if let Some(control) = self.pending.take() {
-            if !self.worker.control(control.clone()) {
+            if !self.worker.control_at(self.generation, control.clone()) {
                 self.pending = Some(control);
             }
             return;
@@ -132,14 +174,15 @@ impl Delivery {
                 self.unavailable();
                 return;
             }
-            Err(_) => {
-                sink.activity_failed();
-                self.unavailable();
+            Err(error) => {
+                if error.kind() != std::io::ErrorKind::WouldBlock {
+                    self.worker.control_at(
+                        self.generation,
+                        Control::Storage(super::recovery::Failure::new("privacy-read", &error)),
+                    );
+                }
                 return;
             }
-        };
-        let Some(capture) = self.worker.snapshot() else {
-            return;
         };
         self.known |= capture.binding.is_some();
         if let Mode::Legacy(until) = self.mode {
@@ -172,6 +215,9 @@ impl Delivery {
                     "replaceAuthorityEpoch":self.replace,"clock":{"clockEpoch":capture.epoch.id,"tick":capture.epoch.tick(&sent),"wall":sent.wall},
                     "tracking":capture.latest.state.tracking,"knownWitnessId":capture.witness.as_ref().map(|w|&w.id),"latest":null,"acknowledgedThrough":if self.rollback_probe {0}else{capture.ack}});
                 let started = Instant::now();
+                if self.worker.health().generation != self.generation {
+                    return;
+                }
                 let answer = sink.activity_request(&request, self.known);
                 match answer {
                     Answer::Accepted(value) => {
@@ -325,7 +371,7 @@ impl Delivery {
                     Some(prepared).filter(|prepared| prepared.fresh(&self.worker.clock.read()))
                 }
                 Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
-                    self.unavailable();
+                    self.preparing = None;
                     return;
                 }
                 Err(mpsc::TryRecvError::Empty) => None,
@@ -333,7 +379,7 @@ impl Delivery {
         } else {
             if history_due && (capture.ack + 1 < capture.sequence || capture.release_pending) {
                 let (tx, rx) = mpsc::sync_channel(1);
-                if self.worker.control(Control::Prepare(tx)) {
+                if self.worker.control_at(self.generation, Control::Prepare(tx)) {
                     self.preparing = Some(rx);
                 }
             }
@@ -384,6 +430,9 @@ impl Delivery {
     }
 
     fn answer(&mut self, sink: &mut dyn Sink, capture: &Capture, request: &Value, batch: Option<&Batch>) {
+        if self.worker.health().generation != self.generation {
+            return;
+        }
         match sink.activity_request(request, true) {
             Answer::Accepted(value) => {
                 let Some(bound) = capture.binding.as_ref() else {
@@ -440,6 +489,10 @@ impl Delivery {
         let mut report = legacy_report(capture, inventory);
         report.tracking.as_mut().unwrap().complete &= !self.legacy_fault;
         if self.legacy.as_ref().is_some_and(|(at, old)| *old == report && at.elapsed() < Duration::from_secs(120)) {
+            return;
+        }
+        let health = self.worker.health();
+        if health.generation != self.generation || health.unavailable {
             return;
         }
         if sink.report(&report) {
@@ -1009,6 +1062,169 @@ mod tests {
         delivery.turn(&mut sink, &[]);
         assert_eq!(sink.failures, 1);
         assert_eq!(sink.requests, 0);
+        drop(delivery);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovered_empty_legacy_capture_requires_an_acknowledged_incomplete_report() {
+        let _capture = super::super::fault::Plan::current().empty_capture(true);
+        struct OldHub {
+            reports: Vec<SessionReport>,
+            accept: bool,
+        }
+        impl Sink for OldHub {
+            fn deliver(&mut self, _: &Outcome) {}
+            fn activity_request(&mut self, _: &Value, _: bool) -> Answer {
+                Answer::Unsupported
+            }
+            fn report(&mut self, report: &SessionReport) -> bool {
+                self.reports.push(report.clone());
+                self.accept
+            }
+        }
+        fn until(mut ready: impl FnMut() -> bool) {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while !ready() {
+                assert!(Instant::now() < deadline, "legacy lifecycle timed out");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        let root = std::env::temp_dir().join(format!("quotum-legacy-recovery-{}", crate::config::random_hex()));
+        let paths = Paths { config: root.join("config"), work: root.join("work"), state: root.join("state") };
+        let worker = Worker::start(Start {
+            paths,
+            home: root.clone(),
+            clients: Vec::new(),
+            scope: Scope { version: 1, clients: vec!["codex".into()], route_disabled: Vec::new(), complete: true },
+            namespace: "a".repeat(64),
+            credential_scope: "b".repeat(64),
+            projects: true,
+            stop: Stop::new(),
+            privacy: String::new(),
+        })
+        .unwrap();
+        let mut delivery = Delivery::new(worker);
+        let mut sink = OldHub { reports: Vec::new(), accept: true };
+        until(|| {
+            delivery.turn(&mut sink, &[]);
+            sink.reports.len() >= 2 && sink.reports.last().unwrap().tracking.as_ref().unwrap().complete
+        });
+        assert!(
+            sink.reports.iter().all(|report| report.sessions.is_empty() && report.client_sessions.is_empty()),
+            "an empty tracked-client list cannot depend on native clients"
+        );
+        assert!(!sink.reports[0].tracking.as_ref().unwrap().complete);
+        assert!(!delivery.legacy_fault, "the initial incomplete report was acknowledged");
+        sink.accept = false;
+        let before_reports = sink.reports.len();
+        let before_generation = delivery.worker.health().generation;
+        assert!(delivery.worker.control(Control::Storage(super::super::recovery::Failure::new(
+            "privacy-read",
+            &std::io::Error::from_raw_os_error(5),
+        ))));
+        until(|| {
+            delivery.turn(&mut sink, &[]);
+            let health = delivery.worker.health();
+            health.generation > before_generation
+                && health.recoveries > 0
+                && !health.unavailable
+                && sink.reports.len() > before_reports
+        });
+        let recovered = &sink.reports[before_reports];
+        assert!(
+            !recovered.tracking.as_ref().unwrap().complete,
+            "the first post-fault legacy report must break coverage even when no clients are running"
+        );
+        assert!(delivery.legacy_fault, "a rejected incomplete report cannot restore continuity");
+        sink.accept = true;
+        let capture = delivery.worker.snapshot().unwrap();
+        delivery.legacy(&mut sink, &capture, &[]);
+        assert!(!sink.reports.last().unwrap().tracking.as_ref().unwrap().complete);
+        assert!(!delivery.legacy_fault);
+        delivery.legacy(&mut sink, &capture, &[]);
+        assert!(sink.reports.last().unwrap().tracking.as_ref().unwrap().complete);
+        drop(delivery);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_authorization_rechecks_generation_after_a_delayed_turn() {
+        let _capture = super::super::fault::Plan::current().empty_capture(true);
+        struct OldHub {
+            reports: Vec<SessionReport>,
+        }
+        impl Sink for OldHub {
+            fn deliver(&mut self, _: &Outcome) {}
+            fn activity_request(&mut self, _: &Value, _: bool) -> Answer {
+                Answer::Unsupported
+            }
+            fn report(&mut self, report: &SessionReport) -> bool {
+                self.reports.push(report.clone());
+                true
+            }
+        }
+        fn until(mut ready: impl FnMut() -> bool) {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while !ready() {
+                assert!(Instant::now() < deadline, "legacy lifecycle timed out");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        let root = std::env::temp_dir().join(format!("quotum-legacy-race-{}", crate::config::random_hex()));
+        let paths = Paths { config: root.join("config"), work: root.join("work"), state: root.join("state") };
+        let worker = Worker::start(Start {
+            paths,
+            home: root.clone(),
+            clients: Vec::new(),
+            scope: Scope { version: 1, clients: vec!["codex".into()], route_disabled: Vec::new(), complete: true },
+            namespace: "a".repeat(64),
+            credential_scope: "b".repeat(64),
+            projects: true,
+            stop: Stop::new(),
+            privacy: String::new(),
+        })
+        .unwrap();
+        let mut delivery = Delivery::new(worker);
+        let mut sink = OldHub { reports: Vec::new() };
+        until(|| {
+            delivery.turn(&mut sink, &[]);
+            sink.reports.len() >= 2 && sink.reports.last().unwrap().tracking.as_ref().unwrap().complete
+        });
+        assert!(!delivery.legacy_fault);
+        assert!(matches!(delivery.mode, Mode::Legacy(_)));
+        let before_generation = delivery.worker.health().generation;
+        let before_reports = sink.reports.len();
+        // The ordinary unchanged-report heartbeat is due; avoid a two-minute wall-clock wait.
+        delivery.legacy.as_mut().unwrap().0 = Instant::now() - Duration::from_secs(121);
+        AFTER_HEALTH.with(|pause| {
+            *pause.borrow_mut() = Some(Box::new(move |worker| {
+                // Only the capture thread advances while the coordinator's old health sample is retained.
+                assert!(worker.control(Control::Storage(super::super::recovery::Failure::new(
+                    "privacy-read",
+                    &std::io::Error::from_raw_os_error(5),
+                ))));
+                until(|| {
+                    let health = worker.health();
+                    health.generation > before_generation
+                        && health.recoveries > 0
+                        && !health.unavailable
+                        && worker.snapshot().is_some()
+                });
+            }));
+        });
+        delivery.turn(&mut sink, &[]);
+        assert!(delivery.worker.health().generation > before_generation);
+        assert_eq!(sink.reports.len(), before_reports, "a new generation needs fresh delivery authorization");
+        until(|| {
+            delivery.turn(&mut sink, &[]);
+            sink.reports.len() > before_reports
+        });
+        assert!(
+            !sink.reports[before_reports].tracking.as_ref().unwrap().complete,
+            "recovery must still break coverage after the stale turn was discarded"
+        );
         drop(delivery);
         std::fs::remove_dir_all(root).unwrap();
     }

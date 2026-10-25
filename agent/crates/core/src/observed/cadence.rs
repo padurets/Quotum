@@ -29,6 +29,8 @@ pub(crate) struct Cadence {
     slots: u64,
     planned: bool,
     interrupted_deadline: Option<u64>,
+    recovery_price: f64,
+    last_recovery: Option<u64>,
 }
 
 impl Cadence {
@@ -57,6 +59,8 @@ impl Cadence {
             slots: 8,
             planned: false,
             interrupted_deadline: None,
+            recovery_price: 0.0,
+            last_recovery: None,
         }
     }
 
@@ -228,11 +232,61 @@ impl Cadence {
         // Commands spend actual budget, but are not repeated by every future capture.
         self.charge(cost_ms / self.allowance);
     }
+
+    pub fn maintenance(&mut self, now: u64, cost_ms: f64) {
+        self.control(now, cost_ms);
+        self.recovery_price = (cost_ms / self.allowance).max(self.recovery_price * 0.875);
+        self.last_recovery = Some(self.at);
+    }
+
+    pub fn recovery_due(&mut self, now: u64) -> u64 {
+        self.accrue(now);
+        let repaid = self.at.saturating_add((-self.balance).max(0.0).ceil() as u64);
+        let affordable = |at: u64| {
+            if self.last_recovery.is_none_or(|last| at.saturating_sub(last) >= STALE) {
+                self.spent_at(at) < HORIZON as f64
+            } else {
+                self.spent_at(at) + self.recovery_price <= HORIZON as f64
+            }
+        };
+        if affordable(repaid) {
+            return repaid;
+        }
+        self.buckets
+            .iter()
+            .map(|bucket| bucket.expiry)
+            .chain(self.last_recovery.map(|last| last.saturating_add(STALE)))
+            .filter(|&at| at >= repaid && affordable(at))
+            .min()
+            .expect("repaid and expired maintenance permits calibration")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expensive_reopens_and_failed_captures_share_the_run_ledger_across_generations() {
+        let mut cadence = Cadence::new();
+        let mut now = 0;
+        let mut events = Vec::new();
+        for _ in 0..30 {
+            now = cadence.recovery_due(now);
+            cadence.maintenance(now, 100.0);
+            events.push((now, 100.0));
+            now = cadence.recovery_due(now);
+            cadence.reset_grid(now);
+            let due = cadence.due(now);
+            now = due.max(now);
+            // A failed ordinary append still spends its native scan and journal cost.
+            capture(&mut cadence, now, 80, false, false, false);
+            now += 80;
+            events.push((now, 80.0));
+            assert!(moving_cost(&events, now) <= 0.004 * HORIZON as f64);
+            assert!(cadence.recovery_due(now) > now, "a new generation cannot erase debt");
+        }
+    }
 
     fn capture(c: &mut Cadence, start: u64, cost: u64, empty: bool, idle: bool, pressure: bool) {
         if c.should_judge(start) {

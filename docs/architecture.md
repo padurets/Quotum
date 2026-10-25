@@ -267,8 +267,31 @@ run. The worker publishes one immutable bounded snapshot and accepts at most eig
 pending metadata commands. Stopping the runner disconnects and joins this worker;
 the CLI and app use the same state directory and writer lock after their handoff.
 A replacement waits interruptibly for a preceding writer still finishing delivery.
-Permanent capture failure produces one bounded warning instead of silently leaving
-the quota loop without activity capture.
+Temporary local storage errors keep that thread's supervisor alive independently of
+quota collection and HTTP. It drops the failed writer, reopens and validates the
+existing journal, and retries after 1, 2, 5, 15, 30 and then 60 seconds. CPU debt can
+defer an expensive attempt further. A successful reopen alone does not reset retries:
+the first new durable observation does. Recovery starts a new capture identity and
+fresh CPU evidence; it never fills the unobserved gap with work, idle or coverage.
+The supervisor keeps its clock basis across storage recovery. A fallback clock without
+a native boot identity can retain only an epoch established in this same run; an
+actual process restart still retires an unprovable pending fallback epoch.
+Read I/O errors do not authorize corruption recovery or payload deletion. An already
+known missing manifest must return before capture can resume; it cannot initialize
+a replacement queue. Delivery reconciles the same queue and binding with hello before
+replaying history, and discards controls and prepared replies from an earlier writer
+generation. Policy, identity and authority violations remain fenced.
+Failure transitions and recovery report only static operation, I/O kind, optional OS
+code and bounded counters. First and last failure evidence remain in memory even if
+the log cannot be written; repeating failures do not produce repeating warnings.
+Initial privacy publication also runs away from the quota coordinator. The app retains
+a valid config while its privacy storage is unavailable, measures with activity
+deferred, and retries the latest policy even when completely idle. A failed settings
+save does not claim acceptance of an unwritten privacy barrier. Pending restrictions
+still rotate the privacy revision if a later save reenables tracking before repair.
+Policy attempts retain the app's machine lock until they finish and use that ownership's
+cancellation token. Releasing the machine cancels pending attempts before a successor
+can acquire it, so an old app callback cannot change the successor's privacy revision.
 
 Capture and classification have separate clocks. CPU thresholds and the one-minute
 hold use complete fifteen-second judgement windows. New roots first establish a
@@ -282,7 +305,9 @@ including journal and command work. Costs are normalized by their mode's allowan
 at completion; changing mode or resetting the grid never erases spending or debt.
 Large descendant trees and large root rosters use the dense allowance. An aged
 price permits one new calibration only after debt repayment and with ledger room.
-No polling loop catches up missed captures. Thread CPU clocks measure capture,
+No polling loop catches up missed captures. The supervisor retains the rolling CPU
+ledger, debt, prices and monotonic origin across writer generations, including failed
+capture, control and reopen work. Thread CPU clocks measure capture,
 context, journal and control work; an unavailable CPU clock uses elapsed time as a
 conservative fallback. Waiting time spends no CPU allowance when the CPU clock is
 available. Delayed looks, clock faults, suspend,

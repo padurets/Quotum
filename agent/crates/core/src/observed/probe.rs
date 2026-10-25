@@ -242,6 +242,15 @@ fn run(args: &[String]) {
     std::fs::create_dir_all(&paths.state).unwrap();
     let stop = Stop::new();
     let end = stop.clone();
+    let input_stop = stop.clone();
+    std::thread::spawn(move || {
+        for line in io::stdin().lock().lines().map_while(Result::ok) {
+            if line == "stop" {
+                input_stop.request(How::Exit);
+                break;
+            }
+        }
+    });
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(duration));
         end.request(How::Exit);

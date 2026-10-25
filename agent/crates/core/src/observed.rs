@@ -11,10 +11,13 @@ pub(crate) mod cadence;
 pub(crate) mod clock;
 pub(crate) mod cost;
 pub(crate) mod delivery;
+#[cfg(test)]
+mod fault;
 pub(crate) mod outbox;
 pub(crate) mod privacy;
 #[cfg(all(feature = "activity-bench", target_os = "linux"))]
 pub mod probe;
+pub mod recovery;
 pub(crate) mod worker;
 
 pub struct Target {
@@ -33,6 +36,116 @@ pub fn update_privacy(paths: &crate::config::Paths, config: &crate::config::Conf
     let clients = crate::clients::ClientId::ALL.into_iter().filter(|c| config.tracks(*c)).collect::<Vec<_>>();
     let route_disabled = crate::clients::ClientId::ALL.into_iter().filter(|c| !config.routes(*c)).collect::<Vec<_>>();
     privacy::update(paths, config.sessions() && !clients.is_empty(), config.projects(), &clients, &route_disabled)
+}
+
+/// Pending application policy publication, including when no capture Runner is needed.
+/// Callers serialize config acceptance and pass the latest config on every attempt.
+#[derive(Default)]
+pub struct PrivacyUpdate {
+    pending: bool,
+    retire: bool,
+    retry: recovery::Retry,
+    due: Option<std::time::Instant>,
+    health: recovery::Health,
+}
+
+impl PrivacyUpdate {
+    pub fn pending(&self) -> bool {
+        self.pending
+    }
+    pub fn health(&self) -> &recovery::Health {
+        &self.health
+    }
+
+    pub fn accept(
+        &mut self,
+        paths: &crate::config::Paths,
+        config: &crate::config::Config,
+        restriction: bool,
+        stop: &crate::stop::Stop,
+    ) -> Result<(), recovery::Failure> {
+        self.retire |= restriction;
+        self.pending = true;
+        self.attempt(paths, config, stop)
+    }
+
+    pub fn retry(
+        &mut self,
+        paths: &crate::config::Paths,
+        config: &crate::config::Config,
+        stop: &crate::stop::Stop,
+    ) -> bool {
+        if !self.pending
+            || stop.requested()
+            || self.health.terminal
+            || self.due.is_some_and(|due| std::time::Instant::now() < due)
+        {
+            return false;
+        }
+        self.attempt(paths, config, stop).is_ok()
+    }
+
+    fn attempt(
+        &mut self,
+        paths: &crate::config::Paths,
+        config: &crate::config::Config,
+        stop: &crate::stop::Stop,
+    ) -> Result<(), recovery::Failure> {
+        let clients = crate::clients::ClientId::ALL.into_iter().filter(|c| config.tracks(*c)).collect::<Vec<_>>();
+        let routes = crate::clients::ClientId::ALL.into_iter().filter(|c| !config.routes(*c)).collect::<Vec<_>>();
+        match privacy::try_update(
+            paths,
+            config.sessions() && !clients.is_empty(),
+            config.projects(),
+            &clients,
+            &routes,
+            self.retire,
+            Some(stop),
+        ) {
+            Ok(_) => {
+                self.pending = false;
+                self.retire = false;
+                self.due = None;
+                self.retry.reset();
+                self.health.observed();
+                Ok(())
+            }
+            Err(error) => {
+                let failure = recovery::Failure::new("privacy", &error);
+                self.health.fail(failure);
+                self.due = Some(std::time::Instant::now() + self.retry.failed());
+                Err(failure)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+    use crate::config::{Config, Paths};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn pending_off_on_keeps_a_restriction_even_before_its_first_successful_publication() {
+        let root = std::env::temp_dir().join(format!("quotum-policy-retry-{}", crate::config::random_hex()));
+        let paths = Paths { config: root.join("config"), state: root.clone(), work: root.join("work") };
+        let on = Config::default();
+        let before = update_privacy(&paths, &on).unwrap();
+        let held = crate::config::lock_file(&root.join("activity-policy.lock")).unwrap();
+        let mut pending = PrivacyUpdate::default();
+        let stop = crate::stop::Stop::new();
+        let start = Instant::now();
+        assert!(pending.accept(&paths, &Config::parse("sessions=false").unwrap(), true, &stop).unwrap_err().retryable);
+        assert!(pending.accept(&paths, &on, false, &stop).unwrap_err().retryable);
+        assert!(start.elapsed() < Duration::from_secs(1), "policy lock waits never block the coordinator");
+        drop(held);
+        pending.due = None;
+        assert!(pending.retry(&paths, &on, &stop));
+        assert!(!pending.pending());
+        assert_ne!(before, update_privacy(&paths, &on).unwrap());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 pub(crate) const BODY_BYTES: usize = 512 * 1024;

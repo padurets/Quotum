@@ -132,7 +132,7 @@ impl Log {
         let written =
             fs::OpenOptions::new().create(true).append(true).open(&self.file).and_then(|mut f| writeln!(f, "{line}"));
         if written.is_err() {
-            eprintln!("{line}");
+            let _ = writeln!(std::io::stderr().lock(), "{line}");
         }
     }
 
