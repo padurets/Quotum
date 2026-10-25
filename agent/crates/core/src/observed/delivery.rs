@@ -134,6 +134,7 @@ impl Delivery {
             self.last_history = None;
             self.last_live = None;
             self.legacy = None;
+            self.legacy_fault = true;
             if !matches!(self.mode, Mode::Unavailable) {
                 self.mode = Mode::Hello;
                 self.refresh = false;
@@ -1044,6 +1045,88 @@ mod tests {
         delivery.turn(&mut sink, &[]);
         assert_eq!(sink.failures, 1);
         assert_eq!(sink.requests, 0);
+        drop(delivery);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovered_empty_legacy_capture_requires_an_acknowledged_incomplete_report() {
+        struct OldHub {
+            reports: Vec<SessionReport>,
+            accept: bool,
+        }
+        impl Sink for OldHub {
+            fn deliver(&mut self, _: &Outcome) {}
+            fn activity_request(&mut self, _: &Value, _: bool) -> Answer {
+                Answer::Unsupported
+            }
+            fn report(&mut self, report: &SessionReport) -> bool {
+                self.reports.push(report.clone());
+                self.accept
+            }
+        }
+        fn until(mut ready: impl FnMut() -> bool) {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while !ready() {
+                assert!(Instant::now() < deadline, "legacy lifecycle timed out");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        let root = std::env::temp_dir().join(format!("quotum-legacy-recovery-{}", crate::config::random_hex()));
+        let paths = Paths { config: root.join("config"), work: root.join("work"), state: root.join("state") };
+        let worker = Worker::start(Start {
+            paths,
+            home: root.clone(),
+            clients: Vec::new(),
+            scope: Scope { version: 1, clients: vec!["codex".into()], route_disabled: Vec::new(), complete: true },
+            namespace: "a".repeat(64),
+            credential_scope: "b".repeat(64),
+            projects: true,
+            stop: Stop::new(),
+            privacy: String::new(),
+        })
+        .unwrap();
+        let mut delivery = Delivery::new(worker);
+        let mut sink = OldHub { reports: Vec::new(), accept: true };
+        until(|| {
+            delivery.turn(&mut sink, &[]);
+            sink.reports.len() >= 2 && sink.reports.last().unwrap().tracking.as_ref().unwrap().complete
+        });
+        assert!(
+            sink.reports.iter().all(|report| report.sessions.is_empty() && report.client_sessions.is_empty()),
+            "an empty tracked-client list cannot depend on native clients"
+        );
+        assert!(!sink.reports[0].tracking.as_ref().unwrap().complete);
+        assert!(!delivery.legacy_fault, "the initial incomplete report was acknowledged");
+        sink.accept = false;
+        let before_reports = sink.reports.len();
+        let before_generation = delivery.worker.health().generation;
+        assert!(delivery.worker.control(Control::Storage(super::super::recovery::Failure::new(
+            "privacy-read",
+            &std::io::Error::from_raw_os_error(5),
+        ))));
+        until(|| {
+            delivery.turn(&mut sink, &[]);
+            let health = delivery.worker.health();
+            health.generation > before_generation
+                && health.recoveries > 0
+                && !health.unavailable
+                && sink.reports.len() > before_reports
+        });
+        let recovered = &sink.reports[before_reports];
+        assert!(
+            !recovered.tracking.as_ref().unwrap().complete,
+            "the first post-fault legacy report must break coverage even when no clients are running"
+        );
+        assert!(delivery.legacy_fault, "a rejected incomplete report cannot restore continuity");
+        sink.accept = true;
+        let capture = delivery.worker.snapshot().unwrap();
+        delivery.legacy(&mut sink, &capture, &[]);
+        assert!(!sink.reports.last().unwrap().tracking.as_ref().unwrap().complete);
+        assert!(!delivery.legacy_fault);
+        delivery.legacy(&mut sink, &capture, &[]);
+        assert!(sink.reports.last().unwrap().tracking.as_ref().unwrap().complete);
         drop(delivery);
         std::fs::remove_dir_all(root).unwrap();
     }
