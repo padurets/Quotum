@@ -777,8 +777,8 @@ requires committed prefix retirement and zero additional reads; a missing eligib
 boundary or unconfirmed retirement is inconclusive.
 
 The manual `startup_io_control` input observes the file backing a Linux browser's
-kernel page wait on an isolated GitHub runner. A fixed owned-file batch must first
-produce a matching probe observation, identity and SIGTERM generation before the
+entry into the kernel page-wait path on an isolated GitHub runner. A fixed owned-file batch must first
+produce a matching entry observation, identity and SIGTERM generation before the
 unchanged full history benchmark starts. Missing BTF, an unavailable probe or an
 unconfirmed fixture stops this diagnostic; no retry substitutes for qualification.
 The observer admits only the known fixture and the benchmark's detached browser main
@@ -786,10 +786,11 @@ thread, checking parent, birth and UID. It keeps numeric device/inode/page ident
 and wait bits, never kernel addresses, paths or stack data. Entry snapshots precede
 reference release. A 21-second observation window does not delay browser termination;
 the original twenty-second launch and twenty-minute job limits remain unchanged.
-Exact single-function multi-probe links and program counters are checked before the
-benchmark and after the window. Missing or nonzero kernel miss counters invalidate
-duration qualification. Unpaired entries do not prove a physical wait duration;
-post-readiness observations are not automatically startup cost. The original benchmark
+The exact classic kprobe can observe this inline function even when it is absent
+from ftrace's function list; the fixture must still qualify the actual attachment.
+Only its specific traceability warning is accepted. An entry does not prove blocking,
+its duration, a current wait owner or the absence of other waits. No return probe or
+duration certificate is collected. Post-readiness entries are not automatically startup cost. The original benchmark
 verdict and console output survive collection and cleanup, and this optional job
 cannot satisfy the required benchmark gate. Select it without other diagnostic modes.
 

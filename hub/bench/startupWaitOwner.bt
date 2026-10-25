@@ -1,10 +1,12 @@
 /* $1 P, $2 bench E, $3 UID, $4/$5 parent birth ticks, $6 USER_HZ=100.
  * $7/$8/$9 expected fixture device major/minor/inode, from its owned FD.
  * $10/$11 precreated gated fixture F PID/birth ticks; MAIN THREADS ONLY.
- * F/E/tracer already called setsid before attachment. Controller owns deadlines.
+ * Exact classic entry only: an entry does not prove blocking, duration or absence.
+ * Numeric entry snapshots only; counts are observed entries, never CPU or wait time.
  * class: 0 unknown, 1 file, 2 anon(tag1), 3 KSM(tag3). Never dereference tags.
- * Probe ABI: v6.17 folio_wait_bit_common(folio,bit,state,behavior), DROP=2.
- * Require exact single-name wildcard expansion, MULTI fdinfo/miss certification.
+ * ABI: v6.17 folio_wait_bit_common(folio,bit,state,behavior), DROP=2.
+ * Snapshot precedes any DROP. No pointer, return probe or duration state is retained.
+ * At most 64 numeric keys per cohort, four fixture and sixteen browser entry rows.
  */
 BEGIN { if ($6 != 100) { @config_invalid = 1; exit(); } }
 
@@ -26,7 +28,7 @@ tracepoint:syscalls:sys_exit_setsid
   }
 }
 
-kprobe:folio_wait_bit_commo*
+kprobe:folio_wait_bit_common
 /!@capture_closed && tid == pid && (@cohort[pid] || pid == $10)/
 {
   $entered = nsecs(monotonic);
@@ -38,69 +40,39 @@ kprobe:folio_wait_bit_commo*
   }
   $c = @cohort[pid];
   if ($c && @alive[$c] && @root[$c] == pid && @birth[$c] == (uint64)curtask->start_boottime && @parent[$c] == (uint64)curtask->real_parent->tgid && @parent_ticks[$c] == (uint64)curtask->real_parent->start_boottime / 10000000 && uid == $3) {
-    @entries[$c] = @entries[$c] + 1; @depth[$c] = @depth[$c] + 1;
-    if (@depth[$c] > 1) { @overlap[$c] = @overlap[$c] + 1; }
-    else {
-      $f = (struct folio *)arg0; $raw = (uint64)$f->mapping;
-      $kind = 0; $major = 0; $minor = 0; $ino = (uint64)0; $index = (uint64)0;
-      if (($raw & 3) == 1) { $kind = 2; }
-      else if (($raw & 3) == 3) { $kind = 3; }
-      else if ($raw && !($raw & 3)) {
-        $m = (struct address_space *)$raw; $inode = $m->host;
-        if ($inode != 0) {
-          $sb = $inode->i_sb; $back = $inode->i_mapping; $index0 = (uint64)$f->index;
-          if ($sb != 0 && $back == $m) {
-            $dev = (uint64)$sb->s_dev; $ino0 = (uint64)$inode->i_ino;
-            if ((uint64)$f->mapping == $raw && $m->host == $inode && $inode->i_mapping == $m && (uint64)$f->index == $index0) {
-              $kind = 1; $major = $dev >> 20; $minor = $dev & 1048575;
-              $ino = $ino0; $index = $index0;
-            }
+    @entries[$c] = @entries[$c] + 1;
+    $f = (struct folio *)arg0; $raw = (uint64)$f->mapping;
+    $kind = 0; $major = 0; $minor = 0; $ino = (uint64)0; $index = (uint64)0;
+    if (($raw & 3) == 1) { $kind = 2; }
+    else if (($raw & 3) == 3) { $kind = 3; }
+    else if ($raw && !($raw & 3)) {
+      $m = (struct address_space *)$raw; $inode = $m->host;
+      if ($inode != 0) {
+        $sb = $inode->i_sb; $back = $inode->i_mapping; $index0 = (uint64)$f->index;
+        if ($sb != 0 && $back == $m) {
+          $dev = (uint64)$sb->s_dev; $ino0 = (uint64)$inode->i_ino;
+          if ((uint64)$f->mapping == $raw && $m->host == $inode && $inode->i_mapping == $m && (uint64)$f->index == $index0) {
+            $kind = 1; $major = $dev >> 20; $minor = $dev & 1048575;
+            $ino = $ino0; $index = $index0;
           }
         }
       }
-      if ((uint64)$f->mapping != $raw) { $kind = 0; $major = 0; $minor = 0; $ino = 0; $index = 0; }
-      if ($kind != 1) { @mapping_unqualified[$c] = @mapping_unqualified[$c] + 1; }
-      $key = ($c, $kind, $major, $minor, $ino, (int32)arg1, (int32)arg3);
-      /* bpftrace 0.20 permits tuple values, but map keys must list scalar fields. */
-      if (!@seen[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6] && @key_count[$c] >= 64) { @missing[$c] = @missing[$c] + 1; }
-      else {
-        if (!@seen[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6]) { @seen[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6] = 1; @key_count[$c] = @key_count[$c] + 1; }
-        @pending_key[$c] = $key; @pending_index[$c] = $index;
-        @pending_start[$c] = $entered; @pending_root[$c] = pid; @pending_birth[$c] = @birth[$c];
-      }
     }
-  } else if ($c) { @identity_lost[$c] = @identity_lost[$c] + 1; }
-}
-
-kretprobe:folio_wait_bit_commo*
-/!@capture_closed && tid == pid && @cohort[pid]/
-{
-  $c = @cohort[pid];
-  if (@alive[$c] && @root[$c] == pid && @birth[$c] == (uint64)curtask->start_boottime && @parent[$c] == (uint64)curtask->real_parent->tgid && @parent_ticks[$c] == (uint64)curtask->real_parent->start_boottime / 10000000 && uid == $3) {
-    if (@depth[$c] > 1) { @depth[$c] = @depth[$c] - 1; }
+    if ((uint64)$f->mapping != $raw) { $kind = 0; $major = 0; $minor = 0; $ino = 0; $index = 0; }
+    if ($kind != 1) { @mapping_unqualified[$c] = @mapping_unqualified[$c] + 1; }
+    $key = ($c, $kind, $major, $minor, $ino, (int32)arg1, (int32)arg3);
+    /* bpftrace 0.20 map keys list scalar fields, never a nested tuple key. */
+    if (!@seen[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6] && @key_count[$c] >= 64) { @missing[$c] = @missing[$c] + 1; }
     else {
-      if (@depth[$c] == 1 && @pending_start[$c]) {
-        $key = @pending_key[$c]; $start = @pending_start[$c]; $end = nsecs(monotonic); $elapsed = $end - $start;
-        @count[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6] = count();
-        @sum_ns[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6] = sum($elapsed);
-        @max_ns[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6] = max($elapsed);
-        if ($elapsed > @longest_ns[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6]) {
-          @longest_ns[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6] = $elapsed;
-          @max_point[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6] = ($elapsed, @pending_index[$c], $start, $end);
-        }
-        $point = @max_point[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6];
-        if ($point.0 != @longest_ns[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6] || $point.3 - $point.2 != $point.0) { @tuple_mismatch[$c] = @tuple_mismatch[$c] + 1; }
-        $eligible = $c == 2 || ($key.1 == 1 && $key.2 == $7 && $key.3 == $8 && $key.4 == $9);
-        if ($eligible && @pairs_printed[$c] < ($c == 1 ? 4 : 16)) {
-          @pairs_printed[$c] = @pairs_printed[$c] + 1;
-          printf("QFW_PAIR %llu %llu %llu %llu %llu %llu %llu %llu %lld %lld %llu %llu\n", $c, (uint64)pid, @birth[$c], $key.1, $key.2, $key.3, $key.4, @pending_index[$c], $key.5, $key.6, $start, $end);
-        } else if ($eligible) { @pairs_omitted[$c] = @pairs_omitted[$c] + 1; }
-        delete(@pending_key[$c]); delete(@pending_index[$c]); delete(@pending_start[$c]);
-        delete(@pending_root[$c]); delete(@pending_birth[$c]);
-      } else { @unmatched[$c] = @unmatched[$c] + 1; }
-      @depth[$c] = 0;
+      if (!@seen[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6]) { @seen[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6] = 1; @key_count[$c] = @key_count[$c] + 1; }
+      @count[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6] = count();
     }
-  } else { @identity_lost[$c] = @identity_lost[$c] + 1; }
+    $eligible = $c == 2 || ($kind == 1 && $major == $7 && $minor == $8 && $ino == $9);
+    if ($eligible && @entries_printed[$c] < ($c == 1 ? 4 : 16)) {
+      @entries_printed[$c] = @entries_printed[$c] + 1;
+      printf("QFW_ENTRY %llu %llu %llu %llu %llu %llu %llu %llu %lld %lld %llu\n", $c, (uint64)pid, @birth[$c], $kind, $major, $minor, $ino, $index, (int32)arg1, (int32)arg3, $entered);
+    } else if ($eligible) { @entries_omitted[$c] = @entries_omitted[$c] + 1; }
+  } else if ($c) { @identity_lost[$c] = @identity_lost[$c] + 1; }
 }
 
 tracepoint:sched:sched_process_exec
