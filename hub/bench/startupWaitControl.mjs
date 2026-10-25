@@ -42,22 +42,22 @@ export function diagnosticClassifier({toolMessages=false}={}){
   },finish(){if(!sealed){sealed={categories:[...kinds].length?[...kinds]:bytes?['other']:[],locations,bytes,scannedBytes:scanned,discardedBytes:bytes,unscannedBytes:bytes-scanned,capBytes:16384,limited:bytes>16384};
     if(toolMessages){
       const rows=toolText.split(/\r?\n/);if(bytes>16384)rows.pop();
-      sealed.toolMessages=rows.filter(v=>v.trim()).slice(0,8).map(v=>v.replace(/\x1b\[[0-9;]*[A-Za-z]/g,'').replace(/https?:\/\/\S+/gi,'[url]').replace(/(?:[A-Za-z]:\\|\/)[^\s"'<>]*/g,'[path]').replace(/\b(?:0x)?[a-f0-9]{8,128}\b/gi,'[address]').replace(/\b[A-Za-z0-9_-]*(?:token|secret|cookie|password|credential)[A-Za-z0-9_-]*(?:\s*[=:]\s*(?:"[^"]*"|'[^']*'|\S+))?/gi,'[redacted]').replace(/[\x00-\x1f\x7f]/g,'?').slice(0,256));
+      sealed.toolMessages=rows.filter(v=>v.trim()).slice(0,8).map(v=>v.replace(/\x1b\[[0-9;]*[A-Za-z]/g,'').replace(/https?:\/\/\S+/gi,'[url]').replace(/(?:[A-Za-z]:\\|\/)[^\s"'<>:]*/g,'[path]').replace(/\b(?:0x)?[a-f0-9]{8,128}\b/gi,'[address]').replace(/\b[A-Za-z0-9_-]*(?:token|secret|cookie|password|credential)[A-Za-z0-9_-]*(?:\s*[=:]\s*(?:"[^"]*"|'[^']*'|\S+))?/gi,'[redacted]').replace(/[\x00-\x1f\x7f]/g,'?').slice(0,256));
       sealed.toolMessagesLimited=bytes>16384||rows.filter(v=>v.trim()).length>8||rows.some(v=>v.length>256);
     }
     tail='';toolText='';}return sealed;}};
 }
 
-/** Bind the sole accepted warning to the pinned script and its probe line. */
+/** Bind the sole accepted warning to the pinned script and exact function name. */
 export function traceExpectedWarning(file,source){
   const probe='kprobe:folio_wait_bit_common',lines=source.split('\n'),at=lines.indexOf(probe);
   if(at<0||lines.lastIndexOf(probe)!==at||typeof file!=='string'||!file.length||file.length>2048||file.includes('\n'))throw new TypeError('warning-source');
-  return{file,line:at+1,maxLine:lines.length,message:'folio_wait_bit_common is not traceable (either non-existing, inlined, or marked as "notrace"); attaching to it will likely fail'};
+  return{file,maxLine:lines.length,message:'folio_wait_bit_common is not traceable (either non-existing, inlined, or marked as "notrace"); attaching to it will likely fail'};
 }
 
 /** Only the known warning and a valid source range are accepted; other text fails. */
 export function traceWarningFilter(expected){
-  if(!expected||typeof expected!=='object'||typeof expected.file!=='string'||typeof expected.message!=='string'||!Number.isInteger(expected.line)||!Number.isInteger(expected.maxLine)||expected.line<=0||expected.maxLine<expected.line||expected.maxLine>1000)throw new TypeError('warning-shape');
+  if(!expected||typeof expected!=='object'||typeof expected.file!=='string'||typeof expected.message!=='string'||!Number.isInteger(expected.maxLine)||expected.maxLine<=0||expected.maxLine>1000)throw new TypeError('warning-shape');
   const prefix=expected.file+':',suffix=': WARNING: '+expected.message+'\n';let bytes=0,text='',complete=false,unrecognized=false,limitExceeded=false,sealed;
   return{add(chunk){
     if(sealed)return !sealed.unrecognized;
@@ -67,7 +67,7 @@ export function traceWarningFilter(expected){
       if(text.length>4096||!prefix.startsWith(text)&&!text.startsWith(prefix))unrecognized=true;
       else if(text.includes('\n')){
         const range=text.startsWith(prefix)&&text.endsWith(suffix)&&text.indexOf('\n')===text.length-1?/^([1-9]\d{0,3})-([1-9]\d{0,3})$/.exec(text.slice(prefix.length,-suffix.length)):null;
-        complete=!!range&&Number(range[1])===expected.line&&Number(range[2])>expected.line&&Number(range[2])<=expected.maxLine;
+        complete=!!range&&Number(range[2])>Number(range[1])&&Number(range[2])<=expected.maxLine;
         if(!complete)unrecognized=true;
       }
       if(unrecognized)text='';

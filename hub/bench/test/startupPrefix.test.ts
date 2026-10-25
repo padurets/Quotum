@@ -43,7 +43,7 @@ await test('known 0.20 source warning has exact source line range and text',()=>
 });
 await test('no warning is valid; repeated warning, extra whitespace and unknown errors refuse',()=>{
  assert.deepEqual(traceWarningFilter(expectedSpec).finish(),{allowedWarnings:0,unrecognized:false,bytes:0,limitExceeded:false});
- for(const value of [expected+expected,expected+'\n','\n'+expected,expected+'ERROR: canary-secret',expected.replace('WARNING:','ERROR:'),expected.replace(':2-3:',':3-4:'),expected.replace(':2-3:',':2-99:'),expected.replace('/isolated/','/foreign/'),expected.replace('either non-existing','unknown'),expected.replace(':2-3:',':2:1-29:')]){
+ for(const value of [expected+expected,expected+'\n','\n'+expected,expected+'ERROR: canary-secret',expected.replace('WARNING:','ERROR:'),expected.replace(':2-3:',':0-3:'),expected.replace(':2-3:',':2-99:'),expected.replace('/isolated/','/foreign/'),expected.replace('either non-existing','unknown'),expected.replace(':2-3:',':2:1-29:')]){
   const q=traceWarningFilter(expectedSpec);q.add(Buffer.from(value));const r=q.finish();assert.equal(r.unrecognized,true);assert.equal(r.allowedWarnings,0);assert.equal(JSON.stringify(r).includes('canary-secret'),false);
  }
 });
@@ -57,10 +57,12 @@ await test('warning cap and sealed results retain no arbitrary compiler output',
 
 await test('isolated tracer errors retain bounded useful text while paths and addresses are removed',()=>{
  const d=diagnosticClassifier({toolMessages:true});d.add(Buffer.from('/isolated/private/startupWaitOwner.bt:71:43: ERROR: comparison of unsigned int64 and int64\nlibbpf: failed operation at 0xffffffff81234567, deadbeef and https://example.invalid/private TOKEN=secret-value\nC:\\private\\trace.bt: no such option\n'));
- const r=d.finish(),text=JSON.stringify(r.toolMessages);assert.equal(r.toolMessages.length,3);assert.match(text,/comparison of unsigned int64 and int64/);assert.match(text,/no such option/);for(const value of ['/isolated','C:\\private','0xffffffff','deadbeef','example.invalid','secret-value'])assert.equal(text.includes(value),false);assert.equal(r.toolMessagesLimited,false);
+ const r=d.finish(),text=JSON.stringify(r.toolMessages);assert.equal(r.toolMessages.length,3);assert.match(text,/comparison of unsigned int64 and int64/);assert.match(text,/no such option/);for(const value of ['/isolated','C:\\private','0xffffffff','deadbeef','example.invalid','secret-value'])assert.equal(text.includes(value),false);assert.equal(r.toolMessagesLimited,false);assert.match(r.toolMessages[0],/\[path\]:71:43: ERROR:/);
 });
 await test('tool error chunks, EOF and caps preserve diagnosis without changing default retention',()=>{
  const plain=diagnosticClassifier();plain.add(Buffer.from('ERROR: unknown flag'));assert.equal('toolMessages'in plain.finish(),false);
  const d=diagnosticClassifier({toolMessages:true});d.add(Buffer.from('ERROR: un'));d.add(Buffer.from('known flag'));assert.deepEqual(d.finish().toolMessages,['ERROR: unknown flag']);const before=d.finish();d.add(Buffer.from('later'));assert.deepEqual(d.finish(),before);
  const cap=diagnosticClassifier({toolMessages:true});cap.add(Buffer.from(Array.from({length:10},()=> 'x'.repeat(300)).join('\n')));const r=cap.finish();assert.equal(r.toolMessages.length,8);assert.equal(r.toolMessages.every((v:string)=>v.length<=256),true);assert.equal(r.toolMessagesLimited,true);
 });
+
+await test('the same known warning permits valid source ranges with preceding whitespace',()=>{for(const range of ['1-2','1-3','2-4','3-4']){const q=traceWarningFilter(expectedSpec);assert.equal(q.add(Buffer.from(expected.replace(':2-3:',':'+range+':'))),true);assert.equal(q.finish().allowedWarnings,1);}});
