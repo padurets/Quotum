@@ -13,6 +13,13 @@ use crate::clients::{ClientId, InstalledClient};
 use crate::model::{ClientSession, ClientSource, Provider, RunningSession, SessionReport, Tracking, now_ms};
 use crate::sink::Sink;
 
+#[cfg(test)]
+type AfterHealth = Box<dyn FnOnce(&Worker)>;
+#[cfg(test)]
+thread_local! {
+    static AFTER_HEALTH: std::cell::RefCell<Option<AfterHealth>> = const { std::cell::RefCell::new(None) };
+}
+
 #[derive(Clone, Copy)]
 enum Mode {
     Hello,
@@ -117,6 +124,12 @@ impl Delivery {
 
     pub fn turn(&mut self, sink: &mut dyn Sink, inventory: &[InstalledClient]) {
         let health = self.worker.health();
+        #[cfg(test)]
+        AFTER_HEALTH.with(|hook| {
+            if let Some(observe) = hook.borrow_mut().take() {
+                observe(&self.worker);
+            }
+        });
         if health.unavailable != self.unavailable
             || health.recoveries != self.recovered
             || health.terminal && !self.reported_failure
@@ -476,6 +489,10 @@ impl Delivery {
         let mut report = legacy_report(capture, inventory);
         report.tracking.as_mut().unwrap().complete &= !self.legacy_fault;
         if self.legacy.as_ref().is_some_and(|(at, old)| *old == report && at.elapsed() < Duration::from_secs(120)) {
+            return;
+        }
+        let health = self.worker.health();
+        if health.generation != self.generation || health.unavailable {
             return;
         }
         if sink.report(&report) {
@@ -1128,6 +1145,86 @@ mod tests {
         assert!(!delivery.legacy_fault);
         delivery.legacy(&mut sink, &capture, &[]);
         assert!(sink.reports.last().unwrap().tracking.as_ref().unwrap().complete);
+        drop(delivery);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_authorization_rechecks_generation_after_a_delayed_turn() {
+        let _capture = super::super::fault::Plan::current().empty_capture(true);
+        struct OldHub {
+            reports: Vec<SessionReport>,
+        }
+        impl Sink for OldHub {
+            fn deliver(&mut self, _: &Outcome) {}
+            fn activity_request(&mut self, _: &Value, _: bool) -> Answer {
+                Answer::Unsupported
+            }
+            fn report(&mut self, report: &SessionReport) -> bool {
+                self.reports.push(report.clone());
+                true
+            }
+        }
+        fn until(mut ready: impl FnMut() -> bool) {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while !ready() {
+                assert!(Instant::now() < deadline, "legacy lifecycle timed out");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        let root = std::env::temp_dir().join(format!("quotum-legacy-race-{}", crate::config::random_hex()));
+        let paths = Paths { config: root.join("config"), work: root.join("work"), state: root.join("state") };
+        let worker = Worker::start(Start {
+            paths,
+            home: root.clone(),
+            clients: Vec::new(),
+            scope: Scope { version: 1, clients: vec!["codex".into()], route_disabled: Vec::new(), complete: true },
+            namespace: "a".repeat(64),
+            credential_scope: "b".repeat(64),
+            projects: true,
+            stop: Stop::new(),
+            privacy: String::new(),
+        })
+        .unwrap();
+        let mut delivery = Delivery::new(worker);
+        let mut sink = OldHub { reports: Vec::new() };
+        until(|| {
+            delivery.turn(&mut sink, &[]);
+            sink.reports.len() >= 2 && sink.reports.last().unwrap().tracking.as_ref().unwrap().complete
+        });
+        assert!(!delivery.legacy_fault);
+        assert!(matches!(delivery.mode, Mode::Legacy(_)));
+        let before_generation = delivery.worker.health().generation;
+        let before_reports = sink.reports.len();
+        // The ordinary unchanged-report heartbeat is due; avoid a two-minute wall-clock wait.
+        delivery.legacy.as_mut().unwrap().0 = Instant::now() - Duration::from_secs(121);
+        AFTER_HEALTH.with(|pause| {
+            *pause.borrow_mut() = Some(Box::new(move |worker| {
+                // Only the capture thread advances while the coordinator's old health sample is retained.
+                assert!(worker.control(Control::Storage(super::super::recovery::Failure::new(
+                    "privacy-read",
+                    &std::io::Error::from_raw_os_error(5),
+                ))));
+                until(|| {
+                    let health = worker.health();
+                    health.generation > before_generation
+                        && health.recoveries > 0
+                        && !health.unavailable
+                        && worker.snapshot().is_some()
+                });
+            }));
+        });
+        delivery.turn(&mut sink, &[]);
+        assert!(delivery.worker.health().generation > before_generation);
+        assert_eq!(sink.reports.len(), before_reports, "a new generation needs fresh delivery authorization");
+        until(|| {
+            delivery.turn(&mut sink, &[]);
+            sink.reports.len() > before_reports
+        });
+        assert!(
+            !sink.reports[before_reports].tracking.as_ref().unwrap().complete,
+            "recovery must still break coverage after the stale turn was discarded"
+        );
         drop(delivery);
         std::fs::remove_dir_all(root).unwrap();
     }
