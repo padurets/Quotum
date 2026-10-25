@@ -793,6 +793,9 @@ its duration, a current wait owner or the absence of other waits. No return prob
 duration certificate is collected. Post-readiness entries are not automatically startup cost. The original benchmark
 verdict and console output survive collection and cleanup, and this optional job
 cannot satisfy the required benchmark gate. Select it without other diagnostic modes.
+Its isolated tracer retains at most eight 256-character tool-error lines from a 16 KiB
+prefix, with paths and memory addresses removed. Other launch diagnostics retain
+their fixed categories and coordinates.
 
 The manual `compositor_guard_control` input compares the pending-tree compositor
 guard in pinned Google Chrome Beta 157.0.8103.15. Three independent runners execute

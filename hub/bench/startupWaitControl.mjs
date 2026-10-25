@@ -25,20 +25,27 @@ export const isolatedCI=(env,repository)=>env.CI==='true'&&env.GITHUB_ACTIONS===
 export function forwardBenchmark(child,output=process){child.stdout?.pipe(output.stdout,{end:false});child.stderr?.pipe(output.stderr,{end:false});}
 const numericTuple=text=>{text=text.trim();if(text.startsWith('(')||text.endsWith(')')){if(!/^\([^()]*\)$/.test(text))return null;text=text.slice(1,-1);}if(/[()]/.test(text))return null;const values=text.split(/\s*,\s*/);return values.every(signed)?values:null;};
 
-/** Scan a capped prefix; retain only fixed categories and known-source coordinates. */
-export function diagnosticClassifier(){
-  let bytes=0,scanned=0,tail='',sealed;
+/** Classify a capped prefix. The isolated tracer can also retain redacted tool errors. */
+export function diagnosticClassifier({toolMessages=false}={}){
+  let bytes=0,scanned=0,tail='',toolText='',sealed;
   const kinds=new Set(),locations=[];
   const patterns=[['permission',/EPERM|EACCES|permission denied|operation not permitted|must be root/i],['BTF',/\bBTF\b/i],['layout',/no member named|unknown struct|unknown type|invalid field|incomplete definition/i],['syntax',/syntax ?error|unexpected token|parse error|unknown identifier|semantic error/i],['attach',/failed to attach|cannot attach|error attaching|no probes to attach|no matching probes|probe[^\n]*not found/i],['verifier',/verifier|verification failed|invalid mem access/i],['resource',/no space left|cannot allocate|ENOMEM|out of memory|too many open files|resource temporarily/i],['lost-events',/lost[^\n]*(?:event|sample)|dropped[^\n]*events/i]];
   return{add(chunk){
     if(sealed)return;bytes+=chunk.length;const part=chunk.subarray(0,Math.max(0,16384-scanned));scanned+=part.length;
+    if(toolMessages)toolText+=part.toString('utf8');
     const text=tail+part.toString('utf8');for(const[k,p]of patterns)if(p.test(text))kinds.add(k);
     for(const match of text.matchAll(/(?:^|\n)(?:[^:\n]*\/)?(startupWaitOwner\.bt|stdin):(\d{1,4}):(\d{1,4})(?=[:\s-]|$)/g)){
       const line=Number(match[2]),column=Number(match[3]),source=match[1]==='stdin'?'stdin':'bpf-script';
       if(line>0&&line<=1000&&column>0&&column<=1000&&locations.length<8&&!locations.some(r=>r.source===source&&r.line===line&&r.column===column))locations.push({source,line,column});
     }
     tail=text.slice(-4096);
-  },finish(){if(!sealed){sealed={categories:[...kinds].length?[...kinds]:bytes?['other']:[],locations,bytes,scannedBytes:scanned,discardedBytes:bytes,unscannedBytes:bytes-scanned,capBytes:16384,limited:bytes>16384};tail='';}return sealed;}};
+  },finish(){if(!sealed){sealed={categories:[...kinds].length?[...kinds]:bytes?['other']:[],locations,bytes,scannedBytes:scanned,discardedBytes:bytes,unscannedBytes:bytes-scanned,capBytes:16384,limited:bytes>16384};
+    if(toolMessages){
+      const rows=toolText.split(/\r?\n/);if(bytes>16384)rows.pop();
+      sealed.toolMessages=rows.filter(v=>v.trim()).slice(0,8).map(v=>v.replace(/\x1b\[[0-9;]*[A-Za-z]/g,'').replace(/https?:\/\/\S+/gi,'[url]').replace(/(?:[A-Za-z]:\\|\/)[^\s"'<>]*/g,'[path]').replace(/\b(?:0x)?[a-f0-9]{8,128}\b/gi,'[address]').replace(/\b[A-Za-z0-9_-]*(?:token|secret|cookie|password|credential)[A-Za-z0-9_-]*(?:\s*[=:]\s*(?:"[^"]*"|'[^']*'|\S+))?/gi,'[redacted]').replace(/[\x00-\x1f\x7f]/g,'?').slice(0,256));
+      sealed.toolMessagesLimited=bytes>16384||rows.filter(v=>v.trim()).length>8||rows.some(v=>v.length>256);
+    }
+    tail='';toolText='';}return sealed;}};
 }
 
 /** bpftrace 0.20 log.cpp prints this one source-bound three-line warning. */
@@ -128,7 +135,7 @@ export async function runControl(repository,directory){
   };
   const boundedCurrent=(pid,signal)=>deadline(100,s=>current(pid,s),signal).catch(()=>null);
   const owned=(child,kind)=>{
-    const owner=browserProcess(child,true),state={kind,pid:child.pid??null,exit:null,signal:null,reaped:false,pipesClosed:false,stdoutBytes:0,stderrBytes:0,bad:false,records:[]};let partial='';const diagnostic=kind==='trace'?diagnosticClassifier():null,warning=kind==='trace'?traceWarningFilter(expectedWarning):null;
+    const owner=browserProcess(child,true),state={kind,pid:child.pid??null,exit:null,signal:null,reaped:false,pipesClosed:false,stdoutBytes:0,stderrBytes:0,bad:false,records:[]};let partial='';const diagnostic=kind==='trace'?diagnosticClassifier({toolMessages:true}):null,warning=kind==='trace'?traceWarningFilter(expectedWarning):null;
     const closed=new Promise(resolve=>{child.once('error',()=>{state.bad=true;if(!child.pid){state.reaped=true;resolve();}});child.once('exit',(code,signal)=>{state.exit=code;state.signal=signal;state.reaped=true;if(kind==='bench'&&code!==0&&!cancel.signal.aborted&&!state.controllerTerm)report.primary='benchmark-failed';});child.once('close',()=>{state.pipesClosed=true;if(diagnostic)state.diagnostic=diagnostic.finish();if(warning)state.warning=warning.finish();resolve();});});
     const lines=value=>{
       partial+=value.toString('utf8');const maximum=kind==='bench'?65536:4096;

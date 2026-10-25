@@ -54,3 +54,13 @@ await test('all chunk boundaries preserve the one warning and an incomplete pref
 await test('warning cap and sealed results retain no arbitrary compiler output',()=>{
  const q=traceWarningFilter(expected);assert.equal(q.add(Buffer.alloc(16385,120)),false);assert.deepEqual(q.finish(),{allowedWarnings:0,unrecognized:true,bytes:16385,limitExceeded:true});const before=q.finish();q.add(Buffer.from('canary-secret'));assert.deepEqual(q.finish(),before);assert.throws(()=>traceWarningFilter(''));assert.throws(()=>traceWarningFilter('x'.repeat(4097)));assert.throws(()=>traceExpectedWarning(script,source+'\nkprobe:folio_wait_bit_common\n'));
 });
+
+await test('isolated tracer errors retain bounded useful text while paths and addresses are removed',()=>{
+ const d=diagnosticClassifier({toolMessages:true});d.add(Buffer.from('/isolated/private/startupWaitOwner.bt:71:43: ERROR: comparison of unsigned int64 and int64\nlibbpf: failed operation at 0xffffffff81234567, deadbeef and https://example.invalid/private TOKEN=secret-value\nC:\\private\\trace.bt: no such option\n'));
+ const r=d.finish(),text=JSON.stringify(r.toolMessages);assert.equal(r.toolMessages.length,3);assert.match(text,/comparison of unsigned int64 and int64/);assert.match(text,/no such option/);for(const value of ['/isolated','C:\\private','0xffffffff','deadbeef','example.invalid','secret-value'])assert.equal(text.includes(value),false);assert.equal(r.toolMessagesLimited,false);
+});
+await test('tool error chunks, EOF and caps preserve diagnosis without changing default retention',()=>{
+ const plain=diagnosticClassifier();plain.add(Buffer.from('ERROR: unknown flag'));assert.equal('toolMessages'in plain.finish(),false);
+ const d=diagnosticClassifier({toolMessages:true});d.add(Buffer.from('ERROR: un'));d.add(Buffer.from('known flag'));assert.deepEqual(d.finish().toolMessages,['ERROR: unknown flag']);const before=d.finish();d.add(Buffer.from('later'));assert.deepEqual(d.finish(),before);
+ const cap=diagnosticClassifier({toolMessages:true});cap.add(Buffer.from(Array.from({length:10},()=> 'x'.repeat(300)).join('\n')));const r=cap.finish();assert.equal(r.toolMessages.length,8);assert.equal(r.toolMessages.every((v:string)=>v.length<=256),true);assert.equal(r.toolMessagesLimited,true);
+});
