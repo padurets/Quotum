@@ -349,7 +349,7 @@ test('detached text retains same-batch removal context while the original idle p
     assert.equal(samples.length,1);assert.equal(samples[0].type,'characterData');assert.equal(samples[0].hasParent,false);assert.equal(samples[0].connected,false);
     assert.deepEqual(samples[0].removals,[{index:1,kind:'exact',region:'card',time,ownerFound:true}]);assert.equal(samples[0].limited,false);
     assert.equal(JSON.stringify(r.unattributedMutations).includes('private-canary'),false);assert.equal(JSON.stringify(r.unattributedMutations).includes('private-class'),false);
-    assert.ok(idleObservationProblems({from:0,to:120000,cellMs:300000,requests:{count:0,byPath:{}},events:{ping:5},renders:r.renders,mutations:r.mutations}).some(v=>v.includes('changed outside what shows time: page page')));
+    assert.ok(idleObservationProblems({from:0,to:120000,cellMs:300000,requests:{count:0,byPath:{}},events:{ping:5},renders:r.renders,mutations:r.mutations,scriptMsPerSecond:0}).some(v=>v.includes('changed outside what shows time: page page')));
   }
 });
 
