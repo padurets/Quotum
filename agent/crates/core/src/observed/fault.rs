@@ -5,7 +5,17 @@ use std::io;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Default)]
-pub(super) struct Plan(Arc<Mutex<Option<Fault>>>);
+pub(super) struct Plan(Arc<Mutex<Option<Fault>>>, Arc<Mutex<Option<bool>>>);
+
+pub(super) struct EmptyCapture {
+    plan: Plan,
+    previous: Option<bool>,
+}
+impl Drop for EmptyCapture {
+    fn drop(&mut self) {
+        *self.plan.1.lock().unwrap() = self.previous;
+    }
+}
 struct Fault {
     operation: &'static str,
     after: usize,
@@ -28,6 +38,15 @@ impl Plan {
     pub fn clear(&self) {
         *self.0.lock().unwrap() = None;
     }
+    pub fn empty_capture(&self, complete: bool) -> EmptyCapture {
+        let previous = self.1.lock().unwrap().replace(complete);
+        EmptyCapture { plan: self.clone(), previous }
+    }
+}
+
+pub(super) fn empty_capture() -> Option<bool> {
+    let plan = Plan::current();
+    *plan.1.lock().unwrap()
 }
 
 pub(super) fn check(operation: &'static str) -> io::Result<()> {

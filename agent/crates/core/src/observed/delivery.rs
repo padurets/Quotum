@@ -1051,6 +1051,7 @@ mod tests {
 
     #[test]
     fn recovered_empty_legacy_capture_requires_an_acknowledged_incomplete_report() {
+        let _capture = super::super::fault::Plan::current().empty_capture(true);
         struct OldHub {
             reports: Vec<SessionReport>,
             accept: bool,

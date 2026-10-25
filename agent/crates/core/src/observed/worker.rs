@@ -1231,7 +1231,7 @@ impl Sampler {
                 let judge = cadence.should_judge(now);
                 #[cfg(all(feature = "activity-bench", target_os = "linux"))]
                 let native_started = (super::probe::cpu(), Instant::now());
-                let sessions = self.activity.capture(judge);
+                let (sessions, captured_complete) = self.capture(judge);
                 let roots = sessions.len();
                 #[cfg(all(feature = "activity-bench", target_os = "linux"))]
                 super::probe::cost(
@@ -1245,7 +1245,7 @@ impl Sampler {
                 #[cfg(all(feature = "activity-bench", target_os = "linux"))]
                 let context_started = (super::probe::cpu(), Instant::now());
                 let (mut state, holds, order, legacy_ids) = self.state(sessions, reading.wall);
-                state.tracking.complete &= self.activity.complete();
+                state.tracking.complete &= captured_complete;
                 let complete = state.tracking.complete;
                 let state = Arc::new(state);
                 mode = (
@@ -1318,6 +1318,15 @@ impl Sampler {
             }
         }
         Ok(())
+    }
+
+    fn capture(&mut self, judge: bool) -> (Vec<Session>, bool) {
+        #[cfg(test)]
+        if let Some(complete) = super::fault::empty_capture() {
+            return (Vec::new(), complete);
+        }
+        let sessions = self.activity.capture(judge);
+        (sessions, self.activity.complete())
     }
 
     fn publish(shared: &Mutex<Option<Arc<Capture>>>, capture: Capture) {
