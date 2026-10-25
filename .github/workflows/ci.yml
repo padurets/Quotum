@@ -501,6 +501,7 @@ jobs:
           fi
           /usr/bin/bpftrace --version
           uname -r
+          test -x /usr/bin/cc
           sudo -n -- /bin/bash <<'SH'
           set -euo pipefail
           startup_trace_root=/sys/kernel/tracing
@@ -510,16 +511,21 @@ jobs:
           if [[ "$startup_trace_type" != tracefs ]]; then mount -t tracefs nodev "$startup_trace_root"; fi
           [[ "$(stat -f -c %T "$startup_trace_root")" == tracefs ]]
           [[ -r /sys/kernel/btf/vmlinux ]]
-          for startup_trace_event in syscalls/sys_exit_setsid sched/sched_process_exec signal/signal_generate sched/sched_process_exit filemap/mm_filemap_get_pages filemap/mm_filemap_fault; do
+          for startup_trace_event in syscalls/sys_exit_setsid syscalls/sys_enter_clone sched/sched_switch sched/sched_process_exec signal/signal_generate sched/sched_process_exit filemap/mm_filemap_get_pages filemap/mm_filemap_fault; do
             [[ -r "$startup_trace_root/events/$startup_trace_event/format" ]]
           done
           printf 'startup tracefs and BTF prerequisites: qualified\n'
           SH
           printf 'QUOTUM_CHROME=%s\n' "$(command -v google-chrome)" >> "$GITHUB_ENV"
           printf 'QUOTUM_BENCH_DIAGNOSTICS_DIR=%s\n' "$RUNNER_TEMP/quotum-startup-wait" >> "$GITHUB_ENV"
+      - name: Build the isolated scheduler wait fixture
+        run: |
+          umask 077
+          /usr/bin/cc -shared -fPIC -O2 -Wall -Wextra -Werror bench/startupWaitFixture.c -o "$RUNNER_TEMP/quotum-wait-fixture.so"
+          printf 'QUOTUM_BENCH_WAIT_FIXTURE_LIBRARY=%s\n' "$RUNNER_TEMP/quotum-wait-fixture.so" >> "$GITHUB_ENV"
       - name: Prepare matching renderer unwind tables
         run: bash bench/prepareNativeUnwind.sh
-      - name: Qualify file reads and faults and observe the unchanged history run
+      - name: Qualify file inputs and a known scheduler wait and observe the unchanged history run
         run: node --import tsx bench/startupWaitControl.mjs "$GITHUB_WORKSPACE" "$QUOTUM_BENCH_DIAGNOSTICS_DIR"
       - name: Startup observation evidence
         if: always()

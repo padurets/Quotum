@@ -1,13 +1,56 @@
 /* $1 P, $2 bench E, $3 UID, $4/$5 parent birth ticks, $6 USER_HZ=100.
  * $7/$8/$9 owned fixture device major/minor/inode; $10/$11 gated F PID/birth ticks.
- * MAIN THREADS ONLY. File identity context, never a folio-wait/cause capture.
+ * MAIN THREADS ONLY. File context plus reported-D scheduler off-CPU intervals.
  * origin 1: get_pages success point/requested range; origin 2: filemap fault entry.
  * Indices are page units, inclusive; fault lastIndex equals firstIndex.
- * Events do not prove disk I/O, physical blocking, duration or absence.
+ * Filemap events do not prove disk I/O, physical blocking, duration or absence.
  * At most 64 numeric file/origin keys per cohort; no pointers are retained.
  * Print two eligible fixture/eight browser rows per origin; omitted counts explicit.
  */
 BEGIN { if ($6 != 100) { @config_invalid = 1; exit(); } }
+
+/* Ignore earlier fixture file reads: its explicit vfork is the positive wait control. */
+tracepoint:syscalls:sys_enter_clone
+/!@capture_closed && tid == pid && @cohort[pid] == 1 && uid == $3 && (args->clone_flags & (uint64)16384)/
+{
+  if (@alive[1] && @birth[1] == (uint64)curtask->start_boottime && @parent[1] == (uint64)curtask->real_parent->tgid && @parent_ticks[1] == (uint64)curtask->real_parent->start_boottime / 10000000) {
+    @wait_armed = 1;
+  } else { @identity_lost[1] = @identity_lost[1] + 1; }
+}
+
+/* Switch-in runs on the outgoing task: only switch-out may inspect curtask identity. */
+tracepoint:sched:sched_switch
+/!@capture_closed && (@cohort[(uint64)args->prev_pid] || @cohort[(uint64)args->next_pid])/
+{
+  $at = nsecs(monotonic);
+  $c = @cohort[(uint64)args->next_pid];
+  if ($c && @alive[$c] && @wait_out[$c]) {
+    if ($at <= @wait_out[$c]) { @wait_invalid[$c] = @wait_invalid[$c] + 1; }
+    else {
+      @wait_count[$c] = @wait_count[$c] + 1;
+      @wait_sum[$c] = @wait_sum[$c] + $at - @wait_out[$c];
+      if ($at - @wait_out[$c] > @wait_max[$c]) {
+        @wait_max[$c] = $at - @wait_out[$c];
+        @wait_bounds[$c] = (@wait_out[$c], $at);
+        @wait_max_stack[$c] = @wait_stack[$c];
+      }
+      if ($c == 1 && !@wait_fixture_printed) {
+        @wait_fixture_printed = 1;
+        printf("QFW_WAIT 1 %llu %llu %llu %llu\n%s\nQFW_STACK_END 1\n", @root[1], @birth[1], @wait_out[1], $at, @wait_stack[1]);
+      }
+    }
+    delete(@wait_out[$c]); delete(@wait_stack[$c]);
+  }
+  $c = @cohort[(uint64)args->prev_pid];
+  if ($c && @alive[$c] && ($c == 2 || @wait_armed)) {
+    if (tid != pid || @root[$c] != pid || @birth[$c] != (uint64)curtask->start_boottime || @parent[$c] != (uint64)curtask->real_parent->tgid || @parent_ticks[$c] != (uint64)curtask->real_parent->start_boottime / 10000000 || uid != $3) {
+      @identity_lost[$c] = @identity_lost[$c] + 1;
+    } else if ((uint64)args->prev_state == (uint64)2) {
+      if (@wait_out[$c]) { @wait_invalid[$c] = @wait_invalid[$c] + 1; }
+      @wait_out[$c] = $at; @wait_stack[$c] = kstack(bpftrace, 32);
+    }
+  }
+}
 
 tracepoint:syscalls:sys_exit_setsid
 /!@capture_closed && tid == pid && (uint64)args->ret == pid && uid == $3 && $6 == 100/
@@ -130,4 +173,11 @@ interval:s:1 {
     }
   }
 }
-END { printf("QFW_END %llu\n", nsecs(monotonic)); } /* Automatic maps contain numeric keys/values only. */
+END {
+  if (@wait_max[2]) {
+    printf("QFW_WAIT 2 %llu %llu %llu %llu\n%s\nQFW_STACK_END 2\n", @root[2], @birth[2], @wait_bounds[2].0, @wait_bounds[2].1, @wait_max_stack[2]);
+  }
+  delete(@wait_stack[1]); delete(@wait_stack[2]);
+  delete(@wait_max_stack[1]); delete(@wait_max_stack[2]);
+  printf("QFW_END %llu\n", nsecs(monotonic));
+} /* Remaining automatic maps contain numeric keys/values only. */

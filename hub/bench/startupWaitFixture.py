@@ -1,4 +1,4 @@
-"""One owned-file fault-touch and paired-read batch; no kernel-wait claim."""
+"""Owned-file reads and a separate gated vfork wait on the same main thread."""
 import ctypes
 import fcntl
 import json
@@ -28,7 +28,7 @@ def identity(value):
 
 
 def run():
-    require(len(sys.argv) == 2 and len(sys.argv[1]) <= 2048, "arguments")
+    require(len(sys.argv) == 3 and len(sys.argv[1]) <= 2048, "arguments")
     wanted = json.loads(sys.argv[1])
     require(type(wanted) is dict and set(wanted) == set(FIELDS), "identity")
     require(all(type(v) is int and v >= 0 or type(v) is str and
@@ -103,6 +103,12 @@ def run():
           "fdPosition": str(position), "coldstats": {"adviceCalls": 1,
           "mincoreCalls": 1, "pages": SIZE // page_size, "residentPages": resident}},
           separators=(",", ":")), flush=True)
+    require(sys.stdin.buffer.readline(5) == b"wait\n", "wait-gate")
+    library = ctypes.CDLL(sys.argv[2], use_errno=True)
+    library.quotum_fixture_wait.argtypes = []
+    library.quotum_fixture_wait.restype = ctypes.c_int
+    require(library.quotum_fixture_wait() == 0, "wait-child")
+    print('{"status":"fixture-wait-complete"}', flush=True)
     sys.stdin.buffer.readline(1)  # Parent keeps stdin open, then sends owned SIGTERM.
     return 3
 

@@ -804,16 +804,16 @@ seconds for its captured work-prefix boundary before the cached return. The cont
 requires committed prefix retirement and zero additional reads; a missing eligible
 boundary or unconfirmed retirement is inconclusive.
 
-The manual `startup_io_control` input observes file identities and page ranges from
-a Linux browser's filemap read and fault tracepoints on an isolated GitHub runner.
+The manual `startup_io_control` input observes file identities, page ranges and
+reported-D scheduler intervals of a Linux browser on an isolated GitHub runner.
 A fixed owned-file batch must first produce matching read and fault observations,
-identity and SIGTERM generation before the
-unchanged full history benchmark starts. Missing BTF, an unavailable probe or an
+identity, a resolved kernel stack from a separate gated vfork wait, and SIGTERM
+generation before the unchanged full history benchmark starts. Missing BTF, an unavailable probe or an
 unconfirmed fixture stops this diagnostic; no retry substitutes for qualification.
 The observer admits only the known fixture and the benchmark's detached browser main
 thread, checking parent, birth and UID. It keeps numeric device/inode/page identifiers
-from the events, never kernel addresses, paths or stack data. A prepared read range's
-last index is inclusive. It is reported after successful page acquisition, whereas a
+from the events and bounded resolved kernel symbols, never kernel addresses or paths.
+A prepared read range's last index is inclusive. It is reported after successful page acquisition, whereas a
 fault entry is reported before the page-cache lookup. A fault entry is one page.
 A 21-second observation window does not delay browser termination;
 the original twenty-second launch and twenty-minute job limits remain unchanged.
@@ -822,7 +822,12 @@ an observer error preserves an inconclusive diagnostic result while the original
 benchmark finishes, provided the observer's release is confirmed.
 These events identify filemap inputs. They do not prove a physical read, a completed
 fault, blocking, its duration, the file behind an earlier wait or the absence of other
-operations. No dynamic function probe or duration certificate is collected.
+operations. Scheduler switch-out/in pairs measure off-CPU time in reported D state,
+including runnable queue time after wakeup. They do not isolate blocked or disk I/O
+latency. Only the longest completed browser interval and its stack are retained;
+a pending interval is censored. Empty, unresolved or depth-limited stacks fail
+qualification. The vfork fixture validates this observation path before Chrome starts;
+it does not reproduce a Chrome stall. No dynamic function probe is collected.
 Post-readiness inputs are not automatically startup cost. The original benchmark
 verdict and console output survive collection and cleanup, and this optional job
 cannot satisfy the required benchmark gate. Select it without other diagnostic modes.
