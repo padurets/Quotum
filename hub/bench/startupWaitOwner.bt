@@ -68,7 +68,7 @@ kprobe:folio_wait_bit_common
       @count[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6] = count();
     }
     $eligible = $c == 2 || ($kind == 1 && $major == $7 && $minor == $8 && $ino == $9);
-    if ($eligible && @entries_printed[$c] < ($c == 1 ? 4 : 16)) {
+    if ($eligible && @entries_printed[$c] < (uint64)($c == 1 ? 4 : 16)) {
       @entries_printed[$c] = @entries_printed[$c] + 1;
       printf("QFW_ENTRY %llu %llu %llu %llu %llu %llu %llu %llu %lld %lld %llu\n", $c, (uint64)pid, @birth[$c], $kind, $major, $minor, $ino, $index, (int32)arg1, (int32)arg3, $entered);
     } else if ($eligible) { @entries_omitted[$c] = @entries_omitted[$c] + 1; }
