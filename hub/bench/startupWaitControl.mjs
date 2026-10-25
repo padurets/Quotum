@@ -54,12 +54,12 @@ export function diagnosticClassifier({toolMessages=false}={}){
 
 /** Retain numeric records and bounded resolved kernel symbols; discard all raw lines. */
 export function traceProtocol(){
-  const state={markers:[],maps:[],waits:[],invalid:0,omitted:0,ended:false,pendingStack:false};let stack;
+  const state={markers:[],maps:[],waits:[],pendingWaits:[],invalid:0,omitted:0,ended:false,pendingStack:false};let stack;
   const add=line=>{
     line=line.trim();if(!line)return;
-    if(state.markers.length+state.maps.length+state.waits.length>=1536){state.omitted++;return;}
+    if(state.markers.length+state.maps.length+state.waits.length+state.pendingWaits.length>=1536){state.omitted++;return;}
     if(stack){
-      if(line==='QFW_STACK_END '+stack.cohort){if(stack.symbols.length&&stack.symbols.length<32&&!stack.bad)state.waits.push({...stack,bad:undefined,schedulerOffCpuOnly:true,pureBlockedTime:false});else state.invalid++;stack=null;state.pendingStack=false;return;}
+      if(line==='QFW_STACK_END '+stack.cohort){if(stack.symbols.length&&stack.symbols.length<32&&!stack.bad)(stack.kind==='QFW_PENDING'?state.pendingWaits:state.waits).push({...stack,bad:undefined,schedulerOffCpuOnly:true,pureBlockedTime:false,...(stack.kind==='QFW_PENDING'?{censored:true,durationProven:false}:{})});else state.invalid++;stack=null;state.pendingStack=false;return;}
       const frame=/^([A-Za-z_][A-Za-z0-9_.$]{0,191})\+([0-9]{1,12})$/.exec(line);
       if(frame&&!/^[a-f0-9]+$/i.test(frame[1])&&stack.symbols.length<32){stack.symbols.push({name:frame[1],offset:frame[2]});return;}
       state.invalid++;stack.bad=true;
@@ -79,6 +79,8 @@ export function traceProtocol(){
       if(a.length===10&&a.every(uint)&&['1','2'].includes(a[0])&&['1','2'].includes(a[1])&&small(a[2])&&positive(a[2])&&positive(a[3])&&positive(a[9])&&BigInt(a[7])<=BigInt(a[8])&&(a[1]==='1'||a[7]===a[8]))r={kind,cohort:Number(a[0]),origin:Number(a[1]),pid:Number(a[2]),birthNs:a[3],major:a[4],minor:a[5],inode:a[6],firstIndex:a[7],lastIndex:a[8],ns:a[9]};
     }else if(kind==='QFW_WAIT'){
       if(a.length===5&&a.every(positive)&&['1','2'].includes(a[0])&&small(a[1])&&BigInt(a[4])>BigInt(a[3])){stack={kind,cohort:Number(a[0]),pid:Number(a[1]),birthNs:a[2],outNs:a[3],ns:a[4],symbols:[]};state.pendingStack=true;return;}
+    }else if(kind==='QFW_PENDING'){
+      if(a.length===5&&a.every(positive)&&a[0]==='2'&&small(a[1])&&BigInt(a[4])>BigInt(a[3])){stack={kind,cohort:2,pid:Number(a[1]),birthNs:a[2],outNs:a[3],censorNs:a[4],symbols:[]};state.pendingStack=true;return;}
     }else{
       const m=/^@([a-z_]{1,32})(?:\[([^\]]+)\])?:\s*(\([^)]*\)|-?\d+)$/.exec(line);
       if(m&&MAPS.has(m[1])){
@@ -91,10 +93,28 @@ export function traceProtocol(){
   return{state,add};
 }
 
+/** Termination and exit bound interpretation even when no switch-in was retained. */
+function pendingCensor(state){
+  const bindings=state.markers.filter(r=>r.kind==='QFW_BIND'&&r.cohort===2),windows=state.markers.filter(r=>r.kind==='QFW_WINDOW_CLOSED');
+  if(bindings.length!==1||windows.length!==1)return null;
+  const binding=bindings[0],bounds=[BigInt(windows[0].ns)];
+  for(const[kind,name]of [['QFW_TERM','first_term_ns'],['QFW_EXIT','exit_ns']]){
+    const rows=state.markers.filter(r=>r.kind===kind&&r.cohort===2);
+    if(rows.length>1||rows.some(r=>r.pid!==binding.pid||r.birthNs!==binding.birthNs))return null;
+    const maps=state.maps.filter(r=>r.name===name&&r.keys.join(',')==='2');
+    if(maps.length>1||maps.some(r=>r.values.length!==1||!uint(r.values[0])))return null;
+    if(rows.length?maps.length!==1||maps[0].values[0]!==rows[0].ns:maps.length&&positive(maps[0].values[0]))return null;
+    if(rows.length)bounds.push(BigInt(rows[0].ns));
+  }
+  return {binding,ns:String(bounds.reduce((a,b)=>a<b?a:b))};
+}
+
 /** Called after reap: cross-CPU delivery order cannot establish logical END order. */
 export function traceComplete(state){
   const ends=state.markers.filter(r=>r.kind==='QFW_END');
-  return !state.invalid&&!state.omitted&&!state.pendingStack&&ends.length===1&&[...state.markers,...state.waits].every(r=>BigInt(r.ns)<=BigInt(ends[0].ns))&&new Set(state.waits.map(r=>r.cohort)).size===state.waits.length&&state.waits.every(w=>{const b=state.markers.filter(r=>r.kind==='QFW_BIND'&&r.cohort===w.cohort);return b.length===1&&b[0].pid===w.pid&&b[0].birthNs===w.birthNs&&BigInt(w.outNs)>=BigInt(b[0].ns);});
+  const pending=state.pendingWaits??[],censor=pending.length?pendingCensor(state):null;
+  if(pending.some(w=>state.waits.some(done=>done.cohort===2&&BigInt(done.ns)>BigInt(w.outNs))))return false;
+  return !state.invalid&&!state.omitted&&!state.pendingStack&&ends.length===1&&[...state.markers,...state.waits].every(r=>BigInt(r.ns)<=BigInt(ends[0].ns))&&pending.length<=1&&pending.every(w=>censor&&w.cohort===2&&w.pid===censor.binding.pid&&w.birthNs===censor.binding.birthNs&&BigInt(w.outNs)>=BigInt(censor.binding.ns)&&BigInt(w.outNs)<BigInt(w.censorNs)&&w.censorNs===censor.ns&&BigInt(w.censorNs)<=BigInt(ends[0].ns))&&new Set(state.waits.map(r=>r.cohort)).size===state.waits.length&&state.waits.every(w=>{const b=state.markers.filter(r=>r.kind==='QFW_BIND'&&r.cohort===w.cohort);return b.length===1&&b[0].pid===w.pid&&b[0].birthNs===w.birthNs&&BigInt(w.outNs)>=BigInt(b[0].ns);});
 }
 
 /** END alone cannot certify the automatic numeric dump, which follows it. */
@@ -104,6 +124,12 @@ export function traceInventoryComplete(state){
   const windows=state.markers.filter(r=>r.kind==='QFW_WINDOW_CLOSED'),bindings=state.markers.filter(r=>r.kind==='QFW_BIND');
   if(windows.length!==1||bindings.length!==2||new Set(bindings.map(r=>r.cohort)).size!==2||!exact('capture_closed',[],['1'])||!exact('window_closed_ns',[],[windows[0].ns]))return false;
   for(const b of bindings){const c=String(b.cohort);for(const[name,values]of [['root',[String(b.pid)]],['birth',[b.birthNs]],['parent',[String(b.parent)]],['bound_ns',[b.ns]]])if(!exact(name,[c],values))return false;if(!exact('cohort',[String(b.pid)],[c]))return false;}
+  const pending=state.pendingWaits??[],out=state.maps.filter(r=>r.name==='wait_out'&&r.keys.join(',')==='2');
+  if(out.length>1||out.some(r=>r.values.length!==1||!uint(r.values[0])))return false;
+  const censor=out.length&&positive(out[0].values[0])?pendingCensor(state):null;
+  const eligible=censor&&BigInt(out[0].values[0])>=BigInt(censor.binding.ns)&&BigInt(out[0].values[0])<BigInt(censor.ns);
+  if(out.length&&positive(out[0].values[0])&&!eligible)return false;
+  if(eligible?pending.length!==1||pending[0].outNs!==out[0].values[0]:pending.length!==0)return false;
   const values=name=>state.maps.find(r=>r.name===name&&r.keys.join(',')==='1')?.values??[];
   const count=values('wait_count'),max=values('wait_max'),bounds=values('wait_bounds');
   return exact('wait_armed',[],['1'])&&exact('wait_fixture_printed',[],['1'])&&['wait_count','wait_max','wait_bounds'].every(name=>exact(name,['1']))&&count.length===1&&positive(count[0])&&max.length===1&&positive(max[0])&&bounds.length===2&&bounds.every(positive)&&BigInt(bounds[1])>BigInt(bounds[0])&&BigInt(max[0])===BigInt(bounds[1])-BigInt(bounds[0]);

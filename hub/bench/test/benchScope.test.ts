@@ -308,6 +308,16 @@ test('the existing bench check requires success from both independent scopes',{s
   assert.ok(control.includes('timeout-minutes: 15'));assert.ok(control.includes('--ci --scope dashboard'));
 });
 
+test('startup observation continues after optional unwind preparation while the control remains required',()=>{
+  const workflow=readFileSync(new URL('../../../.github/workflows/ci.yml',import.meta.url),'utf8');
+  const job=workflow.split('  startup-io-control:\n')[1].split(/\n  [\w-]+:/)[0];
+  const optional='      - name: Prepare matching renderer unwind tables\n        continue-on-error: true\n        run: bash bench/prepareNativeUnwind.sh';
+  assert.equal(job.split(optional).length,2);assert.equal(job.replace(optional,'').includes('continue-on-error:'),false);
+  const control=job.split('      - name: Qualify file inputs and a known scheduler wait and observe the unchanged history run\n')[1].split('\n      - ')[0];
+  assert.ok(control.includes('run: node --import tsx bench/startupWaitControl.mjs'));assert.equal(control.includes('if:'),false);assert.ok(job.includes('timeout-minutes: 20'));
+  const native=workflow.split('  native-postmortem-control:\n')[1].split(/\n  [\w-]+:/)[0];assert.equal(native.includes('continue-on-error:'),false);
+});
+
 
 for(const mode of ['native-trace','native-profile'])for(const scope of ['all','dashboard'])test(mode+' '+scope+' keeps every original dashboard phase and owned cleanup',async()=>{
   const result=await run(['--scope',scope],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode});

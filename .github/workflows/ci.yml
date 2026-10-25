@@ -524,6 +524,7 @@ jobs:
           /usr/bin/cc -shared -fPIC -O2 -Wall -Wextra -Werror bench/startupWaitFixture.c -o "$RUNNER_TEMP/quotum-wait-fixture.so"
           printf 'QUOTUM_BENCH_WAIT_FIXTURE_LIBRARY=%s\n' "$RUNNER_TEMP/quotum-wait-fixture.so" >> "$GITHUB_ENV"
       - name: Prepare matching renderer unwind tables
+        continue-on-error: true
         run: bash bench/prepareNativeUnwind.sh
       - name: Qualify file inputs and a known scheduler wait and observe the unchanged history run
         run: node --import tsx bench/startupWaitControl.mjs "$GITHUB_WORKSPACE" "$QUOTUM_BENCH_DIAGNOSTICS_DIR"

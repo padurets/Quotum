@@ -23,6 +23,44 @@ const inventory=()=>{const p=addWait(base());p.add('QFW_BIND 2 2222 2100000000 1
 await test('a reaped END without the automatic numeric inventory is incomplete',()=>{const p=inventory();assert.equal(traceInventoryComplete(p.state),true);const empty=structuredClone(p.state);empty.maps=[];assert.equal(traceComplete(empty),true);assert.equal(traceInventoryComplete(empty),false);for(const missing of ['root','birth','parent','bound_ns','cohort','capture_closed','window_closed_ns','wait_armed','wait_fixture_printed','wait_count','wait_max','wait_bounds']){const q=inventory();q.state.maps=q.state.maps.filter((r:any)=>r.name!==missing);assert.equal(traceInventoryComplete(q.state),false,missing);}});
 await test('numeric inventory rejects foreign bindings, duplicate keys and a substituted cutoff',()=>{for(const name of ['root','birth','parent','bound_ns','cohort','capture_closed','window_closed_ns']){const p=inventory();p.state.maps.find((r:any)=>r.name===name).values=['9'];assert.equal(traceInventoryComplete(p.state),false,name);}const p=inventory();p.state.maps.push(structuredClone(p.state.maps[0]));assert.equal(traceInventoryComplete(p.state),false);});
 await test('fixture accounting requires scalar counters and consistent ascending bounds',()=>{for(const[name,values]of [['wait_count',['1','2']],['wait_count',['0']],['wait_max',['200000000','1']],['wait_max',['1']],['wait_bounds',['0']],['wait_bounds',['5200000010','5000000010']]]){const p=inventory();p.state.maps.find((r:any)=>r.name===name).values=values;assert.equal(traceInventoryComplete(p.state),false,name as string);}});
+const addPending=(p:any,out='6000000000',censor='27000000000',pid='2222',birth='2100000000',frames=['__schedule+1','folio_wait_bit_common+2'])=>{for(const line of ['QFW_PENDING 2 '+pid+' '+birth+' '+out+' '+censor,...frames,'QFW_STACK_END 2'])p.add(line);return p;};
+const pendingInventory=()=>{const p=inventory();p.add('@wait_out[2]: 6000000000');return addPending(p);};
+await test('an unpaired browser switch-out retains a separately censored stack without completed accounting',()=>{
+  const p=pendingInventory();assert.equal(traceInventoryComplete(p.state),true);assert.equal(p.state.waits.length,1);assert.equal(p.state.pendingWaits.length,1);
+  const w=p.state.pendingWaits[0];assert.equal(w.censorNs,'27000000000');assert.equal(w.censored,true);assert.equal(w.durationProven,false);assert.equal(w.pureBlockedTime,false);assert.equal('ns'in w,false);assert.equal('duration'in w,false);
+  addWait(p,'QFW_WAIT 2 2222 2100000000 5400000000 5500000000');assert.equal(traceInventoryComplete(p.state),true);
+});
+await test('pending interpretation stops at the earliest observed TERM, EXIT or capture cutoff',()=>{
+  for(const[term,exit,censor]of [['8000000000','9000000000','8000000000'],['9000000000','8000000000','8000000000'],['28000000000','29000000000','27000000000']]){
+    const p=inventory();p.state.markers.find((r:any)=>r.kind==='QFW_END').ns='30000000000';p.add('@wait_out[2]: 6000000000');
+    p.add('QFW_TERM 2 2222 2100000000 '+term+' 1002 2000000000 1001 0');p.add('QFW_EXIT 2 2222 2100000000 '+exit);
+    p.add('@first_term_ns[2]: '+term);p.add('@exit_ns[2]: '+exit);
+    addPending(p,'6000000000',censor);assert.equal(traceInventoryComplete(p.state),true);
+    p.state.pendingWaits[0].censorNs=String(BigInt(censor)+1n);assert.equal(traceInventoryComplete(p.state),false);
+  }
+});
+await test('foreign identity, pre-binding or post-termination pending records remain unknown',()=>{
+  for(const[out,censor,pid,birth]of [['6000000000','27000000000','99','2100000000'],['6000000000','27000000000','2222','2100000001'],['5299999999','27000000000','2222','2100000000']]){const p=inventory();p.add('@wait_out[2]: '+out);addPending(p,out,censor,pid,birth);assert.equal(traceInventoryComplete(p.state),false);}
+  for(const[kind,name]of [['QFW_TERM','first_term_ns'],['QFW_EXIT','exit_ns']])for(const at of ['5999999999','6000000000']){const p=pendingInventory();p.add(kind+' 2 2222 2100000000 '+at+(kind==='QFW_TERM'?' 1002 2000000000 1001 0':''));p.add('@'+name+'[2]: '+at);assert.equal(traceInventoryComplete(p.state),false);p.state.pendingWaits=[];assert.equal(traceInventoryComplete(p.state),false);}
+});
+await test('pending censor fences require matching numeric maps and identity-bound markers',()=>{
+  for(const[kind,name]of [['QFW_TERM','first_term_ns'],['QFW_EXIT','exit_ns']]){
+    const marker=kind+' 2 2222 2100000000 8000000000'+(kind==='QFW_TERM'?' 1002 2000000000 1001 0':'');
+    for(const lines of [[marker],['@'+name+'[2]: 5000000000'],[marker,'@'+name+'[2]: 8000000001'],[marker,'@'+name+'[2]: (8000000000, 1)'],[marker,'@'+name+'[2]: 8000000000','@'+name+'[2]: 8000000000']]){const p=inventory();p.add('@wait_out[2]: 6000000000');for(const line of lines)p.add(line);addPending(p,'6000000000',lines.includes(marker)?'8000000000':'27000000000');assert.equal(traceInventoryComplete(p.state),false);}
+  }
+});
+await test('an eligible pending timestamp requires exactly its matching bounded stack',()=>{
+  const p=pendingInventory();p.state.pendingWaits=[];assert.equal(traceInventoryComplete(p.state),false);
+  const q=pendingInventory();q.state.pendingWaits.push(structuredClone(q.state.pendingWaits[0]));assert.equal(traceInventoryComplete(q.state),false);
+  for(const edit of [(p:any)=>p.state.maps=p.state.maps.filter((r:any)=>r.name!=='wait_out'),(p:any)=>p.state.maps.find((r:any)=>r.name==='wait_out').values=['6000000001']]){const p=pendingInventory();edit(p);assert.equal(traceInventoryComplete(p.state),false);}
+});
+await test('a main thread cannot have a pending switch-out before a retained completed switch-in',()=>{
+  for(const out of ['6000000000','7000000000']){const p=pendingInventory();addWait(p,'QFW_WAIT 2 2222 2100000000 '+out+' 8000000000');assert.equal(traceInventoryComplete(p.state),false);}
+});
+await test('unresolved, truncated or incomplete pending stacks cannot certify the numeric inventory',()=>{
+  for(const frames of [[],['0xffffffff81234567'],Array(32).fill('__schedule+0')]){const p=inventory();p.add('@wait_out[2]: 6000000000');addPending(p,undefined,undefined,undefined,undefined,frames);assert.equal(traceInventoryComplete(p.state),false);assert.equal(JSON.stringify(p.state).includes('0xffffffff'),false);}
+  const p=inventory();p.add('@wait_out[2]: 6000000000');p.add('QFW_PENDING 2 2222 2100000000 6000000000 27000000000');p.add('__schedule+0');assert.equal(traceInventoryComplete(p.state),false);
+});
 await test('bounded tool tail retains a late verifier reason and removes addresses and private fields',()=>{const d=diagnosticClassifier({toolMessages:true});d.add(Buffer.from('prologue\n'+('ignored\n'.repeat(5000))));d.add(Buffer.from('Error log:\nR1 invalid mem access 0xffffffff81234567 /private/loader TOKEN=private-canary\nprocessed 123 instructions\n'));const r=d.finish();assert.ok(r.toolTailMessages.some((v:string)=>v.includes('invalid mem access')));assert.ok(r.toolTailMessages.some((v:string)=>v.includes('processed 123')));assert.equal(r.toolTailLimited,true);assert.ok(r.toolTailMessages.length<=8);assert.equal(JSON.stringify(r).includes('0xffffffff'),false);assert.equal(JSON.stringify(r).includes('/private'),false);assert.equal(JSON.stringify(r).includes('private-canary'),false);const ordinary=diagnosticClassifier();ordinary.add(Buffer.from('verifier private-canary\n'));assert.equal('toolTailMessages'in ordinary.finish(),false);});
 await test('GNU dev_t roundtrip, including high device bits',()=>{for(const [major,minor]of [[0n,0n],[253n,0n],[4095n,1048575n],[0x12345678n,0x23456789n]]){const dev=((major&0xfffn)<<8n)|((major&~0xfffn)<<32n)|(minor&0xffn)|((minor&~0xffn)<<12n);assert.deepEqual(deviceNumbers(dev),{major:String(major),minor:String(minor)});}});
 await test('exact BigInt file metadata keeps decimal precision',()=>{const v={dev:64768n,ino:123456789123456789n,size:16777216n,mtimeNs:1730000000000000001n,ctimeNs:1730000000000000002n,uid:1001n};assert.deepEqual(fileIdentity(v),Object.fromEntries(Object.entries(v).map(([k,v])=>[k,String(v)])));});

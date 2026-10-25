@@ -828,7 +828,9 @@ fault, blocking, its duration, the file behind an earlier wait or the absence of
 operations. Scheduler switch-out/in pairs measure off-CPU time in reported D state,
 including runnable queue time after wakeup. They do not isolate blocked or disk I/O
 latency. Only the longest completed browser interval and its stack are retained;
-a pending interval is censored. Empty, unresolved or depth-limited stacks fail
+a retained unpaired browser switch-out has a separate stack, censored at the earliest
+observed termination, exit or capture cutoff. It proves neither a completed duration nor
+continuous D state. A missing eligible stack remains inconclusive. Empty, unresolved or depth-limited stacks fail
 qualification. The vfork fixture validates this observation path before Chrome starts;
 it does not reproduce a Chrome stall. No dynamic function probe is collected.
 Post-readiness inputs are not automatically startup cost. The original benchmark
@@ -836,6 +838,8 @@ verdict and console output survive collection and cleanup, and this optional job
 cannot satisfy the required benchmark gate. Select it without other diagnostic modes.
 It prepares GDB and matching Chrome unwind tables so the existing postfailure
 capture can inspect a bound renderer if the original command deadline fails.
+Unwind-table preparation is optional: its visible failure does not skip the independent
+startup observer or benchmark. Missing tables leave native unwinding unqualified.
 Preparation can affect the runner's caches; this is not a cold-start comparison.
 Its isolated tracer retains at most eight 256-character tool-error lines from a 16 KiB
 prefix and eight from a 4 KiB tail, with paths and memory addresses removed. Other launch diagnostics retain

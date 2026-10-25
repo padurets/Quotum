@@ -181,6 +181,15 @@ END {
   if (@wait_max[2]) {
     printf("QFW_WAIT 2 %llu %llu %llu %llu\n%s\nQFW_STACK_END 2\n", @root[2], @birth[2], @wait_bounds[2].0, @wait_bounds[2].1, @wait_max_stack[2]);
   }
+  /* An unpaired switch-out is censored, never a completed wait duration. */
+  if (@wait_out[2] && @window_closed_ns) {
+    $censor = @window_closed_ns;
+    if (@first_term_ns[2] && @first_term_ns[2] < $censor) { $censor = @first_term_ns[2]; }
+    if (@exit_ns[2] && @exit_ns[2] < $censor) { $censor = @exit_ns[2]; }
+    if (@wait_out[2] < $censor) {
+      printf("QFW_PENDING 2 %llu %llu %llu %llu\n%s\nQFW_STACK_END 2\n", @root[2], @birth[2], @wait_out[2], $censor, @wait_stack[2]);
+    }
+  }
   delete(@wait_stack[1]); delete(@wait_stack[2]);
   delete(@wait_max_stack[1]); delete(@wait_max_stack[2]);
   /* Detach and END precede the join phase. Retain the actual capture cutoff. */
