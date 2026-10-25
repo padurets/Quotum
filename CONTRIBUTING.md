@@ -102,6 +102,12 @@ or unconfirmed cleanup. These partial diagnostic results never satisfy `bench`.
 The job still has twenty minutes; fresh processes do not imply a cold OS page cache.
 Chrome readiness has one twenty-second window starting immediately before the launcher
 is spawned, including its work and endpoint validation.
+After a failed owned Linux launch, the existing isolated kernel probe brackets its
+identity and wait reads with exact monotonic timestamps. `readBeforeTermination`
+compares the complete sample with the first TERM attempt; overlapping or unqualified
+samples remain unknown. The older `beforeTermination` flag still records whether the
+result had been accepted before that attempt. Neither flag proves signal delivery,
+continuous waiting or the startup cause, and collection adds no pre-TERM wait.
 DevTools commands keep their thirty-second response deadline. An explicit renderer
 crash or target-detach event fails pending commands immediately, even if the socket
 stays open, and retains the original failure before cleanup. It does not retry work.

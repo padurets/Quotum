@@ -50,6 +50,17 @@ test('unsafe data is omitted and evidence overflow remains explicit', () => {
   assert.equal((value as {values: {omittedEntries: number}}).values.omittedEntries, 3);
 });
 
+test('root wait clocks retain exact U64 strings without admitting other diagnostic text',()=>{
+  const keys=['sampleFromNs','sampleToNs','terminationAttemptNs'];
+  for(const key of keys){
+    for(const value of ['0','9007199254740993','18446744073709551615'])assert.equal(safeEvidence(value,key),value);
+    for(const value of ['-1','01','0x10','1.5','18446744073709551616','https://private.invalid/canary'])assert.equal(safeEvidence(value,key),'[text omitted]');
+  }
+  assert.deepEqual(safeEvidence({sampleFromNs:'9007199254740993',sampleToNs:'9007199254740994',terminationAttemptNs:'9007199254740995',
+    beforeTermination:false,readBeforeTermination:true,otherNs:'9007199254740993'}),
+  {sampleFromNs:'9007199254740993',sampleToNs:'9007199254740994',terminationAttemptNs:'9007199254740995',beforeTermination:false,readBeforeTermination:true,otherNs:'[text omitted]'});
+});
+
 test('saved cold request classifications survive while identities and cursor text stay omitted', t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-evidence-test-'));
   t.after(() => rmSync(dir, {recursive: true, force: true}));

@@ -23,17 +23,19 @@ test('TSX-loaded kernel probe emits self-contained child code and bounded wait s
         ['/proc/91/stat','91 (fixture) '+fields.join(' ')],
         ['/proc/91/status',`Uid:\t${uid}\t${uid}\t${uid}\t${uid}\n`],
         ['/proc/91/wchan',symbol],['/proc/91/syscall','0 0x0 0 0 0 0 0 0 0\n'],
-      ]),open=new Map<number,string>();let next=0,output='';
+      ]),open=new Map<number,string>(),readOrder:string[]=[];let next=0,output='';
       const fs={constants:{O_RDONLY:0,O_NONBLOCK:1,O_NOFOLLOW:2},
         openSync:(file:string)=>{assert(files.has(file),'fixture contains every read');open.set(++next,file);return next;},
-        readSync:(fd:number,b:Buffer,offset:number,length:number)=>Buffer.from(files.get(open.get(fd)!)!).copy(b,offset,0,length),
+        readSync:(fd:number,b:Buffer,offset:number,length:number)=>{readOrder.push(open.get(fd)!);return Buffer.from(files.get(open.get(fd)!)!).copy(b,offset,0,length);},
         closeSync:(fd:number)=>{assert(open.delete(fd));},
-        statSync:(file:string)=>{assert.equal(file,'/proc/91/fd/0');return{isFile:()=>false,isFIFO:()=>true,isSocket:()=>false,
+        statSync:(file:string)=>{readOrder.push(file);assert.equal(file,'/proc/91/fd/0');return{isFile:()=>false,isFIFO:()=>true,isSocket:()=>false,
           isDirectory:()=>false,isCharacterDevice:()=>false,isBlockDevice:()=>false};},
       };
       // The emitted source must run without TSX's lexical helpers in a separate Node -e context.
       runInNewContext(args[1],{Buffer,require:(name:string)=>{assert.equal(name,'node:fs');return fs;},
-        process:{argv:['node',args[2]],ppid:process.pid,getuid:()=>uid,stdout:{write:(text:string)=>{output+=text;}}}});
+        process:{argv:['node',args[2]],ppid:process.pid,getuid:()=>uid,hrtime:{bigint:()=>{readOrder.push('clock');return process.hrtime.bigint();}},stdout:{write:(text:string)=>{output+=text;}}}});
+      assert.deepEqual(readOrder,['clock','/proc/91/stat','/proc/91/status','/proc/91/wchan','/proc/91/syscall',
+        '/proc/91/fd/0','/proc/91/syscall','/proc/91/stat','/proc/91/status','clock'],'clock bounds enclose the original seven reads and descriptor stat');
       assert.equal(open.size,0,'fixture file handles close even when parsing fails');
       const pipe=()=>{const value=Object.assign(new EventEmitter(),{destroyed:false,destroy(){this.destroyed=true;}});pipes.push(value);return value;};
       const child=Object.assign(new EventEmitter(),{pid:92,stdout:pipe(),stderr:pipe(),kill(){kills++;return true;},unref(){unrefs++;}});

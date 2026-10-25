@@ -16,45 +16,48 @@ export function processIdentity(pid: number, stat: string): ProcessIdentity | nu
 }
 
 export type KernelProbe = {status:'observed'|'unknown'|'skipped';reason:string;pid:number;birth:string|null;helperPid:number|null;
-  wait:{kind:string;name:string|null};identityStates:{before:{state:string|null};after:{state:string|null}};syscall:number|null;fd:{kind:string};syscallStable:boolean|null;identityStable:boolean|null;beforeTermination:boolean|null;outputBytes:number;diagnosticBytes:number;
+  wait:{kind:string;name:string|null};identityStates:{before:{state:string|null};after:{state:string|null}};syscall:number|null;fd:{kind:string};syscallStable:boolean|null;identityStable:boolean|null;beforeTermination:boolean|null;readBeforeTermination:boolean|null;sampleFromNs:string|null;sampleToNs:string|null;terminationAttemptNs:string|null;outputBytes:number;diagnosticBytes:number;
   reaped:boolean;pipesClosed:boolean;released:boolean;fromMs:number;toMs:number};
 
 /** One postfailure child isolates proc reads; no kernel operation runs in the owner's libuv pool. */
 export async function kernelProbe(root:ProcessIdentity|undefined,endsAt:number,signal:AbortSignal):Promise<KernelProbe> {
   const fromMs=performance.now(),uid=process.getuid?.();
-  const base:KernelProbe={status:'skipped',reason:'guard',pid:root?.pid??0,birth:root?.birth??null,helperPid:null,wait:{kind:'unavailable',name:null},identityStates:{before:{state:null},after:{state:null}},syscall:null,fd:{kind:'unavailable'},syscallStable:null,identityStable:null,beforeTermination:null,outputBytes:0,diagnosticBytes:0,reaped:true,pipesClosed:true,released:true,fromMs,toMs:fromMs};
+  const base:KernelProbe={status:'skipped',reason:'guard',pid:root?.pid??0,birth:root?.birth??null,helperPid:null,wait:{kind:'unavailable',name:null},identityStates:{before:{state:null},after:{state:null}},syscall:null,fd:{kind:'unavailable'},syscallStable:null,identityStable:null,beforeTermination:null,readBeforeTermination:null,sampleFromNs:null,sampleToNs:null,terminationAttemptNs:null,outputBytes:0,diagnosticBytes:0,reaped:true,pipesClosed:true,released:true,fromMs,toMs:fromMs};
   if(process.platform!=='linux'||process.arch!=='x64'||uid===undefined||signal.aborted||!root||root.parent!==process.pid||root.group!==root.pid||root.session!==root.pid||endsAt-performance.now()<=300)return base;
   const source=String.raw`
 const fs=require('node:fs');
 const parse=(id,stat)=>{const head=/^(\d+) \(/.exec(stat),end=stat.lastIndexOf(')');if(!head||head[1]!==String(id)||end<head[0].length)return null;const f=stat.slice(end+2).trim().split(/\s+/);if(f.length<=19||!/^[RSDZTtXxKWPI]$/.test(f[0])||![1,2,3,19].every(i=>/^\d+$/.test(f[i]))||![1,2,3].every(i=>Number.isSafeInteger(Number(f[i]))))return null;return{state:f[0],parent:Number(f[1]),group:Number(f[2]),session:Number(f[3]),birth:f[19]};};
 const expected=JSON.parse(process.argv[1]),[pid,birth,parent,group,session,uid]=expected;
-const out={pid,birth,wait:'unavailable',waitSymbol:null,stateBefore:null,stateAfter:null,syscall:null,fdKind:'unavailable',syscallStable:null,identityStable:false,reason:'identity'};
+const out={pid,birth,wait:'unavailable',waitSymbol:null,stateBefore:null,stateAfter:null,syscall:null,fdKind:'unavailable',syscallStable:null,identityStable:false,reason:'identity',sampleFromNs:null,sampleToNs:null};
 const read=(file,cap)=>{const fd=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NONBLOCK|fs.constants.O_NOFOLLOW);try{const b=Buffer.alloc(cap+1),n=fs.readSync(fd,b,0,b.length,0);if(n>cap)throw 0;return b.toString('utf8',0,n);}finally{fs.closeSync(fd);}};
 const same=()=>{const row=parse(pid,read('/proc/'+pid+'/stat',4096)),u=/^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/m.exec(read('/proc/'+pid+'/status',16384));return row&&row.birth===birth&&row.parent===parent&&row.group===group&&row.session===session&&u&&u.slice(1).every(x=>Number(x)===uid)&&process.getuid()===uid&&process.ppid===parent?row:null;};
 const kind=s=>/^(?:__)?futex_wait(?:_queue(?:_me)?)?$/.test(s)?'futex':/^(?:ep_poll|do_epoll_wait|poll_schedule_timeout|do_poll|do_select)$/.test(s)?'poll':/^(?:hrtimer_nanosleep|do_nanosleep)$/.test(s)?'timer':/^(?:pipe_read|pipe_write)$/.test(s)?'pipe':s==='do_wait'?'child':/^(?:io_schedule|folio_wait_bit_common)$/.test(s)?'io':!s||s==='0'?'unavailable':'unknown';
-let before;try{
+let before;out.sampleFromNs=process.hrtime.bigint().toString();try{
  if(Number.isSafeInteger(pid)&&pid>0&&/^\d+$/.test(birth)&&parent>0&&group===pid&&session===pid&&Number.isSafeInteger(uid)&&(before=same())){out.stateBefore=before.state;
   try{const symbol=read('/proc/'+pid+'/wchan',128).trim();out.wait=kind(symbol);if(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(symbol)&&!/^[A-Fa-f0-9]+$/.test(symbol))out.waitSymbol=symbol;}catch{}
   let call;try{call=read('/proc/'+pid+'/syscall',1024).trim();const fields=call.split(/\s+/);if(/^\d+$/.test(fields[0])&&Number(fields[0])<=1024){out.syscall=Number(fields[0]);if([0,1,17,18,74,75].includes(out.syscall)&&/^0x[\da-f]+$|^\d+$/.test(fields[1])){const fd=Number(fields[1]);if(Number.isSafeInteger(fd)&&fd>=0&&fd<=1048576){const s=fs.statSync('/proc/'+pid+'/fd/'+fd);out.fdKind=s.isFile()?'regular':s.isFIFO()?'pipe':s.isSocket()?'socket':s.isDirectory()?'directory':s.isCharacterDevice()||s.isBlockDevice()?'device':'other';}}}out.syscallStable=read('/proc/'+pid+'/syscall',1024).trim()===call;if(!out.syscallStable)out.fdKind='unavailable';}catch{out.fdKind='unavailable';}
   const after=same();if(after){out.identityStable=true;out.stateAfter=after.state;out.reason=out.wait!=='unknown'&&out.wait!=='unavailable'||out.syscall!==null?'sampled':'unavailable';}else{out.wait='unavailable';out.syscall=null;out.fdKind='unavailable';out.syscallStable=null;}
  }
 }catch{}
-if(!out.identityStable){out.waitSymbol=null;out.stateBefore=null;out.stateAfter=null;out.wait='unavailable';out.syscall=null;out.fdKind='unavailable';out.syscallStable=null;}
+out.sampleToNs=process.hrtime.bigint().toString();
+if(!out.identityStable){out.sampleFromNs=null;out.sampleToNs=null;out.waitSymbol=null;out.stateBefore=null;out.stateAfter=null;out.wait='unavailable';out.syscall=null;out.fdKind='unavailable';out.syscallStable=null;}
 process.stdout.write(JSON.stringify(out)+'\n');`;
   if(signal.aborted||endsAt-performance.now()<=300)return {...base,toMs:performance.now()};
-  const until=Math.min(fromMs+200,endsAt-100);let child:ChildProcess;
+  const until=Math.min(fromMs+200,endsAt-100),spawnFromNs=process.hrtime.bigint();let child:ChildProcess;
   try{child=spawn(process.execPath,['-e',source,JSON.stringify([root.pid,root.birth,root.parent,root.group,root.session,uid])],{stdio:['ignore','pipe','pipe'],env:{LANG:'C'}});}catch{return {...base,status:'unknown',reason:'spawn',toMs:performance.now()};}
   return await new Promise<KernelProbe>(resolve=>{
     let done=false,reaped=false,pipesClosed=false,exit:number|null=null,reason='running',outputBytes=0,diagnosticBytes=0,timer:ReturnType<typeof setTimeout>|undefined;
     const chunks:Buffer[]=[];
     const kill=()=>{if(!reaped&&child.pid)try{child.kill('SIGKILL');}catch{}};
     const finish=()=>{
-      if(done)return;done=true;if(timer)clearTimeout(timer);signal.removeEventListener('abort',cancel);
+      if(done)return;done=true;const finishNs=process.hrtime.bigint();if(timer)clearTimeout(timer);signal.removeEventListener('abort',cancel);
       child.stdout?.removeAllListeners('data');child.stderr?.removeAllListeners('data');child.stdout?.destroy();child.stderr?.destroy();child.unref();
       const result={...base,status:'unknown' as KernelProbe['status'],reason,helperPid:child.pid??null,outputBytes,diagnosticBytes,reaped,pipesClosed,released:reaped&&pipesClosed,toMs:performance.now()};
       if(reason==='closed'&&exit===0&&diagnosticBytes===0&&outputBytes<=4096)try{
         const v=JSON.parse(Buffer.concat(chunks).toString('utf8')),waits=['futex','poll','timer','pipe','child','io','unknown','unavailable'],fds=['regular','pipe','socket','directory','device','other','unavailable'];
-        if(v.pid===root.pid&&v.birth===root.birth&&(v.waitSymbol===null||typeof v.waitSymbol==='string'&&/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(v.waitSymbol)&&!/^[A-Fa-f0-9]+$/.test(v.waitSymbol))&&[v.stateBefore,v.stateAfter].every(state=>state===null||typeof state==='string'&&/^[RSDZTtXxKWPI]$/.test(state))&&(!v.identityStable||v.stateBefore!==null&&v.stateAfter!==null)&&waits.includes(v.wait)&&fds.includes(v.fdKind)&&(v.syscall===null||Number.isSafeInteger(v.syscall)&&v.syscall>=0&&v.syscall<=1024)&&(v.syscallStable===null||typeof v.syscallStable==='boolean')&&typeof v.identityStable==='boolean'&&v.identityStable===(v.reason!=='identity')&&['sampled','identity','unavailable'].includes(v.reason))Object.assign(result,{status:v.reason==='sampled'?'observed':'unknown',reason:v.reason,wait:{kind:v.identityStable?v.wait:'unavailable',name:v.identityStable?v.waitSymbol:null},identityStates:{before:{state:v.identityStable?v.stateBefore:null},after:{state:v.identityStable?v.stateAfter:null}},syscall:v.identityStable?v.syscall:null,fd:{kind:v.identityStable?v.fdKind:'unavailable'},syscallStable:v.identityStable?v.syscallStable:null,identityStable:v.identityStable});else result.reason='malformed';
+        const ns=(value:unknown)=>typeof value==='string'&&/^(?:0|[1-9]\d{0,19})$/.test(value)&&BigInt(value)<=18446744073709551615n?BigInt(value):null;
+        const sampleFromNs=ns(v.sampleFromNs),sampleToNs=ns(v.sampleToNs),timed=sampleFromNs!==null&&sampleToNs!==null&&spawnFromNs<=sampleFromNs&&sampleFromNs<sampleToNs&&sampleToNs<=finishNs;
+        if((v.identityStable?timed:v.sampleFromNs===null&&v.sampleToNs===null)&&v.pid===root.pid&&v.birth===root.birth&&(v.waitSymbol===null||typeof v.waitSymbol==='string'&&/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(v.waitSymbol)&&!/^[A-Fa-f0-9]+$/.test(v.waitSymbol))&&[v.stateBefore,v.stateAfter].every(state=>state===null||typeof state==='string'&&/^[RSDZTtXxKWPI]$/.test(state))&&(!v.identityStable||v.stateBefore!==null&&v.stateAfter!==null)&&waits.includes(v.wait)&&fds.includes(v.fdKind)&&(v.syscall===null||Number.isSafeInteger(v.syscall)&&v.syscall>=0&&v.syscall<=1024)&&(v.syscallStable===null||typeof v.syscallStable==='boolean')&&typeof v.identityStable==='boolean'&&v.identityStable===(v.reason!=='identity')&&['sampled','identity','unavailable'].includes(v.reason))Object.assign(result,{status:v.reason==='sampled'?'observed':'unknown',reason:v.reason,wait:{kind:v.identityStable?v.wait:'unavailable',name:v.identityStable?v.waitSymbol:null},identityStates:{before:{state:v.identityStable?v.stateBefore:null},after:{state:v.identityStable?v.stateAfter:null}},syscall:v.identityStable?v.syscall:null,fd:{kind:v.identityStable?v.fdKind:'unavailable'},syscallStable:v.identityStable?v.syscallStable:null,identityStable:v.identityStable,sampleFromNs:v.identityStable?v.sampleFromNs:null,sampleToNs:v.identityStable?v.sampleToNs:null});else result.reason='malformed';
       }catch{result.reason='malformed';}
       resolve(result);
     };
@@ -122,7 +125,7 @@ export function browserProcess(child: ChildProcess, group: boolean) {
   let closing: Promise<ProcessCleanup> | undefined;
   return {observe, close: (captureRootWait=false) => closing ??= (async () => {
     const started = performance.now();
-    let probe:Promise<KernelProbe>|undefined,finished=false,beforeTermination:boolean|null=null;
+    let probe:Promise<KernelProbe>|undefined,finished=false,beforeTermination:boolean|null=null,terminationAttemptNs:bigint|undefined;
     const result: ProcessCleanup = {status: 'residual', term: false, kill: false, reaped: false, pipesClosed: false, elapsedMs: 0};
     try {
       // Bound the wait for identity reads and forbid signals after cancellation.
@@ -145,6 +148,7 @@ export function browserProcess(child: ChildProcess, group: boolean) {
             if(!result.term&&beforeTermination===null)beforeTermination=result.rootWait?.identityStable===true;
             const signal = result.term ? 'SIGKILL' : 'SIGTERM';
             try {
+              if(probe&&signal==='SIGTERM'&&terminationAttemptNs===undefined)terminationAttemptNs=process.hrtime.bigint();
               if (group) process.kill(-child.pid!, signal); else child.kill(signal);
               if (signal === 'SIGTERM') result.term = true; else result.kill = true;
             } catch (error) {
@@ -161,8 +165,12 @@ export function browserProcess(child: ChildProcess, group: boolean) {
     } catch {result.reason = 'process identity unavailable';}
     finally {
       finished=true;
-      if(probe&&!result.rootWait)result.rootWait={status:'unknown',reason:'pending',pid:lastRoot?.pid??0,birth:lastRoot?.birth??null,helperPid:null,wait:{kind:'unavailable',name:null},identityStates:{before:{state:null},after:{state:null}},syscall:null,fd:{kind:'unavailable'},syscallStable:null,identityStable:null,beforeTermination:null,outputBytes:0,diagnosticBytes:0,reaped:false,pipesClosed:false,released:false,fromMs:started,toMs:performance.now()};
-      if(result.rootWait)result.rootWait={...result.rootWait,beforeTermination};
+      if(probe&&!result.rootWait)result.rootWait={status:'unknown',reason:'pending',pid:lastRoot?.pid??0,birth:lastRoot?.birth??null,helperPid:null,wait:{kind:'unavailable',name:null},identityStates:{before:{state:null},after:{state:null}},syscall:null,fd:{kind:'unavailable'},syscallStable:null,identityStable:null,beforeTermination:null,readBeforeTermination:null,sampleFromNs:null,sampleToNs:null,terminationAttemptNs:null,outputBytes:0,diagnosticBytes:0,reaped:false,pipesClosed:false,released:false,fromMs:started,toMs:performance.now()};
+      if(result.rootWait){
+        const value=result.rootWait,term=terminationAttemptNs!==undefined&&terminationAttemptNs<=18446744073709551615n?terminationAttemptNs.toString():null;
+        const qualified=value.status==='observed'&&value.identityStable===true&&value.released&&value.sampleFromNs!==null&&value.sampleToNs!==null&&term!==null;
+        result.rootWait={...value,beforeTermination,terminationAttemptNs:term,readBeforeTermination:qualified?(BigInt(value.sampleToNs!)<=BigInt(term!)?true:BigInt(value.sampleFromNs!)>=BigInt(term!)?false:null):null};
+      }
       if(result.rootWait&&!result.rootWait.released){result.status='residual';result.reason='kernel probe cleanup unconfirmed';}
       result.reaped = !child.pid || !live(); result.pipesClosed = pipesClosed;
       result.elapsedMs = Math.round(performance.now() - started);
