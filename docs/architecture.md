@@ -273,6 +273,9 @@ existing journal, and retries after 1, 2, 5, 15, 30 and then 60 seconds. CPU deb
 defer an expensive attempt further. A successful reopen alone does not reset retries:
 the first new durable observation does. Recovery starts a new capture identity and
 fresh CPU evidence; it never fills the unobserved gap with work, idle or coverage.
+The supervisor keeps its clock basis across storage recovery. A fallback clock without
+a native boot identity can retain only an epoch established in this same run; an
+actual process restart still retires an unprovable pending fallback epoch.
 Read I/O errors do not authorize corruption recovery or payload deletion. An already
 known missing manifest must return before capture can resume; it cannot initialize
 a replacement queue. Delivery reconciles the same queue and binding with hello before

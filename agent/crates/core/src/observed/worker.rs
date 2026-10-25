@@ -63,6 +63,63 @@ mod tests {
         (root, worker)
     }
 
+    fn fallback_pending() -> Stand {
+        let mut s = Stand::new();
+        // The stream is already activated; delayed work remains above its old floor.
+        s.sampler
+            .queue
+            .bind(Binding {
+                hub_id: "a".repeat(32),
+                device_id: "fixture".into(),
+                authority_epoch: "b".repeat(32),
+                floor_at: 0,
+            })
+            .unwrap();
+        let origin = Reading { boot: None, tick: 0, wall: 1_800_000_000_000 };
+        s.epoch = Epoch::new(&origin);
+        s.sampler.queue.install_clock(s.epoch.clone()).unwrap();
+        s.sampler.clock = Arc::new(Clock::fixed(Reading { tick: 15_000, wall: origin.wall + 15_000, ..origin }));
+        s.record(0, s.state(Some(true)), None);
+        s.record(15_000, s.state(Some(true)), None);
+        assert_eq!(s.sampler.queue.next_sequence(), 3);
+        assert_eq!(s.sampler.queue.ack(), 0);
+        assert!(s.epoch.anchor.is_none());
+        assert!(s.epoch.compatible(&s.sampler.clock.read(), false));
+        s
+    }
+
+    #[test]
+    fn same_run_storage_reopen_preserves_uncalibrated_fallback_work() {
+        let mut s = fallback_pending();
+        let clock = s.sampler.clock.clone();
+        let id = s.epoch.id.clone();
+        // The supervisor preserves this exact Clock across an I/O failure and journal reopen.
+        s.reopen_clock(0, Some(&id));
+        assert!(Arc::ptr_eq(&clock, &s.sampler.clock));
+        let batch = s.sampler.queue.prepare().unwrap();
+        assert!(batch.skip.is_none(), "continuous same-run clock retired durable work: {:?}", batch.skip);
+        assert_eq!(s.epoch.id, id);
+        let reading = clock.read();
+        assert!(s.epoch.bind(&reading, reading.wall));
+        s.sampler.queue.install_clock(s.epoch.clone()).unwrap();
+        assert_eq!(s.work(), 15_000);
+    }
+
+    #[test]
+    fn a_real_restart_still_retires_uncalibrated_fallback_work() {
+        let mut s = fallback_pending();
+        let clock = s.sampler.clock.clone();
+        let id = s.epoch.id.clone();
+        // A different process can expose the same numbers from an unrelated fallback origin.
+        s.sampler.clock = Arc::new(Clock::fixed(clock.read()));
+        s.reopen(0);
+        assert!(!Arc::ptr_eq(&clock, &s.sampler.clock));
+        assert_ne!(s.epoch.id, id);
+        let batch = s.sampler.queue.prepare().unwrap();
+        let loss = batch.skip.expect("a process restart cannot prove the old fallback clock basis");
+        assert_eq!((loss.first_seq, loss.last_seq, loss.reason.as_str()), (1, 2, "clock"));
+    }
+
     #[test]
     fn initialization_retries_on_the_same_thread_and_stop_cancels_backoff() {
         let faults = super::super::fault::Plan::current();
@@ -251,6 +308,9 @@ mod tests {
             total
         }
         fn reopen(&mut self, publication: usize) {
+            self.reopen_clock(publication, None);
+        }
+        fn reopen_clock(&mut self, publication: usize, current: Option<&str>) {
             let temporary = self.root.with_extension("reopen");
             let placeholder = Outbox::open(temporary.clone(), "placeholder".into()).unwrap();
             drop(std::mem::replace(&mut self.sampler.queue, placeholder));
@@ -260,7 +320,7 @@ mod tests {
             self.sampler.previous = None;
             self.sampler.activity.reset_evidence();
             self.sampler.run = crate::config::random_hex();
-            self.epoch = self.sampler.restore_clock(&self.sampler.clock.read()).unwrap();
+            self.epoch = self.sampler.restore_clock(&self.sampler.clock.read(), current).unwrap();
         }
     }
     impl Drop for Stand {
@@ -782,6 +842,7 @@ impl Worker {
             let mut accounts = BTreeMap::new();
             let mut expected = None;
             let mut first_sequence = None;
+            let mut current_clock = None;
             let mut operation = "privacy";
             let mut generation = 0;
             loop {
@@ -854,7 +915,8 @@ impl Worker {
                         fenced: false,
                     };
                     operation = "restore-clock";
-                    let epoch = sampler.restore_clock(&time.read())?;
+                    let epoch = sampler.restore_clock(&time.read(), current_clock.as_deref())?;
+                    current_clock = Some(epoch.id.clone());
                     if sampler.active_witness().is_some_and(|w| w.scope_digest != scope.digest()) {
                         sampler.queue.install_witness(None)?;
                     }
@@ -890,6 +952,7 @@ impl Worker {
                             epoch,
                         });
                         accounts = std::mem::take(&mut sampler.accounts);
+                        current_clock = sampler.queue.metadata.active_clock.clone();
                         // Drop the mutated writer before reopening its published manifest.
                         let cleanup = Instant::now();
                         let cost = super::cost::Cost::start();
@@ -1040,11 +1103,16 @@ struct CaptureRun<'a> {
 }
 
 impl Sampler {
-    fn restore_clock(&mut self, reading: &Reading) -> io::Result<Epoch> {
+    fn restore_clock(&mut self, reading: &Reading, current: Option<&str>) -> io::Result<Epoch> {
         let saved =
             self.queue.metadata.active_clock.as_ref().and_then(|id| self.queue.metadata.clocks.get(id)).cloned();
         let epoch = match saved {
-            Some(epoch) if self.queue.is_current_clock(&epoch.id) && epoch.compatible(reading, true) => epoch,
+            Some(epoch)
+                if self.queue.is_current_clock(&epoch.id)
+                    && epoch.compatible(reading, current != Some(epoch.id.as_str())) =>
+            {
+                epoch
+            }
             Some(old) => {
                 self.queue.retire_unanchored(&old.id)?;
                 Epoch::new(reading)
