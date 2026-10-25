@@ -918,7 +918,8 @@ export class Store {
     if(owner&&changes.evidence)tell(this.observer,o=>{o.touchClientSessions?.(owner,device);o.touchSources(this.held(owner).map(s=>s.id));});
   }
 
-  creditWork(device: string, from: number, until: number, keys: WorkKey[],changes?:WorkCreditChanges) {
+  /** Captured attribution requires unchanged links, holdings and device policies. */
+  creditWork(device: string, from: number, until: number, keys: WorkKey[],changes?:WorkCreditChanges,captured?:ReturnType<LinkStore['batch']>) {
     if (until <= from || !keys.length) return;
     const add = this.db.prepare(
       'INSERT INTO agent_sessions (device_id, client, source_id, origin, started_at, project, folder, ordinal, producer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
@@ -942,7 +943,7 @@ export class Store {
     const credited = new Map<string, number>();
     let changedFrom=Infinity;
     const owner = (this.db.prepare('SELECT user_id AS user FROM devices WHERE id=?').get(device) as {user: string} | undefined)?.user;
-    const contexts = this.links.batch(owner ? [owner] : []);
+    const contexts = captured??this.links.batch(owner ? [owner] : []);
     let changedEvidence = false;
     const evidence = this.db.prepare('SELECT account_by AS accountBy,route_class AS class,route_by AS by,route_host AS host,route_provider AS provider FROM agent_sessions WHERE id=?');
     const saveEvidence = this.db.prepare('UPDATE agent_sessions SET account_by=?,route_class=?,route_by=?,route_host=?,route_provider=? WHERE id=?');

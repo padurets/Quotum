@@ -73,7 +73,7 @@ test('aging preserves actual stable and legacy work credits and persisted interv
       const user=directory.createUser('fixture@example.com','Fixture','fixture',start);
       directory.saveDevice({userId:user.id,machine:machineInfo(machine),agent:'quotum-demo/1',tokenId:null},start);
       const credit=store.creditWork.bind(store);
-      store.creditWork=(device,from,to,keys,changes)=>{calls.push({from,to,keys});return credit(device,from,to,keys,changes);};
+      store.creditWork=(...args)=>{const [,from,to,keys]=args;calls.push({from,to,keys});return credit(...args);};
       seedWork(store,{set,start,people:new Map([['person',new Person('',user.id,'','')]]),boards:new Map(),agents:new Map(),sources:new Map([['mixed','codex:fixture']])});
       const rows=store.db.prepare('SELECT producer_id AS producer,ordinal,started_at AS startedAt,project,folder,source_id AS source,client,origin,from_at AS "from",to_at AS "to" FROM agent_sessions s JOIN agent_work w ON w.session_id=s.id ORDER BY from_at,producer_id,ordinal').all();
       assert.ok(rows.some(row=>row.producer===null)&&rows.some(row=>row.producer!==null));

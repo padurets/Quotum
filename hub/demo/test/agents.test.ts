@@ -134,7 +134,7 @@ test('unchanged seeded work keeps the minute report ledger with one continuous c
   const [seeded, reported] = fixtures;
   let credits = 0;
   const credit = seeded.store.creditWork.bind(seeded.store);
-  seeded.store.creditWork = (device, from, to, keys) => {if (keys.length) credits++; return credit(device, from, to, keys);};
+  seeded.store.creditWork = (...args) => {if (args[3].length) credits++; return credit(...args);};
   try {
     seedWork(seeded.store, seeded.stand);
     for (let at = -span; at <= 0; at += MIN) {
@@ -152,4 +152,60 @@ test('unchanged seeded work keeps the minute report ledger with one continuous c
   } finally {
     for (const fixture of fixtures) fixture.store.close();
   }
+});
+
+test('work seeding captures fixed owner rules once while preserving every credit and notification',()=>{
+  const start=1_800_000_000_000,span=8*MIN;
+  const machines:Machine[]=['ann','bob'].map(person=>({kind:'machine',id:person+'-device',person,expect:[]}));
+  const set:DemoSet={id:'captured-rules',about:'',scene:'',workHistoryMs:span,entries:[
+    ...['ann','bob'].map(id=>({kind:'person' as const,id,name:id,expect:[]})),...machines,
+    ...machines.map(machine=>({kind:'card' as const,id:machine.id,provider:'codex' as const,plan:'',machines:[machine.id],history:span,windows:[],expect:[],agents:[
+      {machine:machine.id,origin:'terminal' as const,project:'same',since:-span,works:{period:2*MIN,on:MIN,phase:0}},
+      {machine:machine.id,origin:'terminal' as const,project:'same',since:-span,works:ALWAYS,legacy:true},
+    ]})),
+  ]};
+  function run(mode:'captured'|'ordinary'|'empty'){
+    const store=new Store(':memory:',start-span),directory=new Directory(store.db);
+    const people=new Map<string,Person>(),sources=new Map<string,string>(),devices=new Map<string,string>();
+    try{
+      for(const machine of machines){
+        const owner=directory.createUser(machine.person+'@example.com',machine.person!,'fixture',start-span);
+        people.set(machine.person!,new Person('',owner.id,'',''));
+        devices.set(machine.person!,directory.saveDevice({userId:owner.id,machine:machineInfo(machine),agent:'quotum-demo/1',tokenId:null},start-span).id);
+        const source=store.source('codex',machine.id,start-span);sources.set(machine.id,source);store.hold(source,owner.id,start-span);
+      }
+      const fixture=mode==='empty'?{...set,entries:set.entries.map(entry=>entry.kind==='card'?{...entry,agents:entry.agents?.map(agent=>({...agent,works:undefined}))}:entry)}:set;
+      const stand:Stand={set:fixture,start,people,boards:new Map(),agents:new Map(),sources};
+      const notifications:unknown[]=[],ownerName=(id:string)=>[...people].find(([,person])=>person.id===id)?.[0],deviceName=(id?:string)=>[...devices].find(([,device])=>device===id)?.[0];
+      store.setObserver({touchSources:ids=>notifications.push({type:'sources',ids}),touchBoards:()=>{},touchUser:()=>{},touchHub:()=>{},history:()=>{},dropSessions:()=>{},dropMember:()=>{},dropBoard:()=>{},
+        touchClientSessions:(owner,device)=>notifications.push({type:'sessions',owner:ownerName(owner),device:deviceName(device)}),
+        clientHistory:(owner,since,device,ids)=>notifications.push({type:'history',owner:ownerName(owner),device:deviceName(device),since,ids:ids?[...ids]:undefined})});
+      const captures:{owners:readonly string[];bobHeld:boolean}[]=[];
+      const batch=store.links.batch.bind(store.links);
+      store.links.batch=(...args)=>{
+        const context=batch(...args);captures.push({owners:[...args[0]],bobHeld:context(people.get('bob')!.id,devices.get('bob')!,'codex').held.has(sources.get('bob-device')!)});return context;
+      };
+      let credits=0;const credit=store.creditWork.bind(store);
+      store.creditWork=(...args)=>{
+        if(args[3].length)credits++;
+        // The control keeps the ordinary per-credit SQL path, including its rules capture.
+        if(mode==='ordinary')args[5]=undefined;
+        return credit(...args);
+      };
+      seedWork(store,stand);
+      const result={rows:store.db.prepare('SELECT d.machine_id,s.client,s.source_id,s.origin,s.started_at,s.project,s.folder,s.ordinal,s.producer_id,s.account_by,s.route_class,s.route_by,s.route_host,s.route_provider,w.from_at,w.to_at FROM agent_sessions s JOIN agent_work w ON w.session_id=s.id JOIN devices d ON d.id=s.device_id ORDER BY d.machine_id,s.producer_id,s.ordinal,w.from_at').all(),
+        revision:store.workRevision(),credits,notifications:[...notifications],since:Number(store.db.prepare("SELECT value FROM meta WHERE key='agentWorkSince'").get()!.value)};
+      if(mode==='captured'){
+        assert.equal(captures.length,1);assert.deepEqual([...captures[0].owners].sort(),[...people.values()].map(person=>person.id).sort());assert.equal(captures[0].bobHeld,true);
+        store.db.prepare('DELETE FROM holders WHERE user_id=? AND source_id=?').run(people.get('bob')!.id,sources.get('bob-device')!);
+        seedWork(store,stand);
+        assert.equal(captures.length,2,'another invocation captures current authority again');assert.equal(captures[1].bobHeld,false);
+      }else if(mode==='ordinary')assert.equal(captures.length,credits+1,'the control includes the unused fixture capture and each ordinary credit');
+      else{assert.equal(captures.length,0);assert.equal(credits,0);assert.equal(result.rows.length,0);}
+      return result;
+    }finally{store.close();}
+  }
+  const captured=run('captured'),ordinary=run('ordinary');
+  assert.ok(captured.credits>2);assert.ok(captured.notifications.length>0);assert.deepEqual(captured,ordinary);
+  run('empty');
 });

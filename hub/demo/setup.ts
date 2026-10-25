@@ -284,6 +284,8 @@ export function seedWork(store: Store, stand: Stand) {
         db.prepare('UPDATE members SET joined_at = ? WHERE board_id = ? AND user_id = ?').run(start + at, stand.boards.get(board.id)!, stand.people.get(person)!.id);
       }
     }
+    // This transaction changes work only; links, holdings and device policies stay fixed.
+    let attribution: ReturnType<Store['links']['batch']> | undefined;
     for (const machine of machines(set)) {
       const device = (db.prepare('SELECT id FROM devices WHERE user_id = ? AND machine_id = ?').get(stand.people.get(personOf(set, machine))!.id, machineInfo(machine).id) as {id: string}).id;
       // Its agents, each with the names the hub files it under, read as the hub reads a list.
@@ -304,7 +306,8 @@ export function seedWork(store: Store, stand: Stand) {
       );
       // Equal ordered packets keep the same work stretches and namespace priority.
       let pending: {from: number; until: number; keys: WorkKey[]; identity: string} | null = null;
-      const flush = () => {if (pending) store.creditWork(device, pending.from, pending.until, pending.keys);};
+      const flush = () => {if (pending) store.creditWork(device, pending.from, pending.until, pending.keys,undefined,
+        pending.keys.length ? attribution??=store.links.batch([...stand.people.values()].map(person=>person.id)) : undefined);};
       for (let t = since; t < 0; t += MIN) {
         // Legacy agents alike in all of it keep their ordinal among the working ones, as the hub tells them.
         const alike = new Map<string, number>();
