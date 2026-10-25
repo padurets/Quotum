@@ -776,21 +776,23 @@ seconds for its captured work-prefix boundary before the cached return. The cont
 requires committed prefix retirement and zero additional reads; a missing eligible
 boundary or unconfirmed retirement is inconclusive.
 
-The manual `startup_io_control` input observes the file backing a Linux browser's
-entry into the kernel page-wait path on an isolated GitHub runner. A fixed owned-file batch must first
-produce a matching entry observation, identity and SIGTERM generation before the
+The manual `startup_io_control` input observes file identities and page ranges from
+a Linux browser's filemap read and fault tracepoints on an isolated GitHub runner.
+A fixed owned-file batch must first produce matching read and fault observations,
+identity and SIGTERM generation before the
 unchanged full history benchmark starts. Missing BTF, an unavailable probe or an
 unconfirmed fixture stops this diagnostic; no retry substitutes for qualification.
 The observer admits only the known fixture and the benchmark's detached browser main
 thread, checking parent, birth and UID. It keeps numeric device/inode/page identifiers
-and wait bits, never kernel addresses, paths or stack data. Entry snapshots precede
-reference release. A 21-second observation window does not delay browser termination;
+from the events, never kernel addresses, paths or stack data. A prepared read range's
+last index is inclusive. It is reported after successful page acquisition, whereas a
+fault entry is reported before the page-cache lookup. A fault entry is one page.
+A 21-second observation window does not delay browser termination;
 the original twenty-second launch and twenty-minute job limits remain unchanged.
-The exact classic kprobe can observe this inline function even when it is absent
-from ftrace's function list; the fixture must still qualify the actual attachment.
-Only its specific traceability warning is accepted. An entry does not prove blocking,
-its duration, a current wait owner or the absence of other waits. No return probe or
-duration certificate is collected. Post-readiness entries are not automatically startup cost. The original benchmark
+These events identify filemap inputs. They do not prove a physical read, a completed
+fault, blocking, its duration, the file behind an earlier wait or the absence of other
+operations. No dynamic function probe or duration certificate is collected.
+Post-readiness inputs are not automatically startup cost. The original benchmark
 verdict and console output survive collection and cleanup, and this optional job
 cannot satisfy the required benchmark gate. Select it without other diagnostic modes.
 Its isolated tracer retains at most eight 256-character tool-error lines from a 16 KiB

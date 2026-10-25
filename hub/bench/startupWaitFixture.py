@@ -1,7 +1,8 @@
-"""One owned-file, fixed paired-read batch; no claim that a kernel wait occurs."""
+"""One owned-file fault-touch and paired-read batch; no kernel-wait claim."""
 import ctypes
 import fcntl
 import json
+import mmap
 import os
 import re
 import stat
@@ -67,6 +68,12 @@ def run():
         require(libc.munmap(address, SIZE) == 0, "unmap")
     require(identity(os.fstat(FD)) == wanted, "identity-changed")
     require(resident == 0, "resident-pages")
+    mapped_touches = 0
+    with mmap.mmap(FD, SIZE, access=mmap.ACCESS_READ) as mapped:
+        for offset in range(0, SIZE, 1024**2):
+            require(mapped[offset] != 0, "read")
+            mapped_touches += 1
+    require(mapped_touches == 16, "read")
     barrier, counts, errors = threading.Barrier(2), [0, 0], []
 
     def reads(slot):
@@ -91,7 +98,8 @@ def run():
     print(json.dumps({"status": "fixture-read-complete", "pid": os.getpid(),
           "birth": birth, "group": os.getpgrp(), "session": os.getsid(0),
           "owner": int(uid[1]), "fdmeta": wanted, "mainReads": counts[0],
-          "threadReads": counts[1], "offsets": 16, "pageBytes": PAGE,
+          "threadReads": counts[1], "mappedTouches": mapped_touches,
+          "offsets": 16, "pageBytes": PAGE,
           "fdPosition": str(position), "coldstats": {"adviceCalls": 1,
           "mincoreCalls": 1, "pages": SIZE // page_size, "residentPages": resident}},
           separators=(",", ":")), flush=True)

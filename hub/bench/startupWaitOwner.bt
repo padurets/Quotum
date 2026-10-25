@@ -1,12 +1,11 @@
 /* $1 P, $2 bench E, $3 UID, $4/$5 parent birth ticks, $6 USER_HZ=100.
- * $7/$8/$9 expected fixture device major/minor/inode, from its owned FD.
- * $10/$11 precreated gated fixture F PID/birth ticks; MAIN THREADS ONLY.
- * Exact classic entry only: an entry does not prove blocking, duration or absence.
- * Numeric entry snapshots only; counts are observed entries, never CPU or wait time.
- * class: 0 unknown, 1 file, 2 anon(tag1), 3 KSM(tag3). Never dereference tags.
- * ABI: v6.17 folio_wait_bit_common(folio,bit,state,behavior), DROP=2.
- * Snapshot precedes any DROP. No pointer, return probe or duration state is retained.
- * At most 64 numeric keys per cohort, four fixture and sixteen browser entry rows.
+ * $7/$8/$9 owned fixture device major/minor/inode; $10/$11 gated F PID/birth ticks.
+ * MAIN THREADS ONLY. File identity context, never a folio-wait/cause capture.
+ * origin 1: get_pages success point/requested range; origin 2: filemap fault entry.
+ * Indices are page units, inclusive; fault lastIndex equals firstIndex.
+ * Events do not prove disk I/O, physical blocking, duration or absence.
+ * At most 64 numeric file/origin keys per cohort; no pointers are retained.
+ * Print two eligible fixture/eight browser rows per origin; omitted counts explicit.
  */
 BEGIN { if ($6 != 100) { @config_invalid = 1; exit(); } }
 
@@ -28,50 +27,61 @@ tracepoint:syscalls:sys_exit_setsid
   }
 }
 
-kprobe:folio_wait_bit_common
+tracepoint:filemap:mm_filemap_get_pages
 /!@capture_closed && tid == pid && (@cohort[pid] || pid == $10)/
 {
-  $entered = nsecs(monotonic);
+  $observed = nsecs(monotonic);
   if (pid == $10 && !@root[1] && uid == $3 && $6 == 100 && (uint64)curtask->start_boottime / 10000000 == $11 && (uint64)curtask->real_parent->tgid == $1 && (uint64)curtask->real_parent->start_boottime / 10000000 == $4) {
     @root[1] = pid; @birth[1] = (uint64)curtask->start_boottime;
-    @parent[1] = $1; @parent_ticks[1] = $4; @bound_ns[1] = $entered;
+    @parent[1] = $1; @parent_ticks[1] = $4; @bound_ns[1] = $observed;
     @alive[1] = 1; @cohort[pid] = 1;
-    printf("QFW_BIND %llu %llu %llu %llu %llu %llu\n", (uint64)1, (uint64)pid, @birth[1], (uint64)$1, (uint64)uid, $entered);
+    printf("QFW_BIND %llu %llu %llu %llu %llu %llu\n", (uint64)1, (uint64)pid, @birth[1], (uint64)$1, (uint64)uid, $observed);
   }
-  $c = @cohort[pid];
+  $c = @cohort[pid]; $origin = (uint64)1;
   if ($c && @alive[$c] && @root[$c] == pid && @birth[$c] == (uint64)curtask->start_boottime && @parent[$c] == (uint64)curtask->real_parent->tgid && @parent_ticks[$c] == (uint64)curtask->real_parent->start_boottime / 10000000 && uid == $3) {
-    @entries[$c] = @entries[$c] + 1;
-    $f = (struct folio *)arg0; $raw = (uint64)$f->mapping;
-    $kind = 0; $major = 0; $minor = 0; $ino = (uint64)0; $index = (uint64)0;
-    if (($raw & 3) == 1) { $kind = 2; }
-    else if (($raw & 3) == 3) { $kind = 3; }
-    else if ($raw && !($raw & 3)) {
-      $m = (struct address_space *)$raw; $inode = $m->host;
-      if ($inode != 0) {
-        $sb = $inode->i_sb; $back = $inode->i_mapping; $index0 = (uint64)$f->index;
-        if ($sb != 0 && $back == $m) {
-          $dev = (uint64)$sb->s_dev; $ino0 = (uint64)$inode->i_ino;
-          if ((uint64)$f->mapping == $raw && $m->host == $inode && $inode->i_mapping == $m && (uint64)$f->index == $index0) {
-            $kind = 1; $major = $dev >> 20; $minor = $dev & 1048575;
-            $ino = $ino0; $index = $index0;
-          }
-        }
-      }
-    }
-    if ((uint64)$f->mapping != $raw) { $kind = 0; $major = 0; $minor = 0; $ino = 0; $index = 0; }
-    if ($kind != 1) { @mapping_unqualified[$c] = @mapping_unqualified[$c] + 1; }
-    $key = ($c, $kind, $major, $minor, $ino, (int32)arg1, (int32)arg3);
-    /* bpftrace 0.20 map keys list scalar fields, never a nested tuple key. */
-    if (!@seen[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6] && @key_count[$c] >= 64) { @missing[$c] = @missing[$c] + 1; }
+    $dev = (uint64)args->s_dev; $major = $dev >> 20; $minor = $dev & 1048575;
+    $ino = (uint64)args->i_ino; $first = (uint64)args->index; $last = (uint64)args->last_index;
+    @entries[$c, $origin] = @entries[$c, $origin] + 1;
+    @last_file[$c, $origin] = ($major, $minor, $ino, $first, $last, $observed);
+    if (!@seen[$c, $origin, $major, $minor, $ino] && @key_count[$c] >= 64) { @missing[$c] = @missing[$c] + 1; }
     else {
-      if (!@seen[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6]) { @seen[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6] = 1; @key_count[$c] = @key_count[$c] + 1; }
-      @count[$key.0, $key.1, $key.2, $key.3, $key.4, $key.5, $key.6] = count();
+      if (!@seen[$c, $origin, $major, $minor, $ino]) { @seen[$c, $origin, $major, $minor, $ino] = 1; @key_count[$c] = @key_count[$c] + 1; }
+      @count[$c, $origin, $major, $minor, $ino] = count();
     }
-    $eligible = $c == 2 || ($kind == 1 && $major == $7 && $minor == $8 && $ino == $9);
-    if ($eligible && @entries_printed[$c] < (uint64)($c == 1 ? 4 : 16)) {
-      @entries_printed[$c] = @entries_printed[$c] + 1;
-      printf("QFW_ENTRY %llu %llu %llu %llu %llu %llu %llu %llu %lld %lld %llu\n", $c, (uint64)pid, @birth[$c], $kind, $major, $minor, $ino, $index, (int32)arg1, (int32)arg3, $entered);
-    } else if ($eligible) { @entries_omitted[$c] = @entries_omitted[$c] + 1; }
+    $eligible = $c == 2 || ($major == $7 && $minor == $8 && $ino == $9);
+    if ($eligible && @files_printed[$c, $origin] < (uint64)($c == 1 ? 2 : 8)) {
+      @files_printed[$c, $origin] = @files_printed[$c, $origin] + 1;
+      printf("QFW_FILE %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu\n", $c, $origin, (uint64)pid, @birth[$c], $major, $minor, $ino, $first, $last, $observed);
+    } else if ($eligible) { @files_omitted[$c, $origin] = @files_omitted[$c, $origin] + 1; }
+  } else if ($c) { @identity_lost[$c] = @identity_lost[$c] + 1; }
+}
+
+tracepoint:filemap:mm_filemap_fault
+/!@capture_closed && tid == pid && (@cohort[pid] || pid == $10)/
+{
+  $observed = nsecs(monotonic);
+  if (pid == $10 && !@root[1] && uid == $3 && $6 == 100 && (uint64)curtask->start_boottime / 10000000 == $11 && (uint64)curtask->real_parent->tgid == $1 && (uint64)curtask->real_parent->start_boottime / 10000000 == $4) {
+    @root[1] = pid; @birth[1] = (uint64)curtask->start_boottime;
+    @parent[1] = $1; @parent_ticks[1] = $4; @bound_ns[1] = $observed;
+    @alive[1] = 1; @cohort[pid] = 1;
+    printf("QFW_BIND %llu %llu %llu %llu %llu %llu\n", (uint64)1, (uint64)pid, @birth[1], (uint64)$1, (uint64)uid, $observed);
+  }
+  $c = @cohort[pid]; $origin = (uint64)2;
+  if ($c && @alive[$c] && @root[$c] == pid && @birth[$c] == (uint64)curtask->start_boottime && @parent[$c] == (uint64)curtask->real_parent->tgid && @parent_ticks[$c] == (uint64)curtask->real_parent->start_boottime / 10000000 && uid == $3) {
+    $dev = (uint64)args->s_dev; $major = $dev >> 20; $minor = $dev & 1048575;
+    $ino = (uint64)args->i_ino; $first = (uint64)args->index; $last = $first;
+    @entries[$c, $origin] = @entries[$c, $origin] + 1;
+    @last_file[$c, $origin] = ($major, $minor, $ino, $first, $last, $observed);
+    if (!@seen[$c, $origin, $major, $minor, $ino] && @key_count[$c] >= 64) { @missing[$c] = @missing[$c] + 1; }
+    else {
+      if (!@seen[$c, $origin, $major, $minor, $ino]) { @seen[$c, $origin, $major, $minor, $ino] = 1; @key_count[$c] = @key_count[$c] + 1; }
+      @count[$c, $origin, $major, $minor, $ino] = count();
+    }
+    $eligible = $c == 2 || ($major == $7 && $minor == $8 && $ino == $9);
+    if ($eligible && @files_printed[$c, $origin] < (uint64)($c == 1 ? 2 : 8)) {
+      @files_printed[$c, $origin] = @files_printed[$c, $origin] + 1;
+      printf("QFW_FILE %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu\n", $c, $origin, (uint64)pid, @birth[$c], $major, $minor, $ino, $first, $last, $observed);
+    } else if ($eligible) { @files_omitted[$c, $origin] = @files_omitted[$c, $origin] + 1; }
   } else if ($c) { @identity_lost[$c] = @identity_lost[$c] + 1; }
 }
 

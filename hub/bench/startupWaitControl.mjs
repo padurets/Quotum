@@ -6,7 +6,7 @@ import {createHash} from 'node:crypto';
 import {setTimeout as sleep} from 'node:timers/promises';
 
 const HERE=path.dirname(fileURLToPath(import.meta.url)),SIZE=16*1024**2,U64=(1n<<64n)-1n;
-const MAPS=new Set('alive birth bound_ns capture_closed cohort config_invalid count entries entries_omitted entries_printed exec_birth exec_count exec_inode exec_missing exec_ns exit_ns extra_admission first_term_ns identity_lost key_count mapping_unqualified missing parent parent_ticks root seen term_sender window_closed_ns'.split(' '));
+const MAPS=new Set('alive birth bound_ns capture_closed cohort config_invalid count entries exec_birth exec_count exec_inode exec_missing exec_ns exit_ns extra_admission files_omitted files_printed first_term_ns identity_lost key_count last_file missing parent parent_ticks root seen term_sender window_closed_ns'.split(' '));
 const BAD_MAPS=new Set('config_invalid extra_admission identity_lost missing'.split(' '));
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const uint=s=>typeof s==='string'&&/^(?:0|[1-9]\d{0,19})$/.test(s)&&BigInt(s)<=U64;
@@ -48,37 +48,6 @@ export function diagnosticClassifier({toolMessages=false}={}){
     tail='';toolText='';}return sealed;}};
 }
 
-/** Bind the sole accepted warning to the pinned script and exact function name. */
-export function traceExpectedWarning(file,source){
-  const probe='kprobe:folio_wait_bit_common',lines=source.split('\n'),at=lines.indexOf(probe);
-  if(at<0||lines.lastIndexOf(probe)!==at||typeof file!=='string'||!file.length||file.length>2048||file.includes('\n'))throw new TypeError('warning-source');
-  return{file,maxLine:lines.length,message:'folio_wait_bit_common is not traceable (either non-existing, inlined, or marked as "notrace"); attaching to it will likely fail'};
-}
-
-/** Only the known warning and a valid source range are accepted; other text fails. */
-export function traceWarningFilter(expected){
-  if(!expected||typeof expected!=='object'||typeof expected.file!=='string'||typeof expected.message!=='string'||!Number.isInteger(expected.maxLine)||expected.maxLine<=0||expected.maxLine>1000)throw new TypeError('warning-shape');
-  const prefix=expected.file+':',suffix=': WARNING: '+expected.message+'\n';let bytes=0,text='',complete=false,unrecognized=false,limitExceeded=false,sealed;
-  return{add(chunk){
-    if(sealed)return !sealed.unrecognized;
-    bytes+=chunk.length;if(bytes>16384){limitExceeded=true;unrecognized=true;}
-    if(!unrecognized){
-      text+=chunk.toString('utf8');
-      if(text.length>4096||!prefix.startsWith(text)&&!text.startsWith(prefix))unrecognized=true;
-      else if(text.includes('\n')){
-        const range=text.startsWith(prefix)&&text.endsWith(suffix)&&text.indexOf('\n')===text.length-1?/^([1-9]\d{0,3})-([1-9]\d{0,3})$/.exec(text.slice(prefix.length,-suffix.length)):null;
-        complete=!!range&&Number(range[2])>Number(range[1])&&Number(range[2])<=expected.maxLine;
-        if(!complete)unrecognized=true;
-      }
-      if(unrecognized)text='';
-    }
-    return !unrecognized;
-  },get qualified(){return !unrecognized&&(bytes===0||complete);},finish(){
-    if(!sealed){sealed={allowedWarnings:!unrecognized&&complete?1:0,unrecognized:unrecognized||bytes>0&&!complete,bytes,limitExceeded};text='';}
-    return{...sealed};
-  }};
-}
-
 /** Accept only fixed numeric markers and named numeric maps; no raw line is retained. */
 export function traceProtocol(){
   const state={markers:[],maps:[],invalid:0,omitted:0,ended:false};
@@ -94,13 +63,13 @@ export function traceProtocol(){
       if(a.length===8&&a.every((v,i)=>(i===7?signed:uint)(v))&&['1','2'].includes(a[0])&&[1,4,6].every(i=>small(a[i]))&&[1,2,3,4,5].every(i=>positive(a[i])))r={kind,cohort:Number(a[0]),pid:Number(a[1]),birthNs:a[2],ns:a[3],senderPid:Number(a[4]),senderBirthNs:a[5],senderUid:Number(a[6]),result:Number(a[7])};
     }else if(kind==='QFW_EXIT'){
       if(a.length===4&&a.every(uint)&&['1','2'].includes(a[0])&&small(a[1])&&positive(a[1])&&positive(a[2])&&positive(a[3]))r={kind,cohort:Number(a[0]),pid:Number(a[1]),birthNs:a[2],ns:a[3]};
-    }else if(kind==='QFW_ENTRY'){
-      if(a.length===11&&a.every((v,i)=>(i===8||i===9?signed:uint)(v))&&['1','2'].includes(a[0])&&small(a[1])&&positive(a[1])&&positive(a[2])&&['0','1','2','3'].includes(a[3])&&['0','1','2'].includes(a[9])&&BigInt(a[8])>=0n&&BigInt(a[8])<64n&&positive(a[10]))r={kind,cohort:Number(a[0]),pid:Number(a[1]),birthNs:a[2],class:Number(a[3]),major:a[4],minor:a[5],inode:a[6],pageIndex:a[7],bit:Number(a[8]),behavior:Number(a[9]),ns:a[10]};
+    }else if(kind==='QFW_FILE'){
+      if(a.length===10&&a.every(uint)&&['1','2'].includes(a[0])&&['1','2'].includes(a[1])&&small(a[2])&&positive(a[2])&&positive(a[3])&&positive(a[9])&&BigInt(a[7])<=BigInt(a[8])&&(a[1]==='1'||a[7]===a[8]))r={kind,cohort:Number(a[0]),origin:Number(a[1]),pid:Number(a[2]),birthNs:a[3],major:a[4],minor:a[5],inode:a[6],firstIndex:a[7],lastIndex:a[8],ns:a[9]};
     }else{
       const m=/^@([a-z_]{1,32})(?:\[([^\]]+)\])?:\s*(\([^)]*\)|-?\d+)$/.exec(line);
       if(m&&MAPS.has(m[1])){
         const keys=m[2]?numericTuple(m[2]):[],values=numericTuple(m[3]);
-        if(keys&&values&&keys.length<=7&&values.length<=7){state.maps.push({name:m[1],keys,values,entryOnly:true,physicalWaitProof:false});return;}
+        if(keys&&values&&keys.length<=7&&values.length<=7){state.maps.push({name:m[1],keys,values,filemapContextOnly:true,physicalWaitProof:false});return;}
       }
     }
     if(!r){state.invalid++;return;}state.markers.push(r);if(kind==='QFW_END')state.ended=true;
@@ -114,14 +83,14 @@ export function traceComplete(state){
   return !state.invalid&&!state.omitted&&ends.length===1&&state.markers.every(r=>BigInt(r.ns)<=BigInt(ends[0].ns));
 }
 
-/** The gate needs an owned-file function entry; it does not certify blocking or duration. */
+/** Both owned-file read-pages-ready and fault-entry contexts must occur; neither proves a wait. */
 export function fixtureProof(trace,json,row,meta,parent,uid){
   const bind=trace.markers.filter(r=>r.kind==='QFW_BIND'&&r.cohort===1),dev=deviceNumbers(meta.dev);
-  if(bind.length!==1||!exactKeys(json,'status pid birth group session owner fdmeta mainReads threadReads offsets pageBytes fdPosition coldstats'.split(' '))||json.status!=='fixture-read-complete'||!row)return false;
+  if(bind.length!==1||!exactKeys(json,'status pid birth group session owner fdmeta mainReads threadReads mappedTouches offsets pageBytes fdPosition coldstats'.split(' '))||json.status!=='fixture-read-complete'||!row)return false;
   const b=bind[0],fields=['dev','ino','size','mtimeNs','ctimeNs','uid'];
   if(b.pid!==row.pid||b.parent!==parent||b.uid!==uid||!bornMatches(b.birthNs,row.birth)||json.pid!==row.pid||json.birth!==row.birth||json.group!==row.pid||json.session!==row.pid||json.owner!==uid||row.parent!==parent||row.group!==row.pid||row.session!==row.pid||row.uids.some(v=>v!==uid))return false;
-  if(!json.fdmeta||fields.some(k=>typeof json.fdmeta[k]!=='string'||json.fdmeta[k]!==meta[k])||Object.keys(json.fdmeta).length!==6||json.mainReads!==16||json.threadReads!==16||json.offsets!==16||json.pageBytes!==4096||json.fdPosition!=='0'||!exactKeys(json.coldstats,['adviceCalls','mincoreCalls','residentPages','pages'])||json.coldstats?.adviceCalls!==1||json.coldstats?.mincoreCalls!==1||json.coldstats?.residentPages!==0||json.coldstats?.pages!==4096)return false;
-  return !trace.invalid&&!trace.omitted&&trace.markers.some(r=>r.kind==='QFW_ENTRY'&&r.cohort===1&&r.pid===b.pid&&r.birthNs===b.birthNs&&r.class===1&&r.major===dev.major&&r.minor===dev.minor&&r.inode===meta.ino&&BigInt(r.pageIndex)<4096n&&r.bit===0);
+  if(!json.fdmeta||fields.some(k=>typeof json.fdmeta[k]!=='string'||json.fdmeta[k]!==meta[k])||Object.keys(json.fdmeta).length!==6||json.mainReads!==16||json.threadReads!==16||json.mappedTouches!==16||json.offsets!==16||json.pageBytes!==4096||json.fdPosition!=='0'||!exactKeys(json.coldstats,['adviceCalls','mincoreCalls','residentPages','pages'])||json.coldstats?.adviceCalls!==1||json.coldstats?.mincoreCalls!==1||json.coldstats?.residentPages!==0||json.coldstats?.pages!==4096)return false;
+  return !trace.invalid&&!trace.omitted&&[1,2].every(origin=>trace.markers.some(r=>r.kind==='QFW_FILE'&&r.cohort===1&&r.origin===origin&&r.pid===b.pid&&r.birthNs===b.birthNs&&r.major===dev.major&&r.minor===dev.minor&&r.inode===meta.ino&&BigInt(r.firstIndex)<4096n&&BigInt(r.lastIndex)<4096n));
 }
 export function fixtureTermProof(trace,row,bracket,sender){
   const binds=trace.markers.filter(r=>r.kind==='QFW_BIND'&&r.cohort===1),terms=trace.markers.filter(r=>r.kind==='QFW_TERM'&&r.cohort===1),exits=trace.markers.filter(r=>r.kind==='QFW_EXIT'&&r.cohort===1);
@@ -130,8 +99,8 @@ export function fixtureTermProof(trace,row,bracket,sender){
 
 export async function runControl(repository,directory){
   requireValue(path.isAbsolute(repository)&&path.isAbsolute(directory),'arguments');requireValue(isolatedCI(process.env,repository),'isolated-ci');fs.mkdirSync(directory,{mode:0o700});
-  const report={kind:'startup-folio-owner-control',status:'unknown',canonicalPass:false,C1RepairProven:false,primary:null,observationIssue:null,entryOnly:true,physicalWaitProven:false,durationProven:false,absenceProven:false,sourceBefore:null,sourceAfter:null,fixture:null,fixtureQualified:false,benchmark:{started:false},trace:null,cleanup:[],limits:['Initial owned-main window; entries after browser ready are not automatically startup cost.','Function entry records identify the passed folio/file/page only; they do not certify blocking, duration or absence. No kernel-miss certificate is claimed.','Signal bracket proves generation by the owned sender, not delivery. Entry capture and fixture qualification are not a C1 reproduction or repair.','Software deadlines require OS/event-loop progress; external20m job allowance is unchanged.']};
-  const cancel=new AbortController(),leases=[];let fd,ownDirectory,trace,fixture,bench,proto=traceProtocol(),fixtureJSON,traceUntil=0,benchReady=null,expectedWarning;
+  const report={kind:'startup-filemap-input-control',status:'unknown',canonicalPass:false,C1RepairProven:false,primary:null,observationIssue:null,filemapContextOnly:true,physicalWaitProven:false,durationProven:false,absenceProven:false,sourceBefore:null,sourceAfter:null,fixture:null,fixtureQualified:false,benchmark:{started:false},trace:null,cleanup:[],limits:['Initial owned-main window; entries after browser ready are not automatically startup cost.','Origin1 reports inclusive requested range at the successful get-pages point, not all pages physically read/acquired. Origin2 is fault-entry before cache lookup. Neither context certifies a stalled read, blocking, duration or absence.','Signal bracket proves generation by the owned sender, not delivery. Filemap context and fixture qualification are not a C1 reproduction or repair.','Software deadlines require OS/event-loop progress; external20m job allowance is unchanged.']};
+  const cancel=new AbortController(),leases=[];let fd,ownDirectory,trace,fixture,bench,proto=traceProtocol(),fixtureJSON,traceUntil=0,benchReady=null;
   const until=performance.now()+20*60_000,uid=process.getuid?.();
   const abort=()=>{report.primary??='controller-cancelled';cancel.abort();};for(const s of ['SIGINT','SIGTERM','SIGHUP'])process.on(s,abort);
   const mod=name=>import(pathToFileURL(path.join(repository,'hub/bench',name)).href);
@@ -144,8 +113,8 @@ export async function runControl(repository,directory){
   };
   const boundedCurrent=(pid,signal)=>deadline(100,s=>current(pid,s),signal).catch(()=>null);
   const owned=(child,kind)=>{
-    const owner=browserProcess(child,true),state={kind,pid:child.pid??null,exit:null,signal:null,reaped:false,pipesClosed:false,stdoutBytes:0,stderrBytes:0,bad:false,records:[]};let partial='';const diagnostic=kind==='trace'?diagnosticClassifier({toolMessages:true}):null,warning=kind==='trace'?traceWarningFilter(expectedWarning):null;
-    const closed=new Promise(resolve=>{child.once('error',()=>{state.bad=true;if(!child.pid){state.reaped=true;resolve();}});child.once('exit',(code,signal)=>{state.exit=code;state.signal=signal;state.reaped=true;if(kind==='bench'&&code!==0&&!cancel.signal.aborted&&!state.controllerTerm)report.primary='benchmark-failed';});child.once('close',()=>{state.pipesClosed=true;if(diagnostic)state.diagnostic=diagnostic.finish();if(warning)state.warning=warning.finish();resolve();});});
+    const owner=browserProcess(child,true),state={kind,pid:child.pid??null,exit:null,signal:null,reaped:false,pipesClosed:false,stdoutBytes:0,stderrBytes:0,bad:false,records:[]};let partial='';const diagnostic=kind==='trace'?diagnosticClassifier({toolMessages:true}):null;
+    const closed=new Promise(resolve=>{child.once('error',()=>{state.bad=true;if(!child.pid){state.reaped=true;resolve();}});child.once('exit',(code,signal)=>{state.exit=code;state.signal=signal;state.reaped=true;if(kind==='bench'&&code!==0&&!cancel.signal.aborted&&!state.controllerTerm)report.primary='benchmark-failed';});child.once('close',()=>{state.pipesClosed=true;if(diagnostic)state.diagnostic=diagnostic.finish();resolve();});});
     const lines=value=>{
       partial+=value.toString('utf8');const maximum=kind==='bench'?65536:4096;
       if(partial.length>maximum&&!partial.includes('\n')){partial='';state.bad=kind!=='bench';return;}
@@ -157,9 +126,9 @@ export async function runControl(repository,directory){
       }
     };
     child.stdout?.on('data',v=>{state.stdoutBytes+=v.length;if(kind==='trace'&&state.stdoutBytes>65536||kind!=='bench'&&kind!=='trace'&&state.stdoutBytes>4096)state.bad=true;else if(kind!=='bench')lines(v);});
-    child.stderr?.on('data',v=>{state.stderrBytes+=v.length;diagnostic?.add(v);if(warning&&!warning.add(v))state.bad=true;if(kind!=='bench'&&state.stderrBytes>16384)state.bad=true;if(kind==='bench')lines(v);});
+    child.stderr?.on('data',v=>{state.stderrBytes+=v.length;diagnostic?.add(v);if(kind==='trace'&&state.stderrBytes>0||kind==='fixture'&&state.stderrBytes>16384)state.bad=true;if(kind==='bench')lines(v);});
     if(kind==='bench')forwardBenchmark(child);
-    child.stdin?.on('error',()=>{state.bad=true;});const lease={child,owner,state,closed,diagnostic,warning,root:null,stopping:null};leases.push(lease);return lease;
+    child.stdin?.on('error',()=>{state.bad=true;});const lease={child,owner,state,closed,diagnostic,root:null,stopping:null};leases.push(lease);return lease;
   };
   const anchor=async lease=>{
     const rows=await deadline(500,s=>lease.owner.observe(s),cancel.signal),r=rows.find(r=>r.pid===lease.child.pid),n=r&&await boundedCurrent(r.pid,cancel.signal);
@@ -211,7 +180,7 @@ export async function runControl(repository,directory){
     }catch{lease.state.bad=true;}
     const remaining=await deadline(150,s=>lease.owner.observe(s)).catch(()=>null);
     lease.state.residual=remaining?.map(r=>({pid:r.pid,birth:r.birth,state:r.state}))??null;
-    if(lease.diagnostic)lease.state.diagnostic=lease.diagnostic.finish();if(lease.warning)lease.state.warning=lease.warning.finish();
+    if(lease.diagnostic)lease.state.diagnostic=lease.diagnostic.finish();
     lease.child.stdin?.destroy();lease.child.stdout?.destroy();lease.child.stderr?.destroy();lease.child.unref();
     lease.state.released=lease.state.reaped&&lease.state.pipesClosed&&remaining?.length===0;report.cleanup.push({...lease.state,records:undefined});
   })();
@@ -231,23 +200,21 @@ export async function runControl(repository,directory){
     const e=await anchor(bench),p=await boundedCurrent(process.pid,cancel.signal);requireValue(p&&p.uids.every(v=>v===uid),'controller-identity');report.controller={pid:p.pid,birth:p.birth,uid};report.benchmark.identity=e;
     fixture=owned(spawn('/usr/bin/python3',['-B',reader,JSON.stringify(meta)],{detached:true,stdio:['pipe','pipe','pipe',fd],env:{LANG:'C',PATH:'/usr/bin:/bin'}}),'fixture');const f=await anchor(fixture);report.fixtureIdentity=f;
     const args=[script,String(p.pid),String(e.pid),String(uid),p.birth,e.birth,'100',dev.major,dev.minor,meta.ino,String(f.pid),f.birth];
-    expectedWarning=traceExpectedWarning(script,fs.readFileSync(script,'utf8'));
     trace=owned(spawn('/usr/bin/sudo',['-n','--','/bin/sh','-c','IFS= read -r gate; [ "$gate" = trace ] || exit 2; exec /usr/bin/timeout --foreground --signal=TERM --kill-after=0.2s 240s /usr/bin/bpftrace -q -B line "$@"','quotum-owned-tracer',...args],{detached:true,stdio:['pipe','pipe','pipe'],env:{LANG:'C',PATH:'/usr/bin:/bin'}}),'trace');
     await anchor(trace);traceUntil=performance.now()+240000;trace.child.stdin.end('trace\n');
-    await poll(()=>{requireValue(!trace.state.bad&&!proto.state.invalid&&!proto.state.omitted&&!trace.state.reaped,'trace-setup');return trace.warning.qualified&&proto.state.markers.some(r=>r.kind==='QFW_TICK');},traceUntil,'trace-tick-timeout');
+    await poll(()=>{requireValue(!trace.state.bad&&!proto.state.invalid&&!proto.state.omitted&&!trace.state.reaped,'trace-setup');return proto.state.markers.some(r=>r.kind==='QFW_TICK');},traceUntil,'trace-tick-timeout');
     cancel.signal.throwIfAborted();fixture.child.stdin.write('start\n');
-    await poll(()=>{requireValue(!trace.state.bad&&!fixture.state.bad&&!trace.state.reaped&&!fixture.state.reaped,'fixture-capture');return trace.warning.qualified&&fixtureProof(proto.state,fixtureJSON,f,meta,p.pid,uid);},traceUntil,'fixture-not-qualified');
+    await poll(()=>{requireValue(!trace.state.bad&&!fixture.state.bad&&!trace.state.reaped&&!fixture.state.reaped,'fixture-capture');return fixtureProof(proto.state,fixtureJSON,f,meta,p.pid,uid);},traceUntil,'fixture-not-qualified');
     requireValue(sameFile(meta,fileIdentity(fs.fstatSync(fd,{bigint:true}))),'fixture-file-changed');report.fixture=fixtureJSON;
     const fresh=await boundedCurrent(f.pid,cancel.signal);requireValue(fresh?.birth===f.birth&&fresh.parent===p.pid&&fresh.group===f.pid&&fresh.session===f.pid&&fresh.uids.every(v=>v===uid),'fixture-identity-changed');
     const bracket={beforeNs:String(process.hrtime.bigint()),afterNs:null};const sent=fixture.child.kill('SIGTERM');bracket.afterNs=String(process.hrtime.bigint());report.fixtureTermBracket=bracket;requireValue(sent,'fixture-term');
     await poll(()=>fixture.state.reaped&&fixture.state.pipesClosed&&fixtureTermProof(proto.state,f,bracket,{pid:p.pid,birth:p.birth,uid}),traceUntil,'fixture-term-unconfirmed');requireValue(fixture.state.signal==='SIGTERM','fixture-exit');await stop(fixture);requireValue(fixture.state.released,'fixture-residual');report.fixtureQualified=true;
-    requireValue(!trace.state.bad&&trace.warning.qualified,'trace-warning');
     const eNow=await boundedCurrent(e.pid,cancel.signal);requireValue(eNow?.birth===e.birth&&eNow.parent===p.pid&&eNow.group===e.pid&&eNow.session===e.pid&&eNow.uids.every(v=>v===uid),'bench-gate-identity');cancel.signal.throwIfAborted();bench.child.stdin.end('start\n');report.benchmark.started=true;
 
     await poll(()=>{requireValue(!trace.state.bad&&!proto.state.invalid&&!proto.state.omitted&&!trace.state.reaped,'trace-capture');if(bench.state.reaped&&!proto.state.markers.some(r=>r.kind==='QFW_BIND'&&r.cohort===2))throw Object.assign(new Error('bench-before-bind'),{controlReason:'bench-before-bind'});return proto.state.markers.some(r=>r.kind==='QFW_WINDOW_CLOSED');},Math.min(until,traceUntil),'trace-window-incomplete');
     const windows=proto.state.markers.filter(r=>r.kind==='QFW_WINDOW_CLOSED'),bindings=proto.state.markers.filter(r=>r.kind==='QFW_BIND'&&r.cohort===2);
     requireValue(windows.length===1&&bindings.length===1&&BigInt(windows[0].ns)-BigInt(bindings[0].ns)>=21000000000n,'trace-window');
-    await stop(trace);requireValue(trace.state.released&&traceComplete(proto.state)&&!trace.state.bad&&!trace.state.killRequested&&!trace.state.warning?.unrecognized&&!trace.state.warning?.limitExceeded,'trace-release');
+    await stop(trace);requireValue(trace.state.released&&traceComplete(proto.state)&&!trace.state.bad&&!trace.state.killRequested,'trace-release');
     await poll(()=>bench.state.reaped&&bench.state.pipesClosed,until,'controller-deadline');
     report.benchmark.exit=bench.state.exit;report.benchmark.signal=bench.state.signal;report.primary??=bench.state.exit===0?'benchmark-completed':'benchmark-failed';report.benchmark.readyLine=benchReady;
     const c2=proto.state.markers.filter(r=>r.kind==='QFW_BIND'&&r.cohort===2);requireValue(c2.length===1&&c2[0].parent===e.pid&&c2[0].uid===uid,'browser-binding');
@@ -261,7 +228,7 @@ export async function runControl(repository,directory){
     for(const helper of signalHelpers){if(!helper.record.reaped)try{helper.child.kill('SIGKILL');}catch{}helper.child.unref();}
     report.signalHelpers=signalHelpers.map(h=>({...h.record,released:h.record.reaped&&h.record.pipesClosed}));
     report.benchmark={...report.benchmark,...(bench?{exit:bench.state.exit,signal:bench.state.signal}:{}),readyLine:benchReady};report.trace={...proto.state,outputBytes:trace?.state.stdoutBytes??0,diagnosticBytes:trace?.state.stderrBytes??0,countsAreLowerBounds:true};
-    if(!traceComplete(proto.state)||signalHelpers.some(h=>!h.record.reaped||!h.record.pipesClosed)||leases.some(l=>!l.state.released||l.state.bad)||proto.state.invalid||proto.state.omitted||trace?.state.warning?.unrecognized||trace?.state.warning?.limitExceeded)report.status='unknown';
+    if(!traceComplete(proto.state)||signalHelpers.some(h=>!h.record.reaped||!h.record.pipesClosed)||leases.some(l=>!l.state.released||l.state.bad)||proto.state.invalid||proto.state.omitted||trace?.state.stderrBytes)report.status='unknown';
     if(!report.browserArtifact)readBrowserArtifact();
     if(fd!==undefined)try{fs.closeSync(fd);}catch{report.status='unknown';}if(ownDirectory)try{fs.rmSync(ownDirectory,{recursive:true});}catch{report.status='unknown';}
     try{fs.writeFileSync(path.join(directory,'control-first.json'),JSON.stringify(report,null,2)+'\n',{flag:'wx',mode:0o600});}finally{for(const s of ['SIGINT','SIGTERM','SIGHUP'])process.removeListener(s,abort);}
@@ -270,5 +237,5 @@ export async function runControl(repository,directory){
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
   try{const args=process.argv.slice(2);requireValue(args.length===2,'arguments');const r=await runControl(...args);console.log(JSON.stringify({kind:r.kind,status:r.status,canonicalPass:false,C1RepairProven:false,fixtureQualified:r.fixtureQualified,benchmarkExit:r.benchmark.exit??null}));process.exitCode=controllerExitCode(r);}
-  catch{console.log(JSON.stringify({kind:'startup-folio-owner-control',status:'unknown',reason:'controller-unavailable',canonicalPass:false,C1RepairProven:false}));process.exitCode=2;}
+  catch{console.log(JSON.stringify({kind:'startup-filemap-input-control',status:'unknown',reason:'controller-unavailable',canonicalPass:false,C1RepairProven:false}));process.exitCode=2;}
 }

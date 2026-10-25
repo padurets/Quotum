@@ -64,7 +64,7 @@ on:
         default: false
 
       startup_io_control:
-        description: Observe owned browser startup waits with a qualified kernel probe
+        description: Observe owned browser startup file inputs with qualified tracepoints
         required: false
         type: boolean
         default: false
@@ -495,17 +495,15 @@ jobs:
           printf 'startup tracefs before: %s\n' "$startup_trace_type"
           if [[ "$startup_trace_type" != tracefs ]]; then mount -t tracefs nodev "$startup_trace_root"; fi
           [[ "$(stat -f -c %T "$startup_trace_root")" == tracefs ]]
-          [[ -r /sys/kernel/btf/vmlinux && -r /proc/kallsyms ]]
-          awk '$3 == "folio_wait_bit_common" { matches++; if ($2 == "t" || $2 == "T") text++ }
-               END { printf "startup symbol matches=%d text=%d\n", matches, text; exit !(matches == 1 && text == 1) }' /proc/kallsyms
-          for startup_trace_event in syscalls/sys_exit_setsid sched/sched_process_exec signal/signal_generate sched/sched_process_exit; do
+          [[ -r /sys/kernel/btf/vmlinux ]]
+          for startup_trace_event in syscalls/sys_exit_setsid sched/sched_process_exec signal/signal_generate sched/sched_process_exit filemap/mm_filemap_get_pages filemap/mm_filemap_fault; do
             [[ -r "$startup_trace_root/events/$startup_trace_event/format" ]]
           done
           printf 'startup tracefs and BTF prerequisites: qualified\n'
           SH
           printf 'QUOTUM_CHROME=%s\n' "$(command -v google-chrome)" >> "$GITHUB_ENV"
           printf 'QUOTUM_BENCH_DIAGNOSTICS_DIR=%s\n' "$RUNNER_TEMP/quotum-startup-wait" >> "$GITHUB_ENV"
-      - name: Qualify one file-path entry and observe the unchanged history run
+      - name: Qualify file reads and faults and observe the unchanged history run
         run: node --import tsx bench/startupWaitControl.mjs "$GITHUB_WORKSPACE" "$QUOTUM_BENCH_DIAGNOSTICS_DIR"
       - name: Startup observation evidence
         if: always()
