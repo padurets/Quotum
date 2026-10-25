@@ -282,10 +282,26 @@ test('the existing bench check requires success from both independent scopes',{s
     const result=spawnSync('bash',['-eu','-c',script],{env:{...process.env,HISTORY_RESULT:history,DASHBOARD_RESULT:dashboard},encoding:'utf8'});
     assert.ifError(result.error);assert.equal(result.status===0,history==='success'&&dashboard==='success',JSON.stringify({history,dashboard}));
   }
+  const requiredProducer=(name:string,job:string)=>{
+    let required=job;
+    if(name==='bench-history'){
+      const marker='      - name: Prepare optional postfailure native capture\n';
+      const setup=job.split(marker)[1];assert.ok(setup,'ordinary history prepares optional native capture');
+      const optional=marker+setup.split('\n      - ')[0];
+      assert.ok(optional.includes('\n        timeout-minutes: 2\n'));
+      assert.ok(optional.includes('\n        continue-on-error: true\n'));
+      assert.ok(optional.includes('bash bench/prepareNativeUnwind.sh'));
+      assert.ok(!optional.includes('npm run bench'));
+      required=job.replace(optional,'');
+    }
+    assert.ok(!required.includes('continue-on-error:'),'only native diagnostic preparation may be optional');
+    return required;
+  };
   for(const [name,scope] of [['bench-history','history'],['bench-dashboard','dashboard']]){
     const job=workflow.split('  '+name+':\n')[1].split(/\n  [\w-]+:/)[0];
-    assert.ok(job.includes('timeout-minutes: 20'));assert.ok(job.includes('--ci --scope '+scope));
-    assert.ok(!job.includes('continue-on-error:'));
+    assert.ok(job.includes('timeout-minutes: 20'));assert.ok(requiredProducer(name,job).includes('--ci --scope '+scope));
+    assert.throws(()=>requiredProducer(name,job.replace('\n    timeout-minutes: 20','\n    continue-on-error: true\n    timeout-minutes: 20')));
+    assert.throws(()=>requiredProducer(name,job.replace('      - run:','      - continue-on-error: true\n        run:')));
     assert.ok(!job.includes('\n    needs:'),'benchmark producers run independently');
   }
   const control=workflow.split('  idle-cpu-control:\n')[1].split(/\n  [\w-]+:/)[0];
