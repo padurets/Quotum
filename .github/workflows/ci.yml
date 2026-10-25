@@ -481,9 +481,9 @@ jobs:
       - run: npm run build
       - name: Prepare the isolated kernel observer
         run: |
-          if [[ ! -x /usr/bin/bpftrace ]]; then
+          if [[ ! -x /usr/bin/bpftrace || ! -x /usr/bin/gdb ]]; then
             sudo apt-get update -qq
-            sudo apt-get install -y --no-install-recommends bpftrace
+            sudo apt-get install -y --no-install-recommends bpftrace gdb
           fi
           /usr/bin/bpftrace --version
           uname -r
@@ -503,6 +503,8 @@ jobs:
           SH
           printf 'QUOTUM_CHROME=%s\n' "$(command -v google-chrome)" >> "$GITHUB_ENV"
           printf 'QUOTUM_BENCH_DIAGNOSTICS_DIR=%s\n' "$RUNNER_TEMP/quotum-startup-wait" >> "$GITHUB_ENV"
+      - name: Prepare matching renderer unwind tables
+        run: bash bench/prepareNativeUnwind.sh
       - name: Qualify file reads and faults and observe the unchanged history run
         run: node --import tsx bench/startupWaitControl.mjs "$GITHUB_WORKSPACE" "$QUOTUM_BENCH_DIAGNOSTICS_DIR"
       - name: Startup observation evidence

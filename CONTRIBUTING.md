@@ -798,6 +798,9 @@ operations. No dynamic function probe or duration certificate is collected.
 Post-readiness inputs are not automatically startup cost. The original benchmark
 verdict and console output survive collection and cleanup, and this optional job
 cannot satisfy the required benchmark gate. Select it without other diagnostic modes.
+It prepares GDB and matching Chrome unwind tables so the existing postfailure
+capture can inspect a bound renderer if the original command deadline fails.
+Preparation can affect the runner's caches; this is not a cold-start comparison.
 Its isolated tracer retains at most eight 256-character tool-error lines from a 16 KiB
 prefix, with paths and memory addresses removed. Other launch diagnostics retain
 their fixed categories and coordinates.
