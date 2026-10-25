@@ -97,9 +97,25 @@ export function fixtureTermProof(trace,row,bracket,sender){
   return binds.length===1&&terms.length===1&&exits.length===1&&[terms[0],exits[0]].every(r=>r.pid===row.pid&&r.birthNs===binds[0].birthNs)&&sender&&terms[0].senderPid===sender.pid&&bornMatches(terms[0].senderBirthNs,sender.birth)&&terms[0].senderUid===sender.uid&&terms[0].result===0&&BigInt(terms[0].ns)>=BigInt(bracket.beforeNs)&&BigInt(terms[0].ns)<=BigInt(bracket.afterNs)&&BigInt(exits[0].ns)>=BigInt(terms[0].ns);
 }
 
+/** A released observer cannot cancel the original benchmark merely for missing evidence. */
+export async function observeFilemapPhase(report,observe,release){
+  const retain=error=>{report.observationIssue??=error?.controlReason??'observation-unavailable';};
+  let state;
+  try{await observe();}catch(error){retain(error);}
+  finally{try{state=await release();}catch(error){retain(error);}}
+  const released=state?.released===true&&state.reaped===true&&state.pipesClosed===true&&Array.isArray(state.residual)&&state.residual.length===0;
+  if(!released)report.observationResourceIssue??='observation-resource-unreleased';
+  return released;
+}
+export function filemapWindowReady(state,protocol){
+  requireValue(!state.bad&&!protocol.invalid&&!protocol.omitted,'trace-capture');
+  if(protocol.markers.some(r=>r.kind==='QFW_WINDOW_CLOSED'))return true;
+  requireValue(!state.reaped,'trace-capture');return false;
+}
+
 export async function runControl(repository,directory){
   requireValue(path.isAbsolute(repository)&&path.isAbsolute(directory),'arguments');requireValue(isolatedCI(process.env,repository),'isolated-ci');fs.mkdirSync(directory,{mode:0o700});
-  const report={kind:'startup-filemap-input-control',status:'unknown',canonicalPass:false,C1RepairProven:false,primary:null,observationIssue:null,filemapContextOnly:true,physicalWaitProven:false,durationProven:false,absenceProven:false,sourceBefore:null,sourceAfter:null,fixture:null,fixtureQualified:false,benchmark:{started:false},trace:null,cleanup:[],limits:['Initial owned-main window; entries after browser ready are not automatically startup cost.','Origin1 reports inclusive requested range at the successful get-pages point, not all pages physically read/acquired. Origin2 is fault-entry before cache lookup. Neither context certifies a stalled read, blocking, duration or absence.','Signal bracket proves generation by the owned sender, not delivery. Filemap context and fixture qualification are not a C1 reproduction or repair.','Software deadlines require OS/event-loop progress; external20m job allowance is unchanged.']};
+  const report={kind:'startup-filemap-input-control',status:'unknown',canonicalPass:false,C1RepairProven:false,primary:null,observationIssue:null,observationResourceIssue:null,filemapContextOnly:true,physicalWaitProven:false,durationProven:false,absenceProven:false,sourceBefore:null,sourceAfter:null,fixture:null,fixtureQualified:false,benchmark:{started:false},trace:null,cleanup:[],limits:['Initial owned-main window; entries after browser ready are not automatically startup cost.','Origin1 reports inclusive requested range at the successful get-pages point, not all pages physically read/acquired. Origin2 is fault-entry before cache lookup. Neither context certifies a stalled read, blocking, duration or absence.','Signal bracket proves generation by the owned sender, not delivery. Filemap context and fixture qualification are not a C1 reproduction or repair.','Software deadlines require OS/event-loop progress; external20m job allowance is unchanged.']};
   const cancel=new AbortController(),leases=[];let fd,ownDirectory,trace,fixture,bench,proto=traceProtocol(),fixtureJSON,traceUntil=0,benchReady=null;
   const until=performance.now()+20*60_000,uid=process.getuid?.();
   const abort=()=>{report.primary??='controller-cancelled';cancel.abort();};for(const s of ['SIGINT','SIGTERM','SIGHUP'])process.on(s,abort);
@@ -172,7 +188,15 @@ export async function runControl(repository,directory){
   };
   const stop=lease=>lease.stopping??=(async()=>{
     try{
-      if(lease.state.kind==='trace')await deadline(1000,async s=>{await rootSignal(lease,'SIGTERM',s);await deadline(150,()=>lease.closed,s).catch(()=>{});if(!lease.state.reaped){await rootSignal(lease,'SIGKILL',s);await deadline(200,()=>lease.closed,s).catch(()=>{});}});
+      if(lease.state.kind==='trace')await deadline(1000,async s=>{
+        if(lease.state.naturalRequested){
+          await deadline(500,()=>lease.closed,s).catch(()=>{});
+          if(!lease.state.reaped||!lease.state.pipesClosed){await rootSignal(lease,'SIGKILL',s);await deadline(200,()=>lease.closed,s).catch(()=>{});}
+        }else{
+          await rootSignal(lease,'SIGTERM',s);await deadline(150,()=>lease.closed,s).catch(()=>{});
+          if(!lease.state.reaped||!lease.state.pipesClosed){await rootSignal(lease,'SIGKILL',s);await deadline(200,()=>lease.closed,s).catch(()=>{});}
+        }
+      });
       else{
         if(lease.state.kind==='bench'&&lease.state.reaped===false&&lease.root){const n=await boundedCurrent(lease.root.pid);if(n?.birth===lease.root.birth&&n.uids.every(v=>v===uid))try{lease.state.controllerTerm=true;lease.child.kill('SIGTERM');}catch{}await deadline(25000,()=>lease.closed).catch(()=>{});}
         await lease.owner.close();
@@ -211,18 +235,24 @@ export async function runControl(repository,directory){
     await poll(()=>fixture.state.reaped&&fixture.state.pipesClosed&&fixtureTermProof(proto.state,f,bracket,{pid:p.pid,birth:p.birth,uid}),traceUntil,'fixture-term-unconfirmed');requireValue(fixture.state.signal==='SIGTERM','fixture-exit');await stop(fixture);requireValue(fixture.state.released,'fixture-residual');report.fixtureQualified=true;
     const eNow=await boundedCurrent(e.pid,cancel.signal);requireValue(eNow?.birth===e.birth&&eNow.parent===p.pid&&eNow.group===e.pid&&eNow.session===e.pid&&eNow.uids.every(v=>v===uid),'bench-gate-identity');cancel.signal.throwIfAborted();bench.child.stdin.end('start\n');report.benchmark.started=true;
 
-    await poll(()=>{requireValue(!trace.state.bad&&!proto.state.invalid&&!proto.state.omitted&&!trace.state.reaped,'trace-capture');if(bench.state.reaped&&!proto.state.markers.some(r=>r.kind==='QFW_BIND'&&r.cohort===2))throw Object.assign(new Error('bench-before-bind'),{controlReason:'bench-before-bind'});return proto.state.markers.some(r=>r.kind==='QFW_WINDOW_CLOSED');},Math.min(until,traceUntil),'trace-window-incomplete');
-    const windows=proto.state.markers.filter(r=>r.kind==='QFW_WINDOW_CLOSED'),bindings=proto.state.markers.filter(r=>r.kind==='QFW_BIND'&&r.cohort===2);
-    requireValue(windows.length===1&&bindings.length===1&&BigInt(windows[0].ns)-BigInt(bindings[0].ns)>=21000000000n,'trace-window');
-    await stop(trace);requireValue(trace.state.released&&traceComplete(proto.state)&&!trace.state.bad&&!trace.state.killRequested,'trace-release');
+    const observerReleased=await observeFilemapPhase(report,async()=>{
+      await poll(()=>{if(filemapWindowReady(trace.state,proto.state))return true;if(bench.state.reaped&&!proto.state.markers.some(r=>r.kind==='QFW_BIND'&&r.cohort===2))throw Object.assign(new Error('bench-before-bind'),{controlReason:'bench-before-bind'});return false;},Math.min(until,traceUntil),'trace-window-incomplete');
+      const windows=proto.state.markers.filter(r=>r.kind==='QFW_WINDOW_CLOSED'),bindings=proto.state.markers.filter(r=>r.kind==='QFW_BIND'&&r.cohort===2);
+      requireValue(windows.length===1&&bindings.length===1&&BigInt(windows[0].ns)-BigInt(bindings[0].ns)>=21000000000n,'trace-window');
+      trace.state.naturalRequested=true;await stop(trace);
+      requireValue(trace.state.released&&traceComplete(proto.state)&&!trace.state.bad&&!trace.state.killRequested&&trace.state.exit===0&&trace.state.signal===null,'trace-release');
+    },async()=>{await stop(trace);return trace.state;});
+    report.benchmark.observerReleaseConfirmed=observerReleased;
+    if(!observerReleased){report.benchmark.cancelRequestedByObservationResource=!bench.state.reaped;throw Object.assign(new Error('observation-resource-unreleased'),{controlReason:'observation-resource-unreleased'});}
+    report.benchmark.continuedAfterObservationIssue=!!report.observationIssue&&!cancel.signal.aborted&&!bench.state.reaped;
     await poll(()=>bench.state.reaped&&bench.state.pipesClosed,until,'controller-deadline');
-    report.benchmark.exit=bench.state.exit;report.benchmark.signal=bench.state.signal;report.primary??=bench.state.exit===0?'benchmark-completed':'benchmark-failed';report.benchmark.readyLine=benchReady;
+    report.benchmark.exit=bench.state.exit;report.benchmark.signal=bench.state.signal;report.primary??=report.observationIssue??(bench.state.exit===0?'benchmark-completed':'benchmark-failed');report.benchmark.readyLine=benchReady;
     const c2=proto.state.markers.filter(r=>r.kind==='QFW_BIND'&&r.cohort===2);requireValue(c2.length===1&&c2[0].parent===e.pid&&c2[0].uid===uid,'browser-binding');
     requireValue(readBrowserArtifact(c2[0],e.pid),'browser-artifact-binding');
-    requireValue(!proto.state.maps.some(m=>BAD_MAPS.has(m.name)&&m.values.some(v=>BigInt(v)!==0n)),'trace-numeric-flags');report.status='observed';
+    requireValue(!proto.state.maps.some(m=>BAD_MAPS.has(m.name)&&m.values.some(v=>BigInt(v)!==0n)),'trace-numeric-flags');report.status=report.observationIssue?'unknown':'observed';
     report.sourceAfter=pinSource();requireValue(JSON.stringify(report.sourceBefore)===JSON.stringify(report.sourceAfter),'source-changed');
     requireValue(Object.entries(report.privateSourcePins).every(([name,hash])=>sha(fs.readFileSync(path.join(HERE,name)))===hash),'private-source-changed');
-  }catch(error){report.observationIssue=error?.controlReason??(cancel.signal.aborted?'controller-cancelled':'unavailable');report.primary??=report.observationIssue;report.status='unknown';}
+  }catch(error){report.observationIssue??=error?.controlReason??(cancel.signal.aborted?'controller-cancelled':'unavailable');report.primary??=report.observationIssue;report.status='unknown';}
   finally{
     if(deadline)await Promise.all(leases.map(stop));
     for(const helper of signalHelpers){if(!helper.record.reaped)try{helper.child.kill('SIGKILL');}catch{}helper.child.unref();}

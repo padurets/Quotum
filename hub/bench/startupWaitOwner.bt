@@ -126,6 +126,7 @@ interval:s:1 {
     if (@root[2] && nsecs(monotonic) - @bound_ns[2] >= 21000000000) {
       @capture_closed = 1; @window_closed_ns = nsecs(monotonic);
       printf("QFW_WINDOW_CLOSED %llu\n", @window_closed_ns);
+      exit();
     }
   }
 }

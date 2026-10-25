@@ -789,6 +789,9 @@ last index is inclusive. It is reported after successful page acquisition, where
 fault entry is reported before the page-cache lookup. A fault entry is one page.
 A 21-second observation window does not delay browser termination;
 the original twenty-second launch and twenty-minute job limits remain unchanged.
+The tracer then exits and retains its final maps. Once the fixture has qualified,
+an observer error preserves an inconclusive diagnostic result while the original
+benchmark finishes, provided the observer's release is confirmed.
 These events identify filemap inputs. They do not prove a physical read, a completed
 fault, blocking, its duration, the file behind an earlier wait or the absence of other
 operations. No dynamic function probe or duration certificate is collected.
