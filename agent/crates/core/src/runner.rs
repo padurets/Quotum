@@ -131,6 +131,7 @@ pub struct Runner {
     /// Ends this run, a measurement under way included.
     stop: Stop,
     policy_contact_every: Duration,
+    activity_deferred: bool,
 }
 
 impl Runner {
@@ -156,7 +157,21 @@ impl Runner {
         stop: Stop,
     ) -> Runner {
         let clients = ClientId::ALL.into_iter().filter(|c| config.tracks(*c)).collect();
-        Runner { config, paths, home, adapters, clients, stop, policy_contact_every: Duration::from_secs(60) }
+        Runner {
+            config,
+            paths,
+            home,
+            adapters,
+            clients,
+            stop,
+            policy_contact_every: Duration::from_secs(60),
+            activity_deferred: false,
+        }
+    }
+
+    /// Keep quota collection running while the app persists its latest privacy restriction.
+    pub fn defer_activity(&mut self) {
+        self.activity_deferred = true;
     }
 
     pub fn clients(&self) -> &[ClientId] {
@@ -231,28 +246,11 @@ impl Runner {
         let mut commands: Vec<Option<String>> = vec![None; self.adapters.len()];
         let mut command_accounts: Vec<Option<String>> = vec![None; self.adapters.len()];
         let mut policy_contact = Instant::now();
-        let target = if !self.stop.requested() { sink.activity_target() } else { None };
-        let observed = target.is_some();
-        let route_policy = ClientId::ALL.into_iter().filter(|c| !self.config.routes(*c)).collect::<Vec<_>>();
+        let target = if !self.stop.requested() && !self.activity_deferred { sink.activity_target() } else { None };
+        let observed = target.is_some() || self.activity_deferred;
         let enabled = self.config.sessions() && !self.clients.is_empty();
-        let privacy = target.as_ref().and_then(|_| {
-            match crate::observed::privacy::update(
-                &self.paths,
-                enabled,
-                self.config.projects(),
-                &self.clients,
-                &route_policy,
-            ) {
-                Ok(privacy) => Some(privacy),
-                Err(_) => {
-                    sink.activity_failed();
-                    None
-                }
-            }
-        });
-        let mut activity_delivery = target.filter(|_| enabled).and_then(|target| {
-            let privacy = privacy.clone()?;
-            let mut clients = self.clients.iter().map(|c| c.id().to_string()).collect::<Vec<_>>();
+        let mut activity_delivery = target.and_then(|target| {
+            let mut clients = self.clients.iter().filter(|_| enabled).map(|c| c.id().to_string()).collect::<Vec<_>>();
             clients.sort();
             let mut route_disabled = ClientId::ALL
                 .into_iter()
@@ -269,7 +267,7 @@ impl Runner {
                 credential_scope: target.credential_scope,
                 projects: self.config.projects(),
                 stop: self.stop.clone(),
-                privacy,
+                privacy: String::new(),
             })
             .map_err(|_| sink.activity_failed())
             .ok()
@@ -305,7 +303,11 @@ impl Runner {
             if let Some(delivery) = &mut activity_delivery {
                 #[cfg(all(feature = "activity-bench", target_os = "linux"))]
                 let context_cpu = crate::observed::probe::cpu();
-                delivery.accounts(self.activity_accounts(&accounts, &identity_paths));
+                delivery.accounts(if enabled {
+                    self.activity_accounts(&accounts, &identity_paths)
+                } else {
+                    Default::default()
+                });
                 #[cfg(all(feature = "activity-bench", target_os = "linux"))]
                 crate::observed::probe::CONTEXT_CPU_NS
                     .fetch_add(crate::observed::probe::cpu() - context_cpu, std::sync::atomic::Ordering::Relaxed);
@@ -1600,10 +1602,10 @@ mod tests {
             }
             fn activity_failed(&mut self) {
                 self.warnings += 1;
+                self.stop.request(crate::stop::How::Exit);
             }
             fn checkin_managed(&mut self, _: &[Ask], _: &[Provider]) -> crate::sink::CheckinAnswer {
                 self.checkins += 1;
-                self.stop.request(crate::stop::How::Exit);
                 crate::sink::CheckinAnswer {
                     directives: Vec::new(),
                     commands: Vec::new(),
@@ -1627,6 +1629,11 @@ mod tests {
                 std::fs::write(root.join("activity-policy.json"), "{}").unwrap();
             }
             let stop = Stop::new();
+            let timeout = stop.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_secs(3));
+                timeout.request(crate::stop::How::Exit);
+            });
             let paths = Paths { config: root.join("config.toml"), work: root.join("work"), state: root.clone() };
             let mut runner = Runner::with_adapters(Config::default(), paths, Vec::new(), root.clone(), stop.clone());
             let mut sink = Recording { stop, warnings: 0, checkins: 0 };
@@ -1634,6 +1641,47 @@ mod tests {
             assert_eq!((sink.warnings, sink.checkins), (1, 1));
             std::fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn deferred_activity_keeps_quota_contact_without_capture_or_legacy_fallback() {
+        struct Deferred {
+            stop: Stop,
+            checkins: usize,
+        }
+        impl Sink for Deferred {
+            fn managed(&self) -> bool {
+                true
+            }
+            fn activity_target(&self) -> Option<crate::observed::Target> {
+                panic!("policy is not durable yet")
+            }
+            fn takes_sessions(&self) -> bool {
+                panic!("deferred activity cannot use legacy sessions")
+            }
+            fn checkin_managed(&mut self, _: &[Ask], _: &[Provider]) -> crate::sink::CheckinAnswer {
+                self.checkins += 1;
+                self.stop.request(crate::stop::How::Exit);
+                crate::sink::CheckinAnswer {
+                    directives: Vec::new(),
+                    commands: Vec::new(),
+                    accounts: Vec::new(),
+                    policy: None,
+                }
+            }
+            fn deliver(&mut self, _: &Outcome) {
+                panic!("no collectors")
+            }
+        }
+        let root = std::env::temp_dir().join(format!("quotum-deferred-policy-{}", crate::config::random_hex()));
+        let paths = Paths { config: root.join("config"), state: root.clone(), work: root.join("work") };
+        let stop = Stop::new();
+        let mut sink = Deferred { stop: stop.clone(), checkins: 0 };
+        let mut runner = Runner::with_adapters(Config::default(), paths, Vec::new(), root.clone(), stop);
+        runner.defer_activity();
+        assert!(runner.run(&mut sink, |_| panic!("no measurements")).is_none());
+        assert_eq!(sink.checkins, 1);
+        assert!(!root.exists());
     }
 
     #[test]

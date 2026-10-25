@@ -113,6 +113,8 @@ pub struct Agent {
     /// A stopped worker still owns its spool until delivery has finished.
     restart_pending: bool,
     started: bool,
+    privacy: quotum_core::observed::PrivacyUpdate,
+    privacy_reported: (bool, bool, u64),
 }
 
 impl Agent {
@@ -128,6 +130,8 @@ impl Agent {
             saves: 0,
             restart_pending: false,
             started: false,
+            privacy: Default::default(),
+            privacy_reported: (false, false, 0),
         }
     }
 
@@ -273,6 +277,7 @@ fn begin(shell: &Arc<Shell>) {
     let _settings = shell.settings_ops.lock().unwrap_or_else(|e| e.into_inner());
     let seen = stat(&shell.paths);
     let loaded = load_settings(&shell.paths, &shell.agent);
+    report_privacy(shell);
     let mut agent = shell.agent();
     agent.restart_pending = false;
     agent.seen = seen;
@@ -318,8 +323,12 @@ fn run(shell: &Arc<Shell>) {
         return;
     }
     let stop = Stop::new();
-    let (config, paths, log, last) =
-        (agent.config.clone(), shell.paths.clone(), shell.agent_log.clone(), agent.last.clone());
+    let (config, paths, log, last) = (
+        (agent.config.clone(), agent.privacy.pending()),
+        shell.paths.clone(),
+        shell.agent_log.clone(),
+        agent.last.clone(),
+    );
     let (measuring, asked) = (shell.clone(), stop.clone());
     let thread = thread::spawn(move || measure(config, paths, asked, ready, log, last, measuring));
     agent.run = Some(Run { stop, thread, generation });
@@ -327,7 +336,7 @@ fn run(shell: &Arc<Shell>) {
 
 /// One run of the agent: measures on the schedule and delivers to the app's hub.
 fn measure(
-    config: Config,
+    settings: (Config, bool),
     paths: Paths,
     stop: Stop,
     ready: Ready,
@@ -335,6 +344,7 @@ fn measure(
     last: Lasts,
     shell: Arc<Shell>,
 ) -> Option<String> {
+    let (config, defer_activity) = settings;
     let hub = Hub { url: ready.origin(), token: ready.token };
     let identity = machine(&paths, &config);
     let delivered = log.clone();
@@ -345,6 +355,9 @@ fn measure(
         Box::new(move |line: &str| delivered.line(line)),
     );
     let mut runner = Runner::new(config, paths, &[], stop);
+    if defer_activity {
+        runner.defer_activity();
+    }
     let mut failing: BTreeMap<Provider, String> = BTreeMap::new();
     runner.run(&mut sink, |event| match event {
         Event::Measured(outcome, _) => {
@@ -570,16 +583,55 @@ pub fn tick(shell: &Arc<Shell>) {
                 restart(shell);
             } else if shell.agent().restart_pending {
                 restart(shell);
+            } else {
+                let recovered = retry_privacy(&shell.paths, &shell.agent, &shell.settings_ops);
+                report_privacy(shell);
+                if recovered {
+                    restart(shell);
+                }
             }
         }
         _ => {}
     }
 }
 
+fn report_privacy(shell: &Arc<Shell>) {
+    let health = {
+        let mut agent = shell.agent();
+        let health = agent.privacy.health().clone();
+        let state = (health.unavailable, health.terminal, health.recoveries);
+        if state == agent.privacy_reported {
+            return;
+        }
+        agent.privacy_reported = state;
+        health
+    };
+    if let Some(failure) = health.last {
+        let state = if health.unavailable { if health.terminal { "stopped" } else { "retrying" } } else { "recovered" };
+        shell.agent_log.line(&format!(
+            "activity: privacy {state}; kind={:?}; os={:?}; failures={}",
+            failure.kind, failure.os_code, health.failures
+        ));
+    }
+}
+
+fn retry_privacy(paths: &Paths, state: &Mutex<Agent>, writes: &Mutex<()>) -> bool {
+    let Ok(_settings) = writes.try_lock() else { return false };
+    let (mut privacy, config) = {
+        let mut agent = state.lock().unwrap_or_else(|e| e.into_inner());
+        (std::mem::take(&mut agent.privacy), agent.config.clone())
+    };
+    let recovered = privacy.retry(paths, &config);
+    state.lock().unwrap_or_else(|e| e.into_inner()).privacy = privacy;
+    recovered
+}
+
 /// Changes the settings in config.toml; the agent measures with them in a moment.
 pub fn save_settings(shell: &Arc<Shell>, patch: &Patch) -> Result<(), String> {
-    let number = accept_settings(&shell.paths, &shell.agent, &shell.settings_ops, patch)?;
+    let accepted = accept_settings(&shell.paths, &shell.agent, &shell.settings_ops, patch);
+    report_privacy(shell);
     shell.wake();
+    let number = accepted?;
     let shell = shell.clone();
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(1500));
@@ -612,14 +664,19 @@ fn accept_settings(paths: &Paths, state: &Mutex<Agent>, writes: &Mutex<()>, patc
     // Its own write is no change to follow: the ticker would restart once more.
     agent.seen = stat(paths);
     agent.saves += 1;
-    Ok(agent.saves)
+    if agent.privacy.pending() {
+        agent.restart_pending = true;
+        Err("could not persist activity privacy settings".into())
+    } else {
+        Ok(agent.saves)
+    }
 }
 
 /// File watchers and native saves accept the same durable privacy barrier, including Idle.
 fn load_settings(paths: &Paths, state: &Mutex<Agent>) -> Result<Config, String> {
     let config = Config::load(&paths.config)?;
-    {
-        let agent = state.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut privacy, tightens) = {
+        let mut agent = state.lock().unwrap_or_else(|e| e.into_inner());
         let tightens = agent.config.sessions() && !config.sessions()
             || agent.config.projects() && !config.projects()
             || ClientId::ALL.into_iter().any(|client| {
@@ -629,9 +686,14 @@ fn load_settings(paths: &Paths, state: &Mutex<Agent>) -> Result<Config, String> 
         if tightens && let Some(run) = &agent.run {
             run.stop.request(How::Exit);
         }
+        (std::mem::take(&mut agent.privacy), tightens)
+    };
+    let result = privacy.accept(paths, &config, tightens);
+    let terminal = result.is_err_and(|failure| !failure.retryable);
+    state.lock().unwrap_or_else(|e| e.into_inner()).privacy = privacy;
+    if terminal {
+        return Err("could not persist activity privacy settings".into());
     }
-    quotum_core::observed::update_privacy(paths, &config)
-        .map_err(|_| "could not persist activity privacy settings".to_string())?;
     Ok(config)
 }
 
@@ -914,7 +976,7 @@ mod tests {
         let writing_paths = paths.clone();
         let saving = thread::spawn(move || {
             let patch: Patch = serde_json::from_str(r#"{"sessions":false}"#).unwrap();
-            accept_settings(&writing_paths, &other, &Mutex::new(()), &patch).unwrap();
+            assert!(accept_settings(&writing_paths, &other, &Mutex::new(()), &patch).is_err());
         });
         let until = Instant::now() + Duration::from_secs(2);
         while !stop.requested() {
@@ -930,10 +992,54 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(5));
         };
-        drop(held);
+        while !saving.is_finished() {
+            assert!(Instant::now() < until, "a held policy lock cannot block a settings save");
+            thread::sleep(Duration::from_millis(5));
+        }
         saving.join().unwrap();
+        drop(held);
         assert!(responsive, "an outstanding HTTP request must not block app_state readers");
+        assert!(state.lock().unwrap().privacy.pending());
+        let until = Instant::now() + Duration::from_secs(3);
+        while !retry_privacy(&paths, &state, &Mutex::new(())) {
+            assert!(Instant::now() < until);
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!state.lock().unwrap().privacy.pending());
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unavailable_privacy_storage_retains_valid_config_and_recovers_without_a_file_edit_or_runner() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("quotum-app-policy-repair-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let paths = Paths { config: root.join("config.toml"), state: root.clone(), work: root.join("work") };
+        let text = "sessions=false\n[providers.claude]\nenabled=false\n[providers.codex]\nenabled=false\n[providers.antigravity]\nenabled=false\n";
+        fs::write(&paths.config, text).unwrap();
+        // Opening the existing publication temporary file fails, without corrupting policy evidence.
+        let temporary = root.join("activity-policy.tmp");
+        fs::write(&temporary, "").unwrap();
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o0)).unwrap();
+        let state = Mutex::new(Agent::new());
+        let config = load_settings(&paths, &state).unwrap();
+        assert!(!config.sessions() && !Provider::ALL.into_iter().any(|p| config.enabled(p)));
+        state.lock().unwrap().config = config;
+        assert!(state.lock().unwrap().privacy.pending());
+        let seen = stat(&paths);
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600)).unwrap();
+        let until = Instant::now() + Duration::from_secs(3);
+        while !retry_privacy(&paths, &state, &Mutex::new(())) {
+            assert!(Instant::now() < until);
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(stat(&paths), seen);
+        assert!(state.lock().unwrap().run.is_none());
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("activity-policy.json")).unwrap()).unwrap();
+        assert_eq!(saved["enabled"], false);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -109,6 +109,12 @@ pub trait Sink {
 
     fn activity_failed(&mut self) {}
 
+    fn activity_health(&mut self, health: &crate::observed::recovery::Health) {
+        if health.unavailable {
+            self.activity_failed();
+        }
+    }
+
     /// Tells the hub which coding agents run on this machine now (all of them); whether it took the list.
     fn sessions(&mut self, _sessions: &[RunningSession]) -> bool {
         false
@@ -464,8 +470,18 @@ impl HubSink {
 }
 
 impl Sink for HubSink {
+    fn activity_health(&mut self, health: &crate::observed::recovery::Health) {
+        if let Some(cause) = health.last {
+            let state =
+                if health.unavailable { if health.terminal { "stopped" } else { "retrying" } } else { "recovered" };
+            (self.log)(&format!(
+                "activity: {state}; operation={}; kind={:?}; os={:?}; failures={}",
+                cause.operation, cause.kind, cause.os_code, health.failures
+            ));
+        }
+    }
     fn activity_failed(&mut self) {
-        (self.log)("activity: capture is unavailable; check local state and restart the agent");
+        (self.log)("activity: capture is unavailable; local policy or authority requires attention");
     }
     fn managed(&self) -> bool {
         true

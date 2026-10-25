@@ -42,6 +42,9 @@ pub(crate) struct Delivery {
     proof_retry: Option<Instant>,
     rollback_probe: bool,
     reported_failure: bool,
+    generation: u64,
+    recovered: u64,
+    unavailable: bool,
 }
 
 impl Delivery {
@@ -67,10 +70,13 @@ impl Delivery {
             proof_retry: None,
             rollback_probe: false,
             reported_failure: false,
+            generation: 0,
+            recovered: 0,
+            unavailable: false,
         }
     }
     pub fn accounts(&mut self, accounts: BTreeMap<ClientId, Account>) {
-        if self.accounts != accounts && self.worker.control(Control::Accounts(accounts.clone())) {
+        if self.accounts != accounts && self.worker.control_at(self.generation, Control::Accounts(accounts.clone())) {
             self.accounts = accounts;
         }
     }
@@ -110,15 +116,37 @@ impl Delivery {
     }
 
     pub fn turn(&mut self, sink: &mut dyn Sink, inventory: &[InstalledClient]) {
-        if self.worker.failed() {
-            if !self.reported_failure {
-                sink.activity_failed();
-                self.reported_failure = true;
+        let health = self.worker.health();
+        if health.unavailable != self.unavailable
+            || health.recoveries != self.recovered
+            || health.terminal && !self.reported_failure
+        {
+            sink.activity_health(&health);
+            self.unavailable = health.unavailable;
+            self.recovered = health.recoveries;
+            self.reported_failure = health.terminal;
+        }
+        if health.generation != self.generation {
+            self.generation = health.generation;
+            self.pending = None;
+            self.preparing = None;
+            self.last_state = None;
+            self.last_history = None;
+            self.last_live = None;
+            self.legacy = None;
+            if !matches!(self.mode, Mode::Unavailable) {
+                self.mode = Mode::Hello;
+                self.refresh = false;
+                self.replace = None;
+                self.rollback_probe = false;
             }
+        }
+        if self.worker.failed() || health.unavailable {
             return;
         }
+        let Some(capture) = self.worker.snapshot() else { return };
         if let Some(control) = self.pending.take() {
-            if !self.worker.control(control.clone()) {
+            if !self.worker.control_at(self.generation, control.clone()) {
                 self.pending = Some(control);
             }
             return;
@@ -132,14 +160,15 @@ impl Delivery {
                 self.unavailable();
                 return;
             }
-            Err(_) => {
-                sink.activity_failed();
-                self.unavailable();
+            Err(error) => {
+                if error.kind() != std::io::ErrorKind::WouldBlock {
+                    self.worker.control_at(
+                        self.generation,
+                        Control::Storage(super::recovery::Failure::new("privacy-read", &error)),
+                    );
+                }
                 return;
             }
-        };
-        let Some(capture) = self.worker.snapshot() else {
-            return;
         };
         self.known |= capture.binding.is_some();
         if let Mode::Legacy(until) = self.mode {
@@ -172,6 +201,9 @@ impl Delivery {
                     "replaceAuthorityEpoch":self.replace,"clock":{"clockEpoch":capture.epoch.id,"tick":capture.epoch.tick(&sent),"wall":sent.wall},
                     "tracking":capture.latest.state.tracking,"knownWitnessId":capture.witness.as_ref().map(|w|&w.id),"latest":null,"acknowledgedThrough":if self.rollback_probe {0}else{capture.ack}});
                 let started = Instant::now();
+                if self.worker.health().generation != self.generation {
+                    return;
+                }
                 let answer = sink.activity_request(&request, self.known);
                 match answer {
                     Answer::Accepted(value) => {
@@ -325,7 +357,7 @@ impl Delivery {
                     Some(prepared).filter(|prepared| prepared.fresh(&self.worker.clock.read()))
                 }
                 Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
-                    self.unavailable();
+                    self.preparing = None;
                     return;
                 }
                 Err(mpsc::TryRecvError::Empty) => None,
@@ -333,7 +365,7 @@ impl Delivery {
         } else {
             if history_due && (capture.ack + 1 < capture.sequence || capture.release_pending) {
                 let (tx, rx) = mpsc::sync_channel(1);
-                if self.worker.control(Control::Prepare(tx)) {
+                if self.worker.control_at(self.generation, Control::Prepare(tx)) {
                     self.preparing = Some(rx);
                 }
             }
@@ -384,6 +416,9 @@ impl Delivery {
     }
 
     fn answer(&mut self, sink: &mut dyn Sink, capture: &Capture, request: &Value, batch: Option<&Batch>) {
+        if self.worker.health().generation != self.generation {
+            return;
+        }
         match sink.activity_request(request, true) {
             Answer::Accepted(value) => {
                 let Some(bound) = capture.binding.as_ref() else {
