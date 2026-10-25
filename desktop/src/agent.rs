@@ -100,7 +100,9 @@ struct Run {
 
 pub struct Agent {
     pub state: State,
-    lock: Option<RunLock>,
+    lock: Option<Arc<RunLock>>,
+    /// Policy attempts pin the lock and are cancelled before ownership can pass on.
+    policy_stop: Stop,
     run: Option<Run>,
     /// The settings in effect: the ones read last without an error.
     pub config: Config,
@@ -122,6 +124,7 @@ impl Agent {
         Agent {
             state: State::Starting,
             lock: None,
+            policy_stop: Stop::new(),
             run: None,
             config: Config::default(),
             seen: None,
@@ -138,6 +141,17 @@ impl Agent {
     /// Whether the app holds the machine and so reads its settings (and may measure).
     fn holds(&self) -> bool {
         self.lock.is_some()
+    }
+
+    fn hold(&mut self, lock: RunLock) {
+        self.policy_stop.request(How::Exit);
+        self.policy_stop = Stop::new();
+        self.lock = Some(Arc::new(lock));
+    }
+
+    fn release(&mut self) {
+        self.policy_stop.request(How::Exit);
+        self.lock.take();
     }
 }
 
@@ -251,7 +265,7 @@ pub fn start(shell: &Arc<Shell>) {
     }
     match shell.paths.lock_run(Holder::App) {
         Ok(lock) => {
-            shell.agent().lock = Some(lock);
+            shell.agent().hold(lock);
             begin(shell);
         }
         Err(LockError::Held(running)) if !running.app => {
@@ -479,13 +493,13 @@ pub fn hub_starting(shell: &Arc<Shell>, generation: u64) {
 pub fn hub_down(shell: &Arc<Shell>) {
     let _ops = shell.agent_ops.lock().unwrap_or_else(|e| e.into_inner());
     halt(shell, Duration::from_secs(5));
-    shell.agent().lock.take();
+    shell.agent().release();
 }
 
 /// Quitting: the agent stops within `limit` and the machine is let go.
 pub fn quit(shell: &Arc<Shell>, limit: Duration) {
     halt(shell, limit);
-    shell.agent().lock.take();
+    shell.agent().release();
 }
 
 /// Takes the machine over from `quotum`: asks it to make way (one that knows how lets go at
@@ -507,7 +521,7 @@ pub fn take_over(shell: &Arc<Shell>) -> Result<(), String> {
     }
     match taken {
         Ok(lock) => {
-            shell.agent().lock = Some(lock);
+            shell.agent().hold(lock);
             shell.confirm_take_over();
             shell.agent_log.line("app: took the machine over from `quotum`");
             begin(shell);
@@ -534,7 +548,7 @@ pub fn tick(shell: &Arc<Shell>) {
     match state {
         State::Held { error, .. } => match shell.paths.lock_run(Holder::App) {
             Ok(lock) => {
-                shell.agent().lock = Some(lock);
+                shell.agent().hold(lock);
                 shell.agent_log.line("app: `quotum` let the machine go; measuring");
                 begin(shell);
             }
@@ -566,7 +580,7 @@ pub fn tick(shell: &Arc<Shell>) {
                     error: "the agent stopped unexpectedly; see agent.log".into(),
                 };
                 // It measures no more: the machine is let go, and a waiting `quotum` goes on.
-                agent.lock.take();
+                agent.release();
                 shell.wake();
                 return;
             }
@@ -617,11 +631,18 @@ fn report_privacy(shell: &Arc<Shell>) {
 
 fn retry_privacy(paths: &Paths, state: &Mutex<Agent>, writes: &Mutex<()>) -> bool {
     let Ok(_settings) = writes.try_lock() else { return false };
-    let (mut privacy, config) = {
+    let (mut privacy, config, stop, _owner) = {
         let mut agent = state.lock().unwrap_or_else(|e| e.into_inner());
-        (std::mem::take(&mut agent.privacy), agent.config.clone())
+        (std::mem::take(&mut agent.privacy), agent.config.clone(), agent.policy_stop.clone(), agent.lock.clone())
     };
-    let recovered = privacy.retry(paths, &config);
+    #[cfg(test)]
+    PRIVACY_RETRY_PAUSE.with(|pause| {
+        if let Some((entered, release)) = pause.borrow_mut().take() {
+            entered.send(()).unwrap();
+            release.recv_timeout(Duration::from_secs(10)).unwrap();
+        }
+    });
+    let recovered = privacy.retry(paths, &config, &stop);
     state.lock().unwrap_or_else(|e| e.into_inner()).privacy = privacy;
     recovered
 }
@@ -675,7 +696,7 @@ fn accept_settings(paths: &Paths, state: &Mutex<Agent>, writes: &Mutex<()>, patc
 /// File watchers and native saves accept the same durable privacy barrier, including Idle.
 fn load_settings(paths: &Paths, state: &Mutex<Agent>) -> Result<Config, String> {
     let config = Config::load(&paths.config)?;
-    let (mut privacy, tightens) = {
+    let (mut privacy, tightens, stop, _owner) = {
         let mut agent = state.lock().unwrap_or_else(|e| e.into_inner());
         let tightens = agent.config.sessions() && !config.sessions()
             || agent.config.projects() && !config.projects()
@@ -686,9 +707,9 @@ fn load_settings(paths: &Paths, state: &Mutex<Agent>) -> Result<Config, String> 
         if tightens && let Some(run) = &agent.run {
             run.stop.request(How::Exit);
         }
-        (std::mem::take(&mut agent.privacy), tightens)
+        (std::mem::take(&mut agent.privacy), tightens, agent.policy_stop.clone(), agent.lock.clone())
     };
-    let result = privacy.accept(paths, &config, tightens);
+    let result = privacy.accept(paths, &config, tightens, &stop);
     let terminal = result.is_err_and(|failure| !failure.retryable);
     state.lock().unwrap_or_else(|e| e.into_inner()).privacy = privacy;
     if terminal {
@@ -763,6 +784,13 @@ fn source_id(source: IntervalSource) -> &'static str {
         IntervalSource::File => "file",
         IntervalSource::Env => "env",
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static PRIVACY_RETRY_PAUSE: std::cell::RefCell<Option<(
+        std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>
+    )>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -1040,6 +1068,74 @@ mod tests {
             serde_json::from_slice(&fs::read(root.join("activity-policy.json")).unwrap()).unwrap();
         assert_eq!(saved["enabled"], false);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_pending_policy_attempt_cannot_outlive_its_machine_ownership() {
+        let root = std::env::temp_dir().join(format!("quotum-policy-handoff-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let paths = Paths { config: root.join("config.toml"), state: root.clone(), work: root.join("work") };
+        paths.ensure().unwrap();
+        let text = "[providers.claude]\nenabled=false\n[providers.codex]\nenabled=false\n[providers.antigravity]\nenabled=false\n";
+        fs::write(&paths.config, text).unwrap();
+        let config = Config::load(&paths.config).unwrap();
+        let original = quotum_core::observed::update_privacy(&paths, &config).unwrap();
+        let mut agent = Agent::new();
+        agent.hold(paths.lock_run(Holder::App).unwrap());
+        agent.config = config;
+        let state = Arc::new(Mutex::new(agent));
+        let writes = Arc::new(Mutex::new(()));
+        let held = quotum_core::config::lock_file(&root.join("activity-policy.lock")).unwrap();
+        for on in [false, true] {
+            let patch: Patch = serde_json::from_value(serde_json::json!({"sessions":on})).unwrap();
+            assert!(accept_settings(&paths, &state, &writes, &patch).is_err());
+        }
+        // begin() clears restart_pending even when its policy attempt is still unavailable.
+        let config = load_settings(&paths, &state).unwrap();
+        {
+            let mut agent = state.lock().unwrap();
+            agent.config = config;
+            agent.restart_pending = false;
+            assert!(agent.privacy.pending());
+        }
+        drop(held);
+        // The normal tick is five seconds later; all three prior failed attempts are due by then.
+        thread::sleep(Duration::from_millis(5100));
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let state_for_retry = state.clone();
+        let writes_for_retry = writes.clone();
+        let paths_for_retry = paths.clone();
+        let retry = thread::spawn(move || {
+            PRIVACY_RETRY_PAUSE.with(|pause| *pause.borrow_mut() = Some((entered_tx, release_rx)));
+            retry_privacy(&paths_for_retry, &state_for_retry, &writes_for_retry)
+        });
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        // This is agent::quit's complete body: finish the run, then release RunLock.
+        assert!(finish_run(&state, Duration::ZERO));
+        state.lock().unwrap().release();
+        assert!(
+            matches!(paths.lock_run(Holder::Cli), Err(LockError::Held(_))),
+            "an in-flight policy attempt must keep ownership until it observes cancellation"
+        );
+        release_tx.send(()).unwrap();
+        assert!(!retry.join().unwrap(), "a cancelled attempt cannot publish a policy");
+        let successor = paths.lock_run(Holder::Cli).unwrap();
+        let config = Config::load(&paths.config).unwrap();
+        let successor_revision = quotum_core::observed::update_privacy(&paths, &config).unwrap();
+        assert_eq!(successor_revision, original);
+        let after_late_retry = quotum_core::observed::update_privacy(&paths, &config).unwrap();
+        drop(successor);
+        state.lock().unwrap().hold(paths.lock_run(Holder::App).unwrap());
+        let off: Patch = serde_json::from_value(serde_json::json!({"sessions":false})).unwrap();
+        accept_settings(&paths, &state, &writes, &off).unwrap();
+        assert!(!state.lock().unwrap().privacy.pending(), "new ownership has a fresh cancellation token");
+        state.lock().unwrap().release();
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(
+            after_late_retry, successor_revision,
+            "an app retry paused before publication must not rotate the live CLI's original delivery revision after handoff"
+        );
     }
 
     #[test]

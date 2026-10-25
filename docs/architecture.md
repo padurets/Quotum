@@ -289,6 +289,9 @@ a valid config while its privacy storage is unavailable, measures with activity
 deferred, and retries the latest policy even when completely idle. A failed settings
 save does not claim acceptance of an unwritten privacy barrier. Pending restrictions
 still rotate the privacy revision if a later save reenables tracking before repair.
+Policy attempts retain the app's machine lock until they finish and use that ownership's
+cancellation token. Releasing the machine cancels pending attempts before a successor
+can acquire it, so an old app callback cannot change the successor's privacy revision.
 
 Capture and classification have separate clocks. CPU thresholds and the one-minute
 hold use complete fifteen-second judgement windows. New roots first establish a

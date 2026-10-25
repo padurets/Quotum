@@ -95,6 +95,9 @@ pub(crate) fn try_update(
     retire: bool,
     stop: Option<&crate::stop::Stop>,
 ) -> io::Result<String> {
+    if stop.is_some_and(|stop| stop.requested()) {
+        return Err(io::ErrorKind::Interrupted.into());
+    }
     let _guard = try_lock(paths)?;
     if stop.is_some_and(|stop| stop.requested()) {
         return Err(io::ErrorKind::Interrupted.into());
