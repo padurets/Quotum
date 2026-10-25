@@ -27,12 +27,12 @@ const numericTuple=text=>{text=text.trim();if(text.startsWith('(')||text.endsWit
 
 /** Classify a capped prefix. The isolated tracer can also retain redacted tool errors. */
 export function diagnosticClassifier({toolMessages=false}={}){
-  let bytes=0,scanned=0,tail='',toolText='',sealed;
+  let bytes=0,scanned=0,tail='',toolText='',toolTail='',sealed;
   const kinds=new Set(),locations=[];
   const patterns=[['permission',/EPERM|EACCES|permission denied|operation not permitted|must be root/i],['BTF',/\bBTF\b/i],['layout',/no member named|unknown struct|unknown type|invalid field|incomplete definition/i],['syntax',/syntax ?error|unexpected token|parse error|unknown identifier|semantic error/i],['attach',/failed to attach|cannot attach|error attaching|no probes to attach|no matching probes|probe[^\n]*not found/i],['verifier',/verifier|verification failed|invalid mem access/i],['resource',/no space left|cannot allocate|ENOMEM|out of memory|too many open files|resource temporarily/i],['lost-events',/lost[^\n]*(?:event|sample)|dropped[^\n]*events/i]];
   return{add(chunk){
     if(sealed)return;bytes+=chunk.length;const part=chunk.subarray(0,Math.max(0,16384-scanned));scanned+=part.length;
-    if(toolMessages)toolText+=part.toString('utf8');
+    if(toolMessages){toolText+=part.toString('utf8');toolTail=(toolTail+chunk.toString('utf8')).slice(-4096);}
     const text=tail+part.toString('utf8');for(const[k,p]of patterns)if(p.test(text))kinds.add(k);
     for(const match of text.matchAll(/(?:^|\n)(?:[^:\n]*\/)?(startupWaitOwner\.bt|stdin):(\d{1,4}):(\d{1,4})(?=[:\s-]|$)/g)){
       const line=Number(match[2]),column=Number(match[3]),source=match[1]==='stdin'?'stdin':'bpf-script';
@@ -42,10 +42,14 @@ export function diagnosticClassifier({toolMessages=false}={}){
   },finish(){if(!sealed){sealed={categories:[...kinds].length?[...kinds]:bytes?['other']:[],locations,bytes,scannedBytes:scanned,discardedBytes:bytes,unscannedBytes:bytes-scanned,capBytes:16384,limited:bytes>16384};
     if(toolMessages){
       const rows=toolText.split(/\r?\n/);if(bytes>16384)rows.pop();
-      sealed.toolMessages=rows.filter(v=>v.trim()).slice(0,8).map(v=>v.replace(/\x1b\[[0-9;]*[A-Za-z]/g,'').replace(/https?:\/\/\S+/gi,'[url]').replace(/(?:[A-Za-z]:\\|\/)[^\s"'<>:]*/g,'[path]').replace(/\b(?:0x)?[a-f0-9]{8,128}\b/gi,'[address]').replace(/\b[A-Za-z0-9_-]*(?:token|secret|cookie|password|credential)[A-Za-z0-9_-]*(?:\s*[=:]\s*(?:"[^"]*"|'[^']*'|\S+))?/gi,'[redacted]').replace(/[\x00-\x1f\x7f]/g,'?').slice(0,256));
+      const safe=v=>v.replace(/\x1b\[[0-9;]*[A-Za-z]/g,'').replace(/https?:\/\/\S+/gi,'[url]').replace(/(?:[A-Za-z]:\\|\/)[^\s"'<>:]*/g,'[path]').replace(/\b(?:0x)?[a-f0-9]{8,128}\b/gi,'[address]').replace(/\b[A-Za-z0-9_-]*(?:token|secret|cookie|password|credential)[A-Za-z0-9_-]*(?:\s*[=:]\s*(?:"[^"]*"|'[^']*'|\S+))?/gi,'[redacted]').replace(/[\x00-\x1f\x7f]/g,'?').slice(0,256);
+      sealed.toolMessages=rows.filter(v=>v.trim()).slice(0,8).map(safe);
       sealed.toolMessagesLimited=bytes>16384||rows.filter(v=>v.trim()).length>8||rows.some(v=>v.length>256);
+      const last=toolTail.split(/\r?\n/);if(bytes>Buffer.byteLength(toolTail))last.shift();
+      sealed.toolTailMessages=last.filter(v=>v.trim()).slice(-8).map(safe);
+      sealed.toolTailLimited=bytes>4096||last.filter(v=>v.trim()).length>8||last.some(v=>v.length>256);
     }
-    tail='';toolText='';}return sealed;}};
+    tail='';toolText='';toolTail='';}return sealed;}};
 }
 
 /** Retain numeric records and bounded resolved kernel symbols; discard all raw lines. */
@@ -243,9 +247,10 @@ export async function runControl(repository,directory){
     const e=await anchor(bench),p=await boundedCurrent(process.pid,cancel.signal);requireValue(p&&p.uids.every(v=>v===uid),'controller-identity');report.controller={pid:p.pid,birth:p.birth,uid};report.benchmark.identity=e;
     fixture=owned(spawn('/usr/bin/python3',['-B',reader,JSON.stringify(meta),library],{detached:true,stdio:['pipe','pipe','pipe',fd],env:{LANG:'C',PATH:'/usr/bin:/bin'}}),'fixture');const f=await anchor(fixture);report.fixtureIdentity=f;
     const args=[script,String(p.pid),String(e.pid),String(uid),p.birth,e.birth,'100',dev.major,dev.minor,meta.ino,String(f.pid),f.birth];
-    trace=owned(spawn('/usr/bin/sudo',['-n','--','/bin/sh','-c','IFS= read -r gate; [ "$gate" = trace ] || exit 2; exec /usr/bin/timeout --foreground --signal=TERM --kill-after=0.2s 240s /usr/bin/bpftrace -q -B line "$@"','quotum-owned-tracer',...args],{detached:true,stdio:['pipe','pipe','pipe'],env:{LANG:'C',PATH:'/usr/bin:/bin'}}),'trace');
+    trace=owned(spawn('/usr/bin/sudo',['-n','--','/bin/sh','-c','IFS= read -r gate; [ "$gate" = trace ] || exit 2; exec /usr/bin/timeout --foreground --signal=TERM --kill-after=0.2s 240s /usr/bin/bpftrace -v -q -B line "$@"','quotum-owned-tracer',...args],{detached:true,stdio:['pipe','pipe','pipe'],env:{LANG:'C',PATH:'/usr/bin:/bin'}}),'trace');
     await anchor(trace);traceUntil=performance.now()+240000;trace.child.stdin.end('trace\n');
-    await poll(()=>{requireValue(!trace.state.bad&&!proto.state.invalid&&!proto.state.omitted&&!trace.state.reaped,'trace-setup');return proto.state.markers.some(r=>r.kind==='QFW_TICK');},traceUntil,'trace-tick-timeout');
+    try{await poll(()=>{requireValue(!trace.state.bad&&!proto.state.invalid&&!proto.state.omitted&&!trace.state.reaped,'trace-setup');return proto.state.markers.some(r=>r.kind==='QFW_TICK');},traceUntil,'trace-tick-timeout');}
+    catch(error){await deadline(500,()=>trace.closed,cancel.signal).catch(()=>{});throw error;}
     cancel.signal.throwIfAborted();fixture.child.stdin.write('start\n');
     await poll(()=>{requireValue(!trace.state.bad&&!fixture.state.bad&&!trace.state.reaped&&!fixture.state.reaped,'fixture-capture');return fixtureProof(proto.state,fixtureJSON,f,meta,p.pid,uid);},traceUntil,'fixture-not-qualified');
     requireValue(sameFile(meta,fileIdentity(fs.fstatSync(fd,{bigint:true}))),'fixture-file-changed');report.fixture=fixtureJSON;
