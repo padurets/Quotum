@@ -247,7 +247,7 @@ export async function runControl(repository,directory){
     const e=await anchor(bench),p=await boundedCurrent(process.pid,cancel.signal);requireValue(p&&p.uids.every(v=>v===uid),'controller-identity');report.controller={pid:p.pid,birth:p.birth,uid};report.benchmark.identity=e;
     fixture=owned(spawn('/usr/bin/python3',['-B',reader,JSON.stringify(meta),library],{detached:true,stdio:['pipe','pipe','pipe',fd],env:{LANG:'C',PATH:'/usr/bin:/bin'}}),'fixture');const f=await anchor(fixture);report.fixtureIdentity=f;
     const args=[script,String(p.pid),String(e.pid),String(uid),p.birth,e.birth,'100',dev.major,dev.minor,meta.ino,String(f.pid),f.birth];
-    trace=owned(spawn('/usr/bin/sudo',['-n','--','/bin/sh','-c','IFS= read -r gate; [ "$gate" = trace ] || exit 2; exec /usr/bin/timeout --foreground --signal=TERM --kill-after=0.2s 240s /usr/bin/bpftrace -v -q -B line "$@"','quotum-owned-tracer',...args],{detached:true,stdio:['pipe','pipe','pipe'],env:{LANG:'C',PATH:'/usr/bin:/bin'}}),'trace');
+    trace=owned(spawn('/usr/bin/sudo',['-n','--','/bin/sh','-c','IFS= read -r gate; [ "$gate" = trace ] || exit 2; exec /usr/bin/timeout --foreground --signal=TERM --kill-after=0.2s 240s /usr/bin/bpftrace -q -B line "$@"','quotum-owned-tracer',...args],{detached:true,stdio:['pipe','pipe','pipe'],env:{LANG:'C',PATH:'/usr/bin:/bin'}}),'trace');
     await anchor(trace);traceUntil=performance.now()+240000;trace.child.stdin.end('trace\n');
     await poll(()=>trace.state.reaped||proto.state.markers.some(r=>r.kind==='QFW_TICK'),traceUntil,'trace-tick-timeout');
     requireValue(!trace.state.bad&&!proto.state.invalid&&!proto.state.omitted&&!trace.state.reaped,'trace-setup');

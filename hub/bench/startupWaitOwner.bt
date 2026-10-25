@@ -21,10 +21,14 @@ tracepoint:syscalls:sys_enter_clone
 
 /* Switch-in runs on the outgoing task: only switch-out may inspect curtask identity. */
 tracepoint:sched:sched_switch
-/!@capture_closed && (@cohort[(uint64)args->prev_pid] || @cohort[(uint64)args->next_pid])/
+/!@capture_closed/
 {
+  /* Keep scalar field values across map calls, not addresses into the context. */
+  $previous = (uint64)args->prev_pid;
+  $next = (uint64)args->next_pid;
+  $state = (uint64)args->prev_state;
   $at = nsecs(monotonic);
-  $c = @cohort[(uint64)args->next_pid];
+  $c = @cohort[$next];
   if ($c && @alive[$c] && @wait_out[$c]) {
     if ($at <= @wait_out[$c]) { @wait_invalid[$c] = @wait_invalid[$c] + 1; }
     else {
@@ -42,11 +46,11 @@ tracepoint:sched:sched_switch
     }
     delete(@wait_out[$c]); delete(@wait_stack[$c]);
   }
-  $c = @cohort[(uint64)args->prev_pid];
+  $c = @cohort[$previous];
   if ($c && @alive[$c] && ($c == 2 || @wait_armed)) {
     if (tid != pid || @root[$c] != pid || @birth[$c] != (uint64)curtask->start_boottime || @parent[$c] != (uint64)curtask->real_parent->tgid || @parent_ticks[$c] != (uint64)curtask->real_parent->start_boottime / 10000000 || uid != $3) {
       @identity_lost[$c] = @identity_lost[$c] + 1;
-    } else if ((uint64)args->prev_state == (uint64)2) {
+    } else if ($state == (uint64)2) {
       if (@wait_out[$c]) { @wait_invalid[$c] = @wait_invalid[$c] + 1; }
       @wait_out[$c] = $at; @wait_stack[$c] = kstack(bpftrace, 32);
     }
