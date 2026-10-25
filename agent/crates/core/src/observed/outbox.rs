@@ -1340,9 +1340,15 @@ mod tests {
 
     #[test]
     fn failed_publications_reopen_only_the_published_prefix() {
-        for operation in
-            ["payload-write", "segment-sync", "manifest-write", "atomic-sync", "atomic-rename", "directory-sync"]
-        {
+        for operation in [
+            "payload-write",
+            "checksum-write",
+            "segment-sync",
+            "manifest-write",
+            "atomic-sync",
+            "atomic-rename",
+            "directory-sync",
+        ] {
             let stand = Stand::new();
             let mut queue = stand.open();
             let epoch = epoch();

@@ -15,6 +15,24 @@ CI runs the same on every push, the agent on Linux, macOS and Windows. `npm star
 `hub/` serves the built dashboard on `127.0.0.1:8080`; `cargo run -p quotum` in `agent/`
 measures this machine once.
 
+The explicit Linux storage-recovery check runs the production CLI and Runner against
+HTTP and SQLite, with synthetic native clients under a separate UID and an owned
+1 MiB tmpfs. It covers exhaustion during capture and privacy initialization, repair
+in the same process and queue, immutable retries, continuing check-ins, unknown gaps
+in both work and coverage, CPU use during a prolonged outage and bounded stop. Build
+the release CLI and the `observed_probe` example (the example needs the
+`quotum-core/activity-bench` feature),
+then, from `hub/`, run:
+
+```sh
+node --import tsx bench/observed-storage-recovery.ts ../agent/target/release/quotum /absolute/path/to/previous/quotum
+```
+
+The optional second binary reproduces the old failure before checking the current
+one. The check needs Docker and the `quotum-rust` development image; it never starts
+real clients or changes a running collector. The separate journal/HTTP recovery
+matrix remains in `bench/observed-recovery.ts`.
+
 After building the hub, `npm run bench -- --ci` in `hub/` checks dashboard costs in
 Chrome (`QUOTUM_CHROME`, one on `PATH`, or `--cdp http://host:port`). It includes native
 wheel and Shift-drag starting from each five-hour limit, weekly limit, agent activity,
