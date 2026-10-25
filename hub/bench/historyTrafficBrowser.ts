@@ -453,6 +453,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
 }
 
 /** Native cancellation/reversal keeps one Shift-wheel token while responses are owned. */
+type CancellationState={tokens:string[];poses:{end:number;origin:number}[];pushes:number;selected:boolean;attempts:Record<string,{aborted:boolean}>};
 export async function browserCancellationTraffic(browser: Browser, proxy: TrafficProxy, cookie: string,diagnostic=false,profileBeforeInput=false,evidence?:Pick<Evidence,'save'>) {
   const reports = [], invalidated = [];
   for (const length of [DAY, 30 * DAY]) for (const mode of ['before-headers', 'after-delivery', 'reversal'] as const) {
@@ -463,6 +464,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
       console.error(`bench: ${name}: opening seed page`);
       const {cdp, bodies, settled, geometry, cell, seeds, close,renderer,lateRenderer} = await historyPage(browser, proxy, cookie, name, length, DAY,undefined,evidence,undefined,undefined,!diagnostic&&!profileBeforeInput&&passiveHistoryBinding(browser));
       let observer:Awaited<ReturnType<typeof observeReversal>>|null=null,status='failed';
+      let finalState:CancellationState|undefined,beforeHeaders:Transfer|undefined;
       console.error(`bench: ${name}: seed page ready`);
       const phase = `${name}/gesture`, reads = () => bodies.reads.filter(r => r.phase === phase);
       let stage = 'start';
@@ -480,7 +482,14 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
         bodies.phase = phase; proxy.phase(phase, mode === 'after-delivery' ? 0 : 400);
         await step('shift down', () => key('keyDown', 'Shift', 16, 8));
         await step('first wheel', () => wheel(-geometry.width * .1));
-        await step('first request', () => until(() => reads()[0]?.attemptId !== undefined && proxy.transfers.some(t => t.id === reads()[0].attemptId)));
+        // The production RAF can start a read before the earlier probe RAF sees
+        // movement. Escape must not erase that pose before it has been sampled.
+        await step('first request', () => until(async () => reads()[0]?.attemptId !== undefined && proxy.transfers.some(t => t.id === reads()[0].attemptId) && (mode !== 'before-headers' || await cdp.evaluate<boolean>('window.__historyTraffic.poses.some(p => p.end < p.origin)'))));
+        if(mode==='before-headers'){
+          const transfers=proxy.transfers.filter(t=>t.id===reads()[0].attemptId);
+          assert.equal(transfers.length,1);beforeHeaders=transfers[0];
+          assert.ok(!beforeHeaders.sent&&!beforeHeaders.finished&&!beforeHeaders.aborted&&reads()[0].canceled!==true&&reads()[0].count?.complete!==true,'before-headers cancellation request no longer pending');
+        }
         if (mode === 'after-delivery') await step('first delivery', () => until(() => reads()[0]?.count?.complete === true));
         if (mode === 'reversal') {
           await step('reverse wheel', () => wheel(geometry.width * .1));
@@ -498,9 +507,14 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
           await step('drawings settled', settled);
         }
         await step('proxy settled', () => proxy.settled(phase));
+        if(mode==='before-headers'){
+          assert.ok(beforeHeaders);
+          assert.equal(beforeHeaders.sent,false,'before-headers cancellation must precede response headers');
+          assert.equal(beforeHeaders.aborted,true,'before-headers cancellation must abort its pending transfer');
+        }
         const attempts = reads(); assert.ok(attempts.every(r => r.count?.id));
         const totals = bodyTotals(attempts.map(r => ({count: r.count!, transfer: transferFor(r.count!, proxy.transfers)})));
-        const state = await step('read final state', () => cdp.evaluate<{tokens: string[]; poses: {end: number; origin: number}[]; pushes: number; selected: boolean; attempts: Record<string, {aborted: boolean}>}>('({tokens:__historyTraffic.tokens,poses:__historyTraffic.poses,pushes:__historyTraffic.pushes,selected:new URLSearchParams(location.search).has("from"),attempts:__quotumHistoryAttempts})'));
+        const state = finalState = await step('read final state', () => cdp.evaluate<CancellationState>('({tokens:__historyTraffic.tokens,poses:__historyTraffic.poses,pushes:__historyTraffic.pushes,selected:new URLSearchParams(location.search).has("from"),attempts:__quotumHistoryAttempts})'));
         assert.equal(state.tokens.length, 1); assert.ok(state.poses.some(p => p.end < p.origin));
         assert.equal(state.pushes, mode === 'reversal' ? 1 : 0); assert.equal(state.selected, mode === 'reversal');
         const aborted = attempts.filter(r => r.canceled || state.attempts[r.count!.id!]?.aborted).length;
@@ -518,7 +532,10 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
         const cut=historyCutInvalidation(error,name,take);status='invalidated';
         invalidated.push({...cut,reads:reads().map(r=>({from:r.from,to:r.to,count:r.count}))});
       } finally {
+        const finite=(n:number)=>Number.isFinite(n)?n:null;
         evidence?.save('traffic-'+name.replace(/[^a-zA-Z0-9_-]/g,'-'), {name,stage,status,reads:trafficReadEvidence(bodies.reads),
+          geometry:{x:finite(geometry.x),y:finite(geometry.y),width:finite(geometry.width),series:finite(geometry.series)},
+          movement:finalState?{tokenCount:finalState.tokens.length,poses:finalState.poses.slice(0,128).map(p=>({end:finite(p.end),origin:finite(p.origin)})),posesOmitted:Math.max(0,finalState.poses.length-128),invalidPoses:finalState.poses.filter(p=>!Number.isFinite(p.end)||!Number.isFinite(p.origin)).length,pushes:finalState.pushes,selected:finalState.selected}:null,
           reports:reports.filter(report=>report.name===name),transfers:proxy.transfers.filter(transfer=>transfer.phase.startsWith(name+'/')),command:cdp.snapshot()});
         const cleanupErrors:unknown[]=[];
         try{await observer?.close();}catch(error){cleanupErrors.push(error);browser.owner?.failures.push('history observer cleanup failed');}

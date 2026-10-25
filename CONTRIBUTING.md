@@ -759,7 +759,10 @@ history attempt gets its
 fixture identity before HTTP starts, so aborts before response headers cannot borrow
 another attempt's byte proof. Separate real HTTP and native Shift-wheel cohorts
 exercise cancellation before headers, after delivery and reversal with a repeated
-query. Controlled production staging also verifies a delivered answer discarded
+query. Before-header cancellation waits for the existing observer to record chart
+movement within the same first-request deadline, then checks that headers remained
+unsent through cancellation. Final numeric movement and geometry are saved even
+when their assertions fail. Controlled production staging also verifies a delivered answer discarded
 before publication; native transport observations do not infer staging disposition.
 Reports retain attempted/completed/failed/aborted counts and uncertain body bounds.
 Proxy sockets and traffic tabs
