@@ -9,9 +9,10 @@
  */
 BEGIN { if ($6 != 100) { @config_invalid = 1; exit(); } }
 
-/* Ignore earlier fixture file reads: its explicit vfork is the positive wait control. */
+/* Exact CLONE_VM | CLONE_VFORK | SIGCHLD flags exclude earlier fixture reads.
+ * Keep the literal uncast: bpftrace 0.20 tags syscall fields with user addrspace. */
 tracepoint:syscalls:sys_enter_clone
-/!@capture_closed && tid == pid && @cohort[pid] == 1 && uid == $3 && (args->clone_flags & (uint64)16384)/
+/!@capture_closed && tid == pid && @cohort[pid] == 1 && uid == $3 && args->clone_flags == 16657/
 {
   if (@alive[1] && @birth[1] == (uint64)curtask->start_boottime && @parent[1] == (uint64)curtask->real_parent->tgid && @parent_ticks[1] == (uint64)curtask->real_parent->start_boottime / 10000000) {
     @wait_armed = 1;
