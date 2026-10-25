@@ -116,21 +116,28 @@ mod tests {
     }
 
     #[test]
-    fn an_established_missing_namespace_is_not_reinitialized_during_recovery() {
-        let (root, worker) = recovering_worker();
-        until(|| worker.snapshot().is_some());
-        let id = worker.snapshot().unwrap().queue_id.clone();
-        let path = root.join("state/activity").join("a".repeat(64));
-        let hidden = root.join("saved-namespace");
-        std::fs::rename(&path, &hidden).unwrap();
-        assert!(worker.control(Control::Storage(Failure::new("prepare", &io::Error::other("fixture")))));
-        until(|| worker.health().failures >= 2);
-        assert!(!path.exists(), "recovery must wait for the established manifest");
-        std::fs::rename(&hidden, &path).unwrap();
-        until(|| worker.snapshot().is_some() && !worker.health().unavailable);
-        assert_eq!(worker.snapshot().unwrap().queue_id, id);
-        drop(worker);
-        std::fs::remove_dir_all(root).unwrap();
+    fn an_established_missing_journal_is_not_reinitialized_during_recovery() {
+        for manifest in [false, true] {
+            // Windows pins the directory through writer.lock; its manifest can still disappear.
+            if cfg!(windows) && !manifest {
+                continue;
+            }
+            let (root, worker) = recovering_worker();
+            until(|| worker.snapshot().is_some());
+            let id = worker.snapshot().unwrap().queue_id.clone();
+            let path = root.join("state/activity").join("a".repeat(64));
+            let path = if manifest { path.join("manifest.json") } else { path };
+            let hidden = root.join("saved-journal");
+            std::fs::rename(&path, &hidden).unwrap();
+            assert!(worker.control(Control::Storage(Failure::new("prepare", &io::Error::other("fixture")))));
+            until(|| worker.health().failures >= 2);
+            assert!(!path.exists(), "recovery must wait for the established journal");
+            std::fs::rename(&hidden, &path).unwrap();
+            until(|| worker.snapshot().is_some() && !worker.health().unavailable);
+            assert_eq!(worker.snapshot().unwrap().queue_id, id);
+            drop(worker);
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     struct Stand {
@@ -648,12 +655,11 @@ mod tests {
                 drop(held);
             } else {
                 drop(held);
-                let deadline = Instant::now() + Duration::from_secs(3);
-                while worker.snapshot().is_none() {
+                // Opening and lock attempts spend CPU before the first capture is admitted.
+                until(|| {
                     assert!(!worker.failed());
-                    assert!(Instant::now() < deadline);
-                    thread::sleep(Duration::from_millis(5));
-                }
+                    worker.snapshot().is_some()
+                });
                 drop(worker);
             }
             std::fs::remove_dir_all(root).unwrap();
