@@ -51,7 +51,11 @@ The `bench` check passes only when both jobs succeed; a failed, skipped or cance
 fails this check. The default `--scope all` runs the history matrix first, then every
 dashboard phase in the same order as `--scope dashboard`. CPU diagnostics (`trace`,
 `profile`, `native-trace`, `native-profile`) support `all` or `dashboard`; caption control
-requires `dashboard`. The optional `history_pool_control` manual CI input runs the full
+requires `dashboard`. The ordinary history job attempts to prepare GDB and matching
+Chrome unwind tables in an optional two-minute step inside its existing job limit.
+Its setup result remains visible; setup failure still runs every benchmark check.
+Native capture starts only after the original command deadline fails and retains
+the original failure. The optional `history_pool_control` manual CI input runs the full
 history matrix in its existing job with the existing bounded cache observer. It requires
 an exact `diagnostic_ref`, compiled-client hash and clean checkout, and rejects other
 diagnostic inputs. CI prepares the existing native debugger and matching unwind tables

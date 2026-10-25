@@ -226,6 +226,14 @@ jobs:
           else
             bash bench/prepareNativeUnwind.sh
           fi
+      - name: Prepare optional postfailure native capture
+        if: ${{ !inputs.history_scroll_control && !inputs.compositor_guard_control && !inputs.history_pool_control }}
+        timeout-minutes: 2
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gdb
+          bash bench/prepareNativeUnwind.sh
       - name: Prepare the single-feature vendor launcher
         if: ${{ inputs.compositor_guard_control }}
         env:
