@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {NODES, nodeOf, probeScript, rendered, type Fiber, type Reading} from '../probe.js';
-import {measuredProblems} from '../budget.js';
+import {idleObservationProblems, measuredProblems} from '../budget.js';
 
 /** A stand-in element: its tag, classes and attributes, and `closest` for the simple selectors the probe uses. */
 class Element {
@@ -132,7 +132,7 @@ test('a removed legend keeps the region where it rendered without exempting late
 
 /** Runs the probe as the browser gets it, in a context of its own with a stand-in DOM. */
 function page() {
-  type Mutation = {type?: string; attributeName?: string; target: unknown; addedNodes?: unknown[]};
+  type Mutation = {type?: string; attributeName?: string; target: unknown; addedNodes?: unknown[]; removedNodes?: unknown[]};
   let observer: ((records: Mutation[]) => void) | undefined;
   let observing = false;
   const context: Record<string, unknown> = {
@@ -338,4 +338,38 @@ test('the probe counts DOM changes by part once per callback, and notes when a c
   );
   assert.deepEqual(Object.keys(reading.cardChanged), ['s1']);
   assert.match(reading.mutations[0].node, /^span\[data-time=ago\]#\d+$/);
+});
+
+test('detached text retains same-batch removal context while the original idle page failure survives',()=>{
+  for(const time of [true,false]){
+    const p=page(),card=el('article',null,{'data-card':'private-canary'}),label=el('span',card,time?{'data-time':'reset'}:{},'private-class');
+    const text={nodeType:3,parentElement:null,isConnected:false};
+    p.record({type:'characterData',target:text},{type:'childList',target:label,removedNodes:[text]});
+    const r=p.bench.read(),samples=r.unattributedMutations!.samples;
+    assert.equal(samples.length,1);assert.equal(samples[0].type,'characterData');assert.equal(samples[0].hasParent,false);assert.equal(samples[0].connected,false);
+    assert.deepEqual(samples[0].removals,[{index:1,kind:'exact',region:'card',time,ownerFound:true}]);assert.equal(samples[0].limited,false);
+    assert.equal(JSON.stringify(r.unattributedMutations).includes('private-canary'),false);assert.equal(JSON.stringify(r.unattributedMutations).includes('private-class'),false);
+    assert.ok(idleObservationProblems({from:0,to:120000,cellMs:300000,requests:{count:0,byPath:{}},events:{ping:5},renders:r.renders,mutations:r.mutations}).some(v=>v.includes('changed outside what shows time: page page')));
+  }
+});
+
+test('connected unowned changes and ambiguous removals gain no inferred time owner',()=>{
+  const p=page(),text={nodeType:3,parentElement:null,isConnected:false},clock=el('span',null,{'data-time':'reset'}),plain=el('div',null);
+  p.record({type:'characterData',target:text},{type:'childList',target:clock,removedNodes:[text]},{type:'childList',target:plain,removedNodes:[text]});
+  let r=p.bench.read();assert.equal(r.unattributedMutations!.samples[0].removals.length,2);assert.equal(r.unattributedMutations!.samples[0].removals[1].ownerFound,false);assert.ok(r.mutations.some(v=>!v.time&&v.region==='page'));
+  p.bench.reset();p.record({type:'attributes',attributeName:'private-canary',target:Object.assign(plain,{isConnected:true})});
+  r=p.bench.read();assert.equal(r.unattributedMutations!.samples[0].reason,'attribute:other');assert.equal(r.unattributedMutations!.samples[0].connected,true);assert.deepEqual(r.unattributedMutations!.samples[0].removals,[]);assert.ok(r.mutations.some(v=>!v.time));assert.equal(JSON.stringify(r.unattributedMutations).includes('private-canary'),false);
+});
+
+test('unattributed mutation context has bounded samples and scanning and resets per phase',()=>{
+  const p=page(),text={nodeType:3,parentElement:null,isConnected:false};
+  p.record(...Array.from({length:70},()=>({type:'characterData',target:text})));
+  let r=p.bench.read();assert.equal(r.unattributedMutations!.samples.length,8);assert.equal(r.unattributedMutations!.omitted,62);assert.equal(r.unattributedMutations!.samples[0].limited,true);assert.equal(r.mutations[0].count,1);
+  p.bench.reset();r=p.bench.read();assert.deepEqual(r.unattributedMutations,{samples:[],omitted:0});
+});
+
+test('diagnostic removal context does not name nodes ahead of the original counters',()=>{
+  const p=page(),card=el('article',null,{'data-card':'s1'}),clock=el('span',card,{'data-time':'reset'}),text={nodeType:3,parentElement:null,isConnected:false};
+  p.record({type:'attributes',target:card},{type:'characterData',target:text},{type:'childList',target:clock,removedNodes:[text]});
+  const r=p.bench.read();assert.match(r.mutations[0].node,/#1$/);assert.match(r.mutations[2].node,/#2$/);assert.equal(r.unattributedMutations!.samples[0].removals[0].time,true);
 });

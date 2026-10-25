@@ -378,7 +378,7 @@ async function main() {
       if (!Number.isFinite(actualSeconds) || actualSeconds <= 0) phaseProblems.push('idle performance duration unavailable');
       const scriptMsPerSecond = scriptPerSecond(before, after, reading.instrumentMs, actualSeconds);
       const calendar=heard!.calendar();
-      const idle = {from, to, cellMs, requests, events:boardEvents, calendar, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
+      const idle = {from, to, cellMs, requests, events:boardEvents, calendar, renders: reading.renders, mutations: reading.mutations, unattributedMutations: reading.unattributedMutations, scriptMsPerSecond};
       evidence.save('idle', {...idle, allEvents:events, boardEvents, deviceContacts, deviceHints, planned, phase, retentionBefore,retentionAfter,counterFrom, counterTo, actualSeconds, phaseProblems,
         performance:{before:{Timestamp:before.Timestamp??null,ScriptDuration:before.ScriptDuration??null,ThreadTime:before.ThreadTime??null},
           after:{Timestamp:after.Timestamp??null,ScriptDuration:after.ScriptDuration??null,ThreadTime:after.ThreadTime??null},instrumentMs:reading.instrumentMs}});

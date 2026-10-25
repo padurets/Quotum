@@ -87,6 +87,13 @@ export type Reading = {
   renders: Counted[];
   /** Once per MutationObserver callback for every part of the page the DOM changed in. */
   mutations: Counted[];
+  /** Capped context for otherwise unattributed mutations; never an idle exemption. */
+  unattributedMutations?: {samples: {
+    at: number; index: number; type: 'attributes'|'characterData'|'childList'|'other'; reason: string;
+    targetNodeType: number; connected: boolean|null; hasParent: boolean; targetIsBody: boolean;
+    removals: {index: number; kind: 'exact'|'subtree'; region: string; time: boolean; ownerFound: boolean}[];
+    limited: boolean;
+  }[]; omitted: number};
   /** When the DOM of each card first changed outside what shows time, as `Date.now()` in the page. */
   cardChanged: Record<string, number>;
 };
@@ -106,10 +113,12 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
     tagName: string;
     className: unknown;
   };
+  type Target = {nodeType: number; parentElement: Element|null; isConnected?: boolean; contains?(node: unknown): boolean};
+  type Mutation = {type: string; attributeName?: string|null; target: Target; addedNodes?: Iterable<{nodeType: number}>; removedNodes?: Iterable<Target>};
   const page = globalThis as unknown as {
     __REACT_DEVTOOLS_GLOBAL_HOOK__: object;
     __quotumBench: {reset(): void; pause(): void; read(): Reading; forgetCards(): void; cardChanged(id: string): number | null; moneyChanged(id: string, amount: string): number | null; seriesChanged(key: string, last: string): number | null};
-    MutationObserver: new (callback: (records: {type: string; attributeName?: string | null; target: {nodeType: number; parentElement: Element | null}; addedNodes?: Iterable<{nodeType: number}>}[]) => void) => {
+    MutationObserver: new (callback: (records: Mutation[]) => void) => {
       observe(target: unknown, options: object): void;
       disconnect(): void;
     };
@@ -123,6 +132,7 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
   type Counts=Map<Element|null,Map<string,Counted>>;
   let renders:Counts = new Map();
   let mutations:Counts = new Map();
+  let unattributedMutations: NonNullable<Reading['unattributedMutations']> = {samples: [], omitted: 0};
   let cardChanged: Record<string, number> = {};
   let moneyChanged: Record<string, number> = {};
   let seriesChanged: Record<string, number> = {};
@@ -200,9 +210,36 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
       const amount = value?.getAttribute('data-money'), card = value?.closest('[data-card]')?.getAttribute('data-card');
       if (card && amount !== null && amount !== undefined) moneyChanged[`${card}\n${amount}`] ??= at;
     };
+    let index = 0;
     for (const record of records) {
       const element = record.target.nodeType === 1 ? (record.target as unknown as Element) : record.target.parentElement;
-      nodes.add(element ? element.closest(selector) : null);
+      const owner = element ? element.closest(selector) : null;
+      nodes.add(owner);
+      if (!owner) {
+        if (unattributedMutations.samples.length >= 8) unattributedMutations.omitted++;
+        else {
+          const removals: NonNullable<Reading['unattributedMutations']>['samples'][number]['removals'] = [];
+          let scanned = 0, limited = records.length > 64;
+          // Removed text can have lost its parent by delivery. Retain same-batch
+          // removal context without changing the original page-level verdict.
+          outer: for (let n = 0; n < Math.min(records.length, 64); n++) {
+            for (const removed of records[n].removedNodes ?? []) {
+              if (++scanned > 64) {limited = true; break outer;}
+              const exact = removed === record.target;
+              if (!exact && !removed.contains?.(record.target)) continue;
+              const target = records[n].target;
+              const parent = target.nodeType === 1 ? target as unknown as Element : target.parentElement;
+              const removalOwner = parent?.closest(selector) ?? null;
+              removals.push({index: n, kind: exact ? 'exact' : 'subtree', region: removalOwner?.closest('[data-card]') ? 'card' : regionOf(removalOwner), time: !!removalOwner?.hasAttribute('data-time'), ownerFound: removalOwner !== null});
+              if (removals.length === 4) {limited = true; break outer;}
+            }
+          }
+          const type = record.type === 'attributes' || record.type === 'characterData' || record.type === 'childList' ? record.type : 'other';
+          const attribute = ['class','style','hidden','aria-hidden'].includes(record.attributeName ?? '') ? record.attributeName : 'other';
+          unattributedMutations.samples.push({at, index, type, reason: type === 'attributes' ? 'attribute:' + attribute : 'no-attribute', targetNodeType: record.target.nodeType, connected: typeof record.target.isConnected === 'boolean' ? record.target.isConnected : null, hasParent: record.target.parentElement !== null, targetIsBody: record.target === page.document.body, removals, limited});
+        }
+      }
+      index++;
       changedSeries(element?.closest('[data-series]'));
       // A financial value can live inside a tray that also shows time. Only its
       // value mutations prove a balance update; a clock or status change cannot.
@@ -239,12 +276,13 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
       commits = 0;
       renders = new Map();
       mutations = new Map();
+      unattributedMutations = {samples: [], omitted: 0};
       cardChanged = {};
       moneyChanged = {};
       seriesChanged = {};
     },
     pause() {recording = false; observer.disconnect();},
-    read: () => ({instrumentMs, commits, renders: listed(renders), mutations: listed(mutations), cardChanged}),
+    read: () => ({instrumentMs, commits, renders: listed(renders), mutations: listed(mutations), unattributedMutations, cardChanged}),
     forgetCards() {
       cardChanged = {};
       moneyChanged = {};
