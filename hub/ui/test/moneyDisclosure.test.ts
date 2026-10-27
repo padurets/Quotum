@@ -25,7 +25,7 @@ function fixture(compact=false){
   const modules:Record<string,unknown>={react:hooks,'./moneySelection':{selectedAllowanceIds},'./dataFilters':{useDataFilters:()=>({current:filters})},'./prefs':{usePref:()=>({unit:'USD'})},'../../server/domain/dataFilters':{walletRule},'./view':{keyShown:()=>true},'./http':{ApiError},'../../server/domain/meterHistory':{MAX_METERS},'./keyReads':{readKeyIds:()=>new Promise((resolve,reject)=>flights.push({resolve,reject}))}};
   const keys={exports:{} as typeof import('../lib/moneyKeys'),require:(name:string)=>modules[name],AbortController};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../lib/moneyKeys.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,keys);
-  const jsx=(type:unknown,props:Node['props'])=>({type,props}),context={useRemovalFocus:dom.focus.useRemovalFocus,exports:{} as {MoneyValues:(props:unknown)=>Node},require:()=>({jsx,jsxs:jsx}),...money,currencySymbol,t,useDataFilters:()=>({current:filters}),usePref:()=>({unit:'USD'}),walletRule,matchesWallet,fundsRule,matchesSelection,Popover:'popover',CreditBalanceValue:({children}:{children:unknown})=>children,ErrorLine:'error',CapMetrics:'unavailable-cap',BudgetKeyMetrics:'key',stamp:String,day:String,ApiError};
+  const jsx=(type:unknown,props:Node['props'])=>({type,props}),context={useRemovalFocus:dom.focus.useRemovalFocus,exports:{} as {MoneyValues:(props:unknown)=>Node},require:()=>({jsx,jsxs:jsx}),...money,currencySymbol,t,useDataFilters:()=>({current:filters}),usePref:()=>({unit:'USD'}),walletRule,matchesWallet,fundsRule,matchesSelection,Popover:'popover',CreditBalanceValue:({children}:{children:unknown})=>children,ErrorLine:'error',CapMetrics:'unavailable-cap',BudgetKeyMetrics:(props:Node['props'])=>jsx('key',{...props,children:props.name}),stamp:String,day:String,ApiError};
   const src=readFileSync(new URL('../components/MoneyCard.tsx',import.meta.url),'utf8');
   runInNewContext(ts.transpileModule(src.slice(src.indexOf('export function MoneyValues('),src.indexOf('/** Subscription funds')),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   let latest:ReturnType<typeof keys.exports.useShownKeys>;
@@ -47,9 +47,10 @@ for(const locale of ['en','ru'] as const)test(`${locale} selected allowance disc
   }finally{setLocale('en');}
 });
 
-test('compact balance disclosure renders selected allowances in the full detail layout',async()=>{
+test('compact selected allowances stay visible while exact evidence remains in the balance disclosure',async()=>{
   const f=fixture(true);f.render();f.flights[0].resolve({keys:[f.key],meters:[f.cap]});await flush();
-  const metric=f.render().find(n=>n.type==='key');assert.ok(metric);assert.notEqual(metric.props.compact,true,'full disclosure names must wrap instead of using the compact row ellipsis');
+  const tree=f.render(),metric=tree.find(n=>n.type==='key');assert.ok(metric);assert.equal(metric.props.compact,true,'the selected cap is visible in the compact row');
+  assert.ok(tree.some(node=>node.props.children===f.key.name),'the balance disclosure keeps the complete allowance name');
 });
 
 for(const compact of [false,true])for(const locale of ['en','ru'] as const)test(`${locale} ${compact?'compact':'dashboard'} actual extra allowance Retry keeps focus in its surviving disclosure`,async()=>{
@@ -101,15 +102,32 @@ test('an explicit uncapped preview choice owns a named unavailable disclosure',(
   assert.equal(f.flights.length,0,'a known preview key needs no extra lookup');
 });
 
-test('a pending extra allowance cannot promote the next arrived cap before its logical order is known',async()=>{
-  const f=fixture(),known={...f.key,id:'known',name:'Beta known'};
-  f.key.name='Alpha selected extra';f.source.keys.push(known);f.source.meters.push({...f.cap,id:'key:known:cap'});
+test('a pending selected allowance keeps its own visible row beside arrived caps',async()=>{
+  const f=fixture();f.source.keys.push({...f.key,id:'known',name:'Z known'});f.source.meters.push({...f.cap,id:'key:known:cap'});
   f.filters.wallet={mode:'only',values:[{source:'s',kind:'keyCap',key:'known'},{source:'s',kind:'keyCap',key:'extra'}]};
-  const primary=()=>f.render().find(n=>n.type==='popover'&&n.props.triggerClass==='money-primary-trigger')!;
-  assert.equal(primary().props.trigger.type,'unavailable-cap','an unknown selected name may sort before the known key');
-  f.flights[0].reject(new ApiError(503,'unavailable'));await flush();assert.equal(primary().props.trigger.type,'unavailable-cap');
-  f.retry();primary();f.flights[1].resolve({keys:[f.key],meters:[]});await flush();
-  assert.equal(primary().props.trigger.props.name,f.key.name,'missing first amount keeps the now known first identity');
-  f.retry();primary();f.flights[2].resolve({keys:[f.key],meters:[f.cap]});await flush();
-  assert.equal(primary().props.trigger.props.limit.scope.id,'extra');
+  const caps=()=>f.render().filter(n=>n.type==='key'||n.type==='unavailable-cap');
+  const check=()=>{const rows=caps();assert.equal(rows.length,2);assert.ok(rows.some(n=>n.type==='key'&&n.props.limit.scope.id==='known'));return rows;};
+  assert.equal(check().filter(n=>n.type==='unavailable-cap').length,1);
+  assert.ok(check().some(node=>node.props.status?.props.triggerClass==='money-status-trigger'),'caps-only readers can reach loading, failure and retry details');
+  f.flights[0].reject(new ApiError(503,'unavailable'));await flush();check();
+  f.retry();check();f.flights[1].resolve({keys:[f.key],meters:[]});await flush();
+  assert.equal(check().find(n=>n.type==='unavailable-cap')?.props.name,f.key.name,'missing amounts keep their resolved logical name');
+  f.retry();check();f.flights[2].resolve({keys:[f.key],meters:[f.cap]});await flush();
+  assert.deepEqual(check().map(n=>n.props.limit.scope.id),['extra','known'],'both selected caps remain visible after the bounded metadata read');
+});
+
+for(const compact of [false,true])for(const locale of ['en','ru'] as const)test(`${locale} ${compact?'compact':'dashboard'} caps-only disclosure survives a failed refresh with retained amounts`,async()=>{
+  setLocale(locale);const f=fixture(compact);
+  try{
+    f.filters.wallet={mode:'only',values:[{source:'s',kind:'keyCap',key:'extra'}]};
+    f.render();f.flights[0].resolve({keys:[f.key],meters:[f.cap]});await flush();
+    const ready=f.render();assert.equal(ready.filter(n=>n.type==='key').length,1);
+    assert.ok(ready.some(n=>n.type==='popover'),'arrived caps keep exact evidence accessible');
+    assert.ok(ready.some(n=>String(n.props.children).includes(t('source.measured',{at:'1'}))));
+    f.retry();f.render();f.flights[1].reject(new ApiError(503,'unavailable'));await flush();
+    const failed=f.render();assert.equal(failed.filter(n=>n.type==='key').length,1,'retained amounts remain visible');
+    assert.ok(failed.some(n=>n.type==='error'&&n.props.error));
+    const retry=failed.find(n=>n.type==='button'&&n.props.children===t('period.retry'));assert.ok(retry,'failure and Retry stay reachable after all caps have arrived');
+    retry.props.onClick();f.render();assert.equal(f.flights.length,3);
+  }finally{f.dom.hooks.dispose();setLocale('en');}
 });

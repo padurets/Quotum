@@ -13,21 +13,29 @@ import {ApiError} from '../lib/http';
 import {t,setLocale} from '../i18n/index';
 const source=readFileSync(new URL('../components/MoneyCard.tsx',import.meta.url),'utf8');
 const jsx=(type:any,props:any)=>({type,props});
-for(const compact of [false,true])for(const locale of ['en','ru'] as const)for(const missing of ['absent-meter','absent-key'] as const)test(`${locale} ${compact?'compact':'dashboard'} ${missing} primary cannot substitute another arrived selected cap`,()=>{
+function visibleNodes(value:any):any[] {
+ if(Array.isArray(value))return value.flatMap(visibleNodes);
+ if(!value||typeof value!=='object')return [];
+ if(value.type==='popover')return visibleNodes(value.props.trigger);
+ return [value,...visibleNodes(value.props.children)];
+}
+for(const balance of [false,true])for(const compact of [false,true])for(const locale of ['en','ru'] as const)for(const missing of ['absent-meter','absent-key'] as const)test(`${locale} ${compact?'compact':'dashboard'} ${balance?'balance and caps':'caps only'} ${missing} keeps every selected cap visible with its own identity`,()=>{
  setLocale(locale);
- const selected=filters.defaultFilters();selected.wallet={mode:'only',values:[{source:'s',kind:'keyCap',key:'a'},{source:'s',kind:'keyCap',key:'b'}]};
+ const selected=filters.defaultFilters();selected.wallet={mode:'only',values:[...(balance?[{source:'s',kind:'balance' as const}]:[]),{source:'s',kind:'keyCap',key:'a'},{source:'s',kind:'keyCap',key:'b'}]};
  const context:any={...money,...filters,currencySymbol,t,ApiError,exports:{},useRemovalFocus:()=>()=>{},require:()=>({jsx,jsxs:jsx}),useDataFilters:()=>({current:selected}),usePref:()=>({unit:'USD'}),Popover:'popover',CapMetrics:'missing-cap',BudgetKeyMetrics:'metric',ErrorLine:'error',CreditBalanceValue:({children}:any)=>children,day:String,stamp:String};
  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export function MoneyValues('),source.indexOf('/** Subscription funds')),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
  const part=(id:string)=>({id,name:`Full selected ${id}`,disabled:false,presence:'observed' as const,expiresAt:null,includeByok:false,at:100,staleAfterMs:10000,periods:{day:null,week:null,month:null},missCount:0});
  const cap=(id:string,amount='3000000')=>({id:`key:${id}:cap`,kind:'cap',unit:'USD',amount,limit:'10000000',at:100,staleAfterMs:10000,stale:false,resetAt:null,minutes:null,scope:null,label:null});
  const names=[part('a'),part('b')];
  const render=(keys:any[],meters:any[])=>context.exports.MoneyValues({source:{id:'s',provider:'openrouter',meters},keys,names,meters,allowances:['a','b'],compact,context:defaultCurrencyContext});
- const primary=(tree:any)=>tree.props.children.find((node:any)=>node?.props?.triggerClass==='money-primary-trigger')?.props.trigger;
- const complete=primary(render(names,[cap('a'),cap('b')]));assert.equal(complete.props.limit.scope.id,'a','positive control uses stable first selected key');
+ const shownCaps=(tree:any)=>visibleNodes(tree).filter(node=>node.type==='metric'||node.type==='missing-cap');
+ assert.deepEqual(shownCaps(render(names,[cap('a'),cap('b')])).map(node=>node.props.limit.scope.id),['a','b'],'both selected caps are visible without opening a disclosure');
 
-  const tree=render(missing==='absent-key'?[part('b')]:names,[cap('b')]),shown=primary(tree);
+  const tree=render(missing==='absent-key'?[part('b')]:names,[cap('b')]),shown=shownCaps(tree);
 
-  assert.ok(shown,'the unavailable primary keeps its disclosure');assert.equal(shown.type,'missing-cap');assert.equal(shown.props.name,'Full selected a','the absent first cap keeps its own complete logical name');
+  assert.equal(shown.length,2,'a missing observation never hides another selected cap');
+  assert.equal(shown[0].type,'missing-cap');assert.equal(shown[0].props.name,'Full selected a','the absent cap keeps its own complete logical name');
+  assert.equal(shown[1].props.limit.scope.id,'b');
 
  setLocale('en');
 });
@@ -50,10 +58,12 @@ for(const missing of [false,true])test(`actual Store logical first cap when hist
  const context:any={...money,...filters,currencySymbol,t,ApiError,exports:{},useRemovalFocus:()=>()=>{},require:()=>({jsx,jsxs:jsx}),useDataFilters:()=>({current:selected}),usePref:()=>({unit:'USD'}),Popover:'popover',CapMetrics:'missing-cap',BudgetKeyMetrics:'metric',ErrorLine:'error',CreditBalanceValue:({children}:any)=>children,day:String,stamp:String};
  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export function MoneyValues('),source.indexOf('/** Subscription funds')),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
  const render=(value:any)=>context.exports.MoneyValues({source:value,keys:value.keys,names:current.keys,meters:value.meters,allowances:selectedAllowanceIds(current,undefined,'USD',selected),context:defaultCurrencyContext});
- const primary=(tree:any)=>tree.props.children.find((node:any)=>node?.props?.triggerClass==='money-primary-trigger')?.props.trigger?.props.limit;
- assert.equal(primary(render(current)).scope.id,a,'positive live control uses logical first A');
+ const shownCaps=(tree:any)=>visibleNodes(tree).filter(node=>node.type==='metric'||node.type==='missing-cap');
+ assert.deepEqual(shownCaps(render(current)).map(node=>node.props.limit.scope.id),[a,b],'both live caps use the logical name order');
  const to=missing?NOW-20*M:NOW,value=periodValues(h.store,h.store.sources(h.board),h.alice.id,to,()=>{},NOW).find(v=>v.id===id)!;
- const actual=primary(render(value));
- assert.ok(!actual||actual.scope.id===a,'first selected identity survives the actual historical key inventory order and missing observations');
+ const actual=shownCaps(render(value));
+ assert.equal(actual.length,2,'both selected identities survive historical inventory changes');
+ if(missing){assert.equal(actual[0].type,'missing-cap');assert.equal(actual[0].props.name,'Alpha logical first');assert.equal(actual[1].props.limit.scope.id,b);}
+ else assert.deepEqual(actual.map(node=>node.props.limit.scope.id),[a,b]);
  }finally{await h.close();}
 });

@@ -48,7 +48,6 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
   const locale = useLocale();
   const [plot, setPlot] = useState<number | undefined>(undefined);
   const base = useRef<number | null>(null);
-  const shell=useRef<{layout:string;chrome:number}|null>(null);
   const measure = useRef(() => {});
   measure.current = () => {
     const root = panel.current;
@@ -56,26 +55,38 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
     if (!sizing || !root || !chart) return;
     const own = chart.querySelector(':scope > svg') ? base.current : parseFloat(getComputedStyle(chart).minHeight) || 0;
     if (own === null) return;
-    const shown = root.getBoundingClientRect().height - fillOf(root);
-    // What is not the plot does not depend on how tall the plot is: the head, totals and legend wrap only with the width.
-    const layout=JSON.stringify([root.clientWidth,locale,own]);
-    if(shell.current?.layout!==layout)shell.current={layout,chrome:shown-chart.getBoundingClientRect().height};
-    const chrome=shell.current.chrome;
+    const bounds = root.getBoundingClientRect();
+    if (bounds.width === 0 || bounds.height === 0) return;
+    const shown = bounds.height - fillOf(root);
+    // The legend is useful content: its actual wrapping determines the panel's chrome.
+    const chrome = pixels(shown - chart.getBoundingClientRect().height);
     const min = pixels(chrome + own);
-    sizing.report({min, natural: min, shown: pixels(shown),layout});
+    const layout = JSON.stringify([root.clientWidth, locale, own, chrome]);
+    sizing.report({min, natural: min, shown: pixels(shown), layout});
     const next = sizing.manual ? pixels(Math.max(own, sizing.allocated - chrome)) : undefined;
     setPlot(was => (same(was, next) ? was : next));
   };
-  // Plot data can replace thousands of SVG segments without changing the panel's
-  // size. Reading its rect after every such render forces their layout during input.
-  // Allocation changes are measured here; content changes arrive before paint through
-  // the observer below, and a new plot base is measured by onBase.
   useLayoutEffect(() => measure.current(), [sizing?.manual, sizing?.allocated, sizing?.width, locale]);
   useLayoutEffect(() => {
-    const observer=new ResizeObserver(()=>measure.current());
-    if(panel.current)observer.observe(panel.current);
-    return()=>observer.disconnect();
-  },[panel,locale]);
+    let legend: HTMLElement | null = null;
+    const observer = new ResizeObserver(() => measure.current());
+    const follow = () => {
+      const next = panel.current?.querySelector<HTMLElement>(':scope > .legend') ?? null;
+      if (next === legend) return false;
+      if (legend) observer.unobserve(legend);
+      legend = next;
+      if (legend) observer.observe(legend);
+      return true;
+    };
+    const mutations = new MutationObserver(() => {if (follow()) measure.current();});
+    follow();
+    if (panel.current) {
+      observer.observe(panel.current);
+      // SVG data changes are below the chart; only replacing the legend changes this subscription.
+      mutations.observe(panel.current, {childList: true});
+    }
+    return () => {mutations.disconnect(); observer.disconnect();};
+  }, [panel]);
   const report = sizing?.report;
   useLayoutEffect(() => () => report?.(null), [report]);
   const onBase = useCallback((height: number) => {

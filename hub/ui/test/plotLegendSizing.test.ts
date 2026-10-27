@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 
-test('plot allocation follows structural width and locale, independently of data results and legend contents',()=>{
+test('plot allocation follows natural legend height, width and locale without reading ordinary data renders',()=>{
   let cursor=0,locale='en',svg=true,rootHeight=500,chartHeight=300,reads=0,plot:number|undefined;
   const slots:any[]=[],effects:(()=>void)[]=[],cleanups:(()=>void)[]=[],reports:any[]=[],observers:any[]=[];
   const sizing={manual:false,allocated:0,width:'wide',report:(r:any)=>{reports.push(r);}};
@@ -20,7 +20,8 @@ test('plot allocation follows structural width and locale, independently of data
   const context={exports:{} as {usePlot:(panel:unknown)=>{plot:number|undefined;onBase:(height:number)=>void}},devicePixelRatio:1,
     getComputedStyle:()=>({minHeight:'300',getPropertyValue:()=> '0'}),
     ResizeObserver:class{constructor(public run:()=>void){observers.push(this);}observe(){}disconnect(){}},
-    require:(name:string)=>name==='react'?react:{useLocale:()=>locale},
+    MutationObserver:class{observe(){}disconnect(){}},
+    require:(name:string)=>name==='react'?react:{useLocale:()=>locale,pan:{active:()=>null,shifting:()=>false,onPhase:()=>()=>{}}},
   };
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/sizing.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
   const render=()=>{cursor=0;effects.length=0;const result=context.exports.usePlot(panel);effects.forEach(run=>run());plot=result.plot;return result;};
@@ -28,9 +29,11 @@ test('plot allocation follows structural width and locale, independently of data
   const layout=reports.at(-1).layout;
   sizing.manual=true;sizing.allocated=620;render();render();assert.equal(plot,420);
   chartHeight=420;rootHeight=620;observers[0].run();render();assert.equal(reports.at(-1).min,500);assert.equal(reports.at(-1).layout,layout);
-  // An empty answer, new legend entries or an error cannot reinterpret the shell.
-  rootHeight=640;observers[0].run();render();assert.equal(plot,420);assert.equal(reports.at(-1).natural,500);
+  // A changed legend takes its actual space; manual height gives the remainder to the plot.
+  rootHeight=640;observers[0].run();render();assert.equal(plot,400);assert.equal(reports.at(-1).natural,520);assert.notEqual(reports.at(-1).layout,layout);
   const before=reads;render();assert.equal(reads,before,'ordinary data renders perform no layout reads');
+  const positive=reports.at(-1);rootHeight=0;observers[0].run();render();
+  assert.equal(reports.at(-1),positive,'a hidden panel cannot replace its last positive geometry');
   root.clientWidth=400;sizing.width='narrow';rootHeight=700;render();render();assert.equal(plot,340);assert.notEqual(reports.at(-1).layout,layout);
   locale='ru';rootHeight=720;render();render();assert.equal(plot,320);
   sizing.manual=false;render();render();assert.equal(plot,undefined);
