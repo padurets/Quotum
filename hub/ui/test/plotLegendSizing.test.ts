@@ -32,6 +32,8 @@ test('plot allocation follows natural legend height, width and locale without re
   // A changed legend takes its actual space; manual height gives the remainder to the plot.
   rootHeight=640;observers[0].run();render();assert.equal(plot,400);assert.equal(reports.at(-1).natural,520);assert.notEqual(reports.at(-1).layout,layout);
   const before=reads;render();assert.equal(reads,before,'ordinary data renders perform no layout reads');
+  const positive=reports.at(-1);rootHeight=0;observers[0].run();render();
+  assert.equal(reports.at(-1),positive,'a hidden panel cannot replace its last positive geometry');
   root.clientWidth=400;sizing.width='narrow';rootHeight=700;render();render();assert.equal(plot,340);assert.notEqual(reports.at(-1).layout,layout);
   locale='ru';rootHeight=720;render();render();assert.equal(plot,320);
   sizing.manual=false;render();render();assert.equal(plot,undefined);

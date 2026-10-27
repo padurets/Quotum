@@ -56,7 +56,9 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
     if (!sizing || !root || !chart || pan.active() || pan.shifting()) return;
     const own = chart.querySelector(':scope > svg') ? base.current : parseFloat(getComputedStyle(chart).minHeight) || 0;
     if (own === null) return;
-    const shown = root.getBoundingClientRect().height - fillOf(root);
+    const bounds = root.getBoundingClientRect();
+    if (bounds.width === 0 || bounds.height === 0) return;
+    const shown = bounds.height - fillOf(root);
     // The legend is useful content: its actual wrapping determines the panel's chrome.
     const chrome = pixels(shown - chart.getBoundingClientRect().height);
     const min = pixels(chrome + own);
