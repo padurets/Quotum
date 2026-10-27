@@ -2421,7 +2421,8 @@ An independently updated tape cannot advance that drawing proof. The server
 checks the original measurement frontier and returns full cells if it has changed,
 including when its notification has not reached the browser. The response marks
 an actual activity-only drawing; otherwise the reader merges full native cells.
-Missing proof or coverage uses the ordinary full path. Dispatch and publication
+Missing proof or coverage uses the ordinary full path once; a later work update
+over that published range can reuse its native buffers. Dispatch and publication
 recheck the native context, and selected-work commits preserve newer native
 invalidation boundaries within the same tile.
 Their error state and retry belong to activity alone: new native measurements still
@@ -2430,7 +2431,7 @@ retry deadline. Retry also repeats failed selected period evidence. Native failu
 remain visible to their own chart while its last complete frame is retained.
 Financial consumers observe resource readiness and errors alongside native accounting
 authority. A successful retry clears the error even when financial values are
-unchanged; ordinary work-only publications keep financial snapshots stable.
+unchanged; work-only publications with proven native coverage keep financial snapshots stable.
 Confirmed work-only history news also preserves historical card measurements and
 their cache. Supplier measurements remain separate when notifications coalesce;
 missing confirmation retains conservative invalidation for older replies.
