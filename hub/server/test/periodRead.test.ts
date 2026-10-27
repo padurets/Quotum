@@ -81,6 +81,80 @@ async function fixture(start=now-3*H) {
   return {store,directory,hub,app,user,board,source,device,read,credit,details};
 }
 
+test('activity cells omit native drawing extraction while retaining independent native evidence and exact selected work',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  h.store.record(h.source,{observedAt:now-30_000,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:now+H}]});
+  h.credit(now-25_000,now-15_000);
+  const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,quota:{cell:String(M),from:String(now-M),to:String(now),meta:''},sessions:{},sourceWork:{}};
+  const read=async(request:PeriodRequest)=>{const response=await h.read(request);assert.equal(response.statusCode,200,response.body);const reply=expandPeriod(response.json<PeriodWireReply>());if(reply.quota?.state!=='complete')throw Error('missing quota');return reply;};
+  const initial=await read(body);if(initial.quota?.state!=='complete')throw Error('missing initial quota');
+  assert.equal(initial.quota.value.chunks[0].series.length,1);
+  const cursor=initial.quota.value.tape!.cursor,query={...body.quota!,evidence:cursor};
+  h.credit(now-10_000,now-5_000);
+  const cells=h.store.cells.bind(h.store);let extractions=0;
+  t.mock.method(h.store,'cells',(...args:Parameters<typeof cells>)=>{extractions++;return cells(...args);});
+  const activity=await read({...body,quota:{...query,cells:'activity'}});
+  assert.equal(extractions,0,'selected activity does not visit native drawing extraction');
+  const full=await read({...body,quota:query});assert.ok(extractions>0);
+  if(activity.quota?.state!=='complete'||full.quota?.state!=='complete')throw Error('missing drawing');
+  assert.equal(activity.quota.value.cells,'activity');assert.equal(full.quota.value.cells,undefined);
+  assert.equal(activity.quota.value.chunks[0].series.length,0);
+  assert.deepEqual(activity.quota.value.chunks.map(chunk=>chunk.activity),full.quota.value.chunks.map(chunk=>chunk.activity));
+  assert.deepEqual(activity.quota.value.tape,full.quota.value.tape,'drawing omission leaves native evidence and cursor unchanged');
+  assert.deepEqual(activity.sessions,full.sessions);assert.deepEqual(activity.sourceWork,full.sourceWork);
+  assert.equal(activity.quota.value.tape!.quota.length,0,'unchanged native measurements use the ordinary empty delta');
+  assert.ok(Buffer.byteLength(JSON.stringify(activity))<Buffer.byteLength(JSON.stringify(full)));
+});
+
+test('activity drawing falls back to full native cells for missing, invalid, foreign or changed native proof',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const record=(at:number,remaining:number)=>h.store.record(h.source,{observedAt:at,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:100-remaining,remaining,resetAt:now+H}]});
+  record(now-30_000,83);
+  const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,quota:{cell:String(M),from:String(now-M),to:String(now),meta:''}};
+  const first=expandPeriod((await h.read(body)).json<PeriodWireReply>());if(first.quota?.state!=='complete')throw Error('missing seed');
+  const cursor=first.quota.value.tape!.cursor;
+  for(const evidence of [undefined,'invalid','skip']){
+    const response=await h.read({...body,quota:{...body.quota!,cells:'activity',evidence}});assert.equal(response.statusCode,200,response.body);
+    const part=expandPeriod(response.json<PeriodWireReply>()).quota!;if(part.state!=='complete')throw Error('missing fallback');
+    assert.equal(part.value.cells,undefined);assert.equal(part.value.chunks[0].series.length,1);
+  }
+  const foreign=await h.read({...body,quota:{...body.quota!,sources:'[]'}});
+  const other=expandPeriod(foreign.json<PeriodWireReply>()).quota!;if(other.state!=='complete')throw Error('missing foreign proof');
+  const mismatch=expandPeriod((await h.read({...body,quota:{...body.quota!,cells:'activity',evidence:other.value.tape!.cursor}})).json<PeriodWireReply>()).quota!;
+  if(mismatch.state!=='complete')throw Error('missing mismatch fallback');assert.equal(mismatch.value.cells,undefined);assert.equal(mismatch.value.chunks[0].series.length,1);
+  record(now-5_000,72);
+  const response=await h.read({...body,quota:{...body.quota!,cells:'activity',evidence:cursor}});assert.equal(response.statusCode,200,response.body);
+  const changed=expandPeriod(response.json<PeriodWireReply>()).quota!;if(changed.state!=='complete')throw Error('missing changed fallback');
+  assert.equal(changed.value.cells,undefined,'a measurement newer than committed native cells requires a full drawing');
+  assert.equal(changed.value.chunks[0].series[0].cells.at(-1)![1],72);
+  assert.ok(changed.value.tape!.quota.length,'the same response retains the newer native observation');
+});
+
+test('activity proof checks native changes through the complete drawing ceiling, including clock-tolerated samples',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const record=(at:number,remaining:number)=>h.store.record(h.source,{observedAt:at,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:100-remaining,remaining,resetAt:now+H}]});
+  record(now-30_000,83);
+  const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,quota:{cell:String(M),from:String(now-M),to:String(now+M),meta:''}};
+  const first=expandPeriod((await h.read(body)).json<PeriodWireReply>()).quota!;if(first.state!=='complete')throw Error('missing seed');
+  for(const [at,remaining] of [[now,72],[now+10_000,61]]){
+    record(at,remaining);
+    const response=await h.read({...body,quota:{...body.quota!,cells:'activity',evidence:first.value.tape!.cursor}});assert.equal(response.statusCode,200,response.body);
+    const next=expandPeriod(response.json<PeriodWireReply>()).quota!;if(next.state!=='complete')throw Error('missing fallback');
+    assert.equal(next.value.cells,undefined,'a newer sample inside the admitted drawing interval requires native cells');
+    assert.equal(next.value.chunks.flatMap(chunk=>chunk.series).flatMap(series=>series.cells).at(-1)![1],remaining);
+  }
+});
+
+test('activity cells preserve quota authorization and reject unsupported family modes',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const query={cell:String(M),from:String(now-M),to:String(now),cells:'activity'},body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now};
+  for(const scope of ['budget','funds'] as const)assert.equal((await h.read({...body,[scope]:query})).statusCode,400);
+  assert.equal((await h.read({...body,quota:{...query,cells:'unknown'}})).statusCode,400);
+  const hidden=h.store.source('codex','f'.repeat(24),now-H);
+  assert.equal((await h.read({...body,quota:{...query,sources:JSON.stringify([hidden])}})).statusCode,404);
+  assert.equal((await h.read({...body,quota:{...query,meters:JSON.stringify([[hidden,'cap']]),unit:'requests'}})).statusCode,404);
+});
+
 test('period cells and baseline tapes borrow only matching captured metadata',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   h.store.record(h.source,{observedAt:now-3*M,plan:'pro',resets:null,staleAfterMs:H,windows:[{id:'weekly',kind:'weekly',label:null,minutes:10080,used:25,remaining:75,resetAt:now+H}]});

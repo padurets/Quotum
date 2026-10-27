@@ -7,7 +7,7 @@ import type {HistoryPool,HistoryMember} from './historyPool';
 
 export type PeriodIntent={board:string;generation:number;resourceGeneration?:number;facetGeneration?:number;calendarGeneration?:number;revision:number;proofEpoch?:number;request:PeriodRequest};
 export type PeriodReservation=((bytes:number)=>boolean)&{retain?(release:()=>void):void};
-export type HistoryReadOwner={finished:Promise<void>;started?():void;role():'visible'|'ahead'|null;cancel():void};
+export type HistoryReadOwner={finished:Promise<void>;activityProof?():{current:boolean;evidence?:string};started?(activityOnly?:boolean):void;role():'visible'|'ahead'|null;cancel():void};
 type Demand={scope:PeriodScope;query:HistoryQuery;signal?:AbortSignal;owner?:HistoryReadOwner;activityOnly:boolean;epoch:number;delivered?:boolean;resolve(value:HistoryReply):void;reject(error:unknown):void};
 type Flight={role:'visible'|'ahead';admission?:object;intent:PeriodIntent;controller:AbortController;demands:Demand[];extras:boolean;facets:boolean;started?:boolean;preparing?:boolean;releases:Set<()=>void>};
 const aborted=()=>new DOMException('Aborted','AbortError');
@@ -124,9 +124,7 @@ export class PeriodTransport implements HistoryMember {
       const query=exactQueries[scope],meta=query?.cells==='skip'&&query.meta===undefined?this.metadataToken?.(intent.board,scope):undefined;
       if(query&&meta!==undefined)query.meta=meta;
     }
-    const body:PeriodRequest={...intent.request,...(!extras?{values:undefined,sessions:undefined,facets:undefined,sourceWork:undefined,calendar:undefined,quota:undefined,budget:undefined,funds:undefined}:exactQueries),...Object.fromEntries(demands.map(d=>[d.scope,d.activityOnly&&d.scope==='quota'&&!intent.request.quota
-      ?{cell:d.query.cell,from:d.query.from,to:d.query.to,sources:'[]',evidence:'skip',meta:''}
-      :{...d.query}]))};
+    const body:PeriodRequest={...intent.request,...(!extras?{values:undefined,sessions:undefined,facets:undefined,sourceWork:undefined,calendar:undefined,quota:undefined,budget:undefined,funds:undefined}:exactQueries),...Object.fromEntries(demands.map(d=>[d.scope,{...d.query}]))};
     const pendingBaseline=(['quota','funds','budget'] as const).filter(scope=>body[scope]&&!this.baselineParts.has(scope));
     const splitBaseline=baseline&&extras&&intent.request.selection.mode==='live';
     const deferredBaseline=splitBaseline&&pendingBaseline.length>1;
@@ -160,8 +158,16 @@ export class PeriodTransport implements HistoryMember {
         else delete body[demand.scope];
       }
       if(!demands.length&&!extras){this.abort(flight);this.schedule();return;}
-      for(const demand of demands)demand.owner?.started?.();
-      const activityOnly=demands.some(d=>d.activityOnly&&d.scope==='quota')&&!intent.request.quota;
+      let activityOnly=false;
+      for(const demand of demands){
+        const proof=demand.activityOnly&&demand.scope==='quota'?demand.owner?.activityProof?.():undefined;
+        demand.activityOnly=demand.activityOnly&&demand.scope==='quota'&&(!proof||proof.current)&&(!intent.request.quota||!!proof?.evidence);
+        if(demand.activityOnly&&body.quota){
+          if(intent.request.quota)body.quota={...body.quota,cells:'activity',evidence:proof!.evidence};
+          else{body.quota={cell:demand.query.cell,from:demand.query.from,to:demand.query.to,sources:'[]',evidence:'skip',meta:''};activityOnly=true;}
+        }
+        demand.owner?.started?.(demand.activityOnly);
+      }
       // Empty-source activity has its own metadata. It cannot confirm a native baseline.
       const appliedIntent={...intent,request:activityOnly?{...body,quota:undefined}:body};
       flight.started=true;
@@ -196,7 +202,7 @@ export class PeriodTransport implements HistoryMember {
         }
         for(const demand of demands) {
           const part=activityOnly&&demand.scope!=='quota'?evidenceReply[demand.scope]:reply[demand.scope];
-          if(part?.state==='complete'){if(demand.epoch===this.resetEpoch&&!demand.delivered&&roleOf(demand)!==null){demand.delivered=true;this.delivered++;}const {tape:_tape,...value}=part.value;demand.resolve(value);}
+          if(part?.state==='complete'){if(demand.epoch===this.resetEpoch&&!demand.delivered&&roleOf(demand)!==null){demand.delivered=true;this.delivered++;}const {tape,...value}=part.value;demand.resolve({...value,...(activityOnly&&demand.scope==='quota'?{cells:'activity' as const}:{}),...(demand.scope==='quota'&&!value.cells&&tape?.cursor?{nativeEvidence:tape.cursor}:{})});}
           else demand.reject(new ApiError(part?.state==='error'&&part.error==='history_limit'?413:400,part?.state==='error'?part.error:'history_failed'));
         }
       }).catch(error=>{

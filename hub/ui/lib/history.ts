@@ -50,7 +50,7 @@ export type HistoryEnv = {
 };
 export type Shown = {history: History | null; loading: boolean;presentation:number;error?:'history_limit'|'history_failed'|'filters_limit'};
 type HistoryBoundary = {board: string; at: number; start: number};
-type Flight = {submitted: boolean; started: boolean; start?: () => void; finish?: () => void; seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number; startedAt: number; controller: AbortController; role: 'visible' | 'ahead';activityOnly:boolean};
+type Flight = {submitted: boolean; started: boolean; start?: () => void; finish?: () => void; seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number; nativeTouched:number;nativeContext:string;nativeVersion:number; startedAt: number; controller: AbortController; role: 'visible' | 'ahead';activityOnly:boolean};
 type ResponseOwner = {answer: HistoryAnswer; keys: string[]; started: boolean; limited?: boolean};
 type TilePin = {tile: HistoryTile; seq: number; from: number; to: number};
 export type PlotInterest = {token: number; length: number; from: number; to: number; direction: -1 | 0 | 1};
@@ -66,7 +66,8 @@ export class HistoryStore {
   private seq = 0;
   private metaSeq = 0;
   private newsSeq = 0;
-  private deferredNews: {target:string;epoch:number;since:number} | null = null;
+  private deferredNews: {target:string;epoch:number;since:number;nativeSince:number} | null = null;
+  private nativeProof:{evidence:string;cell:number;from:number;to:number;context:string}|null=null;
   private lineupKey = '';
   private workAuthority: string | undefined;
   private workKey: string | undefined;
@@ -189,6 +190,7 @@ export class HistoryStore {
     this.activityRevision++;
     this.epoch++;
     this.board = null;
+    this.nativeProof=null;
     this.workAuthority = undefined;
     this.workKey=undefined;
     this.workAvailable=true;
@@ -295,7 +297,7 @@ export class HistoryStore {
     this.schedule();this.publish();return true;
   }
 
-  news(since: number, workAuthority?: string, activitySince=Infinity) {
+  news(since: number, workAuthority?: string, activitySince=Infinity,nativeSince=since) {
     const authorityChanged=this.workAuthority!==undefined&&workAuthority!==undefined&&workAuthority!==this.workAuthority;
     if(authorityChanged||activitySince<(this.selected?.to??this.env.now()+CLOCK_TOLERANCE_MS))this.activityRevision++;
     if (workAuthority || since === 0) this.workAuthority = workAuthority;
@@ -314,28 +316,31 @@ export class HistoryStore {
         // boundary until another target or read needs the surrounding cells.
         const previous=this.deferredNews;
         if(previous&&(previous.target!==target||previous.epoch!==this.epoch))this.flushNews();
-        this.deferredNews={target,epoch:this.epoch,since:Math.min(since,this.deferredNews?.since??Infinity)};
+        this.deferredNews={target,epoch:this.epoch,since:Math.min(since,this.deferredNews?.since??Infinity),nativeSince:Math.min(nativeSince,this.deferredNews?.nativeSince??Infinity)};
         return;
       }
       this.flushNews();
-      this.invalidateSince(since);
+      this.invalidateSince(since,nativeSince);
     }
     this.schedule();
   }
 
-  private invalidateSince(since:number) {
+  private invalidateSince(since:number,nativeSince=since) {
     for(const [cell,tiles]of this.grids)for(const tile of tiles.values()){
       if(tile.to>since)tile.validTo=Math.min(tile.validTo,Math.max(tile.readFrom,cellStart(since,cell)));
-      if(tile.to>since)tile.nativeValidTo=Math.min(tile.nativeValidTo,Math.max(tile.nativeFrom,cellStart(since,cell)));
+      if(tile.to>nativeSince)tile.nativeValidTo=Math.min(tile.nativeValidTo,Math.max(tile.nativeFrom,cellStart(nativeSince,cell)));
     }
-    for(const flight of this.flights)if(flight.epoch===this.epoch&&flight.to>since)flight.touched=Math.min(flight.touched,cellStart(since,flight.cell));
+    for(const flight of this.flights)if(flight.epoch===this.epoch){
+      if(flight.to>since)flight.touched=Math.min(flight.touched,cellStart(since,flight.cell));
+      if(flight.to>nativeSince)flight.nativeTouched=Math.min(flight.nativeTouched,cellStart(nativeSince,flight.cell));
+    }
   }
 
   private flushNews() {
     const pending=this.deferredNews;
     this.deferredNews=null;
     if(!pending||pending.epoch!==this.epoch)return;
-    this.invalidateSince(pending.since);
+    this.invalidateSince(pending.since,pending.nativeSince);
   }
 
   choose(period: string, selected: TimeRange | null) {
@@ -440,10 +445,11 @@ export class HistoryStore {
       for (const tile of tiles.values()) gridBytes += tile.bytes;
       bytes += gridBytes;
     }
-    return bytes;
+    return bytes+(this.nativeProof?256+2*(this.nativeProof.evidence.length+this.nativeProof.context.length):0);
   }
 
   private invalidate() {
+    this.nativeProof=null;
     this.activityRevision++;
     this.deferredNews=null;
     this.cancelProjection();
@@ -551,6 +557,11 @@ export class HistoryStore {
     }
     return true;
   }
+
+  private nativeContext(){return JSON.stringify([this.board,this.run,this.lineupKey,this.windowsKey,this.meters]);}
+
+  private nativeRequiredTo(cell:number,to:number){return Math.min(to,this.cutTo??Infinity,cellStart(Math.max(this.env.now(),this.meta?.now??0)+CLOCK_TOLERANCE_MS,cell)+cell);}
+  private activityCurrent(flight:Flight){return this.wantsActivity&&flight.nativeContext===this.nativeContext()&&flight.nativeVersion===this.nativeVersion&&this.nativeFull(flight.cell,flight.from,this.nativeRequiredTo(flight.cell,flight.to));}
 
   private nativeFull(cell:number,from:number,to:number) {
     for(let at=from;at<to;at+=cell){
@@ -850,18 +861,18 @@ export class HistoryStore {
     // its boundary can replace it without adding another read of the fixed tail.
     if(boundary!==null&&from<=boundary&&to>boundary)this.flushNews();
     if(this.pool)for(const waiting of [...this.flights])if(!waiting.started&&waiting.role===role)this.abort(waiting);
-    const activityOnly=this.scope==='quota'&&this.wantsActivity&&this.workKey!==undefined&&this.nativeFull(target.cell,from,to);
-    const flight: Flight = {submitted:false,started:false,seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity, startedAt: this.elapsedNow(), controller: new AbortController(), role,activityOnly};
+    const activityOnly=this.scope==='quota'&&this.wantsActivity&&this.workKey!==undefined&&this.nativeFull(target.cell,from,this.nativeRequiredTo(target.cell,to));
+    const flight: Flight = {submitted:false,started:false,seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity,nativeTouched:Infinity,nativeContext:this.nativeContext(),nativeVersion:this.nativeVersion, startedAt: this.elapsedNow(), controller: new AbortController(), role,activityOnly};
     this.flights.add(flight);
     const meta = this.meta?.run === this.run ? this.meta : undefined;
-    const board=this.board!,meters=this.meters;
+    const board=this.board!,meters=this.meters,nativeContext=this.nativeContext(),nativeVersion=this.nativeVersion,proof=this.nativeProof;
     let finish:(()=>void)|undefined;
     const finished=this.env.sharedTransport?new Promise<void>(resolve=>{finish=()=>resolve();}):undefined;
     flight.finish=finish;
-    const owner:HistoryReadOwner|undefined=finished?{finished,started:()=>{flight.started=true;flight.startedAt=this.elapsedNow();},role:()=>this.flights.has(flight)?flight.role:null,cancel:()=>this.abort(flight)}:undefined;
+    const owner:HistoryReadOwner|undefined=finished?{finished,activityProof:()=>({current:flight.epoch===this.epoch&&nativeVersion===this.nativeVersion&&nativeContext===this.nativeContext()&&this.wantsActivity&&this.nativeFull(target.cell,from,this.nativeRequiredTo(target.cell,to)),evidence:proof?.context===nativeContext&&proof.cell===target.cell&&proof.from<=from&&proof.to>=this.nativeRequiredTo(target.cell,to)?proof.evidence:undefined}),started:(activityOnly)=>{flight.activityOnly=activityOnly??false;flight.started=true;flight.startedAt=this.elapsedNow();},role:()=>this.flights.has(flight)?flight.role:null,cancel:()=>this.abort(flight)}:undefined;
     const start=()=>{
       if(flight.controller.signal.aborted||flight.epoch!==this.epoch){this.abort(flight);return;}
-      if(flight.activityOnly&&!this.nativeFull(target.cell,from,to))flight.activityOnly=false;
+      if(flight.activityOnly&&!this.nativeFull(target.cell,from,this.nativeRequiredTo(target.cell,to)))flight.activityOnly=false;
       flight.submitted=true;if(!this.env.sharedTransport)flight.started=true;flight.startedAt=this.elapsedNow();
       this.env.read(board, target.cell, from, to, flight.controller.signal, meters, meta, owner, flight.activityOnly).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
     };
@@ -912,7 +923,11 @@ export class HistoryStore {
 
   private merge(flight: Flight, answer: HistoryAnswer) {
     if (!this.flights.has(flight) || flight.controller.signal.aborted || flight.epoch !== this.epoch || answer.run !== this.run) {this.abort(flight); return;}
-    if(flight.activityOnly&&!this.wantsActivity){this.abort(flight);this.schedule();return;}
+    if(this.env.sharedTransport){
+      if(answer.cells==='activity'&&!flight.activityOnly){this.abort(flight);this.schedule();return;}
+      flight.activityOnly=answer.cells==='activity';
+    }
+    if(flight.activityOnly&&!this.activityCurrent(flight)){this.abort(flight);this.schedule();return;}
     if (this.responses.size >= 2) {
       const incoming = this.responsePriority(flight);
       const victim = [...this.responses.keys()].sort((a, b) => this.responsePriority(a) - this.responsePriority(b) || a.seq - b.seq)[0];
@@ -937,7 +952,10 @@ export class HistoryStore {
       for (const key of response.keys) this.reservations.set(key, flight);
       response.started = true;
       const pins = new Map<HistoryTile, {seq: number; from: number; to: number; staged: HistoryTile; chunks: {chunk:Chunk;plane:'all'|'native'|'activity'}[]}>();
-      const valid = () => this.responses.get(flight) === response && this.flights.has(flight) && !flight.controller.signal.aborted && flight.epoch === this.epoch && response.answer.run === this.run && response.keys.every(key => this.reservations.get(key) === flight) && [...pins].every(([base, pin]) => this.grids.get(base.cell)?.get(tileOf(base.from, base.cell)) === base && base.writeSeq === pin.seq && base.readFrom === pin.from && base.readTo === pin.to);
+      const valid = () => {
+        if(flight.activityOnly&&!this.activityCurrent(flight)){this.abort(flight);this.schedule();return false;}
+        return this.responses.get(flight) === response && this.flights.has(flight) && !flight.controller.signal.aborted && flight.epoch === this.epoch && response.answer.run === this.run && response.keys.every(key => this.reservations.get(key) === flight) && [...pins].every(([base, pin]) => this.grids.get(base.cell)?.get(tileOf(base.from, base.cell)) === base && base.writeSeq === pin.seq && base.readFrom === pin.from && base.readTo === pin.to);
+      };
       const work = function* (store: HistoryStore): Preparation<void> {
         let completed = false;
         try {
@@ -970,9 +988,11 @@ export class HistoryStore {
         // No yield between the last ownership check and the entire response's publication.
         for (const [base, {staged, chunks}] of pins) {
           staged.readFrom = base.readFrom; staged.readTo = base.readTo; staged.validTo = base.validTo;
+          staged.nativeFrom=base.nativeFrom;staged.nativeTo=base.nativeTo;staged.nativeValidTo=base.nativeValidTo;staged.nativeSeq=base.nativeSeq;
           staged.writeSeq = flight.seq;
           for (const {chunk,plane} of chunks) {
             const freshEnd = Math.max(chunk.from, Math.min(chunk.to, cellStart(flight.touched, flight.cell)));
+            const freshNativeEnd=Math.max(chunk.from,Math.min(chunk.to,cellStart(flight.nativeTouched,flight.cell)));
             if(plane!=='native'){
               if (staged.readFrom === staged.readTo) {staged.readFrom = chunk.from; staged.readTo = chunk.to; staged.validTo = freshEnd;}
               else if (chunk.from <= staged.readTo && chunk.to >= staged.readFrom) {
@@ -983,10 +1003,10 @@ export class HistoryStore {
             }
             if(plane!=='activity'){
               staged.nativeSeq=flight.seq;
-              if(staged.nativeFrom===staged.nativeTo){staged.nativeFrom=chunk.from;staged.nativeTo=chunk.to;staged.nativeValidTo=freshEnd;}
+              if(staged.nativeFrom===staged.nativeTo){staged.nativeFrom=chunk.from;staged.nativeTo=chunk.to;staged.nativeValidTo=freshNativeEnd;}
               else if(chunk.from<=staged.nativeTo&&chunk.to>=staged.nativeFrom){
-                if(chunk.from<staged.nativeFrom&&freshEnd<staged.nativeFrom)staged.nativeValidTo=freshEnd;
-                else if(chunk.from<=staged.nativeValidTo)staged.nativeValidTo=Math.max(staged.nativeValidTo,freshEnd);
+                if(chunk.from<staged.nativeFrom&&freshNativeEnd<staged.nativeFrom)staged.nativeValidTo=freshNativeEnd;
+                else if(chunk.from<=staged.nativeValidTo)staged.nativeValidTo=Math.max(staged.nativeValidTo,freshNativeEnd);
                 staged.nativeFrom=Math.min(staged.nativeFrom,chunk.from);staged.nativeTo=Math.max(staged.nativeTo,chunk.to);
               }
             }
@@ -995,7 +1015,13 @@ export class HistoryStore {
         }
         const answer = response.answer;
         this.readError=false;
-        if(!flight.activityOnly)this.nativeVersion++;
+        if(!flight.activityOnly){
+          this.nativeVersion++;
+          const chunks=[...pins.values()].flatMap(pin=>pin.chunks.filter(part=>part.plane!=='activity').map(part=>part.chunk)).sort((a,b)=>a.from-b.from);
+          let end=chunks[0]?.from??0;const contiguous=chunks.every(chunk=>{const joined=chunk.from<=end;end=Math.max(end,chunk.to);return joined;});
+          // One committed range proves cells; the coordinator's newer tape alone cannot.
+          this.nativeProof=answer.nativeEvidence&&chunks.length===answer.chunks.length&&chunks.length&&contiguous&&this.nativeFull(flight.cell,chunks[0].from,end)?{evidence:answer.nativeEvidence,cell:flight.cell,from:chunks[0].from,to:end,context:this.nativeContext()}:null;
+        }
         if (flight.seq > this.metaSeq&&!flight.activityOnly) {
           this.metaSeq = flight.seq;
           this.meta = {run: answer.run, now: answer.now, historyStart: answer.historyStart, known: answer.known, ...(answer.meta ? {meta: answer.meta} : {})};
@@ -1197,10 +1223,12 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>,
       else if (hub.type === 'card'&&scope==='quota') loader.setWindows(windowsOf(state));
       else if (hub.type === 'history') {
         const meters=selection(state),selected=new Set(scope==='budget'?meters?.ids.map(([source])=>source):meters?.sources??state.board?.lineup??[]);
-        const changes=hub.data.changes?.filter(change=>change.scope===scope&&selected.has(change.source)&&(scope!=='budget'||change.workSince===undefined||change.since<change.workSince));
+        const changes=hub.data.changes?.filter(change=>change.scope===scope&&selected.has(change.source));
+        const unknown=hub.data.sources.some(source=>selected.has(source)&&(!hub.data.changes||!hub.data.changes.some(change=>change.source===source)));
+        const nativeSince=Math.min(unknown?hub.data.since:Infinity,...(changes??[]).filter(change=>change.workOnly!==true||change.workSince===undefined).map(change=>change.since));
         const workSince = scope==='quota'?hub.data.workSince : undefined;
         const work=scope==='quota'?workChange(hub.data,[...selected]):{retired:false,since:Infinity};
-        if(work.retired||changes?.length || workSince !== undefined)loader.news(work.retired?0:Math.min(...(changes ?? []).map(change=>change.since), workSince ?? Infinity), hub.data.workAuthority,work.since);
+        if(work.retired||nativeSince!==Infinity||work.since!==Infinity||workSince!==undefined)loader.news(work.retired?0:Math.min(nativeSince,work.since,workSince??Infinity),hub.data.workAuthority,work.since,nativeSince);
         else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since, hub.data.workAuthority,work.since);
       }
     }

@@ -69,9 +69,9 @@ export function planRowAt(row:PlanRow,now:number):PlanRow|null {
 export const planRowDeadline=(row:PlanRow)=>Math.min(row[4],row[3]?row[4]-row[1]+row[3].at:Infinity);
 export type HistoryMeta = {now: number; historyStart: number; known: {own?: number; work: number; sources: Record<string, number>;sessions?:number|null;sourceWork?:Record<string,number>}; meta?: string};
 export const workKnownFrom = (known:HistoryMeta['known']):number|null => known.sessions!==undefined?known.sessions:Math.max(known.own??known.work,...(known.own===undefined&&Object.keys(known.sources).length?[Math.min(...Object.values(known.sources))]:[]));
-export type HistoryAnswer = HistoryMeta & {run: string; chunks: Chunk[]};
+export type HistoryAnswer = HistoryMeta & {run: string; chunks: Chunk[];cells?:'activity';nativeEvidence?:string};
 export type HistoryBasis = HistoryMeta & {run: string};
-export type HistoryReply = (HistoryAnswer | {now: number; run: string; meta: string; chunks: Chunk[]}) & {tape?:import('./periodTape.js').PeriodTape};
+export type HistoryReply = (HistoryAnswer | {now: number; run: string; meta: string; chunks: Chunk[]}) & {cells?:'activity';tape?:import('./periodTape.js').PeriodTape};
 
 /** A compact reply can borrow only the metadata captured by its own request. */
 export function expandHistory(reply: HistoryReply, prior?: HistoryBasis): HistoryAnswer {

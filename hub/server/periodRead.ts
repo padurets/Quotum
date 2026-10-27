@@ -150,7 +150,7 @@ export class PeriodReader {
     if(!object(raw)||raw.version!==1||!number(raw.evaluatedAt)||Object.keys(raw).some(k=>!['version','selection','evaluatedAt','quota','budget','funds','values','sessions','workFilter','facets','sourceWork','calendar'].includes(k)))fail(400,'invalid_request');
     const selection=parsePeriod(raw.selection);if(!selection)fail(400,'invalid_request');
     for(const name of PERIOD_SCOPES)if(raw[name]!==undefined&&(!object(raw[name])||Object.values(raw[name]).some(v=>typeof v!=='string')||Object.keys(raw[name]).some(k=>!['cell','from','to','meters','unit','currency','meta','evidence','cells','work','sources'].includes(k))))fail(400,'invalid_request');
-    for(const name of PERIOD_SCOPES)if(object(raw[name])&&raw[name].cells!==undefined&&raw[name].cells!=='skip')fail(400,'invalid_request');
+    for(const name of PERIOD_SCOPES)if(object(raw[name])&&raw[name].cells!==undefined&&raw[name].cells!=='skip'&&(name!=='quota'||raw[name].cells!=='activity'))fail(400,'invalid_request');
     for(const name of PERIOD_SCOPES)if(object(raw[name])&&raw[name].work!==undefined&&(name!=='budget'||raw[name].work!=='1'))fail(400,'invalid_request');
     if(raw.values!==undefined&&(!Array.isArray(raw.values)||raw.values.length>2000||raw.values.some(v=>typeof v!=='string'||v.length>256)))fail(400,'invalid_request');
     if(raw.sessions!==undefined&&(!object(raw.sessions)||Object.keys(raw.sessions).some(k=>k!=='cursor')||raw.sessions.cursor!==undefined&&(typeof raw.sessions.cursor!=='string'||raw.sessions.cursor.length>2048)))fail(400,'invalid_request');
@@ -340,11 +340,17 @@ export class PeriodReader {
       for(const scope of PERIOD_SCOPES)if(request[scope])response[scope]=yield*section((function*(){
         const historyScope=scope==='funds'?'budget':scope;
         // Work estimates use the common tape and curves, without a second copy in drawing cells.
-        const query=request[scope]!,json=readHistory(self.hub,self.history,self.events,board,user,{...query,scope:historyScope},views,query.cells!=='skip',now,false);
-        reserve(Buffer.byteLength(json)*2);const value=JSON.parse(json) as HistoryReply;
-        if(query.evidence==='skip')return value;
-        const tapeIdentity=createHash('sha256').update(JSON.stringify([board,user,scope,scope==='quota'||query.work==='1'?sourceIdentity:null,[...shown].map(([id,s])=>[id,s.since]),scope==='quota'?null:store.financialKey(board),query.meters,query.unit,query.currency,query.work,query.sources,store.currencies.registryRevision(user)])).digest('base64url');
+        const query=request[scope]!;
+        const tapeIdentity=query.evidence==='skip'?'':createHash('sha256').update(JSON.stringify([board,user,scope,scope==='quota'||query.work==='1'?sourceIdentity:null,[...shown].map(([id,s])=>[id,s.since]),scope==='quota'?null:store.financialKey(board),query.meters,query.unit,query.currency,query.work,query.sources,store.currencies.registryRevision(user)])).digest('base64url');
         const previous=self.decode(query.evidence);
+        // Only a cursor captured with committed native cells can authorize this
+        // omission. The browser keeps that proof apart from newer ledger cursors.
+        const drawingCell=Number(query.cell),drawingTo=Math.min(Math.ceil(Number(query.to)/drawingCell)*drawingCell,cellStart(now+CLOCK_TOLERANCE_MS,drawingCell)+drawingCell);
+        const activity=scope==='quota'&&query.cells==='activity'&&previous?.identity===tapeIdentity&&previous.revision>=self.measurementFloor&&previous.revision<=revision&&!self.measurements.some(c=>c.revision>previous.revision&&c.revision<=revision&&shown.has(c.source)&&(!c.scopes||c.scopes.includes('quota'))&&c.since<drawingTo);
+        const json=readHistory(self.hub,self.history,self.events,board,user,{...query,scope:historyScope},views,query.cells==='skip'?false:activity?'activity':true,now,false);
+        reserve(Buffer.byteLength(json)*2);const value=JSON.parse(json) as HistoryReply;
+        if(activity)value.cells='activity';
+        if(query.evidence==='skip')return value;
         const delta=selection.mode==='live'&&previous&&previous.identity===tapeIdentity&&previous.revision>=Math.max(self.measurementFloor,scope==='quota'||query.work==='1'?self.workFloor:0)&&previous.revision<=revision&&range.from>=previous.from;
         const changes=delta?self.measurements.filter(c=>c.revision>previous.revision&&c.revision<=revision&&shown.has(c.source)&&(!c.scopes||c.scopes.includes(historyScope))):[];
         const patch=frontier(delta?previous:null,changes);

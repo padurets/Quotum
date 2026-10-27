@@ -11,6 +11,7 @@ import {moneyReadSelection} from '../lib/moneySelection';
 import {plotGroups} from '../lib/historyPlot';
 import type {HistoryStore} from '../lib/history';
 import type {HistoryTile} from '../lib/historyTiles';
+import type {History} from '../../server/domain/history';
 import {ApiError} from '../lib/http';
 import * as widgets from '../../server/domain/widgets';
 
@@ -65,7 +66,9 @@ for(const kind of ['cached strip','active strip','late reply','A→B→A','clien
       oldFlight=[...(d.loader as unknown as {flights:Set<{controller:AbortController}>}).flights][0];assert.ok(oldFlight);
     }else{
       move(d.loader,1);await flush();assert.ok(names(d.loader).includes('B'));
-      if(kind!=='active strip')d.loader.endPan(false);await flush();native=buffers(d.loader);assert.ok(native.length);
+      if(kind!=='active strip')d.loader.endPan(false);await flush();
+      if(kind==='fixed range'){const filters=defaultFilters();filters.projects={mode:'exclude',values:['Absent qualification']};publishDataFilters(filters);await flush();}
+      native=buffers(d.loader);assert.ok(native.length);
     }
     const financial=d.loader.getFinancial(),nativePlot=d.loader.getPlot(),requests=h.requests.length;
     if(kind==='A→B→A')gate=h.hold();
@@ -189,4 +192,42 @@ for(const scope of ['quota','budget'] as const)for(const cold of [false,true])fo
     native=check();assert.equal(scope==='quota'?native.series[0].points.at(-1)![1]:native.meterSeries.find((row:any)=>row.sourceId===wallet&&row.meterId==='balance').end,scope==='quota'?72:'13000000');
     publishDataFilters(defaultFilters());await flush();assert.equal(h.period.get().error,null);check();
   }finally{await flush();stop();d?.close();await h.close();publishDataFilters(null,false);Date.now=originalNow;}
+});
+
+
+test('a cold pan needs one fixed native proof, then later work filters reuse its drawing',async()=>{
+  const originalNow=Date.now;Date.now=()=>NOW;publishDataFilters(defaultFilters());
+  const h=await fixture({personal:true,fixed:true});let d:Awaited<ReturnType<typeof drawings>>|undefined,stop=()=>{};
+  try{
+    addB(h);await flush();d=await drawings(h);stop=wire(h,d);move(d.loader,1);await flush();d.loader.endPan(false);await flush();
+    const native=():History=>{const frame=d!.renderFinancial();assert.ok(frame.history);return frame.history;};
+    const values=()=>native().series.map(row=>[row.sourceId,row.windowId,row.remainingAtStart,row.remainingAtEnd,row.points]);
+    const before=values(),events=native().events;
+    h.requests.length=0;publishDataFilters(excludeB());await flush();
+    assert.equal(h.requests.length,1,'cold cache proof and selected work share one HTTP request');
+    assert.ok(h.requests[0].quota&&h.requests[0].quota.cells!=='activity','an evidence-skipping pan cannot prove native cells unchanged');
+    assert.deepEqual(values(),before);assert.deepEqual(native().events,events);
+    assert.equal(d.render().history!.activity.by.project.some((row:{name:string})=>row.name==='B'),false);
+    const owned=buffers(d.loader),financial=d.loader.getFinancial();
+    h.requests.length=0;publishDataFilters(defaultFilters());await flush();
+    assert.equal(h.requests.length,1,'the next work edit does not repeat a cold native baseline');
+    assert.equal(h.requests[0].quota?.cells,'activity');
+    assert.ok(owned.every(value=>buffers(d!.loader).includes(value)));assert.equal(d.loader.getFinancial(),financial);
+    assert.deepEqual(values(),before);assert.deepEqual(native().events,events);
+    assert.equal(d.render().history!.activity.by.project.some((row:{name:string})=>row.name==='B'),true);
+  }finally{await flush();stop();d?.close();await h.close();publishDataFilters(null,false);Date.now=originalNow;}
+});
+
+test('legacy history without per-source confirmations cannot authorize activity-only cells',async()=>{
+  const originalNow=Date.now;Date.now=()=>NOW;publishDataFilters(defaultFilters());
+  const h=await fixture({personal:true});let d:Awaited<ReturnType<typeof drawings>>|undefined;
+  try{
+    addB(h);await flush();d=await drawings(h);
+    h.credit(NOW-15_000,NOW-10_000);h.events.flush();await flush();h.requests.length=0;
+    h.store.record(h.source,{observedAt:NOW-5000,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:28,remaining:72,resetAt:NOW+H}]});
+    h.page.dispatch({type:'hub',event:{type:'history',data:{sources:[h.source],since:NOW-5000}}});await flush();
+    assert.ok(h.requests.some(body=>body.quota));
+    assert.ok(h.requests.filter(body=>body.quota).every(body=>body.quota!.cells!=='activity'),'unconfirmed legacy news invalidates native coverage before dispatch');
+    assert.equal(d.loader.getFinancial().history!.series.find(row=>row.sourceId===h.source)!.points.at(-1)![1],72);
+  }finally{d?.close();await h.close();publishDataFilters(null,false);Date.now=originalNow;}
 });

@@ -2414,6 +2414,16 @@ an empty source selection and skipped native evidence. Its metadata never replac
 the native basis, and it cannot complete a pending native summary. Both projections
 keep the same transport slots and memory budget. A hidden activity widget defers its
 refill until shown; activity failures do not discard the native frame.
+Confirmed work-only news also preserves native cell coverage. When the same read
+needs native evidence, quota `cells: 'activity'` retains its full source selection
+and uses a cursor captured with the last completely published native drawing.
+An independently updated tape cannot advance that drawing proof. The server
+checks the original measurement frontier and returns full cells if it has changed,
+including when its notification has not reached the browser. The response marks
+an actual activity-only drawing; otherwise the reader merges full native cells.
+Missing proof or coverage uses the ordinary full path. Dispatch and publication
+recheck the native context, and selected-work commits preserve newer native
+invalidation boundaries within the same tile.
 Their error state and retry belong to activity alone: new native measurements still
 read and commit their own cells, including while activity waits for memory or its
 retry deadline. Retry also repeats failed selected period evidence. Native failures

@@ -579,6 +579,21 @@ test('a missing POST body that Chrome cannot recover fails observation and retai
   assert.equal(observer.reads[0].count?.complete,false);assert.equal(observer.activeCount,0);
 });
 
+test('activity-only drawing reads remain counted and keep their diagnostic mode',()=>{
+  const listeners=new Map<string,(event:never)=>void>();
+  const cdp={on:<T>(name:string,fn:(event:T)=>void)=>listeners.set(name,fn as (event:never)=>void),send:<T>()=>Promise.reject<T>(Error('unexpected command'))};
+  const observer=new HistoryBodies(cdp),emit=(name:string,event:object)=>listeners.get(name)?.(event as never);
+  observer.phase='work';
+  emit('Network.requestWillBeSent',{requestId:'activity',request:{url:'http://localhost/api/boards/private-board/period',postData:JSON.stringify({quota:{cell:'1000',from:'0',to:'2000',cells:'activity',evidence:'private-cursor'}})}});
+  emit('Network.dataReceived',{requestId:'activity',encodedDataLength:123});
+  emit('Network.loadingFailed',{requestId:'activity',canceled:true});
+  assert.equal(observer.resources.length,1,'activity cells still own a measured resource read');
+  const diagnostic=observer.diagnostic('work');
+  assert.equal(diagnostic.attempts,1);assert.equal(diagnostic.reads[0].request?.sections[0].cells,'activity');
+  assert.equal(diagnostic.reads[0].encodedLower,123);assert.equal(diagnostic.reads[0].canceled,true);
+  assert.equal(JSON.stringify(diagnostic).includes('private'),false);
+});
+
 test('warm failure diagnostics distinguish exact reads and gesture stages without exposing identities or bodies',async()=>{
   const listeners=new Map<string,(event:never)=>void>();
   let finish!:(value:{postData:string})=>void;
