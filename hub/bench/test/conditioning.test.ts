@@ -36,7 +36,7 @@ function producers(now:()=>number,advance:(ms:number)=>void){
   return (context as typeof context&{producers:{quotaProducer:typeof quotaProducer;ordinaryProducer:typeof ordinaryProducer;observedProducer:typeof observedProducer;privateProducer:typeof privateProducer}}).producers;
 }
 
-test('shared producers retain actual protocol floors, full reports, pacing, history and cleanup; the independent oracle rejects corruption',async t=>{
+for(const jitter of [false,true])test(jitter?'ordinary reports retain the captured 14999/15001/15000 ms intervals across real server cuts':'shared producers retain actual protocol floors, full reports, pacing, history and cleanup; the independent oracle rejects corruption',async t=>{
   let now=Date.parse('2026-10-27T12:00:00Z');t.mock.method(Date,'now',()=>now);
   const root=mkdtempSync(path.join(tmpdir(),'quotum-conditioning-')),file=path.join(root,'hub.sqlite'),store=new Store(file,now-75*DAY),directory=new Directory(store.db);
   const ingest=new Ingest(store,directory,new Duty(),new Cadence());
@@ -66,21 +66,30 @@ test('shared producers retain actual protocol floors, full reports, pacing, hist
     }
     const token=await owner.machineToken('Fixture'),machine={id:'conditioning-laptop',name:'Laptop',os:'linux',arch:'x86_64'},agent=new Agent(owner.base,machine,token,owner.id),peer=new Agent(owner.base,{...machine,id:'conditioning-peer',name:'Peer'},token,owner.id);
     peer.trackClients([{clientId:'opencode',sessionId:'a'.repeat(32),source:null,origin:'terminal',project:'Preserved peer',startedAt:new Date(start).toISOString(),working:false}],[]);
-    let working=false;const reports:{at:number;working:boolean;privateCount:number}[]=[];
-    const report=async()=>{const at=now;await agent.sessions([{provider:'antigravity',...accountOf(card),sessionId:'f'.repeat(32),origin:'terminal',project:'Benchmark',startedAt:new Date(start).toISOString(),lastWorkedAt:new Date(start).toISOString(),working}],at);await peer.sessions([],at);reports.push({at,working,privateCount:agent.clientSessionCount});return at;};
-    const demo={work:(value:boolean)=>{working=value;},nextReport:async()=>{now=start+(Math.floor((now-start)/15000)+1)*15000;return report();},reportNow:async()=>report()} as unknown as Parameters<typeof ordinaryProducer>[0];
+    let working=false,ordinal=0,lastReceipt:{at:number;ordinal:number;manual:boolean}|undefined;const reports:{at:number;working:boolean;privateCount:number}[]=[];
+    const report=async(manual=false)=>{const at=now;await agent.sessions([{provider:'antigravity',...accountOf(card),sessionId:'f'.repeat(32),origin:'terminal',project:'Benchmark',startedAt:new Date(start).toISOString(),lastWorkedAt:new Date(start).toISOString(),working}],at);await peer.sessions([],at);lastReceipt={at,ordinal:++ordinal,manual};reports.push({at,working,privateCount:agent.clientSessionCount});return at;};
+    let ordinaryReports=0;
+    const demo={work:(value:boolean)=>{working=value;},nextReport:async()=>{now=start+(Math.floor((now-start)/15000)+1)*15000-(jitter&&ordinaryReports++===1?1:0);return report();},reportNow:async()=>report(true),reportReceipt:(_machine:string,at:number)=>{assert.equal(lastReceipt?.at,at);return {...lastReceipt!};}} as unknown as Parameters<typeof ordinaryProducer>[0];
     await agent.ingest([stillSnapshot(card,start,now)],[],now);await report();now++;
     const stand={set:SETS[0],start,people:new Map([[people(SETS[0])[0].id,owner]]),sources:new Map([['antigravity',source]]),agents:new Map([['laptop',agent],[card.machines[0],agent]])} as unknown as Stand;
     ledger=new Conditioning(file,stand);const api=producers(()=>now,ms=>{now+=ms;});
     let hookCount=0;await api.quotaProducer(stand,ledger,{before:async()=>{},after:async point=>{assert.equal(point.index,hookCount++);}});
     const beforeOrdinary=reports.length;
-    await api.ordinaryProducer(demo,ledger,{before:async index=>{if(index===1)now+=30000;}});
-    assert.equal(reports.length-beforeOrdinary,4);assert.ok(ledger.receipt().ordinaryTickDeltas.includes(3),'a slow UI hook may miss a real tick without inventing reports');
+    await api.ordinaryProducer(demo,ledger,{before:async index=>{if(!jitter&&index===1)now+=30000;}});
+    assert.equal(reports.length-beforeOrdinary,4);
+    if(jitter){assert.deepEqual(ledger.ordinary.slice(1).map((row,i)=>row.reportedAt-ledger!.ordinary[i].reportedAt),[14999,15001,15000]);assert.deepEqual(ledger.receipt().ordinaryTickDeltas,[0,2,1]);}
+    else assert.ok(ledger.receipt().ordinaryTickDeltas.includes(3),'a slow UI hook may miss a real tick without inventing reports');
     await api.observedProducer(stand,ledger,{ready:async actor=>{assert.equal(Number(store.db.prepare('SELECT floor_at FROM device_activity').get()!.floor_at),actor.floorAt);}});
     const beforePrivate=reports.length;await api.privateProducer(demo,stand,ledger);assert.equal(reports.length-beforePrivate,5);
     assert.deepEqual(reports.slice(beforePrivate).map(row=>row.privateCount),[1,1,1,1,0]);
     const frequency=deepSources[0];await owner.post(`/api/boards/${owner.personalBoard}/sources/${frequency}/frequency`,{intervalMs:120000});
     const result=await ledger.verify(frequency);assert.equal(result.status,'complete');assert.equal(result.quota.length,20);assert.equal(hookCount,20);
+    assert.deepEqual(result.ordinaryOrdinalDeltas,[1,1,1]);
+    const originalTick=ledger.ordinary[1].tick!;
+    for(const tick of [undefined,{...originalTick,manual:true},{...originalTick,at:originalTick.at-1},{...originalTick,ordinal:ledger.ordinary[0].tick!.ordinal},{...originalTick,ordinal:1.5}]){
+      ledger.ordinary[1].tick=tick;await assert.rejects(ledger.verify(frequency),/scheduled Demo report/);
+    }
+    ledger.ordinary[1].tick=originalTick;
     assert.equal(result.quota[19].pacedAt,result.quota[19].sent+3000,'the twentieth observation retains its final wait');
     assert.equal(JSON.stringify(safeEvidence(result)),JSON.stringify(result),'the actual conditioning receipt survives sanitization');
     const first=ledger.quota[0].used;ledger.quota.forEach(point=>{point.used+=1;});await assert.rejects(ledger.verify(frequency));ledger.quota.forEach(point=>{point.used-=1;});assert.ok(Math.abs(ledger.quota[0].used-first)<1e-9);
@@ -107,6 +116,13 @@ test('shared producers retain actual protocol floors, full reports, pacing, hist
 
   }finally{ledger?.close();await app.close();store.close();rmSync(root,{recursive:true,force:true});}
   async function seedQuota(source:string,taken:ReturnType<typeof stillSnapshot>,at:number){store.record(source,{observedAt:at,plan:taken.plan??'',staleAfterMs:DAY,resets:null,windows:taken.windows.map(window=>({id:window.id,kind:window.kind,label:window.label,minutes:window.minutes,used:window.usedPercent,remaining:100-window.usedPercent,resetAt:window.resetsAt===null?null:Date.parse(window.resetsAt)}))});}
+});
+
+test('ordinary measurement hooks do not request receipt evidence without a conditioning ledger',async()=>{
+  let now=100_000,reports=0;
+  const demo={work(){},nextReport:async()=>{now+=15_000;reports++;return now;},reportReceipt(){throw new Error('unused ledger witness');}} as unknown as Parameters<typeof ordinaryProducer>[0];
+  await producers(()=>now,ms=>{now+=ms;}).ordinaryProducer(demo);
+  assert.equal(reports,4);
 });
 
 

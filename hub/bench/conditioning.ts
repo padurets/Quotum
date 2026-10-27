@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
-import type {Demo} from '../demo/index.js';
+import type {Demo,ReportReceipt} from '../demo/index.js';
 import {cards, people} from '../demo/model.js';
 import type {Stand} from '../demo/setup.js';
 import type {Snapshot} from '../server/projection.js';
@@ -14,7 +14,7 @@ const DAY = 86_400_000;
 export const QUOTA_COUNT = 20, QUOTA_EVERY = 3000;
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
 type WorkKind = 'ordinary' | 'private';
-type Cut = {reportedAt: number; serverAt: number; working: boolean | null};
+type Cut = {reportedAt: number; serverAt: number; working: boolean | null;tick?:ReportReceipt};
 export type QuotaPoint = {index: number; source: string; sent: number; observedAt: number; used: number; lastId: string; ingestMs: number; accepted: number; duplicates: number; failures: number; waitUntil: number; pacedAt?: number};
 type Hooks = {before?(index: number): Promise<void>; after?(at: number, index: number): Promise<void>};
 
@@ -48,11 +48,18 @@ export class Conditioning {
     }
     this.quota.push(point);
   }
-  cut(kind: WorkKind, reportedAt: number, working: boolean | null) {
+  cut(kind: WorkKind, reportedAt: number, working: boolean | null,tick?:ReportReceipt) {
     const machine = this.stand.agents.get('laptop')!.machine.id;
     const row = this.db.prepare('SELECT last_seen_at FROM devices WHERE machine_id=? AND revoked_at IS NULL').get(machine);
     const serverAt = Number(row?.last_seen_at);assert.ok(Number.isSafeInteger(serverAt) && serverAt >= reportedAt && serverAt <= Date.now());
-    this[kind].push({reportedAt, serverAt, working});
+    const cut={reportedAt,serverAt,working,...(tick?{tick:{...tick}}:{})};
+    if(kind==='ordinary')this.scheduledOrdinal(cut);
+    this[kind].push(cut);
+  }
+  private scheduledOrdinal(cut:Cut){
+    const tick=cut.tick;
+    assert.ok(tick&&tick.at===cut.reportedAt&&Number.isSafeInteger(tick.ordinal)&&tick.ordinal>0&&tick.manual===false,'ordinary work requires its accepted scheduled Demo report');
+    return tick.ordinal;
   }
   privateStart(at: number) {this.privateStartedAt = at;}
   observedOpen(actor: ObservedWork) {
@@ -81,7 +88,7 @@ export class Conditioning {
     return {depth,limits:this.db.prepare('SELECT source_id,window_id,kind,min(at) AS first FROM samples WHERE source_id IN (SELECT value FROM json_each(?)) GROUP BY source_id,window_id HAVING min(at)<=? ORDER BY source_id,window_id').all(ids,depth).map(row=>({sourceId:String(row.source_id),windowId:String(row.window_id),kind:String(row.kind),first:Number(row.first)})),
       money:this.db.prepare('SELECT r.source_id,s.provider,min(r.at) AS first FROM readings r JOIN sources s ON s.id=r.source_id WHERE r.source_id IN (SELECT value FROM json_each(?)) GROUP BY r.source_id HAVING min(r.at)<=? ORDER BY r.source_id').all(ids,depth).map(row=>({sourceId:String(row.source_id),providerId:String(row.provider),first:Number(row.first)}))};
   }
-  receipt() {return {quota:this.quota,ordinary:this.ordinary,ordinaryTickDeltas:this.ordinary.slice(1).map((row,index)=>Math.floor((row.reportedAt-this.stand.start)/15000)-Math.floor((this.ordinary[index].reportedAt-this.stand.start)/15000)),private:this.private,privateStartedAt:this.privateStartedAt,observed:{binding:this.observedBinding,reports:this.observed,closed:this.observedClosed}};}
+  receipt() {return {quota:this.quota,ordinary:this.ordinary,ordinaryTickDeltas:this.ordinary.slice(1).map((row,index)=>Math.floor((row.reportedAt-this.stand.start)/15000)-Math.floor((this.ordinary[index].reportedAt-this.stand.start)/15000)),ordinaryOrdinalDeltas:this.ordinary.slice(1).map((row,index)=>row.tick&&this.ordinary[index].tick?row.tick.ordinal-this.ordinary[index].tick!.ordinal:null),private:this.private,privateStartedAt:this.privateStartedAt,observed:{binding:this.observedBinding,reports:this.observed,closed:this.observedClosed}};}
   /** Read the producer's stored projection, without trusting its own in-memory ledger. */
   async verify(frequencySource: string) {
     assert.ok(this.baseline);assert.equal(this.quota.length, QUOTA_COUNT);
@@ -92,7 +99,8 @@ export class Conditioning {
       if (index) assert.ok(point.sent >= this.quota[index - 1].waitUntil - 1, 'quota deliveries retain their three-second cadence');
     });
     assert.deepEqual(this.ordinary.map(row => row.working), [true, true, true, false]);
-    for (let i = 1; i < this.ordinary.length; i++) assert.ok(Math.floor((this.ordinary[i].reportedAt - this.stand.start) / 15000) - Math.floor((this.ordinary[i - 1].reportedAt - this.stand.start) / 15000)>=1, 'ordinary work retains real Demo tick spacing');
+    const ordinals=this.ordinary.map(row=>this.scheduledOrdinal(row));
+    for(let i=1;i<ordinals.length;i++)assert.ok(ordinals[i]>ordinals[i-1],'ordinary work requires distinct scheduled Demo reports');
     assert.deepEqual(this.private.map(row => row.working), [true, true, true, false, null]);
     assert.deepEqual(this.observed.map(row => row.working), [true, true, false]);
     assert.deepEqual(this.observed.map(row => row.acknowledgedThrough), [2, 3, 4]);
@@ -137,11 +145,11 @@ export async function quotaProducer(stand: Stand, ledger?: Conditioning, hooks?:
 }
 
 export async function ordinaryProducer(demo: Demo, ledger?: Conditioning, hooks?: Hooks) {
-  demo.work(true);const started = await demo.nextReport('laptop');ledger?.cut('ordinary', started, true);await pause(1000);
+  demo.work(true);const started = await demo.nextReport('laptop');ledger?.cut('ordinary', started, true,demo.reportReceipt('laptop',started));await pause(1000);
   try {
     for (let index = 0; index < 3; index++) {
       await hooks?.before?.(index);if (index === 2) demo.work(false);
-      const at = await demo.nextReport('laptop');ledger?.cut('ordinary', at, index < 2);await pause(1000);await hooks?.after?.(at, index);
+      const at = await demo.nextReport('laptop');ledger?.cut('ordinary', at, index < 2,demo.reportReceipt('laptop',at));await pause(1000);await hooks?.after?.(at, index);
     }
   } finally {demo.work(false);}
 }
