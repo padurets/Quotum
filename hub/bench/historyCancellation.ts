@@ -1,4 +1,5 @@
 import {historyScenario, type Coverage} from './coverage.js';
+import type {Evidence} from './evidence';
 import assert from 'node:assert/strict';
 import {cellOf, cellStart, compose, targetOf, type Chunk, type HistoryAnswer} from '../server/domain/history';
 import {HistoryStore, followPan} from '../ui/lib/history';
@@ -13,7 +14,7 @@ const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 type Attempt = {phase: string; cell: number; from: number; to: number; signal?: AbortSignal; count?: BodyCount; failed?: boolean};
 
 /** Real HTTP completion and numerical staging have different cancellation boundaries. */
-export async function cancellationTraffic(proxy: Awaited<ReturnType<typeof historyProxy>>, cookie: string, board: string, windows: string[], coverage?:Coverage) {
+export async function cancellationTraffic(proxy: Awaited<ReturnType<typeof historyProxy>>, cookie: string, board: string, windows: string[], coverage?:Coverage, evidence?:Pick<Evidence,'save'>) {
   const reports = [], invalidated = [];
   for (const length of [DAY, 30 * DAY]) for (const mode of ['before-headers', 'during-staging', 'reversal'] as const) {
     for (let take = 1; take <= HISTORY_COHORT_TAKES; take++) {
@@ -82,7 +83,14 @@ export async function cancellationTraffic(proxy: Awaited<ReturnType<typeof histo
         complete=true;
       } catch(error) {
         invalidated.push({...historyCutInvalidation(error,name,take),reads:reads.map(r=>({phase:r.phase,from:r.from,to:r.to,count:r.count}))});
-      } finally {unsubscribe(); store.close(); preparations.dispose(); await Promise.allSettled([...pending]);}
+      } finally {
+        try {unsubscribe(); store.close(); preparations.dispose(); await Promise.allSettled([...pending]);}
+        finally {
+          evidence?.save('traffic-'+name.replace(/[^a-zA-Z0-9_-]/g,'-'),{name,status:complete?'passed':'invalidated',phase,
+            reports:reports.filter(report=>report.name===name),invalidated:invalidated.filter(report=>report.name===name),
+            transfers:proxy.transfers.filter(transfer=>transfer.phase.startsWith(name+'/'))});
+        }
+      }
       if(complete){const report=reports.find(report=>report.name===name)!;coverage?.record(historyScenario(name), [], report.finalComplete&&report.attempted>0?1:0);break;}
     }
   }

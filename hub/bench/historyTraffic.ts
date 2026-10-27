@@ -145,7 +145,7 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
         }
       }
     }
-    const cancellations = await cancellationTraffic(proxy, cookie, board, windows, coverage);
+    const cancellations = await cancellationTraffic(proxy, cookie, board, windows, coverage, evidence);
     if(scrollControl&&(problems.length||invalidated.length||cancellations.invalidated.length))throw new Error('History scroll control prefix incomplete or over budget');
     const native=browser ? await browserHistoryTraffic(browser,proxy,cookie,board,evidence,firstNative?{pair:1,cohort:'history'}:undefined,undefined,coverage) : null;
     const nativeCancellations = browser&&!firstNative ? await browserCancellationTraffic(browser, proxy, cookie, false, false, evidence, coverage) : null;

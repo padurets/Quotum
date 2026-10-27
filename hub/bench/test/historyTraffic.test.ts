@@ -5,10 +5,11 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {brotliCompressSync, constants} from 'node:zlib';
-import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from '../historyProxy';
-import {HistoryCutChanged, bodyBounds, bodyTotals, stableHistory, trafficProblems, transferFor} from '../historyTrafficBudget';
+import {HISTORY_ATTEMPT_HEADER, HISTORY_CODEC, historyBody, historyProxy, type BodyCount, type Transfer} from '../historyProxy';
+import {HistoryCutChanged, historyCutInvalidation, bodyBounds, bodyTotals, stableHistory, trafficProblems, transferFor} from '../historyTrafficBudget';
 import {trafficReadEvidence,historyCheckpointScript} from '../historyTrafficBrowser';
 import {deadline} from '../deadline';
+import {safeEvidence} from '../evidence';
 
 test('history cleanup releases its owned target when the renderer cannot answer', async () => {
   const source = readFileSync(new URL('../historyTrafficBrowser.ts', import.meta.url), 'utf8');
@@ -724,4 +725,61 @@ test('an actual warm assertion retains cold movement and its first error when po
   await assert.rejects(fixture.run(),error=>error===fixture.primary&&(error as Error).message.includes('browser cached return/repeat started history'));
   assert.deepEqual(JSON.parse(JSON.stringify((saved.get('traffic-fixture') as {movement:unknown}).movement)),{...pose,tokens:1});
   assert.deepEqual(order,['pressure','pool','observer','target']);assert.equal(fixture.status,'failed');assert.deepEqual(fixture.browser.owner.failures,['history pool cleanup failed']);
+});
+
+const cancelFile=ts.createSourceFile('historyCancellation.ts',readFileSync(new URL('../historyCancellation.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
+const cancelFunction=cancelFile.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='cancellationTraffic') as ts.FunctionDeclaration;
+const cancelNodes:ts.Node[]=[];const visitCancel=(node:ts.Node)=>{cancelNodes.push(node);ts.forEachChild(node,visitCancel);};visitCancel(cancelFunction);
+const cancelAttempt=cancelNodes.find(node=>ts.isTryStatement(node)&&node.finallyBlock?.getText(cancelFile).includes('preparations.dispose()')) as ts.TryStatement;
+const cancelStatements=cancelAttempt.tryBlock.statements.map(node=>node.getText(cancelFile));
+const cancelTotals=cancelStatements.slice(cancelStatements.findIndex(text=>text.startsWith('const attempts = reads.filter')),cancelStatements.findIndex(text=>text.startsWith('proxy.phase(`${name}/reference`)'))).join('\n');
+const cancelReport=cancelStatements.slice(cancelStatements.findIndex(text=>text.startsWith('const report ='))).join('\n');
+assert.ok(cancelTotals.includes('bodyTotals(')&&cancelReport.includes('reports.push(report)'));
+const cancelCode=ts.transpileModule(`globalThis.run=async(evidence)=>{try{if(cut)throw cut;${cancelTotals}${cancelReport}}catch(error)${cancelAttempt.catchClause!.block.getText(cancelFile)}finally${cancelAttempt.finallyBlock!.getText(cancelFile)}return {reports,invalidated};};`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+
+/** Run the actual report, cutoff catch and finalizer; only earlier gesture/IO setup is supplied. */
+function controlledCancellation(cut:HistoryCutChanged|null=null){
+  const name='controlled/1d/during-staging/take1',phase=name+'/gesture',order:string[]=[],saved:any[]=[];
+  const counts:BodyCount[]=[{id:'p3:1',complete:false,lower:0},{id:'p3:2',complete:true,decoded:123,lower:40,length:40,coding:'br'}];
+  const transfers:Transfer[]=counts.map((count,i)=>({id:count.id!,phase,cell:1,from:0,to:60,started:i,sent:!!i,finished:!!i,aborted:true,...(i?{decoded:123,encoded:40}:{})}));
+  const reads=counts.map(count=>{const controller=new AbortController();controller.abort();return {phase,cell:1,from:0,to:60,signal:controller.signal,count};});
+  let release!:()=>void;const pending=new Set([new Promise<void>(resolve=>{release=()=>{order.push('pending');resolve();};})]);
+  const context={name,phase,take:1,mode:'during-staging',cut,complete:false,reads,pending,reports:[],invalidated:[],proxy:{transfers},
+    assert,bodyTotals,transferFor,historyCutInvalidation,HISTORY_CODEC,console:{error(){}},
+    unsubscribe:()=>order.push('unsubscribe'),store:{close:()=>order.push('store')},preparations:{dispose:()=>order.push('preparations')},run:null as unknown as (evidence?:unknown)=>Promise<unknown>};
+  runInNewContext(cancelCode,context);
+  const evidence={save:(key:string,value:unknown)=>saved.push({key,value:JSON.parse(JSON.stringify(value)),order:[...order]})};
+  return {name,context,order,saved,evidence,release};
+}
+
+const trafficFile=ts.createSourceFile('historyTraffic.ts',readFileSync(new URL('../historyTraffic.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
+const trafficFunction=trafficFile.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='historyTraffic') as ts.FunctionDeclaration;
+const trafficAttempt=trafficFunction.body!.statements.find(ts.isTryStatement)!;
+// The caller's actual cancellation/native tail and proxy finally are kept; unrelated ordinary cohorts are omitted.
+const trafficTail=trafficAttempt.tryBlock.statements.filter(node=>!ts.isForStatement(node)&&!ts.isForOfStatement(node)).map(node=>node.getText(trafficFile)).join('\n');
+const trafficCode=ts.transpileModule(trafficFunction.getText(trafficFile).replace('export async function','async function').replace(trafficAttempt.tryBlock.getText(trafficFile),`{${trafficTail}}`)+'\nglobalThis.run=historyTraffic;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+
+for(const cancelled of [false,true])test(`completed controlled cancellation evidence survives native ${cancelled?'cancellation':'failure'}`,async()=>{
+  const f=controlledCancellation(),primary=cancelled?new DOMException('native cancelled','AbortError'):new Error('native history failed');
+  const fixture={HISTORY_CODEC,historyProxy:async()=>({close:async()=>{f.order.push('proxy');}}),
+    cancellationTraffic:(...args:unknown[])=>f.context.run(args[5]),browserHistoryTraffic:async()=>{throw primary;},run:null as unknown as (...args:unknown[])=>Promise<unknown>};
+  runInNewContext(trafficCode,fixture);const result=fixture.run('http://127.0.0.1','', 'b',[],{},f.evidence);
+  f.release();await assert.rejects(result,error=>error===primary);
+  assert.equal(f.order.at(-1),'proxy');assert.equal(f.saved.length,1,'completed controlled evidence must survive a later native error');
+  const snapshot=safeEvidence({...f.saved[0].value,cookie:'canary-cookie',unknown:'https://private.invalid/canary'}) as typeof f.saved[0]['value'];assert.equal(snapshot.name,f.name);assert.equal(snapshot.status,'passed');
+  assert.doesNotMatch(JSON.stringify(snapshot),/canary|private/);
+  assert.deepEqual(snapshot.reports[0].requests.map((request:any)=>request.id),['p3:1','p3:2']);
+  assert.deepEqual([snapshot.reports[0].attempted,snapshot.reports[0].aborted,snapshot.reports[0].discardedDelivered],[2,2,1]);
+  assert.deepEqual([snapshot.reports[0].decoded,snapshot.reports[0].encodedLower,snapshot.reports[0].encodedUpper],[123,40,40]);
+});
+
+for(const invalidated of [false,true])test(`controlled cancellation ${invalidated?'cutoff invalidation':'completion'} snapshot follows owned cleanup and pending IO`,async()=>{
+  const f=controlledCancellation(invalidated?new HistoryCutChanged({seedNow:1,answerNow:2,cell:1,seedCut:1,answerCut:2}):null);
+  const result=f.context.run(f.evidence);
+  try{await Promise.resolve();assert.deepEqual(f.order,['unsubscribe','store','preparations']);assert.equal(f.saved.length,0);}finally{f.release();}
+  await result;assert.equal(f.saved.length,1);const snapshot=f.saved[0].value;
+  assert.deepEqual(f.saved[0].order,['unsubscribe','store','preparations','pending']);assert.equal(snapshot.status,invalidated?'invalidated':'passed');
+  assert.equal(snapshot.reports.length,invalidated?0:1);assert.equal(snapshot.invalidated.length,invalidated?1:0);
+  assert.deepEqual(snapshot.transfers.map((transfer:any)=>transfer.id),['p3:1','p3:2']);
+  if(invalidated)assert.deepEqual(snapshot.invalidated[0].reads.map((read:any)=>read.count.id),['p3:1','p3:2']);
 });
