@@ -1,3 +1,4 @@
+import {historyScenario, type Coverage} from './coverage.js';
 import {writeFileSync} from 'node:fs';
 import {accountingPath} from './accountingTraffic';
 import {PERIOD_SCOPES,type PeriodScope,type PeriodReply,type PeriodRequest} from '../server/domain/periodRead';
@@ -20,8 +21,8 @@ import {historyPressureScript,saveHistoryPressure} from './historyPressure';
 
 const DAY = 86_400_000;
 type ResourceRead={scope?:PeriodScope;selection:string;from:number;to:number;cell:number;answer?:Pick<HistoryAnswer,'run'|'now'|'known'>;chunks?:[number,number][]};
-type RequestDiagnostic={selection?:{mode:'live';periodMs:number}|{mode:'range';from:number;to:number};evaluatedAt?:number;sections:{scope:PeriodScope;from:number;to:number;cell:number;cells:'skip'|'read';evidence:'skip'|'cursor'|'baseline'}[];values:number;sessions:boolean;sessionsCursor?:boolean;sourceWork?:boolean;sourceWorkCursor?:boolean;calendar?:boolean;calendarCursor?:boolean};
-type Read = {requestBytes?:number;errorCode?:'history_limit'|'too_large'|'other'|'unavailable';httpStatus?:number;endpoint?:'history'|'period'|'period/sessions';stage?:string;diagnostic?:RequestDiagnostic;sections?:ResourceRead[];request?:Promise<void>;selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
+type RequestDiagnostic={selection?:{mode:'live';periodMs:number}|{mode:'range';from:number;to:number};evaluatedAt?:number;sections:{scope:PeriodScope;from:number;to:number;cell:number;cells:'skip'|'read'|'activity';evidence:'skip'|'cursor'|'baseline';cellsCursor?:boolean}[];values:number;sessions:boolean;sessionsCursor?:boolean;sourceWork?:boolean;sourceWorkCursor?:boolean;calendar?:boolean;calendarCursor?:boolean};
+type Read = {scope?:PeriodScope;requestBytes?:number;errorCode?:'history_limit'|'too_large'|'other'|'unavailable';httpStatus?:number;endpoint?:'history'|'period'|'period/sessions';stage?:string;diagnostic?:RequestDiagnostic;sections?:ResourceRead[];request?:Promise<void>;selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
 const lowerHeaders = (headers: Record<string, string>) => Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
 let pageSerial = 0;
 
@@ -98,7 +99,7 @@ export class HistoryBodies {
           read.requestBytes=Buffer.byteLength(postData);
           const body=JSON.parse(postData) as PeriodRequest;
           const selection=body.selection;
-          read.diagnostic={...(selection?{selection:selection.mode==='live'?{mode:'live',periodMs:Number(selection.periodMs)}:{mode:'range',from:Number(selection.from),to:Number(selection.to)}}:{}),evaluatedAt:Number(body.evaluatedAt),sections:PERIOD_SCOPES.flatMap(scope=>{const query=body[scope];return query?[{scope,from:Number(query.from),to:Number(query.to),cell:Number(query.cell),cells:query.cells==='skip'?'skip' as const:'read' as const,evidence:query.evidence==='skip'?'skip' as const:query.evidence?'cursor' as const:'baseline' as const}]:[];}),values:body.values?.length??0,sessions:!!body.sessions,sessionsCursor:!!body.sessions?.cursor,sourceWork:!!body.sourceWork,sourceWorkCursor:!!body.sourceWork?.cursor,calendar:!!body.calendar,calendarCursor:!!body.calendar?.cursor};
+          read.diagnostic={...(selection?{selection:selection.mode==='live'?{mode:'live',periodMs:Number(selection.periodMs)}:{mode:'range',from:Number(selection.from),to:Number(selection.to)}}:{}),evaluatedAt:Number(body.evaluatedAt),sections:PERIOD_SCOPES.flatMap(scope=>{const query=body[scope];return query?[{scope,from:Number(query.from),to:Number(query.to),cell:Number(query.cell),cells:query.cells==='skip'?'skip' as const:query.cells==='activity'?'activity' as const:'read' as const,evidence:query.evidence==='skip'?'skip' as const:query.evidence?'cursor' as const:'baseline' as const,cellsCursor:!!query.cellsCursor}]:[];}),values:body.values?.length??0,sessions:!!body.sessions,sessionsCursor:!!body.sessions?.cursor,sourceWork:!!body.sourceWork,sourceWorkCursor:!!body.sourceWork?.cursor,calendar:!!body.calendar,calendarCursor:!!body.calendar?.cursor};
           for(const scope of PERIOD_SCOPES)if(body[scope]&&body[scope]!.cells!=='skip'){const query=new URL('/api/history',url);query.search=new URLSearchParams({board:decodeURIComponent(url.pathname.split('/')[3]),scope:scope==='funds'?'budget':scope,...body[scope]}).toString();read.sections!.push({scope,selection:historyReadSelection(query),from:Number(body[scope]!.from),to:Number(body[scope]!.to),cell:Number(body[scope]!.cell)});}
           if(read.sections![0])Object.assign(read,read.sections![0]);
         };
@@ -343,7 +344,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
 }
 
 /** Separate tabs use the fixed-codec proxy; this never changes the native perf route. */
-export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProxy, cookie: string, board: string, evidence?: Pick<Evidence, 'save'>, suffix?:{pair:number;cohort:'history'|'activity'},alignment?:RetirementAlignment) {
+export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProxy, cookie: string, board: string, evidence?: Pick<Evidence, 'save'>, suffix?:{pair:number;cohort:'history'|'activity'},alignment?:RetirementAlignment,coverage?:Coverage) {
   if(suffix&&(!Number.isInteger(suffix.pair)||suffix.pair<1||suffix.pair>12||!['history','activity'].includes(suffix.cohort)))throw new Error('Unknown history suffix cohort');
   const reports = [], invalidated = [], problems: string[] = [];
   for (const length of [DAY, 30 * DAY]) for (const future of [DAY, 0]) for (const latency of [0, 100, 400]) for (const fraction of [.5, .04]) {
@@ -408,7 +409,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
             const answer = await historyBody(`${proxy.url}/api/history?${selection}&cell=${cell}&from=${from}&to=${to}`, cookie, undefined, body => {assert.ok(body.complete); referenceDecoded += body.decoded!; referenceEncoded += body.lower;}) as HistoryAnswer;
             stableHistory(answer, group.answer, cell, to);
           }
-          families.push({name: `${name}/${scope}`, attempts: reads.length, maxAttempts, ...totals, referenceDecoded, referenceEncoded, ratios: fraction === .5, optionalUnvisitedCells: optional.length});
+          families.push({name: `${name}/${reads[0].scope ?? scope ?? 'quota'}`, attempts: reads.length, maxAttempts, ...totals, referenceDecoded, referenceEncoded, ratios: fraction === .5, optionalUnvisitedCells: optional.length});
         }
         const aggregate={name:name+'/all-accounting',attempts:physical.length,...physicalTotals,referenceDecoded:families.reduce((n,f)=>n+f.referenceDecoded,0),referenceEncoded:families.reduce((n,f)=>n+f.referenceEncoded,0),ratios:fraction===.5};
         problems.push(...trafficProblems(aggregate));reports.push(aggregate);
@@ -437,7 +438,6 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         }
         status=reports.filter(report=>report.name.startsWith(name+'/')).some(report=>trafficProblems(report).length)?'over-budget':'passed';
         if(suffix&&problems.length)throw new Error('History suffix exceeded its original traffic budget');
-        break;
       } catch (error) {
         if(suffix){status='failed';throw error;}
         const cut=historyCutInvalidation(error,name,take);
@@ -453,6 +453,10 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         try{await close();}catch(error){cleanupErrors.push(error);}
         if(status!=='failed'&&cleanupErrors.length)throw cleanupErrors[0];
       }
+      if(status==='passed'||status==='over-budget'){
+        if(!suffix)for(const report of reports.filter(report=>report.name.startsWith(name+'/')))coverage?.record(historyScenario(report.name), trafficProblems(report));
+        break;
+      }
     }
   }
   return {reports, invalidated, problems};
@@ -460,7 +464,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
 
 /** Native cancellation/reversal keeps one Shift-wheel token while responses are owned. */
 type CancellationState={tokens:string[];poses:{end:number;origin:number}[];pushes:number;selected:boolean;attempts:Record<string,{aborted:boolean}>};
-export async function browserCancellationTraffic(browser: Browser, proxy: TrafficProxy, cookie: string,diagnostic=false,profileBeforeInput=false,evidence?:Pick<Evidence,'save'>) {
+export async function browserCancellationTraffic(browser: Browser, proxy: TrafficProxy, cookie: string,diagnostic=false,profileBeforeInput=false,evidence?:Pick<Evidence,'save'>,coverage?:Coverage) {
   const reports = [], invalidated = [];
   for (const length of [DAY, 30 * DAY]) for (const mode of ['before-headers', 'after-delivery', 'reversal'] as const) {
     if(diagnostic&&(length!==DAY||mode!=='reversal'))continue;
@@ -529,7 +533,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
         stableHistoryReads(bodies.resources.filter(r=>r.phase===phase), seeds, cell);
         const report = {name, attempted: attempts.length, completed: attempts.filter(r => r.count?.complete).length, failed: attempts.filter(r => !r.count?.complete && !r.canceled && !state.attempts[r.count!.id!]?.aborted).length, aborted, transportAbortedDelivered: attempts.filter(r => r.count?.complete && state.attempts[r.count!.id!]?.aborted).length, stagingDisposition: 'not-observed', ...totals, finalComplete: true, movement: {tokens: state.tokens.length, poses: state.poses.length, pushes: state.pushes}, requests: attempts.map(r => ({from: r.from, to: r.to, id: r.count!.id, canceled: r.canceled}))};
         reports.push(report); console.error(`bench: ${name}: ${report.attempted} attempts, ${aborted} aborted, ${totals.byteVerdict} body proof`);
-        status='passed';break;
+        status='passed';
       } catch (error) {
         console.error(`bench: ${name}: failed at ${stage}; HTTP ${JSON.stringify({active: bodies.activeCount, pending: bodies.pending.size, reads: reads().map(r => ({from: r.from, to: r.to, canceled: r.canceled, complete: r.count?.complete}))})}`);
         cdp.at(`${name}/failure state`);
@@ -550,6 +554,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
         try{await close();console.error(`bench: ${name}: page closed`);}catch(error){cleanupErrors.push(error);}
         if(status!=='failed'&&cleanupErrors.length)throw cleanupErrors[0];
       }
+      if(status==='passed'){const report=reports.find(report=>report.name===name)!;if(!diagnostic)coverage?.record(historyScenario(name), [], report.finalComplete&&report.attempted>0?1:0);break;}
     }
   }
   return {reports,invalidated};

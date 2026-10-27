@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {runInNewContext} from 'node:vm';
-import {moneyView, selectMoney} from '../controls.js';
+import {frequencySource, normalizeUpdates, moneyView, selectMoney} from '../controls.js';
 import type {Cdp} from '../cdp.js';
 
 function moneyPage(broken?: 'blank' | 'scale' | 'slow-quota') {
@@ -78,4 +78,27 @@ test('fixed purpose verification rejects an empty numeric plot', async () => {
 
 test('waiting for a money view still rejects geometry outside the current scale', async () => {
   await assert.rejects(moneyView(moneyPage('scale').cdp, 'wallet', 'capped', 'zero'), /left its scale/);
+});
+
+
+test('the update leaf restores a ready live one-day page and its probe before financial measurement',async()=>{
+  let frame=0,loaded=()=>{},removed=false,cleaned=false,resets=0;
+  const prefs={range:'30d',horizon:'3d'},location={href:'http://localhost/?board=fixture&from=10&to=20'},commands:{method:string;params?:unknown}[]=[];
+  const context={URL,Date:{now:()=>frame*16},window:{__quotumPan:{cleanup:()=>{cleaned=true;}},__quotumBench:{reset:()=>{resets++;}}},
+    localStorage:{getItem:()=>JSON.stringify(prefs),setItem:(_key:string,value:string)=>Object.assign(prefs,JSON.parse(value))},location,
+    history:{replaceState:(_state:unknown,_title:string,url:URL)=>{location.href=String(url);}},
+    requestAnimationFrame:(run:()=>void)=>queueMicrotask(()=>{frame++;run();}),
+    document:{getElementById:()=>({remove:()=>{removed=true;}}),querySelector:(selector:string)=>selector.startsWith('[data-widget=')?{dataset:{drawReady:String(frame>=3)}}:null}};
+  const cdp={on:(_method:string,run:()=>void)=>{loaded=run;},off:()=>{},send:async(method:string,params?:unknown)=>{commands.push({method,params});if(method==='Page.reload')loaded();},evaluate:async(source:string)=>runInNewContext(source,context)} as unknown as Cdp;
+  await normalizeUpdates(cdp);
+  assert.equal(prefs.range,'24h');assert.equal(prefs.horizon,'3d');assert.equal(location.href,'http://localhost/?board=fixture');
+  assert.ok(removed&&cleaned);assert.equal(resets,1);assert.ok(frame>=3);
+  assert.deepEqual(commands.slice(0,4),[{method:'Emulation.setCPUThrottlingRate',params:{rate:1}},{method:'Emulation.clearDeviceMetricsOverride',params:undefined},{method:'Network.emulateNetworkConditions',params:{offline:false,latency:0,downloadThroughput:-1,uploadThroughput:-1}},{method:'Fetch.disable',params:undefined}]);
+  assert.equal(commands.at(-1)?.method,'Page.reload');
+});
+
+test('standalone frequency selects the actual first mounted card, independently of the quota measurement source',async()=>{
+  const source='claude:0123456789ab';
+  const cdp={evaluate:async(expression:string)=>runInNewContext(expression,{document:{querySelector:()=>({closest:()=>({getAttribute:()=>source})})}})} as unknown as Cdp;
+  assert.equal(await frequencySource(cdp),source);
 });

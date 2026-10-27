@@ -1,3 +1,4 @@
+import {historyScenario, type Coverage} from './coverage.js';
 import assert from 'node:assert/strict';
 import {cellStart, compose, expandHistory, targetOf, tileOf, type Chunk, type HistoryAnswer, type HistoryReply} from '../server/domain/history';
 import {followPan, HistoryStore} from '../ui/lib/history';
@@ -18,7 +19,7 @@ const gridsOf = (store: HistoryStore) => (store as unknown as {grids: Map<number
 
 /** Controlled traffic uses the production gesture, loader and actual HTTP parser;
  * native presentation is measured separately on the unchanged browser route. */
-export async function historyTraffic(upstream: string, cookie: string, board: string, windows: string[], browser?: Browser, evidence?: Pick<Evidence, 'save'>, scrollControl=false, firstNative=false) {
+export async function historyTraffic(upstream: string, cookie: string, board: string, windows: string[], browser?: Browser, evidence?: Pick<Evidence, 'save'>, scrollControl=false, firstNative=false, coverage?:Coverage) {
   if(firstNative&&(!scrollControl||!browser||!evidence))throw new Error('First native prefix requires the pinned diagnostic caller');
   const proxy = await historyProxy(upstream, browser?.owner), reports = [], invalidated = [], problems: string[] = [];
   try {
@@ -127,7 +128,6 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
           reports.push(report); problems.push(...trafficProblems(report)); unsubscribe();
           console.error(`bench: ${name}: ${report.attempts} GETs, ${report.warmAttempts} warm GETs, decoded ratio ${report.decoded === null ? 'unknown' : report.decoded / referenceDecoded}, encoded ratio ${report.encodedUpper === null ? 'unknown' : report.encodedUpper / referenceEncoded}`);
           status = trafficProblems(report).length ? 'over-budget' : 'passed';
-          break;
         } catch (error) {
           const cut=historyCutInvalidation(error,name,take);
           status = 'invalidated';
@@ -138,12 +138,17 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
             transfers: proxy.transfers.filter(transfer=>transfer.phase.startsWith(name+'/'))});
           store.close(); await Promise.allSettled([...pending]);
         }
+        if(status==='passed'||status==='over-budget'){
+          const report=reports.find(report=>report.name===name)!;
+          coverage?.record(historyScenario(name), trafficProblems(report), report.series>=12?1:0);
+          break;
+        }
       }
     }
-    const cancellations = await cancellationTraffic(proxy, cookie, board, windows);
+    const cancellations = await cancellationTraffic(proxy, cookie, board, windows, coverage, evidence);
     if(scrollControl&&(problems.length||invalidated.length||cancellations.invalidated.length))throw new Error('History scroll control prefix incomplete or over budget');
-    const native=browser ? await browserHistoryTraffic(browser,proxy,cookie,board,evidence,firstNative?{pair:1,cohort:'history'}:undefined) : null;
-    const nativeCancellations = browser&&!firstNative ? await browserCancellationTraffic(browser, proxy, cookie, false, false, evidence) : null;
+    const native=browser ? await browserHistoryTraffic(browser,proxy,cookie,board,evidence,firstNative?{pair:1,cohort:'history'}:undefined,undefined,coverage) : null;
+    const nativeCancellations = browser&&!firstNative ? await browserCancellationTraffic(browser, proxy, cookie, false, false, evidence, coverage) : null;
     if (native) problems.push(...native.problems);
     return {codec: HISTORY_CODEC, reports, invalidated, cancellations, native, nativeCancellations, problems};
   } finally {await proxy.close();}

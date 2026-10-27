@@ -12,6 +12,10 @@ on:
   pull_request:
   workflow_call:
     inputs:
+      reusable_call:
+        description: Keep called workflows separate from direct pull-request runs
+        type: boolean
+        default: true
       ui-runs:
         description: How many times to run the Windows UI smoke on each package
         type: number
@@ -27,8 +31,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: desktop-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'pull_request' && !inputs.reusable_call && format('quotum-desktop-pr-{0}', github.event.pull_request.number) || format('quotum-desktop-run-{0}-{1}', github.run_id, github.run_attempt) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !inputs.reusable_call }}
 
 jobs:
   app:

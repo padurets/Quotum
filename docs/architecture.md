@@ -2421,13 +2421,28 @@ an empty source selection and skipped native evidence. Its metadata never replac
 the native basis, and it cannot complete a pending native summary. Both projections
 keep the same transport slots and memory budget. A hidden activity widget defers its
 refill until shown; activity failures do not discard the native frame.
+Confirmed work-only news also preserves native cell coverage. When the same read
+needs native evidence, quota `cells: 'activity'` retains its full source selection
+and sends a separate `cellsCursor` captured with the last completely published
+native drawing. Its exact evidence cursor remains independently owned.
+An independently updated tape cannot advance that drawing proof. The server
+checks the original measurement frontier and returns full cells if it has changed,
+including when its notification has not reached the browser. The response marks
+an actual activity-only drawing; otherwise the reader merges full native cells.
+Full native quota replies authenticate their actual contiguous cell bounds in the
+existing tape cursor. When evidence is skipped, a separate native-only `cellsCursor`
+proves the cold drawing without claiming receipt of the native tape. A drawing-only
+proof cannot confirm a tape delta, and an activity-only reply cannot advance drawing
+coverage. Missing proof or insufficient coverage uses the ordinary full path. Dispatch and publication
+recheck the native context, and selected-work commits preserve newer native
+invalidation boundaries within the same tile.
 Their error state and retry belong to activity alone: new native measurements still
 read and commit their own cells, including while activity waits for memory or its
 retry deadline. Retry also repeats failed selected period evidence. Native failures
 remain visible to their own chart while its last complete frame is retained.
 Financial consumers observe resource readiness and errors alongside native accounting
 authority. A successful retry clears the error even when financial values are
-unchanged; ordinary work-only publications keep financial snapshots stable.
+unchanged; work-only publications with proven native coverage keep financial snapshots stable.
 Confirmed work-only history news also preserves historical card measurements and
 their cache. Supplier measurements remain separate when notifications coalesce;
 missing confirmation retains conservative invalidation for older replies.

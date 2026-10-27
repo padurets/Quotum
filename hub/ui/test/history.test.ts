@@ -52,13 +52,13 @@ function harness(budget?: number, preparations?: Preparations, scope?: 'quota'|'
   let elapsed = 0;
   let dropped = 0;
   const timers = new Map<unknown, {at: number; run: () => void}>();
-  const reads: {board: string; cell: number; from: number; to: number; signal?: AbortSignal; meters?:MeterSelection; metadata?: HistoryBasis; settled: boolean; answer(patch?: Partial<HistoryAnswer>): Promise<void>; fail(error: unknown): Promise<void>}[] = [];
+  const reads: {board: string; cell: number; from: number; to: number; signal?: AbortSignal; meters?:MeterSelection; metadata?: HistoryBasis;activityOnly?:boolean; settled: boolean; answer(patch?: Partial<HistoryAnswer>): Promise<void>; fail(error: unknown): Promise<void>}[] = [];
   const store = new HistoryStore({
     workInPresentation,
     now: () => now,
     preparations,
     elapsedNow: () => elapsed,
-    read: (board, cell, from, to, signal, meters, metadata) => new Promise((resolve, reject) => reads.push({board, cell, from, to, signal, meters, metadata, settled: false,
+    read: (board, cell, from, to, signal, meters, metadata,_owner,activityOnly) => new Promise((resolve, reject) => reads.push({board, cell, from, to, signal, meters, metadata,activityOnly, settled: false,
       async answer(patch = {}) {
         this.settled = true;
         const end = Math.min(to, cellStart((patch.now ?? now) + CLOCK_TOLERANCE_MS, cell) + cell);
@@ -82,7 +82,7 @@ function harness(budget?: number, preparations?: Preparations, scope?: 'quota'|'
     }
     elapsed += end - now; now = end;
   };
-  const start = async () => {store.open('b'); store.hello('run'); store.snapshot(['s'], ['s w']); await flush();};
+  const start = async (workKey?:string) => {store.open('b'); store.hello('run');if(workKey!==undefined)store.setWorkFilter(workKey); store.snapshot(['s'], ['s w']); await flush();};
   return {store, reads, advance, start, now: () => now, dropped: () => dropped, timers, correctClock: (ms: number) => {now += ms;}};
 }
 
@@ -2038,3 +2038,41 @@ for (const scope of ['quota', 'budget'] as const) for (const slices of [1, 8, 20
     assert.equal(evicted.posts, normal.posts, 'unrelated cache eviction cannot restart the final projection');
   });
 }
+
+
+for(const change of ['native','windows','outside same tile'] as const)test(`activity preparation cannot revive native coverage after ${change} changes`,async()=>{
+  const jobs:(()=>void)[]=[],pool=new HistoryPool();let ticks=0;
+  const preparer=new Preparations({now:()=>ticks++,post:run=>jobs.push(run)},-1),h=harness(undefined,preparer,'quota',pool);
+  const finish=async()=>{for(let i=0;jobs.length;i++){assert.ok(i<2000);jobs.shift()!();await flush();}};
+  try{
+    h.store.choose('1h',{from:NOW-25*M,to:NOW-5*M});await h.start('selected');
+    const initial=pending(h)[0];assert.ok(initial);
+    const chunks:Chunk[]=[];
+    for(let from=initial.from;from<initial.to;){const to=Math.min(initial.to,tileEnd(tileOf(from,initial.cell),initial.cell));chunks.push({...empty(from,to),series:[{source:'s',window:'w',hold:M,open:80,cells:Array.from({length:(to-from)/initial.cell},(_,i)=>[i,80,0,M])}]});from=to;}
+    await initial.answer({chunks,cellsCursor:'committed-cell-proof'});await finish();
+    const range={from:NOW-15*M,to:NOW-10*M};h.store.choose('1h',range);await flush();await finish();await h.advance(300);
+    h.store.news(NOW-12*M,undefined,NOW-12*M,Infinity);
+    // Submit one real bounded visible demand before the scheduled pump coalesces its suffix.
+    (h.store as unknown as {read(target:ReturnType<typeof targetOf>,from:number,to:number,role:'visible'):void}).read(targetOf(H,h.now(),`${range.from}-${range.to}`,range),NOW-12*M,range.to,'visible');await flush();
+    const activity=pending(h)[0];assert.ok(activity);assert.equal(activity.activityOnly,true);
+    await activity.answer();assert.ok(jobs.length);jobs.shift()!();await flush();assert.ok(jobs.length,'the activity COW preparation remains suspended');
+    const grids=(h.store as unknown as {grids:Map<number,Map<number,HistoryTile>>}).grids;
+    const base=grids.get(activity.cell)!.get(tileOf(activity.from,activity.cell))!;
+    const nativeBefore=base.nativeValidTo;
+    if(change==='windows')h.store.setWindows(['s w','s added']);
+    else{
+      const since=change==='native'?activity.from:activity.to+activity.cell;
+      // Flush a native cutoff after this flight staged its tile, including a suffix outside its query.
+      (h.store as unknown as {invalidateSince(since:number,nativeSince:number):void}).invalidateSince(since,since);
+    }
+    await finish();
+    if(change==='outside same tile'){
+      const committed=grids.get(activity.cell)!.get(tileOf(activity.from,activity.cell))!;
+      assert.ok(activity.to+activity.cell<nativeBefore);
+      assert.equal(committed.nativeValidTo,activity.to+activity.cell,'activity publication preserves the newer invalid suffix');
+    }else{
+      assert.equal(activity.signal?.aborted,true,'native/context loss cancels the old activity preparation');
+      assert.ok(pending(h).length,'the current target schedules a replacement');
+    }
+  }finally{h.store.close();preparer.dispose();assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);}
+});

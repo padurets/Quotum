@@ -47,6 +47,7 @@ const STOP_MS = 7_000;
 const SETTLE_MS = 1_000;
 /** How often machines tell their lists of running agents, as agents do. */
 const TICK = 15 * SECOND;
+export type ReportReceipt = Readonly<{at:number;ordinal:number;manual:boolean}>;
 
 export class Stop extends Error {}
 
@@ -131,6 +132,9 @@ export class Demo {
   private timer: NodeJS.Timeout | undefined;
   private tick: ((manual?: boolean) => Promise<void>) | undefined;
   private reporting = Promise.resolve();
+  private reportOrdinal = 0;
+  private reportingTick: Omit<ReportReceipt,'at'> | undefined;
+  private readonly reportReceipts = new Map<string,ReportReceipt>();
   stopping = false;
   private benchWork = false;
   private readonly reports = new Set<(machine: string, at: number) => void>();
@@ -147,6 +151,13 @@ export class Demo {
       const heard = (id: string, at: number) => {if (id === machine) {clearTimeout(timer); this.reports.delete(heard); resolve(at);}};
       this.reports.add(heard);
     });
+  }
+
+  /** A successful machine report belongs to its actual serialized writer invocation. */
+  reportReceipt(machine:string,at:number):ReportReceipt {
+    const receipt=this.reportReceipts.get(machine);
+    if(!receipt||receipt.at!==at)throw new Error('no matching Demo report receipt');
+    return {...receipt};
   }
 
   /** Bench cases advance the same list writer without waiting for its next timer. */
@@ -248,8 +259,13 @@ export class Demo {
           idle.push({sessionId: 'f'.repeat(32), provider: card.provider, ...accountOf(card), origin: 'terminal', project: 'Benchmark', folder: undefined, startedAt: new Date(this.start).toISOString(), working: this.benchWork, lastWorkedAt: new Date(this.start).toISOString()});
         }
         return idle;
-      }, (machine, at) => {for (const heard of this.reports) heard(machine.id, at);});
+      }, (machine, at) => {
+        if(!this.reportingTick)throw new Error('report outside the Demo writer');
+        this.reportReceipts.set(machine.id,{at,...this.reportingTick});
+        for (const heard of this.reports) heard(machine.id, at);
+      });
       const tick = (manual = false) => this.reporting = this.reporting.then(async () => {
+        this.reportingTick={ordinal:++this.reportOrdinal,manual};
         const t = Date.now() - this.start;
         try {
           if (still) await live.report(0, Date.now());
@@ -261,6 +277,8 @@ export class Demo {
         } catch (error) {
           await this.settled();
           if (!this.stopping) console.error(`demo: ${(error as Error).message}`);
+        } finally {
+          this.reportingTick=undefined;
         }
         if (!this.stopping) this.timer = setTimeout(() => void tick(), manual ? TICK : TICK - ((Date.now() - this.start) % TICK));
       });

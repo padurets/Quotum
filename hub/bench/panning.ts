@@ -1,3 +1,4 @@
+import type {Coverage} from './coverage.js';
 import type {Cdp} from './cdp.js';
 import type {IdleCpuDiagnostic} from './idleCpuDiagnostic.js';
 import {panningProblems, type PanReading,type NativePanTarget} from './panningBudget.js';
@@ -7,7 +8,7 @@ import {panningReload,type ReloadDiagnostic} from './panningReload.js';
 import {panningSettlement} from './panningFailure.js';
 
 /** Native input against the real charts; the temporary layout brings all five into view. */
-export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp, 'at'|'off'|'snapshot'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), options?: {save(name: string, value: unknown): void; saveTrace?(name:string,value:unknown):void; selection?: 'quota24'}|ReloadDiagnostic, diagnoseReload?:ReloadDiagnostic, nativeTrace?:()=>IdleCpuDiagnostic, nativeTarget:NativePanTarget='activity/24h') {
+export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp, 'at'|'off'|'snapshot'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), options?: {save(name: string, value: unknown): void; saveTrace?(name:string,value:unknown):void; selection?: 'quota24'}|ReloadDiagnostic, diagnoseReload?:ReloadDiagnostic, nativeTrace?:()=>IdleCpuDiagnostic, nativeTarget:NativePanTarget='activity/24h', coverage?:Coverage) {
   const evidence=typeof options==='function'?undefined:options;
   diagnoseReload??=typeof options==='function'?options:undefined;
   cdp.at?.('panning/setup');
@@ -92,10 +93,10 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       evidence?.save('panning-stage', {initiator, period, stage: 'starting', viewport: [1280,2400], throttle: 4, geometry});
       const edgeSeries:PanReading['edgeSeries']=[];
       const traced=period===nativeTarget.split('/')[1]?familyTrace:undefined;
-      const detailed=!!traced&&nativeTarget==='session/30d';
+      const detailed=!!traced&&(nativeTarget==='session/30d'||nativeTarget==='quota/24h');
       const samplerSource=`(() => {
         const initiator=${JSON.stringify(initiator)},period=${JSON.stringify(period)};
-        const transactions=${panTransactionsScript()};let nextRequest=0;
+        const transactions=${panTransactionsScript(32,detailed&&initiator==='quota'&&period==='24h')};let nextRequest=0;
         const charts=['quota-history','activity','budget-history','subscription-funds','quota-session-history'].map(id=>document.querySelector('[data-widget="'+id+'"] .chart>svg')),driver=({quota:0,activity:1,budget:2,funds:3,session:4})[initiator],root=charts[driver],views=charts.map(svg=>svg.viewBox.baseVal.width),scales=charts.map((svg,i)=>svg.getBoundingClientRect().width/views[i]),size=svg=>svg.getAttribute('viewBox')+':'+svg.style.height,sizes=charts.map(size);
         // PlotLayer retains these owners while React replaces their path children.
         // Repeated selectors inside every production RAF would load the measurement itself.
@@ -106,7 +107,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         const connected=()=>layers.every((layer,i)=>layer.isConnected!==false&&slides[i].isConnected!==false)&&clips.every(clip=>clip.isConnected!==false);
         const probe=window.__quotumPan={initiator,period,frames:[],latency:[],responses:[],inputs:0,updated:0,chartUpdates:Array(5).fill(0),synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,mutationSamples:[],undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[],wheelGapMs:0,lastWheel:null};
         ${detailed?`// One bounded journal extends the existing probe only in the selected diagnostic cell.
-        const detail={limit:4096,count:3,omitted:0,startedAt:performance.now(),stoppedAt:0,preparationAttached:false,preparationRestored:false,preparationJobsAtAttach:null,preparationPendingAtAttach:null,frames:[],inputs:[],callbacks:[],preparations:[],settlements:['wheel','drag','return'].map(segment=>({segment,begin:null,ready:null,end:null,densityBegin:null,densityEnd:null,polls:0,blockers:{loading:0,panEnd:0,drawReady:0,isPanning:0,forecastRange:0,budgetTableRange:0,agentsRange:0}}))};
+        const detail={${initiator==='quota'&&period==='24h'?'rawTicks:0,':''}limit:4096,count:3,omitted:0,startedAt:performance.now(),stoppedAt:0,preparationAttached:false,preparationRestored:false,preparationJobsAtAttach:null,preparationPendingAtAttach:null,frames:[],inputs:[],callbacks:[],preparations:[],settlements:['wheel','drag','return'].map(segment=>({segment,begin:null,ready:null,end:null,densityBegin:null,densityEnd:null,polls:0,blockers:{loading:0,panEnd:0,drawReady:0,isPanning:0,forecastRange:0,budgetTableRange:0,agentsRange:0}}))};
         let sampleSerial=0,activeSample=0,rafSerial=0,activeRaf=0,diagnosticStopped=false;
         const keep=(kind,row)=>{if(detail.count>=detail.limit){detail.omitted++;return false;}detail.count++;detail[kind].push(row);return true;};
         // Three fixed rows share the journal cap; polling never allocates another row.
@@ -142,7 +143,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         };
         let gesture=null;
         const capturedInputs=new WeakMap();
-        const capture=e=>{const delivered=performance.now(),at=e.timeStamp>1e12?e.timeStamp-performance.timeOrigin:e.timeStamp;capturedInputs.set(e,{at:Math.min(delivered,at),delivered});if(probe.running&&probe.feeding&&e.type==='wheel')transactions.input(at,delivered,probe.segment);};
+        const capture=e=>{const delivered=performance.now(),at=e.timeStamp>1e12?e.timeStamp-performance.timeOrigin:e.timeStamp;${detailed&&initiator==='quota'&&period==='24h'?`const captured={at:Math.min(delivered,at),delivered,rawTicks:detail.rawTicks,captureOrdinal:null};capturedInputs.set(e,captured);if(probe.running&&probe.feeding&&e.type==='wheel')captured.captureOrdinal=transactions.input(at,delivered,probe.segment,detail.rawTicks);`:`capturedInputs.set(e,{at:Math.min(delivered,at),delivered});if(probe.running&&probe.feeding&&e.type==='wheel')transactions.input(at,delivered,probe.segment);`}};
         const owners=()=>layers;
         // Inline frozen matrices and the committed domain are enough during input;
         // no computed style or SVG layout read belongs in this moving-frame probe.
@@ -206,7 +207,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         const schedule=callback=>originalRAF.call(window,callback);
         let previous=charts.map(()=>'0:1'),phase='idle',lastFrame=null,paintedToken=null;
         let sampleEntry=0,callbacksSinceMovingFrame=0,maxCallbackGapMs=0,samplerMs=0;
-        const consume=(count,now,stamp,reachedGesture)=>{const reached=probe.pending.slice(0,count).filter(input=>input.gesture===reachedGesture);probe.pending=probe.pending.filter((input,i)=>i>=count||input.gesture!==reachedGesture);for(const input of reached){const ms=now-input.at;probe.latency.push(ms);probe.responses.push({ms,queued:input.delivered-input.at,processed:now-input.delivered,segment:input.segment,requests:probe.flights.size${evidence?.selection === 'quota24' ? ',at:input.at,delivered:input.delivered,reached:now,id:input.id' : ''}});${detailed?`const response=probe.responses.at(-1);if(keep('inputs',response))Object.assign(response,{id:input.id,sampleId:activeSample,rafId:activeRaf,token:Number.isFinite(Number(input.gesture.token))?Number(input.gesture.token):null,at:input.at,delivered:input.delivered,reached:now});`:''}}};
+        const consume=(count,now,stamp,reachedGesture)=>{const reached=probe.pending.slice(0,count).filter(input=>input.gesture===reachedGesture);probe.pending=probe.pending.filter((input,i)=>i>=count||input.gesture!==reachedGesture);for(const input of reached){const ms=now-input.at;probe.latency.push(ms);probe.responses.push({ms,queued:input.delivered-input.at,processed:now-input.delivered,segment:input.segment,requests:probe.flights.size${evidence?.selection === 'quota24' ? ',at:input.at,delivered:input.delivered,reached:now,id:input.id' : ''}});${detailed?`const response=probe.responses.at(-1);if(keep('inputs',response))Object.assign(response,{id:input.id,sampleId:activeSample,rafId:activeRaf,token:Number.isFinite(Number(input.gesture.token))?Number(input.gesture.token):null,at:input.at,delivered:input.delivered,reached:now${initiator==='quota'&&period==='24h'?',rawTicks:input.rawTicks,captureOrdinal:input.captureOrdinal':''}});`:''}}};
         const sample=(stamp,afterCallback=false)=>{
           if(!probe.running)return;
           const now=performance.now();${detailed?'activeSample=++sampleSerial;':''}
@@ -275,6 +276,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         }})${detailed?')(++rafSerial)':''};
         const tick=stamp=>{
           if(!probe.running)return;
+          ${detailed&&initiator==='quota'&&period==='24h'?'detail.rawTicks++;':''}
           // A clamped delta requests the already bounded pose and may schedule no
           // production RAF. Observe it without adding a stationary movement frame.
           if(!root.dataset.panEnd||probe.pending.some(input=>input.clamped))sample(stamp);
@@ -421,6 +423,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       await cdp.evaluate(`history.back()`);
       await settled();
       progress(`${initiator}/${period}/complete`);
+      coverage?.record(`panning/${initiator}/${period}`, panningProblems(report), report.frames.length);
     }
       await cdp.evaluate(`document.getElementById('quotum-pan-layout')?.remove()`);
     }

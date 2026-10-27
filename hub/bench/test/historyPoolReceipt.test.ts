@@ -435,7 +435,7 @@ function publicationFixture(plane:'all'|'native'|'activity') {
   const store=reader as any;store.run='run';store.board='synthetic';store.epoch=7;store.active=false;store.activityActive=plane!=='native';
   const base=new HistoryTile(0,60);base.readTo=base.validTo=60;base.nativeTo=base.nativeValidTo=plane==='activity'?120:60;base.writeSeq=base.nativeSeq=1;
   store.grids.set(60,new Map([[tileOf(0,60),base]]));
-  const flight={submitted:true,started:true,seq:2,epoch:7,target:'fixed',newsSeq:0,cell:60,from:0,to:120,touched:Infinity,startedAt:0,controller:new AbortController(),role:'visible',activityOnly:plane==='activity'};
+  const flight={submitted:true,started:true,seq:2,epoch:7,target:'fixed',newsSeq:0,cell:60,from:0,to:120,touched:Infinity,nativeTouched:Infinity,nativeContext:store.nativeContext(),nativeVersion:store.nativeVersion,startedAt:0,controller:new AbortController(),role:'visible',activityOnly:plane==='activity'};
   const chunk:Chunk={from:0,to:120,series:Array.from({length:24},(_,i)=>({source:'synthetic-'+i,window:'w',hold:60,open:80,cells:[[0,80,0,60],[1,79,0,60]]})),activity:{sessions:[],devices:{},cells:[]},resets:[],grants:[]};
   const answer:HistoryAnswer={run:'run',now:1000,historyStart:0,known:{work:0,sources:Object.fromEntries(chunk.series.map(s=>[s.source,0]))},chunks:[chunk]};
   store.flights.add(flight);store.merge(flight,answer);

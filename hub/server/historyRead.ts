@@ -3,7 +3,7 @@ import {config} from './config.js';
 import type {Hub} from './api.js';
 import {HistoryLimit, type HistoryTiles} from './history.js';
 import {selectionOf, type MeterGroup, type MeterSelection} from './domain/meterHistory.js';
-import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, READ_CELLS, cellStart, tileOf, tileStart, type Chunk} from './domain/history.js';
+import {MAX_READ_TILES, READ_CELLS, historyReadTo, tileOf, tileStart, type Chunk} from './domain/history.js';
 import type {Events} from './events.js';
 import {displayHistory} from './currencies/history.js';
 import type {WorkRead,WorkViews} from './store/store.js';
@@ -21,7 +21,7 @@ export class ReadError extends Error {
 export function fail(status:number, code:string, limit?:{stage:NonNullable<ReadError['limitStage']>;cause:unknown}):never {throw new ReadError(status,code,limit?.stage,limit?.cause);}
 
 /** Both transports enforce the same tile, authority and currency contract. */
-export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:string, user:string, query:HistoryQuery, input?:WorkRead|WorkViews, cells=true, capturedAt?:number, workCells=true):string {
+export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:string, user:string, query:HistoryQuery, input?:WorkRead|WorkViews, cells:boolean|'activity'=true, capturedAt?:number, workCells=true):string {
   const {store}=hub;
   let work=input&&typeof input==='object'?input.sourceWide:input;
   const selected=input&&typeof input==='object'?input.selected:undefined;
@@ -37,7 +37,7 @@ export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:
     const askedTo = number(query.to);
     if (query.meta !== undefined && !/^(?:[A-Za-z0-9_-]{43})?$/.test(query.meta)) fail(400, 'invalid_request');
     if (!READ_CELLS.includes(cell) || !Number.isFinite(from) || !Number.isFinite(askedTo) || from % cell || (askedTo <= now && askedTo % cell)) fail(400, 'invalid_request');
-    const to = Math.min(Math.ceil(askedTo / cell) * cell, cellStart(now + CLOCK_TOLERANCE_MS, cell) + cell);
+    const to = historyReadTo(askedTo,cell,now);
     const oldest = tileStart(tileOf(now - config.retention.sampleDays * 86_400_000, cell), cell);
     if (to % cell || tileOf(to - 1, cell) - tileOf(from, cell) + 1 > MAX_READ_TILES) fail(400, 'invalid_request');
     let shown = store.authorizedSources(board);
@@ -71,13 +71,15 @@ export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:
     const access=scope==='budget'&&!sourceWork?undefined:work!.ensureAccess!();
     let chunks: string[];
     try {
-      chunks=cells?history.read(board, cell, from, to, now, shown, meters, scope, work,sourceWork&&workCells):[];
-      if(cells&&selected&&scope!=='budget'){
+      chunks=cells===true?history.read(board, cell, from, to, now, shown, meters, scope, work,sourceWork&&workCells):[];
+      if(cells&&(selected||cells==='activity')&&scope!=='budget'){
         // Resource tiles keep their source-wide identity. Only selected activity is
         // rebuilt over the borrowed raw ledger; a filter never rereads native samples.
-        const rows=selected(from,Math.min(to,now)),devices=Object.fromEntries(rows.map(row=>[row.device,row.rawContext?.deviceName??row.device]));
-        selected.reserve?.(1024+rows.length*256+chunks.reduce((sum,json)=>sum+Buffer.byteLength(json)*3,0));
-        const projected=cellsOf([],rows,devices,cell,from,to,store.historyKnown(shown,access?.owner??null,access),selected.reserve);
+        const read=selected??work!;
+        const rows=read(from,Math.min(to,now)),devices=Object.fromEntries(rows.map(row=>[row.device,row.rawContext?.deviceName??row.device]));
+        read.reserve?.(1024+rows.length*256+chunks.reduce((sum,json)=>sum+Buffer.byteLength(json)*3,0));
+        const projected=cellsOf([],rows,devices,cell,from,to,store.historyKnown(shown,access?.owner??null,access),read.reserve);
+        if(cells==='activity')chunks=projected.map(chunk=>compactJSON(chunk));
         chunks=chunks.map((json,index)=>{
           const activity=projected[index].activity;
           return compactJSON({...JSON.parse(json),activity:{...activity,sessions:activity.sessions.map(([id,source,project,device,status])=>[history.fragmentRef(board,id,source,status),source,project,device,status,history.ref(board,id)])}});

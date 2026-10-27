@@ -22,7 +22,7 @@ import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
 import {fixtureTiming, idlePhaseProblems, idlePhaseScript, idleWindow, overviewCards, quietAfter, stillProblems, stillSnapshot, warmUntil, type IdlePhase} from './still.js';
 import {hear, type Heard} from './stream.js';
-import {frequencyKeys, moneyView, selectMoney} from './controls.js';
+import {frequencyKeys, frequencySource, normalizeUpdates, moneyView, selectMoney} from './controls.js';
 import {panning} from './panning.js';
 import {panningProblems,type NativePanTarget} from './panningBudget.js';
 import {seedPanningBudgets,panningSet} from './fixture.js';
@@ -40,12 +40,13 @@ import {observeReversal} from './reversalDiagnostic.js';
 import {reloadHubProbe} from './panningReload.js';
 import {IdleCpuDiagnostic,sourceIdentity} from './idleCpuDiagnostic.js';
 import {idleRetentionScript,idleRetentionProblems,type IdleRetention} from './idleRetention.js';
-import {ObservedWork} from './observed.js';
 import {fixedActivity} from './fixedActivity.js';
 import {measurementDetails} from './measurementDetailsFixture.js';
 import {captionControl} from './captionControl.js';
 import {captionGeometry} from './captionGeometry.js';
 import {deadline} from './deadline.js';
+import {Conditioning, quotaProducer, ordinaryProducer, observedProducer, privateProducer} from './conditioning.js';
+import {BENCH_SCOPES, Coverage, type BenchScope} from './coverage.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -60,7 +61,7 @@ import {deadline} from './deadline.js';
  * idle page for a shorter time.
  */
 
-const USAGE = 'Usage: npm run bench -- [--ci] [--scope all|history|dashboard] [--cdp <http://host:port>]';
+const USAGE = 'Usage: npm run bench -- [--ci] [--scope all|history|dashboard|updates|panning] [--cdp <http://host:port>]';
 /** How long the idle page is watched, in seconds. */
 const IDLE = {full: 300, ci: 120};
 /** How long the board may take to show its cards. */
@@ -73,7 +74,7 @@ const MEASURE_EVERY = 3_000;
 /** A measurement that has not shown on its card by then does not show. */
 const SHOWN_WITHIN = 5_000;
 
-type Scope = 'all' | 'history' | 'dashboard';
+type Scope = BenchScope;
 export function parseArgs(argv: string[]): {ci: boolean; cdp: string | null; scope: Scope} {
   let ci = false;
   let cdp: string | null = null;
@@ -83,7 +84,7 @@ export function parseArgs(argv: string[]): {ci: boolean; cdp: string | null; sco
     if (arg === '--ci') ci = true;
     else if (arg === '--scope') {
       const value = argv[++i];
-      if (scoped || !value || !['all', 'history', 'dashboard'].includes(value)) throw new Stop(`--scope takes exactly one of all, history or dashboard.\n${USAGE}`);
+      if (scoped || !value || !BENCH_SCOPES.includes(value as Scope)) throw new Stop(`--scope takes exactly one of all, history, dashboard, updates or panning.\n${USAGE}`);
       scope = value as Scope; scoped = true;
     } else if (arg === '--cdp') {
       cdp = argv[++i] ?? '';
@@ -120,10 +121,17 @@ async function main() {
   const captionMode = process.env.QUOTUM_BENCH_CAPTION_CONTROL;
   const nativeFrameMode=idleCpuMode==='native-trace'||idleCpuMode==='native-profile';
   const nativeFrameTarget=process.env.QUOTUM_BENCH_NATIVE_TARGET||'activity/24h';
+  const quota24Trace=idleCpuMode==='native-trace'&&nativeFrameTarget==='quota/24h';
   const poolDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL;
   const scrollControl=process.env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL;
   const historySuffix=process.env.QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX;
   const firstNative=process.env.QUOTUM_BENCH_HISTORY_FIRST_NATIVE;
+  const diagnostic = Boolean(idleCpuMode || captionMode || poolDiagnostic || scrollControl || firstNative || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || process.env.QUOTUM_BENCH_REVERSAL_PROBE === '1');
+  const coverage = new Coverage(options.scope, diagnostic, (value, classification) => {if (classification) evidence.fail(classification);evidence.saveCoverage(value);});
+  evidence.plan(options.scope);
+  evidence.saveCoverage(coverage.summary());
+  evidence.end();
+  evidence.begin('preparation');
   evidence.save('scope', {mode: options.scope});
   let idleCpu:IdleCpuDiagnostic|undefined;
   const diagnosticDirectory=path.join('/tmp/quotum-idle-cpu-diagnostic',`${process.env.GITHUB_RUN_ID??'local'}-${process.env.GITHUB_RUN_ATTEMPT??'1'}-${process.pid}`);
@@ -134,31 +142,36 @@ async function main() {
     writeFileSync(path.join(diagnosticDirectory,name+'.json'),Buffer.byteLength(data)<=limit?data:JSON.stringify({mode:'diagnostic',status:'insufficient-evidence',reason:'artifact size',bytes:Buffer.byteLength(data),limit}));
   };
   const bind = process.env.QUOTUM_BIND || '127.0.0.1';
-  let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
+  let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>=null;
   try {
+    if(nativeFrameTarget==='quota/24h'&&(!quota24Trace||!options.ci||options.scope!=='panning'||options.cdp||captionMode||poolDiagnostic||scrollControl||historySuffix||firstNative||process.env.QUOTUM_C3_CHROME||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE||process.env.QUOTUM_BENCH_REVERSAL_PROBE||!process.env.QUOTUM_BENCH_DIAGNOSTICS_DIR))throw new Stop('Unknown or conflicting quota24 trace control');
+    if((options.scope==='updates'||options.scope==='panning')&&!quota24Trace&&[idleCpuMode,captionMode,poolDiagnostic,scrollControl,historySuffix,firstNative,process.env.QUOTUM_C3_CHROME,process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE==='1',process.env.QUOTUM_BENCH_REVERSAL_PROBE==='1',process.env.QUOTUM_BENCH_NATIVE_TARGET].some(Boolean))throw new Stop('Leaf benchmark scopes cannot be combined with diagnostics');
     if(firstNative&&(firstNative!=='1'||!options.ci||options.scope!=='history'||options.cdp||scrollControl||historySuffix||idleCpuMode||captionMode||poolDiagnostic||process.env.QUOTUM_C3_CHROME||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE||process.env.QUOTUM_BENCH_REVERSAL_PROBE||!process.env.QUOTUM_BENCH_DIAGNOSTICS_DIR))throw new Stop('Unknown or conflicting first native prefix');
     if(historySuffix&&(historySuffix!=='1'||scrollControl!=='1'||process.env.QUOTUM_C3_CHROME||!process.env.QUOTUM_BENCH_DIAGNOSTICS_DIR))throw new Stop('Unknown or conflicting history suffix');
     const historyPoolControl=poolDiagnostic==='1'&&options.ci&&options.scope==='history'&&!options.cdp&&!idleCpuMode&&!captionMode&&!scrollControl&&!process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE&&!process.env.QUOTUM_BENCH_REVERSAL_PROBE;
     if(scrollControl){
       if(scrollControl!=='1'||!options.ci||options.scope!=='history'||options.cdp||idleCpuMode||captionMode||poolDiagnostic||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE||process.env.QUOTUM_BENCH_REVERSAL_PROBE)throw new Stop('Unknown or conflicting history scroll control');
     }
-    if(scrollControl||historyPoolControl||firstNative){
+    if(scrollControl||historyPoolControl||firstNative||quota24Trace){
       const source=sourceIdentity(),client=clientIdentity(),expected=process.env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256;
-      if(!/^[a-f0-9]{40}$/.test(source.sourceHead??'')||source.checkoutSha!==source.sourceHead||!/^[a-f0-9]{64}$/.test(expected??'')||client.status!=='available'||client.sha256!==expected||execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim())throw new Stop('History control source or client mismatch');
-      evidence.save(historyPoolControl?'history-pool-source':'history-scroll-source',{mode:'diagnostic',sha:source.sourceHead,checkoutHash:source.checkoutSha,eventHash:source.eventSha,clientHash:client.sha256,expectedClientHash:expected});
+      if(!/^[a-f0-9]{40}$/.test(source.sourceHead??'')||source.checkoutSha!==source.sourceHead||!/^[a-f0-9]{64}$/.test(expected??'')||client.status!=='available'||client.sha256!==expected||execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim())throw new Stop(quota24Trace?'Quota24 trace source or client mismatch':'History control source or client mismatch');
+      evidence.save(quota24Trace?'native-frame-control-source':historyPoolControl?'history-pool-source':'history-scroll-source',{mode:'diagnostic',sha:source.sourceHead,checkoutHash:source.checkoutSha,eventHash:source.eventSha,clientHash:client.sha256,expectedClientHash:expected});
     }
     if (['PANNING', 'IDLE', 'IDLE_TIMING', 'STARTUP_WAITS'].some(mode => process.env['QUOTUM_BENCH_DIAGNOSE_' + mode])) throw new Stop('Removed benchmark diagnostic mode');
     if (captionMode && (captionMode !== '1' || !options.ci || options.scope !== 'dashboard' || options.cdp || idleCpuMode || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting caption control mode');
     const diagnostics = [idleCpuMode&&options.scope==='dashboard'?undefined:idleCpuMode, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE];
-    if (options.scope !== 'all' && diagnostics.some(Boolean)&&!historyPoolControl) throw new Stop('Partial benchmark scopes cannot be combined with diagnostics');
+    if (options.scope !== 'all' && options.scope !== 'updates' && options.scope !== 'panning' && diagnostics.some(Boolean)&&!historyPoolControl) throw new Stop('Partial benchmark scopes cannot be combined with diagnostics');
+    if(quota24Trace){chrome=findChrome(process.env);if(!chrome)throw new Stop('No Chrome for quota24 trace control');}
     address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
     if (idleCpuMode && (!['trace','profile','native-trace','native-profile'].includes(idleCpuMode) || !options.ci || options.cdp || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
     if (poolDiagnostic && (poolDiagnostic !== '1' || !options.ci || options.cdp || idleCpuMode || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting history pool diagnostic mode');
-    if (process.env.QUOTUM_BENCH_NATIVE_TARGET && (!nativeFrameMode || !['activity/24h','session/30d'].includes(nativeFrameTarget))) throw new Stop('Unknown or conflicting native trace target');
+    if (process.env.QUOTUM_BENCH_NATIVE_TARGET && (!nativeFrameMode || !['activity/24h','session/30d','quota/24h'].includes(nativeFrameTarget))) throw new Stop('Unknown or conflicting native trace target');
     await prepare(address);
-    chrome = options.cdp ? null : findChrome(process.env);
+    if(!quota24Trace)chrome = options.cdp ? null : findChrome(process.env);
     if (!options.cdp && !chrome) throw new Stop('No Chrome to run: set QUOTUM_CHROME, put google-chrome or chromium on PATH, or pass --cdp <http://host:port>.');
+    evidence.end();
   } catch (error) {
+    evidence.end('failed', 'fixture');
     evidence.finish('failed', {stage: 'preparation', status: 'no-browser-created'});
     throw error;
   }
@@ -167,20 +180,44 @@ async function main() {
   let browser: Browser | undefined;
   let tab: Awaited<ReturnType<typeof openTab>> | undefined;
   let heard: Heard | undefined;
+  let conditioningPartial:(()=>unknown)|undefined;
   const owner = new RunOwner(evidence);
   let cancelled = false;
   let finishing: Promise<void> | undefined;
   const finish = (code: number): Promise<void> => finishing ??= (async () => {
+    evidence.end(cancelled ? 'cancelled' : code ? 'failed' : 'passed', cancelled ? 'cancelled' : code ? 'runtime' : undefined);
+    if (cancelled || code) coverage.stop();
+    const summary = coverage.summary(), retained = evidence.saveCoverage(summary);
+    say(`coverage ${summary.status}: ${summary.observed.length}/${summary.expected.length} scenarios`);
+    if (!diagnostic) {
+      evidence.begin('coverage');
+      const incomplete = summary.status !== 'passed' || !retained;
+      evidence.end(incomplete ? 'failed' : 'passed', incomplete ? 'coverage' : undefined);
+      if (incomplete) {
+        code ||= 1;
+        say(`coverage incomplete: ${summary.missing.length} missing, ${summary.duplicates.length} duplicate, ${summary.incomplete.length} failed; retained=${retained}`);
+      }
+    }
     heard?.close();
     evidence.begin('cleanup');
+    let cleanupFailed = false;
     try{await idleCpu?.close();}catch{
-      code=1;owner.failures.push('Idle CPU cleanup unconfirmed');
+      cleanupFailed = true;code ||= 1;owner.failures.push('Idle CPU cleanup unconfirmed');
       try{saveDiagnostic('idle-cpu-cleanup',{mode:'diagnostic',status:'insufficient-evidence'});}catch{/* Continue owned browser cleanup if receipt writing fails. */}
     }
-    try {await owner.close();} catch (error) {code = 1; say(String(error));}
-    try {await demo.stop();} catch {code = 1; say('demo cleanup failed');}
+    try {await owner.close();} catch (error) {cleanupFailed = true;code ||= 1; say(String(error));}
+    try {await demo.stop();} catch {cleanupFailed = true;code ||= 1; say('demo cleanup failed');}
+    evidence.end(cleanupFailed ? 'failed' : 'passed', cleanupFailed ? 'cleanup' : undefined);
     if(scrollControl||firstNative)evidence.save('scroll-control-disposition',{mode:'diagnostic',status:cancelled?'cancelled':code?'inconclusive':'noC3Observed'});
-    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || idleCpuMode || poolDiagnostic || captionMode || scrollControl || firstNative) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
+    if (cancelled || code) coverage.stop();
+    evidence.saveCoverage(coverage.summary());
+    const status = cancelled ? 'cancelled' : code ? 'failed' : diagnostic ? 'diagnostic' : 'passed';
+    const cleanupReceipt = {browser: browser?.launchReport?.(), failures: owner.failures};
+    if (!evidence.finish(status, cleanupReceipt) && !diagnostic) {
+      code ||= 1;coverage.stop();
+      evidence.begin('coverage');evidence.end('failed', 'coverage');
+      evidence.finish('failed', cleanupReceipt);
+    }
     process.exit(code);
   })();
   const set = panningSet(SETS[0]);
@@ -193,6 +230,7 @@ async function main() {
 
   try {
     say(`a still hub of the ${set.id} set at ${address.base}`);
+    evidence.begin('fixture');
     const stand = await demo.run();
     seedPanningBudgets(path.join(demo.dir,'quotum.sqlite'),stand);
     const ana = stand.people.get(people(set)[0].id)!;
@@ -200,8 +238,10 @@ async function main() {
     const overview = () => overviewCards(path => ana.get<Snapshot>(path), board);
     heard = await hear(address.base, ana.cookie, board);
 
+    evidence.end();evidence.begin('browser');
     browser = await owner.start(signal => options.cdp ? Promise.resolve(attachedChrome(options.cdp)) : launchChrome(chrome!, !process.env.CI, signal));
     evidence.save('browser', browser.launchReport?.() ?? {mode: 'attached'});
+    evidence.end();
     if(process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE==='1'){
       say('diagnostic native replay only; this does not run the canonical benchmark');
       await diagnoseReversal(browser,address.base,ana.cookie,24);
@@ -211,11 +251,11 @@ async function main() {
     // The unchanged traffic matrix runs while the seeded measurements age. Its
     // temporary pages close before the idle board opens or any script budget starts.
     let traffic:Awaited<ReturnType<typeof historyTraffic>>|undefined;
-    if(options.scope!=='dashboard'){
+    if(options.scope==='all'||options.scope==='history'){
       say('checking controlled pan traffic over fixed Brotli HTTP, separately from native performance');
       evidence.begin('history-traffic');
       const current = await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`);
-      try{traffic=await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser, evidence,Boolean(scrollControl||firstNative),Boolean(firstNative));}
+      try{traffic=await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser, evidence,Boolean(scrollControl||firstNative),Boolean(firstNative),coverage);}
       catch(error){
         if(!firstNative&&process.env.QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX!=='1'&&/browser\/(?:1|30)d\/reversal/.test(String(error))){
           say('replaying the failed reversal with page and browser diagnostics; the original failure remains');
@@ -224,6 +264,7 @@ async function main() {
         throw error;
       }
       evidence.save('history-traffic', traffic);
+      evidence.checked(traffic.problems);
       if(process.env.QUOTUM_BENCH_REVERSAL_PROBE==='1')await diagnoseReversal(browser,address.base,ana.cookie,12);
     }
     if(options.scope==='history'){
@@ -257,12 +298,18 @@ async function main() {
       }
       await finish(traffic.problems.length?1:0);return;
     }
+    const conditioning=new Conditioning(path.join(demo.dir,'quotum.sqlite'),stand);conditioningPartial=()=>conditioning.receipt();owner.resource(async()=>conditioning.close());
+    evidence.begin('dashboard-setup');
     tab = await openTab(browser);
     const {cdp} = tab;
     const requests = new Requests(cdp);
     await cdp.send('Page.enable');
     await cdp.send('Network.enable');
     await cdp.send('Performance.enable');
+    if(options.scope==='updates'||options.scope==='panning'){
+      await cdp.send('Emulation.setCPUThrottlingRate',{rate:1});await cdp.send('Emulation.clearDeviceMetricsOverride');
+      await cdp.send('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:-1,uploadThroughput:-1});
+    }
     if(idleCpuMode&&!nativeFrameMode){
       idleCpu=new IdleCpuDiagnostic(cdp,saveDiagnostic,clientIdentity(),!options.cdp,idleCpuMode==='trace'?'trace':'profile');
     }
@@ -274,7 +321,7 @@ async function main() {
     // Name order keeps this phase still; clock-driven numeric crossings have
     // their own subscribed-selector tests, including equal displayed labels.
     const bootstrapSource=`localStorage.setItem('quotum.locale','en');
-      localStorage.setItem('quotum.prefs',JSON.stringify({...JSON.parse(localStorage.getItem('quotum.prefs')||'{}'),agentsSort:{column:'project',descending:false}}));
+      localStorage.setItem('quotum.prefs',JSON.stringify({...JSON.parse(localStorage.getItem('quotum.prefs')||'{}'),agentsSort:{column:'project',descending:false}${options.scope==='updates'||options.scope==='panning'?",range:'24h'":''}}));
       window.__quotumInspectHistoryPool=pool=>{
         window.__quotumIdleRetention=()=>(${idleRetentionScript()})(pool);
         window.__quotumWalletState=(source,authority)=>{
@@ -292,11 +339,11 @@ async function main() {
           period:p?{generation:p.generation,revision:p.revision,workNeeded:p.workNeeded,dirty:[...p.dirtyScopes],error:p.get().error,calendar:p.calendar.state.error,calendarNeeded:p.calendar.needed,completed:p.transport.completed,failed:p.transport.failed,
             flights:[...p.transport.flights].map(f=>({extras:f.extras,preparing:!!f.preparing,aborted:f.controller.signal.aborted,sections:Object.keys(f.intent.request)}))}:null};
       };};
-      ${nativeFrameMode&&nativeFrameTarget==='session/30d'?`(() => {
+      ${nativeFrameMode&&(nativeFrameTarget==='session/30d'||quota24Trace)?`(() => {
         const inspect=window.__quotumInspectPreparations;
         window.__quotumInspectPreparations=value=>{if(typeof inspect==='function')inspect(value);window.__quotumPanPreparations=value;};
       })();`:''}
-      ${probeScript()}`;
+      ${options.scope==='panning'?'':probeScript()}`;
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source:bootstrapSource});
     idleCpu?.binding.rememberInjected(1,bootstrapSource,'idle-probe');
     await cdp.send('Page.navigate', {url: `${address.base}/`});
@@ -310,8 +357,41 @@ async function main() {
       if(Date.now()>shownBy)throw new Stop('The enabled agent-hours calendar did not receive its baseline.');
       await sleep(100);
     }
+    const nativePanning=async()=>{
+      say('checking native continuous wheel and Shift-drag from all five charts at 24h and 30d, CPU ×4');
+      evidence.begin('panning');
+      const nativeFrameTrace=nativeFrameMode?()=>{
+        const save=(name:string,value:unknown,large=false)=>large?evidence.saveTrace(name,value):evidence.save(name,value);
+        const trace=new IdleCpuDiagnostic(cdp,save,clientIdentity(),!options.cdp,idleCpuMode==='native-profile'?'native-profile':'native-trace',owner.signal,quota24Trace);
+        owner.resource(()=>trace.close());
+        evidence.save('native-frame-source',sourceIdentity());
+        return trace;
+      }:undefined;
+      const runPanning: typeof panning = (target, pace, output) => panning(target, pace, output, async(label,signal,origin)=>{
+        await Promise.all([reloadHubProbe(address.base,signal,origin),(async()=>{
+          const observer=await observeReversal(cdp,browser!,{signal,origin});
+          try{await observer.diagnose(label);}finally{await observer.close();}
+        })()]);
+      },nativeFrameTrace,nativeFrameTarget as NativePanTarget,coverage);
+      const panned = await runPanning(cdp, undefined, evidence);
+      evidence.save('panning', panned);
+      evidence.checked(panned.problems);
+      say(`native panning: ${JSON.stringify({reports: panned.reports.map(report => ({initiator: report.initiator, period: report.period, frameP95Ms: round(percentile(report.frames, .95)), frameP99Ms: round(percentile(report.frames, .99)), inputP95Ms: round(percentile(report.latency, .95)), pushesDuring:report.pushesDuring,pushesAfter:report.pushesAfter,forbiddenMutations:report.forbiddenMutations})), problems: panned.problems})}`);
+      for(const report of panned.reports)if(panningProblems(report).length)say('native panning failure details: '+JSON.stringify(report));
+      return panned;
+    };
+    if(options.scope==='panning'){
+      evidence.end();evidence.begin('conditioning');
+      await quotaProducer(stand,conditioning);await ordinaryProducer(demo,conditioning);
+      const initial=new Requests(cdp);initial.counting=true;const setupFrom=Date.now();
+      try{await observedProducer(stand,conditioning,{ready:async()=>{await observedBaseline(stand,cdp,initial,setupFrom);}});}finally{initial.counting=false;}
+      await privateProducer(demo,stand,conditioning);
+      const target=await frequencySource(cdp);await ana.post(`/api/boards/${board}/sources/${target}/frequency`,{intervalMs:120000});
+      const conditioned=await conditioning.verify(target);evidence.save('conditioning',conditioned);evidence.end();
+      heard.reset();
+    }
     const opened = Date.now();
-    evidence.begin('warmup');
+    evidence.end();evidence.begin('warmup');
     // Measure with the shared controls open, as before they could be collapsed.
     await cdp.evaluate(`(async () => {
       const toggle = document.querySelector('.filter-toggle > button');
@@ -319,12 +399,15 @@ async function main() {
       await new Promise(requestAnimationFrame);
       if (!document.querySelector('.analytics-head:not([hidden]) .period')) throw new Error('shared filters did not open');
     })()`);
-    const warm = Math.max(warmUntil(await overview(), opened),timing.warmAt);
+    const observationWarmUntil=options.scope==='panning'?opened+30_000:warmUntil(await overview(), opened),warm = Math.max(observationWarmUntil,timing.warmAt);
     say(`the board is open; it settles for ${Math.round((warm - Date.now()) / 1000)} s`);
+    evidence.save('warmup', {opened, warm, from: Date.now(), minimumSettleMs: 30_000, observationWarmUntil, minimumSettleUntil: opened + 30_000, fadeBeyondSettleMs: Math.max(0, warm - opened - 30_000)});
     await sleep(warm - Date.now());
     if (heard.counts().history) throw new Stop('The stand credited agent work during warmup; its agents must be idle.');
 
+    evidence.end();
     if (captionMode) {
+      evidence.begin('caption-control');
       evidence.save('caption-control-warm', {opened, warm, timing, counts: heard.counts()});
       const geometry=await deadline(30_000,signal=>captionGeometry(cdp,signal));
       evidence.save('caption-control-geometry',geometry);
@@ -335,11 +418,18 @@ async function main() {
       await finish(result.status !== 'complete' || result.problems.length ? 1 : 0); return;
     }
 
+    if(options.scope==='panning'){
+      const panned=await nativePanning();const result={mode:options.scope,panning:panned.reports,problems:panned.problems};
+      console.log(JSON.stringify(result,null,2));evidence.save('result',result);await finish(panned.problems.length?1:0);return;
+    }
+
     const cellMs = cellOf(86_400_000);
     const planned = idleWindow(Date.now(), seconds, cellMs);
     evidence.save('idle-plan', planned);
+    evidence.begin('idle-alignment');
     say(`waiting ${Math.round((planned.from-Date.now())/1000)} s to include one real chart-cell transition`);
     await sleep(planned.from-Date.now());
+    evidence.end();
     if(idleCpu)await idleCpu.start();
     const from = Date.now();
     const to = from + seconds * 1000;
@@ -387,9 +477,14 @@ async function main() {
         evidence.save('idle-cpu-result', {mode: 'diagnostic', problems: originalIdleTimingProblems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
       }
       if(idleCpu)saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:idleCpuMode==='trace'?'Original CI idle protocol; no CPU sampling, tracing overhead is unqualified.':'Original CI idle protocol with CPU sampling; profiler and trace overhead is unqualified.',original:{seconds,from,to,cellMs,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,boardEvents,deviceContacts,deviceHints,reading,problems:originalIdleTimingProblems}});
-      return {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo,retentionBefore};
+      return {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo,retentionBefore,retentionAfter};
     };
-    const {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond} = await readIdle();
+    const {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond, retentionBefore, retentionAfter} = await readIdle();
+    const idleChecks = [...idleProblems(idle), ...phaseProblems];
+    coverage.record('updates/idle', idleChecks);
+    coverage.record('updates/retirement-before', phaseProblems, retentionBefore ? 1 : 0);
+    coverage.record('updates/retirement-after', phaseProblems, retentionAfter ? 1 : 0);
+    evidence.checked(idleChecks);
     if(idleCpu){
       const diagnosticProblems=originalIdleTimingProblems!;
       const window={before,after,instrumentMs:reading.instrumentMs,seconds};
@@ -400,76 +495,62 @@ async function main() {
       await finish(diagnosticProblems.length||edge.status!=='complete'?1:0);return;
     }
     evidence.begin('measurements');
-    const measured = await measure(stand, cdp);
+    const measured = await measure(stand, cdp,conditioning);
     evidence.save('measured', measured);
+    const measurementChecks = [...chartProblems(measured.chartLatencies), ...(measured.historyBytes <= HISTORY_BYTES_PER_MEASUREMENT ? [] : [`history read ${measured.historyBytes} bytes per measurement, above budget`]), ...measuredProblems({card: measured.source, latencies: measured.latencies, renders: measured.reading.renders, mutations: measured.reading.mutations, from: measured.from, to: measured.to})];
+    for (let i = 0; i < MEASUREMENTS; i++) coverage.record(`updates/quota/${i + 1}`, measurementChecks, measured.latencies.length === MEASUREMENTS && measured.chartLatencies.length === MEASUREMENTS && measured.ingestLatencies.length === MEASUREMENTS ? 1 : 0);
+    evidence.checked(measurementChecks);
     evidence.begin('work');
-    const worked = await work(demo, stand, cdp, evidence);
+    const worked = await work(demo, stand, cdp, evidence,conditioning);
     evidence.save('work', worked);
-    const observedWork=await workObserved(stand,cdp);
-    const privateWork = await workPrivate(demo, stand, cdp);
+    coverage.record('updates/work/ordinary', worked.problems, worked.reports.length === 3 ? 3 : 0);evidence.checked(worked.problems);
+    evidence.begin('observed-work');
+    const observedWork=await workObserved(stand,cdp,conditioning);
+    evidence.save('observed-work', observedWork);
+    coverage.record('updates/work/observed', observedWork.problems, observedWork.reports.length === 3 ? 3 : 0);evidence.checked(observedWork.problems);
+    evidence.begin('private-work');
+    const privateWork = await workPrivate(demo, stand, cdp,conditioning);
     evidence.save('private-work', privateWork);
-    const problems = [
-      ...idleProblems(idle),
-      ...phaseProblems,
-      ...worked.problems,
-      ...observedWork.problems,
-      ...privateWork.problems,
-      ...chartProblems(measured.chartLatencies),
-      ...(measured.historyBytes <= HISTORY_BYTES_PER_MEASUREMENT ? [] : [`history read ${measured.historyBytes} bytes per measurement, above budget`]),
-      ...measuredProblems({
-        card: measured.source,
-        latencies: measured.latencies,
-        renders: measured.reading.renders,
-        mutations: measured.reading.mutations,
-        from: measured.from,
-        to: measured.to,
-      }),
-    ];
+    coverage.record('updates/work/private', privateWork.problems, privateWork.reports.length === 3 ? 3 : 0);evidence.checked(privateWork.problems);
+    const problems = [...idleChecks, ...worked.problems, ...observedWork.problems, ...privateWork.problems, ...measurementChecks];
     // Keep completed measurements available if a later browser phase stops the job.
     say(`initial readings: ${JSON.stringify({idle:{scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,boardEvents,deviceContacts,deviceHints,renders:reading.renders,mutations:reading.mutations},measured:{historyBytes:measured.historyBytes,ingestP95Ms:percentile(measured.ingestLatencies,.95),cardP95Ms:percentile(measured.latencies,.95),chartP95Ms:percentile(measured.chartLatencies,.95)},work:worked.reports,observedWork:observedWork.reports,observedWorkSetup:observedWork.setup,problems})}`);
     // The readings above are frozen: keyboard checks do not enter the performance budget.
     say('checking consecutive frequency saves with native arrow keys');
-    await frequencyKeys(cdp);
+    evidence.begin('frequency');
+    const frequencyTarget=await frequencyKeys(cdp);
+    coverage.record('updates/frequency');evidence.end();
+    if(options.scope!=='updates'){evidence.begin('conditioning');const conditioned=await conditioning.verify(frequencyTarget);evidence.save('conditioning',conditioned);evidence.end();}
     // Panning has its own movement and mutation probe. Traversing React and the
     // DOM for the finished measurement phase would add unrelated work to every frame.
     await cdp.evaluate('__quotumBench.pause()');
-    say('checking native continuous wheel and Shift-drag from all five charts at 24h and 30d, CPU ×4');
-    evidence.begin('panning');
-    const nativeFrameTrace=nativeFrameMode?()=>{
-      const save=(name:string,value:unknown,large=false)=>large?evidence.saveTrace(name,value):evidence.save(name,value);
-      const trace=new IdleCpuDiagnostic(cdp,save,clientIdentity(),!options.cdp,idleCpuMode==='native-profile'?'native-profile':'native-trace',owner.signal);
-      owner.resource(()=>trace.close());
-      evidence.save('native-frame-source',sourceIdentity());
-      return trace;
-    }:undefined;
-    const runPanning: typeof panning = (target, pace, output) => panning(target, pace, output, async(label,signal,origin)=>{
-      await Promise.all([reloadHubProbe(address.base,signal,origin),(async()=>{
-        const observer=await observeReversal(cdp,browser!,{signal,origin});
-        try{await observer.diagnose(label);}finally{await observer.close();}
-      })()]);
-    },nativeFrameTrace,nativeFrameTarget as NativePanTarget);
-    const panned = await runPanning(cdp, undefined, evidence);
-    evidence.save('panning', panned);
-    problems.push(...panned.problems);
-    say(`native panning: ${JSON.stringify({reports: panned.reports.map(report => ({initiator: report.initiator, period: report.period, frameP95Ms: round(percentile(report.frames, .95)), frameP99Ms: round(percentile(report.frames, .99)), inputP95Ms: round(percentile(report.latency, .95)), pushesDuring:report.pushesDuring,pushesAfter:report.pushesAfter,forbiddenMutations:report.forbiddenMutations})), problems: panned.problems})}`);
-    for(const report of panned.reports)if(panningProblems(report).length)say('native panning failure details: '+JSON.stringify(report));
-    if(options.scope!=='dashboard'&&!traffic)throw new Stop('canonical history traffic readings unavailable');
+    let panned:Awaited<ReturnType<typeof panning>>|undefined;
+    if(options.scope!=='updates')panned=await nativePanning();
+    if(panned)problems.push(...panned.problems);
+    if(options.scope==='all'&&!traffic)throw new Stop('canonical history traffic readings unavailable');
     if(traffic)problems.push(...traffic.problems);
+    if(options.scope==='updates')await normalizeUpdates(cdp);
     evidence.begin('credits');
     const credits=await creditPhase(demo,stand,cdp,evidence);
+    for (let i = 0; i < 4; i++) coverage.record(`updates/credits/${i + 1}`, credits.problems, credits.updates.length === 4 ? 1 : 0);
+    evidence.checked(credits.problems);
     evidence.save('credits', credits);
     problems.push(...credits.problems);
     evidence.begin('money');
-    const monetary=await moneyPhase(demo,stand,cdp);
+    const monetary=await moneyPhase(demo,stand,cdp,coverage,evidence);
+    evidence.checked(monetary.problems);
     evidence.save('money', monetary);
     evidence.begin('fixed-activity');
     say('checking paint-only emphasis and shared Activity filters, late-work cells and cancellation at 24h/30d');
-    const selectedActivity=await fixedActivity(browser,stand,evidence);
+    const selectedActivity=await fixedActivity(browser,stand,evidence,coverage);
+    evidence.checked(selectedActivity.problems);
     problems.push(...selectedActivity.problems);
     evidence.save('fixed-activity', selectedActivity);
     problems.push(...monetary.problems);
     say('checking complete measurement disclosure text after all performance readings');
-    const measurementDisclosures=await measurementDetails(browser,ana);
+    evidence.begin('measurement-details');
+    const measurementDisclosures=await measurementDetails(browser,ana,coverage);
+    evidence.save('measurement-details', measurementDisclosures);evidence.end();
     const result = {
       mode: options.scope,
       set: set.id,
@@ -509,7 +590,7 @@ async function main() {
       credits,
       historyTraffic: traffic,
       selectedActivity,
-      panning: panned.reports.map(report => ({...report,
+      panning: panned?.reports.map(report => ({...report,
         frames: {count: report.frames.length, p95Ms: round(percentile(report.frames, .95)), p99Ms: round(percentile(report.frames, .99))},
         latency: {count: report.latency.length, p95Ms: round(percentile(report.latency, .95))},
       })),
@@ -521,6 +602,8 @@ async function main() {
     await finish(problems.length ? 1 : 0);
   } catch (error) {
     if (finishing) return;
+    evidence.end('failed', error instanceof Stop ? 'fixture' : 'runtime');
+    if(conditioningPartial)evidence.save('conditioning-partial',conditioningPartial());
     evidence.save('failure', {status: 'failed', kind: error instanceof Stop ? 'fixture' : 'runtime'});
     if(error instanceof ChromeLaunchError)evidence.save('browser',error.report);
     await demo.settled();
@@ -534,10 +617,8 @@ async function main() {
  * its machine would: how long after each measurement was sent its card changed outside
  * what shows time, and what the page did over all of them.
  */
-async function measure(stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
-  const card = cards(stand.set).find(c => c.id === MEASURED)!;
+async function measure(stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp, conditioning?:Conditioning) {
   const source = stand.sources.get(MEASURED)!;
-  const agent = stand.agents.get(card.machines[0])!;
   say(`measuring ${MEASURED} ${MEASUREMENTS} times, ${MEASURE_EVERY / 1000} s apart`);
   await cdp.evaluate('__quotumBench.reset()');
   const from = Date.now();
@@ -545,36 +626,29 @@ async function measure(stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
   const chartLatencies: number[] = [];
   const ingestLatencies: number[] = [];
   const requests = new Requests(cdp); requests.counting = true;
-  const overview = await stand.people.get(people(stand.set)[0].id)!.get<Snapshot>('/api/overview');
-  const initial = overview.sources.find(s => s.id === source)!.windows.find(w => w.id === 'gemini:weekly')!.used;
-  for (let i = 0; i < MEASUREMENTS; i++) {
-    await cdp.evaluate('__quotumBench.forgetCards()');
-    const taken = stillSnapshot(card, stand.start, Date.now());
-    const used = initial + (i + 1) * .1;
-    const windows = taken.windows.map(w => w.id === 'gemini:weekly' ? {...w, usedPercent: used} : w);
-    const last = `${cellStart(Date.parse(taken.observedAt), cellOf(86_400_000))}:${Math.round((100 - used) * 100) / 100}`;
-    const sent = Date.now();
-    await agent.ingest([{...taken, windows}], [], sent);
-    ingestLatencies.push(Date.now()-sent);
-    let changed: number | null = null;
-    let chart: number | null = null;
-    while ((changed === null || chart === null) && Date.now() < sent + SHOWN_WITHIN) {
-      changed = await cdp.evaluate<number | null>(`__quotumBench.cardChanged(${JSON.stringify(source)})`);
-      chart = await cdp.evaluate<number | null>(`__quotumBench.seriesChanged(${JSON.stringify(source + ' gemini:weekly')}, ${JSON.stringify(last)})`);
-      if (changed === null || chart === null) await sleep(20);
-    }
-    latencies.push(changed === null ? Infinity : changed - sent);
-    chartLatencies.push(chart === null ? Infinity : chart - sent);
-    if (!Number.isFinite(chart)) {
-      const key = source + ' gemini:weekly';
-      const shown = await cdp.evaluate(`(() => {
-        const line = [...document.querySelectorAll('[data-series]')].find(node => node.getAttribute('data-series') === ${JSON.stringify(key)});
-        return {last: line?.getAttribute('data-last'), chart: line?.closest('svg')?.dataset, paths: line?.querySelectorAll('path').length};
-      })()`);
-      say(`missing quota update: ${JSON.stringify({measurement: i + 1, observedAt: taken.observedAt, expected: last, observed: String(chart), shown})}`);
-    }
-    await sleep(sent + MEASURE_EVERY - Date.now());
-  }
+  await quotaProducer(stand,conditioning,{
+    before:async()=>{await cdp.evaluate('__quotumBench.forgetCards()');},
+    after:async point=>{
+      const {sent,lastId:last}=point;ingestLatencies.push(point.ingestMs);
+      let changed: number | null = null;
+      let chart: number | null = null;
+      while ((changed === null || chart === null) && Date.now() < sent + SHOWN_WITHIN) {
+        changed = await cdp.evaluate<number | null>(`__quotumBench.cardChanged(${JSON.stringify(source)})`);
+        chart = await cdp.evaluate<number | null>(`__quotumBench.seriesChanged(${JSON.stringify(source + ' gemini:weekly')}, ${JSON.stringify(last)})`);
+        if (changed === null || chart === null) await sleep(20);
+      }
+      latencies.push(changed === null ? Infinity : changed - sent);
+      chartLatencies.push(chart === null ? Infinity : chart - sent);
+      if (!Number.isFinite(chart)) {
+        const key = source + ' gemini:weekly';
+        const shown = await cdp.evaluate(`(() => {
+          const line = [...document.querySelectorAll('[data-series]')].find(node => node.getAttribute('data-series') === ${JSON.stringify(key)});
+          return {last: line?.getAttribute('data-last'), chart: line?.closest('svg')?.dataset, paths: line?.querySelectorAll('path').length};
+        })()`);
+        say(`missing quota update: ${JSON.stringify({measurement: point.index + 1, observedAt: point.observedAt, expected: last, observed: String(chart), shown})}`);
+      }
+    },
+  });
   await drain(requests); requests.counting = false;
   return {source, latencies, chartLatencies, ingestLatencies, historyBytes: requests.historyBytes / MEASUREMENTS, reading: await cdp.evaluate<Reading>('__quotumBench.read()'), from, to: Date.now()};
 }
@@ -663,7 +737,7 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
   return {source,qualification:{from:qualifiedFrom,to:qualifiedTo,waits},updates,problems};
 }
 
-async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp) {
+async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp,coverage?:Coverage,evidence?:Pick<Evidence,'save'>) {
   const owner=stand.people.get(people(stand.set)[0].id)!;
   say('checking money updates, partial inventory, pagination, selection and unchanged observations');
   // The panning scenarios finish at 30d; this phase measures one-day cell updates.
@@ -713,12 +787,14 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
   const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),to=Date.now();
   const problems=[...measuredProblems({card:source,latencies,renders:reading.renders,mutations:reading.mutations,from,to}),...chartProblems(chartLatencies)];
   const bytes=requests.historyBytes/6;if(bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push('money history exceeds the existing measurement byte budget');
+  for (let i = 0; i < 6; i++) coverage?.record(`updates/wallet/${i + 1}`, problems, latencies.length === 6 && chartLatencies.length === 6 ? 1 : 0);
   const first=await owner.get<{keys:unknown[];next:string|null}>('/api/boards/'+owner.personalBoard+'/sources/'+source+'/keys?limit=50');
   if(first.keys.length!==50||!first.next)problems.push('money key pagination did not expose a full first page');
   const second=await owner.get<{keys:unknown[]}>('/api/boards/'+owner.personalBoard+'/sources/'+source+'/keys?limit=50&after='+encodeURIComponent(first.next??''));
   if(second.keys.length!==7)problems.push('money key pagination lost the final page');
   const state=await owner.get<Snapshot>('/api/overview?board='+owner.personalBoard);
   if(state.sources.find(s=>s.id===source)?.inventory?.complete!==false)problems.push('partial money inventory was reported complete');
+  coverage?.record('updates/inventory', problems, first.keys.length === 50 && second.keys.length === 7 ? 1 : 0);
   const previous=state.sources.find(s=>s.id===source)!;
   const previousBalance=previous.meters?.find(m=>m.id==='balance')?.amount;
   const ledger=new DatabaseSync(path.join(demo.dir,'quotum.sqlite'),{readOnly:true});
@@ -744,8 +820,11 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
     const heartbeatReading=await cdp.evaluate<Reading>('__quotumBench.read()');
     problems.push(...renderProblems({card:source,renders:heartbeatReading.renders,mutations:heartbeatReading.mutations,from:heartbeatFrom,to:Date.now()}));
   }finally{ledger.close();}
-  const linkedWork=await workLinkedWallet(demo,stand,cdp,source);problems.push(...linkedWork.problems);
+  coverage?.record('updates/wallet-heartbeat', problems);
+  const linkedWork=await workLinkedWallet(demo,stand,cdp,source,evidence);problems.push(...linkedWork.problems);
+  coverage?.record('updates/linked-wallet', linkedWork.problems, linkedWork.reports.length === 3 ? 3 : 0);
   const currencies=await currencyPhase(demo,stand,cdp,source,record.id);problems.push(...currencies.problems);
+  coverage?.record('updates/currencies', currencies.problems);
   const capped=await owner.post<Credential>('/api/credentials',{provider:'openrouter',secret:MONEY_KEY(5),allowNoExpiry:true});
   const cappedSource=capped.sourceId!;
   let cap:Meter|undefined;
@@ -756,11 +835,12 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
     if(!cap){if(Date.now()>cappedBy)throw new Stop('zero-cap money fixture did not appear');await sleep(20);}
   }
   await moneyView(cdp,source,cappedSource,cap.id);
+  coverage?.record('updates/money-view');
   return {count:latencies.length,p95Ms:Math.round(percentile(latencies,.95)),chartP95Ms:Math.round(percentile(chartLatencies,.95)),historyBytesPerMeasurement:bytes,heartbeat,linkedWork,currencies,problems};
 }
 
 /** Attributed wallet credit updates work readers once while financial drawing stays still. */
-async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp,source:string) {
+async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp,source:string,evidence?:Pick<Evidence,'save'>) {
   say('checking linked wallet credit with Activity, money work columns and a stable financial chart');
   const owner=stand.people.get(people(stand.set)[0].id)!,agent=stand.agents.get('laptop')!,start=Date.now();
   const initial=new Requests(cdp);initial.counting=true;
@@ -795,11 +875,11 @@ async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>
   }
   initial.counting=false;
   const setup={waitMs:Date.now()-setupFrom,historyRequests:initial.historyRequests,historyBytes:initial.historyBytes};
-  const reports:{at:number;capturedAt:number;reads:number;bytes:number;activeMs:number;activityAgentMs:number;activeMsLatency:number|null;activityMsLatency:number|null}[]=[],problems:string[]=[];
+  const reports:{at:number;capturedAt:number;reads:number;bytes:number;activeMs:number;activityAgentMs:number;activeMsLatency:number|null;activityMsLatency:number|null}[]=[],problems:string[]=[],traffic:Requests[]=[];
   for(let i=0;i<3;i++) {
     const before=await active(),beforeAgent=await agentTime(),drawing=await geometry();
     if(before<0||beforeAgent<0)await unavailable();
-    await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp);requests.counting=true;const from=Date.now();
+    await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp,true);requests.counting=true;traffic.push(requests);const from=Date.now();
     await cdp.evaluate(`(()=>{
       let activeAt=null,activityAt=null;
       const values=()=>({activeMs:Number(document.querySelector('[data-work-source="${source}"]')?.getAttribute('data-active-ms')??-1),activityAgentMs:${activityRead}});
@@ -830,7 +910,16 @@ async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>
   agent.trackClients([],[]);await demo.reportNow('laptop');
   const response=await fetch(owner.base+'/api/links/'+created.links.at(-1)!.id,{method:'DELETE',headers:{cookie:owner.cookie,origin:new URL(owner.base).origin,'content-type':'application/json'},body:JSON.stringify({expectedRevision:created.revision,requestId:randomUUID()})});
   if(!response.ok)throw new Stop('linked wallet fixture could not remove its rule');
-  return {setup,activityProject:session.project,reports,problems};
+  const originalCommandFailure=cdp.snapshot().failure;
+  const original={setup,activityProject:session.project,reports,problems,traffic:{originalCommandFailure,reports:traffic.map(requests=>requests.trafficReading)}};
+  evidence?.save('linked-wallet',original);
+  // Original measurements and actor cleanup finish before any body capture.
+  cdp.at('money/linked-wallet/traffic-diagnostic');
+  const diagnostics=await Promise.all(traffic.map(requests=>requests.diagnose(cdp)));
+  cdp.at('money');
+  const captured={originalCommandFailure,reports:diagnostics};
+  evidence?.save('linked-wallet-traffic',captured);
+  return {...original,traffic:captured};
 }
 
 /** The personal display path uses the same measurement and render budgets as native money. */
@@ -890,35 +979,35 @@ async function drain(requests: Requests) {
 }
 
 /** Every credited tick is observed separately; the stand remains the sole list writer. */
-async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp, evidence:Pick<Evidence,'save'>) {
+async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp, evidence:Pick<Evidence,'save'>,conditioning?:Conditioning) {
   const source = stand.sources.get(MEASURED)!;
   const reports: {at: number; reads: number; bytes: number}[] = [];
   const problems: string[] = [];
   const traffic:Requests[]=[];
-  demo.work(true);
-  await demo.nextReport('laptop'); // First list starts the work; the next credits it.
-  await sleep(1000);
-  for (let i = 0; i < 3; i++) {
-    await cdp.evaluate('__quotumBench.reset()');
-    // The opposite end of a live period may retire older work during this report.
-    // Check the recent buckets receiving this credit, with one fixed comparison cut.
-    const calendarFrom=Date.now()-2*3_600_000;
-    const calendarTotal=`Array.from(document.querySelectorAll('.agent-hours-heatmap [data-agent-ms]')).filter(node=>Number(node.getAttribute('data-heatmap-cell'))>=${calendarFrom}).reduce((sum,node)=>sum+Number(node.getAttribute('data-agent-ms')),0)`;
-    const calendarBefore=await cdp.evaluate<number>(calendarTotal);
-    const requests = new Requests(cdp,true); requests.counting = true;traffic.push(requests);
-    const from = Date.now();
-    if (i === 2) demo.work(false); // This report credits the last working list.
-    const at = await demo.nextReport('laptop');
-    await sleep(1000); await drain(requests); requests.counting = false;
-    const reading = await cdp.evaluate<Reading>('__quotumBench.read()');
-    const reads = requests.historyRequests;
-    const bytes = requests.historyBytes;
-    reports.push({at, reads, bytes});
-    if (reads !== 1 || bytes > HISTORY_BYTES_PER_MEASUREMENT) problems.push(`work report read history ${reads} times, ${bytes} bytes`);
-    const calendarAfter=await cdp.evaluate<number>(calendarTotal);
-    if(calendarAfter<=calendarBefore)problems.push('work report did not update recent registered calendar hours');
-    problems.push(...renderProblems({card: source, renders: reading.renders, mutations: reading.mutations, from, to: Date.now()}));
-  }
+  let requests!:Requests,from=0,calendarBefore=0,calendarTotal='';
+  await ordinaryProducer(demo,conditioning,{
+    before:async()=>{
+      await cdp.evaluate('__quotumBench.reset()');
+      // The opposite end of a live period may retire older work during this report.
+      // Check the recent buckets receiving this credit, with one fixed comparison cut.
+      const calendarFrom=Date.now()-2*3_600_000;
+      calendarTotal=`Array.from(document.querySelectorAll('.agent-hours-heatmap [data-agent-ms]')).filter(node=>Number(node.getAttribute('data-heatmap-cell'))>=${calendarFrom}).reduce((sum,node)=>sum+Number(node.getAttribute('data-agent-ms')),0)`;
+      calendarBefore=await cdp.evaluate<number>(calendarTotal);
+      requests = new Requests(cdp,true); requests.counting = true;traffic.push(requests);
+      from = Date.now();
+    },
+    after:async at=>{
+      await drain(requests); requests.counting = false;
+      const reading = await cdp.evaluate<Reading>('__quotumBench.read()');
+      const reads = requests.historyRequests;
+      const bytes = requests.historyBytes;
+      reports.push({at, reads, bytes});
+      if (reads !== 1 || bytes > HISTORY_BYTES_PER_MEASUREMENT) problems.push(`work report read history ${reads} times, ${bytes} bytes`);
+      const calendarAfter=await cdp.evaluate<number>(calendarTotal);
+      if(calendarAfter<=calendarBefore)problems.push('work report did not update recent registered calendar hours');
+      problems.push(...renderProblems({card: source, renders: reading.renders, mutations: reading.mutations, from, to: Date.now()}));
+    },
+  });
   const original={reports,problems,traffic:{reports:traffic.map(requests=>requests.trafficReading)}};
   evidence.save('work',original);
   // A passing first reply is the comparison for an intermittent byte overrun.
@@ -931,73 +1020,75 @@ async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cd
 }
 
 /** The interval endpoint has the same history and rendering budget as the released writer. */
-async function workObserved(stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp) {
-  say('checking captured intervals without extra history reads or unrelated renders');
+async function observedBaseline(stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp,initial:Requests,setupFrom:number) {
   const source=stand.sources.get(MEASURED)!,owner=stand.people.get(people(stand.set)[0].id)!;
-  const initial=new Requests(cdp);initial.counting=true;const setupFrom=Date.now();
-  const actor=await ObservedWork.open(owner,cards(stand.set).find(card=>card.id===MEASURED)!);
-  const reports:{at:number;reads:number;bytes:number;history:Requests['history']}[]=[],problems:string[]=[];
-  const setup={waitMs:0,historyRequests:0,historyBytes:0};
-  try {
-    await sleep(1000);
-    const authority=(await owner.get<Snapshot>('/api/overview?board='+owner.personalBoard)).workAuthority;
-    const readyBy=Date.now()+SHOWN_WITHIN;let previous='',stable=0;
-    // Joining a device changes the admitted cohort. Finish its cold baseline
-    // before measuring the history tail read caused by a completed interval.
-    while(stable<3){
-      const layout=await cdp.evaluate<string|null>(`(()=>{
-        const baseline=window.__quotumWalletState?.(${JSON.stringify(source)},${JSON.stringify(authority)});
-        if(!baseline?.authorityReady||baseline.periodLoading||baseline.periodError||baseline.workNeeded||baseline.preparation?.flights.length)return null;
-        if(document.querySelector('.agents-panel.is-loading,.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-draw-ready="false"]'))return null;
-        if(document.getAnimations().some(animation=>animation.playState==='running'&&animation.effect?.target?.matches('.widget,.widget-body')))return null;
-        return JSON.stringify(Array.from(document.querySelectorAll('.widgets>.widget')).map(node=>{const box=node.getBoundingClientRect();return[box.x,box.y,box.width,box.height];}));
-      })()`);
-      stable=!initial.historyPending&&layout!==null&&layout===previous?stable+1:0;previous=layout??'';
-      if(stable<3){
-        if(Date.now()>=readyBy){
-          const state=await cdp.evaluate(`window.__quotumWalletState?.(${JSON.stringify(source)},${JSON.stringify(authority)})`);
-          const settlement=await cdp.evaluate(`(()=>({
-            blockers:Array.from(document.querySelectorAll('.agents-panel.is-loading,.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-draw-ready="false"]')).map(node=>({id:node.closest('[data-widget]')?.dataset.widget,tag:node.tagName,className:node.getAttribute('class'),drawReady:node.getAttribute('data-draw-ready')})),
-            animations:document.getAnimations().filter(animation=>animation.playState==='running'&&animation.effect?.target?.matches('.widget,.widget-body')).map(animation=>({id:animation.effect.target.closest('[data-widget]')?.dataset.widget,currentTime:animation.currentTime,playState:animation.playState})),
-            layout:Array.from(document.querySelectorAll('.widgets>.widget')).map(node=>{const box=node.getBoundingClientRect();return{id:node.dataset.widget,box:[box.x,box.y,box.width,box.height]};})
-          }))()`);
-          console.error('bench: captured work setup '+JSON.stringify({state,pending:initial.historyPending,history:initial.history,settlement,previousLayout:previous}));
-          throw new Stop('captured work configuration history did not settle');
-        }
-        await sleep(20);
+  const authority=(await owner.get<Snapshot>('/api/overview?board='+owner.personalBoard)).workAuthority;
+  const readyBy=Date.now()+SHOWN_WITHIN;let previous='',stable=0;
+  // Joining a device changes the admitted cohort. Finish its cold baseline
+  // before measuring the history tail read caused by a completed interval.
+  while(stable<3){
+    const layout=await cdp.evaluate<string|null>(`(()=>{
+      const baseline=window.__quotumWalletState?.(${JSON.stringify(source)},${JSON.stringify(authority)});
+      if(!baseline?.authorityReady||baseline.periodLoading||baseline.periodError||baseline.workNeeded||baseline.preparation?.flights.length)return null;
+      if(document.querySelector('.agents-panel.is-loading,.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-draw-ready="false"]'))return null;
+      if(document.getAnimations().some(animation=>animation.playState==='running'&&animation.effect?.target?.matches('.widget,.widget-body')))return null;
+      return JSON.stringify(Array.from(document.querySelectorAll('.widgets>.widget')).map(node=>{const box=node.getBoundingClientRect();return[box.x,box.y,box.width,box.height];}));
+    })()`);
+    stable=!initial.historyPending&&layout!==null&&layout===previous?stable+1:0;previous=layout??'';
+    if(stable<3){
+      if(Date.now()>=readyBy){
+        const state=await cdp.evaluate(`window.__quotumWalletState?.(${JSON.stringify(source)},${JSON.stringify(authority)})`);
+        const settlement=await cdp.evaluate(`(()=>({
+          blockers:Array.from(document.querySelectorAll('.agents-panel.is-loading,.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-draw-ready="false"]')).map(node=>({id:node.closest('[data-widget]')?.dataset.widget,tag:node.tagName,className:node.getAttribute('class'),drawReady:node.getAttribute('data-draw-ready')})),
+          animations:document.getAnimations().filter(animation=>animation.playState==='running'&&animation.effect?.target?.matches('.widget,.widget-body')).map(animation=>({id:animation.effect.target.closest('[data-widget]')?.dataset.widget,currentTime:animation.currentTime,playState:animation.playState})),
+          layout:Array.from(document.querySelectorAll('.widgets>.widget')).map(node=>{const box=node.getBoundingClientRect();return{id:node.dataset.widget,box:[box.x,box.y,box.width,box.height]};})
+        }))()`);
+        console.error('bench: captured work setup '+JSON.stringify({state,pending:initial.historyPending,history:initial.history,settlement,previousLayout:previous}));
+        throw new Stop('captured work configuration history did not settle');
       }
+      await sleep(20);
     }
-    initial.counting=false;
-    Object.assign(setup,{waitMs:Date.now()-setupFrom,historyRequests:initial.historyRequests,historyBytes:initial.historyBytes});
-    for(let i=0;i<3;i++) {
-      await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp);requests.counting=true;
-      const from=Date.now(),at=await actor.report(i<2);
-      await sleep(1000);await drain(requests);requests.counting=false;
-      const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.historyRequests,bytes=requests.historyBytes;
-      reports.push({at,reads,bytes,history:requests.history});
-      if(reads!==1||bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push(`captured work read history ${reads} times, ${bytes} bytes`);
-      problems.push(...renderProblems({card:source,renders:reading.renders,mutations:reading.mutations,from,to:Date.now()}));
-    }
-  }finally{initial.counting=false;await actor.close();await sleep(1000);}
+  }
+  initial.counting=false;
+  return {waitMs:Date.now()-setupFrom,historyRequests:initial.historyRequests,historyBytes:initial.historyBytes};
+}
+
+async function workObserved(stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp,conditioning?:Conditioning) {
+  say('checking captured intervals without extra history reads or unrelated renders');
+  const source=stand.sources.get(MEASURED)!;
+  const initial=new Requests(cdp);initial.counting=true;const setupFrom=Date.now();
+  const reports:{at:number;reads:number;bytes:number;history:Requests['history']}[]=[],problems:string[]=[];
+  let setup={waitMs:0,historyRequests:0,historyBytes:0},requests!:Requests,from=0;
+  try {
+    await observedProducer(stand,conditioning,{
+      ready:async()=>{setup=await observedBaseline(stand,cdp,initial,setupFrom);},
+      before:async()=>{await cdp.evaluate('__quotumBench.reset()');requests=new Requests(cdp);requests.counting=true;from=Date.now();},
+      after:async at=>{
+        await drain(requests);requests.counting=false;
+        const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.historyRequests,bytes=requests.historyBytes;
+        reports.push({at,reads,bytes,history:requests.history});
+        if(reads!==1||bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push(`captured work read history ${reads} times, ${bytes} bytes`);
+        problems.push(...renderProblems({card:source,renders:reading.renders,mutations:reading.mutations,from,to:Date.now()}));
+      },
+    });
+  }finally{initial.counting=false;}
   return {reports,setup,problems};
 }
 
-async function workPrivate(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
+async function workPrivate(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp,conditioning?:Conditioning) {
   say('checking private client credit without card, header or financial renders');
-  const agent=stand.agents.get('laptop')!,start=Date.now();
-  const session={clientId:'opencode',sessionId:'d'.repeat(32),source:null,origin:'terminal',project:'Private benchmark',startedAt:new Date(start).toISOString(),working:true};
-  agent.trackClients([session],[]);await demo.reportNow('laptop');await sleep(1000);
   const reports:{at:number;reads:number;bytes:number}[]=[],problems:string[]=[];
-  for(let i=0;i<3;i++) {
-    await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp);requests.counting=true;const from=Date.now();
-    if(i===2)agent.trackClients([{...session,working:false}],[]);
-    const at=await demo.reportNow('laptop');await sleep(1000);await drain(requests);requests.counting=false;
-    const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.historyRequests,bytes=requests.historyBytes;
-    reports.push({at,reads,bytes});
-    if(reads!==1||bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push(`private work read history ${reads} times, ${bytes} bytes`);
-    problems.push(...privateWorkRenderProblems({renders:reading.renders,mutations:reading.mutations,from,to:Date.now(),cellMs:cellOf(86_400_000)}));
-  }
-  agent.trackClients([],[]);await demo.reportNow('laptop');
+  let requests!:Requests,from=0;
+  await privateProducer(demo,stand,conditioning,{
+    before:async()=>{await cdp.evaluate('__quotumBench.reset()');requests=new Requests(cdp);requests.counting=true;from=Date.now();},
+    after:async at=>{
+      await drain(requests);requests.counting=false;
+      const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.historyRequests,bytes=requests.historyBytes;
+      reports.push({at,reads,bytes});
+      if(reads!==1||bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push(`private work read history ${reads} times, ${bytes} bytes`);
+      problems.push(...privateWorkRenderProblems({renders:reading.renders,mutations:reading.mutations,from,to:Date.now(),cellMs:cellOf(86_400_000)}));
+    },
+  });
   return {reports,problems};
 }
 
