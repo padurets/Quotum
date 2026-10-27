@@ -7,7 +7,7 @@ import {workChange} from './workChanges';
 import type {HistoryScope} from '../../server/domain/history';
 import {widgetVisible, QUOTA_WIDGETS, BUDGET_WIDGETS, SUBSCRIPTION_FUNDS, ACTIVITY} from '../../server/domain/widgets';
 import {useMemo,useRef,useSyncExternalStore} from 'react';
-import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart,planEventsAt,planEventsDeadline, type Chunk, type HistoryAnswer, type HistoryBasis, type Target} from '../../server/domain/history';
+import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, historyReadTo, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart,planEventsAt,planEventsDeadline, type Chunk, type HistoryAnswer, type HistoryBasis, type Target} from '../../server/domain/history';
 import {page, type PageEvent, type PageState} from './board';
 import {clock,hubNow,useClock,type PageClock} from './clock';
 import {HistoryTile} from './historyTiles';
@@ -560,7 +560,7 @@ export class HistoryStore {
 
   private nativeContext(){return JSON.stringify([this.board,this.run,this.lineupKey,this.windowsKey,this.meters]);}
 
-  private nativeRequiredTo(cell:number,to:number){return Math.min(to,this.cutTo??Infinity,cellStart(Math.max(this.env.now(),this.meta?.now??0)+CLOCK_TOLERANCE_MS,cell)+cell);}
+  private nativeRequiredTo(cell:number,to:number){return Math.min(to,this.cutTo??Infinity,historyReadTo(to,cell,Math.max(this.env.now(),this.meta?.now??0)));}
   private activityCurrent(flight:Flight){return this.wantsActivity&&flight.nativeContext===this.nativeContext()&&flight.nativeVersion===this.nativeVersion&&this.nativeFull(flight.cell,flight.from,this.nativeRequiredTo(flight.cell,flight.to));}
 
   private nativeFull(cell:number,from:number,to:number) {

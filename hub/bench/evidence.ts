@@ -15,7 +15,7 @@ const requestLabels = new Map([
   ['scope', new Set(['quota', 'budget', 'funds', 'all', 'dashboard', 'history', 'updates', 'panning'])],
   ['outcome', new Set(['running', 'passed', 'failed', 'cancelled', 'incomplete'])],
   ['classification', new Set(['budget', 'fixture', 'runtime', 'cancelled', 'cleanup', 'coverage'])],
-  ['cells', new Set(['skip', 'read'])],
+  ['cells', new Set(['skip', 'read', 'activity'])],
   ['evidence', new Set(['skip', 'cursor', 'baseline'])],
   ['endpoint', new Set(['history', 'period', 'period/sessions'])],
   ['errorCode', new Set(['history_limit', 'too_large', 'other', 'unavailable'])],

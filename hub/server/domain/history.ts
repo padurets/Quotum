@@ -17,6 +17,7 @@ export const CLOCK_TOLERANCE_MS = 30_000;
 export const cellOf = (span: number) => CELLS.find(cell => span / cell <= MAX_CELLS * 1.05) ?? CELLS.at(-1)!;
 export const READ_CELLS = CELLS.filter(cell => cell <= cellOf(31 * 86_400_000));
 export const cellStart = (at: number, cell: number) => Math.floor(at / cell) * cell;
+export const historyReadTo = (to:number,cell:number,now:number) => Math.min(Math.ceil(to/cell)*cell,cellStart(now+CLOCK_TOLERANCE_MS,cell)+cell);
 export const tileOf = (at: number, cell: number) => Math.floor(at / (cell * TILE_CELLS));
 export const tileStart = (tile: number, cell: number) => tile * cell * TILE_CELLS;
 export const tileEnd = (tile: number, cell: number) => tileStart(tile + 1, cell);

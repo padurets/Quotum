@@ -3,7 +3,7 @@ import {config} from './config.js';
 import type {Hub} from './api.js';
 import {HistoryLimit, type HistoryTiles} from './history.js';
 import {selectionOf, type MeterGroup, type MeterSelection} from './domain/meterHistory.js';
-import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, READ_CELLS, cellStart, tileOf, tileStart, type Chunk} from './domain/history.js';
+import {MAX_READ_TILES, READ_CELLS, historyReadTo, tileOf, tileStart, type Chunk} from './domain/history.js';
 import type {Events} from './events.js';
 import {displayHistory} from './currencies/history.js';
 import type {WorkRead,WorkViews} from './store/store.js';
@@ -37,7 +37,7 @@ export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:
     const askedTo = number(query.to);
     if (query.meta !== undefined && !/^(?:[A-Za-z0-9_-]{43})?$/.test(query.meta)) fail(400, 'invalid_request');
     if (!READ_CELLS.includes(cell) || !Number.isFinite(from) || !Number.isFinite(askedTo) || from % cell || (askedTo <= now && askedTo % cell)) fail(400, 'invalid_request');
-    const to = Math.min(Math.ceil(askedTo / cell) * cell, cellStart(now + CLOCK_TOLERANCE_MS, cell) + cell);
+    const to = historyReadTo(askedTo,cell,now);
     const oldest = tileStart(tileOf(now - config.retention.sampleDays * 86_400_000, cell), cell);
     if (to % cell || tileOf(to - 1, cell) - tileOf(from, cell) + 1 > MAX_READ_TILES) fail(400, 'invalid_request');
     let shown = store.authorizedSources(board);

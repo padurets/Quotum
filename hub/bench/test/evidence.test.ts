@@ -7,6 +7,10 @@ import path from 'node:path';
 import {clientIdentity, Evidence, safeEvidence} from '../evidence.js';
 import {measuredProblems} from '../budget.js';
 
+test('saved activity drawing mode survives without admitting arbitrary request text',()=>{
+  assert.deepEqual(safeEvidence({sections:[{scope:'quota',cells:'activity',evidence:'cursor'},{cells:'private-value',evidence:'private-cursor'}]}),{sections:[{scope:'quota',cells:'activity',evidence:'cursor'},{cells:'[text omitted]',evidence:'[text omitted]'}]});
+});
+
 test('saved measurements retain the card identity needed to replay their render budget', t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-evidence-test-'));
   t.after(() => rmSync(dir, {recursive: true, force: true}));

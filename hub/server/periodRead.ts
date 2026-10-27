@@ -21,7 +21,7 @@ import {drain,type Preparation} from './domain/prepare.js';
 import {PeriodPreparation} from './periodPrepare.js';
 import {selectionOf} from './domain/meterHistory.js';
 import {parseWorkFilter,type WorkFilter} from './domain/dataFilters.js';
-import {cellOf,cellStart,CLOCK_TOLERANCE_MS} from './domain/history.js';
+import {cellOf,cellStart,historyReadTo,CLOCK_TOLERANCE_MS} from './domain/history.js';
 import {PeriodCurves,sourceWorkTape,type SourceWorkCurves} from './domain/periodCurves.js';
 import {sourceWorkFrom} from './domain/workAccess.js';
 import {retainedWorkChoices} from './dataFilters.js';
@@ -253,7 +253,7 @@ export class PeriodReader {
       let upper=request.values?.length?Math.min(now,selection.mode==='range'?range.to+cell+1:cut):0;
       for(const scope of PERIOD_SCOPES)if(request[scope]){
         const query=request[scope]!;
-        upper=Math.max(upper,Math.min(now,Number(query.to)),query.evidence==='skip'?0:selection.mode==='range'?fixedRange.to:cut);
+        upper=Math.max(upper,scope==='quota'&&query.cells==='activity'?historyReadTo(Number(query.to),Number(query.cell),now):Math.min(now,Number(query.to)),query.evidence==='skip'?0:selection.mode==='range'?fixedRange.to:cut);
         if(scope==='quota')for(const id of shown.keys())include(id,'quota');
         if(query.meters){
           try{for(const [id] of selectionOf(JSON.parse(query.meters),query.unit).ids)include(id,scope==='quota'?'quota':'budget');}
@@ -345,7 +345,7 @@ export class PeriodReader {
         const previous=self.decode(query.evidence);
         // Only a cursor captured with committed native cells can authorize this
         // omission. The browser keeps that proof apart from newer ledger cursors.
-        const drawingCell=Number(query.cell),drawingTo=Math.min(Math.ceil(Number(query.to)/drawingCell)*drawingCell,cellStart(now+CLOCK_TOLERANCE_MS,drawingCell)+drawingCell);
+        const drawingTo=historyReadTo(Number(query.to),Number(query.cell),now);
         const activity=scope==='quota'&&query.cells==='activity'&&previous?.identity===tapeIdentity&&previous.revision>=self.measurementFloor&&previous.revision<=revision&&!self.measurements.some(c=>c.revision>previous.revision&&c.revision<=revision&&shown.has(c.source)&&(!c.scopes||c.scopes.includes('quota'))&&c.since<drawingTo);
         const json=readHistory(self.hub,self.history,self.events,board,user,{...query,scope:historyScope},views,query.cells==='skip'?false:activity?'activity':true,now,false);
         reserve(Buffer.byteLength(json)*2);const value=JSON.parse(json) as HistoryReply;
