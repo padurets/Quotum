@@ -36,8 +36,9 @@ function producers(now:()=>number,advance:(ms:number)=>void){
   return (context as typeof context&{producers:{quotaProducer:typeof quotaProducer;ordinaryProducer:typeof ordinaryProducer;observedProducer:typeof observedProducer;privateProducer:typeof privateProducer}}).producers;
 }
 
-for(const jitter of [false,true])test(jitter?'ordinary reports retain the captured 14999/15001/15000 ms intervals across real server cuts':'shared producers retain actual protocol floors, full reports, pacing, history and cleanup; the independent oracle rejects corruption',async t=>{
+for(const [jitter,earlyQuota] of [[false,false],[true,false],[false,true]])test(earlyQuota?'quota pacing rechecks early wakes through the original deadline and consumes ingest and hook time':jitter?'ordinary reports retain the captured 14999/15001/15000 ms intervals across real server cuts':'shared producers retain actual protocol floors, full reports, pacing, history and cleanup; the independent oracle rejects corruption',async t=>{
   let now=Date.parse('2026-10-27T12:00:00Z');t.mock.method(Date,'now',()=>now);
+  let quotaIndex=-1;const quotaWaits:number[][]=[],quotaWakes:number[][]=[];
   const root=mkdtempSync(path.join(tmpdir(),'quotum-conditioning-')),file=path.join(root,'hub.sqlite'),store=new Store(file,now-75*DAY),directory=new Directory(store.db);
   const ingest=new Ingest(store,directory,new Duty(),new Cadence());
   const app=await buildApp({store,directory,ingest,pairing:new Pairing(directory),resets:new ResetFeed(undefined,()=>{}),setup:new Setup(true,'BCDF-GHJK'),local:null});
@@ -46,6 +47,7 @@ for(const jitter of [false,true])test(jitter?'ordinary reports retain the captur
   t.mock.method(globalThis,'fetch',async(input:Parameters<typeof fetch>[0],init?:RequestInit)=>{
     const url=new URL(String(input));if(init?.method==='DELETE'&&url.pathname.startsWith('/api/tokens/')){closeAttempts++;if(failObservedClose)throw cleanupError;}
     const response=await app.inject({method:(init?.method??'GET') as 'GET',url:url.pathname+url.search,headers:{host:url.host,...Object.fromEntries(new Headers(init?.headers))},payload:init?.body as string|undefined});
+    if(earlyQuota&&quotaIndex>=0&&url.pathname==='/v1/ingest')now+=quotaIndex===3?3001:6;
     const headers=new Headers();for(const [key,value] of Object.entries(response.headers))if(value!==undefined)headers.set(key,Array.isArray(value)?value.join(','):String(value));
     return new Response(response.body,{status:response.statusCode,headers});
   });
@@ -72,8 +74,13 @@ for(const jitter of [false,true])test(jitter?'ordinary reports retain the captur
     const demo={work:(value:boolean)=>{working=value;},nextReport:async()=>{now=start+(Math.floor((now-start)/15000)+1)*15000-(jitter&&ordinaryReports++===1?1:0);return report();},reportNow:async()=>report(true),reportReceipt:(_machine:string,at:number)=>{assert.equal(lastReceipt?.at,at);return {...lastReceipt!};}} as unknown as Parameters<typeof ordinaryProducer>[0];
     await agent.ingest([stillSnapshot(card,start,now)],[],now);await report();now++;
     const stand={set:SETS[0],start,people:new Map([[people(SETS[0])[0].id,owner]]),sources:new Map([['antigravity',source]]),agents:new Map([['laptop',agent],[card.machines[0],agent]])} as unknown as Stand;
-    ledger=new Conditioning(file,stand);const api=producers(()=>now,ms=>{now+=ms;});
-    let hookCount=0;await api.quotaProducer(stand,ledger,{before:async()=>{},after:async point=>{assert.equal(point.index,hookCount++);}});
+    ledger=new Conditioning(file,stand);const api=producers(()=>now,ms=>{
+      if(earlyQuota&&quotaIndex>=0){quotaWaits[quotaIndex].push(ms);now+=(quotaIndex===2||quotaIndex===19)&&ms>1?Math.max(1,ms-2):ms;quotaWakes[quotaIndex].push(now);}else now+=ms;
+    });
+    let hookCount=0;await api.quotaProducer(stand,ledger,{before:async()=>{quotaIndex=hookCount;quotaWaits[quotaIndex]=[];quotaWakes[quotaIndex]=[];},after:async point=>{
+      assert.equal(point.index,hookCount++);
+      if(earlyQuota){if(point.index===1)now+=700;if(point.index===4||point.index===5)now=point.waitUntil+(point.index===5?1:0);}
+    }});quotaIndex=-1;
     const beforeOrdinary=reports.length;
     await api.ordinaryProducer(demo,ledger,{before:async index=>{if(!jitter&&index===1)now+=30000;}});
     assert.equal(reports.length-beforeOrdinary,4);
@@ -83,7 +90,14 @@ for(const jitter of [false,true])test(jitter?'ordinary reports retain the captur
     const beforePrivate=reports.length;await api.privateProducer(demo,stand,ledger);assert.equal(reports.length-beforePrivate,5);
     assert.deepEqual(reports.slice(beforePrivate).map(row=>row.privateCount),[1,1,1,1,0]);
     const frequency=deepSources[0];await owner.post(`/api/boards/${owner.personalBoard}/sources/${frequency}/frequency`,{intervalMs:120000});
+    if(earlyQuota){assert.equal(ledger.quota[2].ingestMs,6);assert.equal(quotaWakes[2][0]-ledger.quota[2].sent,2998);}
     const result=await ledger.verify(frequency);assert.equal(result.status,'complete');assert.equal(result.quota.length,20);assert.equal(hookCount,20);
+    if(earlyQuota){
+      for(const index of [2,19])assert.deepEqual(quotaWakes[index].map(at=>at-result.quota[index].sent),[2998,2999,3000]);
+      assert.deepEqual(quotaWaits[0],[2994]);assert.deepEqual(quotaWaits[1],[2294],'ingest and hook time consume the original slot');
+      for(const index of [3,4,5])assert.deepEqual(quotaWaits[index],[],'an exact or late deadline needs no additional pause');
+      for(const point of result.quota)assert.equal(point.pacedAt,point.sent+3000+([3,5].includes(point.index)?1:0));
+    }
     assert.deepEqual(result.ordinaryOrdinalDeltas,[1,1,1]);
     const originalTick=ledger.ordinary[1].tick!;
     for(const tick of [undefined,{...originalTick,manual:true},{...originalTick,at:originalTick.at-1},{...originalTick,ordinal:ledger.ordinary[0].tick!.ordinal},{...originalTick,ordinal:1.5}]){

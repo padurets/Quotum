@@ -140,7 +140,9 @@ export async function quotaProducer(stand: Stand, ledger?: Conditioning, hooks?:
     const point: QuotaPoint = {index, source, sent, observedAt: Date.parse(taken.observedAt), used, ingestMs, ...reply, lastId: `${cellStart(Date.parse(taken.observedAt),cellOf(DAY))}:${Math.round((100 - used) * 100) / 100}`, waitUntil: sent + QUOTA_EVERY};
     await hooks?.after(point);
     ledger?.quotaPoint(point, {...taken, windows});
-    await pause(point.waitUntil - Date.now());point.pacedAt = Date.now();
+    let pacedAt = Date.now();
+    while (pacedAt < point.waitUntil) {await pause(point.waitUntil - pacedAt);pacedAt = Date.now();}
+    point.pacedAt = pacedAt;
   }
 }
 
