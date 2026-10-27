@@ -100,6 +100,9 @@ cohorts, then the complete first native history cohort, including its cached ret
 and repeat. It keeps ordinary passive renderer binding and stops at the first failure
 or unconfirmed cleanup. These partial diagnostic results never satisfy `bench`.
 The job still has twenty minutes; fresh processes do not imply a cold OS page cache.
+Pairing it with `history_preinput_binding` instead runs the complete history matrix once,
+binding each owned renderer before input. It keeps the same twenty-minute job and
+thirty-second command deadlines; its results remain diagnostic, never a `bench` pass.
 Chrome readiness has one twenty-second window starting immediately before the launcher
 is spawned, including its work and endpoint validation.
 After a failed owned Linux launch, the existing isolated kernel probe brackets its
@@ -141,12 +144,25 @@ collection and two-second release windows. An unconfirmed detach, helper exit or
 pipe closure fails cleanup. Missing GDB falls back to the existing page debugger;
 attached browsers and successful commands receive no native intervention.
 On Linux, ordinary owned history pages retain their original navigation identity passively,
-without extra commands before failure. Missing identity does not gate successful input.
-After an original failure and an unresponsive page probe, the existing two-second
-resolver may bind capture to that document's renderer. Missing optional metadata keeps
-the explicitly unbound capture above; an attempted but incomplete mapping permits no
-native or debugger intervention. Resolution shares the original five-second collection
-window, so insufficient remaining time can still leave capture incomplete.
+without extra page commands before failure. A single owned-process scan, bounded to one
+second, sits between the existing reachable-target evaluation and the acknowledged
+traffic-probe setup evaluation. It also checks that the observer and browser root share
+a PID namespace. Missing identity never gates successful input.
+Only Chrome 155.0.8059.39 at source revision
+`3ff7ac5a9224be9156d7f8703a06e22890aafd34` and 155.0.8059.12 at
+`384c82079f60e0b79cdca6e49efd5cfceefa5b74` qualify the internal request-ID PID
+contract. The revision comes from the existing version reply. A subsequent controlled
+accounting POST Fetch must name the pinned main frame and loader. Its cold-input witness
+survives successful cold input and HTTP-free cached return/repeat on that document.
+After the original failure, the existing process scan and browser liveness reply must
+confirm the same owned birth, renderer role and launcher root. Missing, unsupported or
+conflicting evidence permits no native or debugger fallback on this route. Navigation,
+crash, detach and disposal abort capture through the helper's existing stdin gate;
+invalidation after that gate still requires bounded release and leaves attribution
+unknown. Delivery of lifecycle events is not atomic with native intervention.
+Resolution and capture share the original five-second collection window, so insufficient
+remaining time can still leave capture incomplete. Separate diagnostic routes retain
+their pre-input metadata-trace identity.
 The manual CI `native_postmortem_control` qualifies this collector on the requested
 source and built-client hash using a separate runtime UID and matching unwind tables.
 Before the forced command, a completed metadata trace binds the page's primary frame
@@ -156,10 +172,11 @@ This preparation is diagnostic and does not run in ordinary benchmarks.
 After the command fails, the control also resolves identity on the original page
 connection using browser navigation evidence retained before the original navigation.
 It must match the pre-input PID and birth at both ends of native capture, within the
-existing collection limits. This independent pre-input oracle remains part of SDK
-qualification; it does not run in the direct history scroll control.
-It holds one synchronous HTTP request from its own fixture page until the original
-30-second command timeout, then requires native main-thread frames and confirmed
+existing collection limits. This comparison with late binding is specific to SDK
+qualification. The paired history route uses the pre-input binding before its ordinary
+gestures. This qualification control holds one synchronous HTTP request from its own
+fixture page until the original 30-second command timeout, then requires native
+main-thread frames and confirmed
 cleanup, including the fixture's pending connection. This exercises native unwinding;
 JIT frame unwinding is not qualified. It does not execute the app client,
 reproduce the original intermittent hang, qualify forced helper failures or replace
@@ -774,21 +791,21 @@ Reports retain attempted/completed/failed/aborted counts and uncertain body boun
 Proxy sockets and traffic tabs
 close before the benchmark stops its own demo.
 
-The manual CI input `history_scroll_control` requires `diagnostic_ref` and
-`expected_client_sha256`, and selects only the existing 20-minute history job.
-It runs one owned benchmark process with the original controlled traffic prefix, all
+The paired manual CI inputs `history_scroll_control` and `history_preinput_binding`
+require `diagnostic_ref` and `expected_client_sha256`, and select only the existing
+20-minute history job. Invalid pairs, other diagnostic modes and malformed pins fail
+before checkout or preparation. The pinned benchmark source can differ from the workflow
+revision; retained source and client identities describe the checked-out benchmark.
+This route runs one owned benchmark process with the original controlled traffic prefix, all
 24 native history cohorts and the six native cancellation cohorts, with every original
 assertion, reference-cut rule and deadline. The diagnostic prefix must complete without
 invalidations or budget failures. GDB is prepared before the run and first used only
-after an original failed command. In the direct history scroll control, passive original
-navigation evidence must establish the document before input; this does not bind a PID.
-Only after an original failure does the same page connection resolve its owned renderer
-and birth through a completed metadata trace, within the existing collection limit.
-Unknown or lost document or renderer identity permits neither native attach nor a page
-debugger fallback. Reports retain actual binding bookends only when it is resolved.
-The first failure stops without a diagnostic replay. Startup, compositor and legacy
-controls retain their pre-input metadata binding and existing reversal replay.
-The effects of diagnostic preparation are not qualified.
+after an original failed command. The existing metadata trace resolves the owned renderer
+PID and birth on each healthy history page before its first input; unavailable identity
+stops before that input. The existing diagnostic reversal replay remains unchanged.
+Neither input enables the separate history suffix. Without `history_preinput_binding`,
+`history_scroll_control` retains its six fresh partial prefixes and passive document
+binding. The effects of diagnostic preparation and observation are not qualified.
 This control also downloads the official debug archive
 for the installed Chrome version and installs only its unwind tables under the matching
 system build ID. Build IDs and the retained table bytes must agree; full symbol and
@@ -796,7 +813,8 @@ source tables are discarded before Chrome starts. GDB still has its two-second l
 and saved frame positions are symbolized offline. Preparation does not execute Chrome
 or GDB; its effects on the OS file cache are not qualified. A completed diagnostic is
 an observation, never a canonical benchmark pass or proof that a hang was repaired.
-After retaining the successful original result, this direct control runs twelve fixed
+The separate local `QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX=1` control, which neither manual
+route enables, retains the successful original result and then runs twelve fixed
 pairs of the original 1d/history/0ms/0.5/take1 and 30d/activity/100ms/0.5/take1 cohorts
 in fresh tabs of the same Chrome, with separate evidence and the original gestures and
 guards. The first failure, including a reference-cut change, stops without retry. The
