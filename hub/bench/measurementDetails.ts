@@ -7,11 +7,21 @@ export async function inspectMeasurementDetails(cdp:Pick<Cdp,'evaluate'>,reading
   return cdp.evaluate<Record<string,unknown>>(`(async()=>{
     const expected=${JSON.stringify(reading)};let card,trigger;
     const wait=async(test)=>{const end=Date.now()+10000;while(!test()){if(Date.now()>end)throw Error('measurement disclosure did not become ready');await new Promise(r=>setTimeout(r,20));}};
-    await wait(()=>{card=[...document.querySelectorAll('[data-widget]')].find(e=>e.dataset.widget==='source:'+expected.source);trigger=card?.querySelector('.card-head .picker>button');return trigger;});
-    trigger.scrollIntoView({block:'center'});await document.fonts.ready;await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);
-    // A newly available meter may add a node inside its already placed data area.
-    if(!card.querySelector('.card-measurements'))throw Error('measurement disclosure has no measured card body');
     const geometry=()=>[...document.querySelectorAll('.widgets>.widget,.card-measurements')].map(e=>{const b=e.getBoundingClientRect();return[b.x+scrollX,b.y+scrollY,b.width,b.height];});
+    let previous='',stable=0;
+    // Natural card heights must finish their initial historical read before the
+    // opening action is compared with its baseline, including neighbouring cards.
+    await wait(()=>{
+      card=[...document.querySelectorAll('[data-widget]')].find(e=>e.dataset.widget==='source:'+expected.source);trigger=card?.querySelector('.card-head .picker>button');
+      if(!trigger||document.querySelector('.card.is-loading,.card-head .source-settings-icon>i,.agents-panel.is-loading,.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-draw-ready="false"]')||document.getAnimations().some(animation=>animation.playState==='running'&&animation.effect?.target?.matches('.widget,.widget-body'))){stable=0;previous='';return false;}
+      // Every fixture card has an evidenced 58% allowance, even when its newer
+      // native window is missing from this historical interval.
+      const cards=[...document.querySelectorAll('.widgets>.widget .card')];
+      if(!cards.length||cards.some(node=>![...node.querySelectorAll('.card-measurements .limit-value')].some(value=>value.textContent.includes('58'))||expected.status!=='live'&&!node.querySelector('.card-measurements .key-status'))){stable=0;previous='';return false;}
+      const next=JSON.stringify(geometry());stable=next===previous?stable+1:0;previous=next;return stable>=3;
+    });
+    trigger.scrollIntoView({block:'center'});await document.fonts.ready;await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);
+    if(!card.querySelector('.card-measurements'))throw Error('measurement disclosure has no measured card body');
     const before=geometry();trigger.focus();trigger.click();
     const name=()=>[...card.querySelectorAll('.measurement-details .limit-name')].find(e=>e.textContent.includes(expected.label));
     await wait(()=>{
