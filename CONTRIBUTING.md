@@ -48,6 +48,8 @@ funds history without waking quota or wallet analytics. A separate fixed Activit
 shared-filter totals and bar values, clean-cell reuse, coalesced late work, cancelled
 responses and all transport/preparation costs under the existing pool limits.
 Emphasis owns no reader and receives no extra-read allowance.
+After the money checks, the demo stops its hub-managed measurement producer before
+opening fixed Activity baselines, preserving credentials, source holdings and history.
 Each fixed Activity period saves its bounded pool journal before checking completeness.
 With evidence enabled, its existing final phase sample also retains the journal before
 assertions. A failed page saves that partial snapshot and its phase before closing;

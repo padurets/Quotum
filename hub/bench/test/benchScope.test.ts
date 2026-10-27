@@ -27,7 +27,7 @@ const declarations=['parseArgs','main'].map(name=>{
 const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={main,parseArgs};',{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},
 }).outputText;
-type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'fixed-activity'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace'|'suffix-throw'|'suffix-budget'|'suffix-cancel'|'suffix-cleanup'|'suffix-error-cleanup'|'suffix-returned-problems'|'reversal-throw'|'measurement-details-throw'|'suffix-no-exposure';
+type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'fixed-activity'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace'|'suffix-throw'|'suffix-budget'|'suffix-cancel'|'suffix-cleanup'|'suffix-error-cleanup'|'suffix-returned-problems'|'reversal-throw'|'measurement-details-throw'|'suffix-no-exposure'|'stop-hub-sources';
 async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),diagnosticFiles=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
   const bootstraps:string[]=[];
@@ -40,7 +40,10 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   const events=new EventCounts(()=>now);for(let i=0;i<5;i++)events.push('event: ping\ndata: {}\n\n');
   const source={id:'fixture',successAt:env.TEST_FRESH_OBSERVATION?now:now-600_000,staleAfterMs:3_600_000,windows:[]};
   const overview={sources:[source],forecast:{},board:{id:'board'}};
-  const person={personalBoard:'board',cookie:'session=fixture',get:async()=>overview,post:async(url:string,body:{intervalMs:number})=>{assert.equal(url,'/api/boards/board/sources/first-card/frequency');assert.equal(body.intervalMs,120000);mark('saved-frequency');}};
+  const person={personalBoard:'board',cookie:'session=fixture',get:async()=>overview,post:async(url:string,body?:{intervalMs:number})=>{
+    if(url==='/api/prototype/stop-hub-sources'){assert.equal(body,undefined);mark('stop-hub-sources');if(fault==='stop-hub-sources')throw Error('stop-hub-sources-original');return;}
+    assert.equal(url,'/api/boards/board/sources/first-card/frequency');assert.equal(body?.intervalMs,120000);mark('saved-frequency');
+  }};
   const set={id:'all',scene:'still'},stand={set,start:now,people:new Map([['ana',person]])};
   const browser={owned:true,endpoint:'fixture',launchReport:()=>({mode:'owned'}),close:async()=>{
     mark('browser-close');if(fault==='browser-close'||env.TEST_BROWSER_CLOSE==='1')throw Error('browser-close-red');
@@ -160,6 +163,19 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
 }
 const tail=['measure','work','observed-work','private-work','frequency','panning','credits','money','fixed-activity','measurement-details'];
 const order=(calls:string[])=>calls.filter(call=>call==='history'||call==='openTab'||tail.includes(call));
+for(const scope of ['all','dashboard','updates'])test(`${scope} stops scheduled money polls before opening fixed Activity`,async()=>{
+  const out=await run(['--scope',scope]);assert.equal(out.error,undefined);assert.deepEqual(out.exits,[0]);
+  const expected=['money','stop-hub-sources','phase:fixed-activity','fixed-activity'];
+  assert.deepEqual(out.calls.filter(call=>expected.includes(call)),expected);
+});
+for(const scope of ['all','updates'])test(`${scope} refuses fixed Activity after a failed producer stop and still cleans up`,async()=>{
+  const out=await run(['--scope',scope],'stop-hub-sources');assert.deepEqual(out.exits,[1]);
+  assert.ok(out.logs.some(line=>line.includes('stop-hub-sources-original')));
+  assert.ok(!out.calls.includes('phase:fixed-activity'));assert.ok(!out.calls.includes('fixed-activity'));
+  assert.ok(!out.calls.includes('measurement-details'));
+  assert.equal((out.saved.get('coverage') as ReturnType<Coverage['summary']>).status,'incomplete');
+  for(const action of ['stream-close','conditioning-close','browser-close','demo-stop'])assert.equal(out.calls.filter(call=>call===action).length,1);
+});
 test('actual main ages the whole fixture and still waits for the opened page to settle',async()=>{
   const cell=300_000,minute=60_000,base=Date.parse('2026-10-15T12:00:10Z');
   for(let phase=0;phase<5;phase++){

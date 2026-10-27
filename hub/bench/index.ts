@@ -540,6 +540,8 @@ async function main() {
     const monetary=await moneyPhase(demo,stand,cdp,coverage,evidence);
     evidence.checked(monetary.problems);
     evidence.save('money', monetary);
+    // Fixed Activity owns work updates; scheduled money polls would add unrelated history reads.
+    await ana.post('/api/prototype/stop-hub-sources');
     evidence.begin('fixed-activity');
     say('checking paint-only emphasis and shared Activity filters, late-work cells and cancellation at 24h/30d');
     const selectedActivity=await fixedActivity(browser,stand,evidence,coverage);

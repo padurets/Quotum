@@ -44,5 +44,10 @@ export const demoAdditionControls: ExtendHub = async (app, hub, guards) => {
       if (request.body?.lostReply === true) lostReplies.add(user.id); else lostReplies.delete(user.id);
       return {ok: true};
     });
+    scope.post('/api/prototype/stop-hub-sources', (_request, reply) => {
+      if (!hub.hubSources) return reply.code(503).send({error: 'prototype_hub_sources_unavailable'});
+      hub.hubSources.stop();
+      return {ok: true};
+    });
   });
 };
