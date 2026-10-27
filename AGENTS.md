@@ -63,7 +63,8 @@ The default command retains history followed by the full dashboard sequence. CI 
 `--scope history`, `--scope updates` and `--scope panning` on independent runners with
 20-minute limits; all three must succeed. `--scope dashboard` retains the composite
 dashboard sequence for local use and existing diagnostics. New leaf scopes reject
-diagnostic modes. Named coverage and minimum samples are mandatory; partial phase
+diagnostic modes except the owned CI, source/client-pinned `native-trace` control
+for `quota/24h` with `--scope panning`. Named coverage and minimum samples are mandatory; partial phase
 evidence must preserve failures and cleanup outcomes.
 Native horizontal wheel and Shift-drag scenarios start separately from each of the five
 charts (five-hour limits, weekly limits, activity, balance and subscription funds), moving all five at 24h and 30d

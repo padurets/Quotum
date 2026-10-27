@@ -297,6 +297,8 @@ For a standalone quota input-gap capture, owned CI `native-trace` also accepts
 job. This control requires an exact source SHA matching a clean checkout, the expected
 compiled-client SHA256 and a diagnostics directory before fixture preparation. It
 rejects attached browsers, other scopes, CPU profiling and other diagnostic controls.
+Chrome discovery is checked before preparation; an explicit `QUOTUM_CHROME`
+override keeps its existing validation at launch.
 It runs the same conditioning and all ten panning cells in their ordinary order;
 only quota/24h receives the detailed journal. Its existing sampler tick counts raw
 callbacks independently of movement. Each maximum timestamp or delivery gap retains
