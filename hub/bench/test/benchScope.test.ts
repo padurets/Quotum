@@ -31,7 +31,7 @@ type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'
 async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),diagnosticFiles=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
   const bootstraps:string[]=[];
-  const listeners=new Map<string,()=>void>(),waits:number[]=[];let now=startedAt,phaseStart=now,metricReads=0,retentionReads=0;
+  const listeners=new Map<string,()=>void>(),waits:number[]=[];let now=startedAt,phaseStart=now,metricReads=0,retentionReads=0,chromeFinds=0;
   let terminal!:()=>void;const exited=new Promise<void>(resolve=>{terminal=resolve;});let cancellationStarted=false,suffixCalls=0;const suffixError=new Error('suffix-original');
   const mark=(name:string)=>{calls.push(name);};
   const red=(name:string)=>fault===name||fault==='all-red';
@@ -87,8 +87,8 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   class ChromeLaunchError extends Error {}
   class IdleCpuDiagnostic {
     readonly binding={rememberInjected:(frame:number,source:string,label:string)=>{assert.equal(frame,1);assert.ok(source.length);assert.equal(label,'idle-probe');mark('idle-trace-injected');}};
-    constructor(_cdp:unknown,_save:unknown,_client:unknown,owned:boolean,readonly mode:string,readonly signal?:AbortSignal){
-      assert.equal(owned,true);assert.ok(['native-trace','native-profile','trace','profile'].includes(mode));
+    constructor(_cdp:unknown,_save:unknown,_client:unknown,owned:boolean,readonly mode:string,readonly signal?:AbortSignal,inputPump=false){
+      assert.equal(inputPump,env.QUOTUM_BENCH_NATIVE_TARGET==='quota/24h');assert.equal(owned,true);assert.ok(['native-trace','native-profile','trace','profile'].includes(mode));
       if(mode.startsWith('native-')){assert.ok(signal);signal.throwIfAborted();mark('native-trace-created');}else mark('idle-trace-created');
     }
     async start(){mark('idle-trace-start');}
@@ -108,11 +108,11 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     BENCH_SCOPES,Coverage,Conditioning,safeEvidence,statSync:()=>({size:env.TEST_SUFFIX_BIG_BASELINE?1024*1024+1:Buffer.byteLength(JSON.stringify(safeEvidence(saved.get('result'))))}),
     readFileSync:()=>env.TEST_SUFFIX_BAD_BASELINE?'missing':JSON.stringify(safeEvidence(saved.get('result'))),
     mkdirSync:()=>{},writeFileSync:(file:string,body:string)=>diagnosticFiles.set(path.basename(file,'.json'),JSON.parse(body)),
-    sourceIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL||env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL||env.QUOTUM_BENCH_HISTORY_FIRST_NATIVE?{sourceHead:env.QUOTUM_BENCH_SOURCE_SHA??null,checkoutSha:'1'.repeat(40)}:{checkoutSha:'fixture'},
+    sourceIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL||env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL||env.QUOTUM_BENCH_HISTORY_FIRST_NATIVE||env.QUOTUM_BENCH_NATIVE_TARGET==='quota/24h'?{sourceHead:env.QUOTUM_BENCH_SOURCE_SHA??null,checkoutSha:'1'.repeat(40)}:{checkoutSha:'fixture'},
     execFileSync:()=>env.TEST_CONTROL_DIRTY??'',
     USAGE:'fixture usage',IDLE:{ci:120,full:300},SHOWN_MS:30_000,MEASURED:'fixture',MEASUREMENTS:20,HISTORY_BYTES_PER_MEASUREMENT,
     SETS:[set],fixtureTiming,panningSet:(value:unknown)=>value,people:()=>[{id:'ana'}],freePort:async()=>{mark('freePort');return 1234;},
-    addressOf:()=>({base:'http://127.0.0.1:1234'}),prepare:async()=>{mark('prepare');},findChrome:()=>'/unused/chrome',
+    addressOf:()=>({base:'http://127.0.0.1:1234'}),prepare:async()=>{mark('prepare');},findChrome:()=>{chromeFinds++;return env.TEST_CONTROL_NO_CHROME?null:'/unused/chrome';},
     seedPanningBudgets:()=>{mark('seed');},hear:async()=>({close:()=>{mark('stream-close');},reset:(window?:{from:number;to:number})=>{events.reset(window);for(let i=0;i<5;i++)events.push('event: ping\ndata: {}\n\n');},counts:()=>events.counts(),boardCounts:()=>events.boardCounts(),calendar:()=>events.calendar(),contacts:()=>events.contacts(),hints:()=>events.hints()}),
     launchChrome:async()=>{mark('launch');return browser;},openTab:async()=>{mark('openTab');return{cdp};},
     historyProxy:async(_upstream:string,scope:RunOwner)=>{
@@ -150,13 +150,13 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     moneyPhase:async(_demo:unknown,_stand:unknown,_cdp:unknown,coverage:Coverage)=>{mark('money');for(const prefix of ['updates/wallet/','updates/wallet-heartbeat','updates/inventory','updates/linked-wallet','updates/currencies','updates/money-view'])receipts(coverage,'updates',prefix,problems('money'));return{problems:problems('money')};},
     fixedActivity:async(_browser:unknown,_stand:unknown,_evidence:unknown,coverage:Coverage)=>{mark('fixed-activity');receipts(coverage,'updates','updates/activity/',problems('fixed-activity'));return{reports:[],problems:problems('fixed-activity')};},
     measurementDetails:async(actualBrowser:unknown,actualOwner:unknown,coverage:Coverage)=>{assert.equal(actualBrowser,browser);assert.equal(actualOwner,person);mark('measurement-details');if(fault==='cancel'&&args.includes('updates')){listeners.get('SIGTERM')!();await exited;throw Error('cancelled-update');}if(fault==='measurement-details-throw')throw new Error('measurement-details-original');receipts(coverage,'updates','updates/disclosure/');return Array.from({length:16},(_,index)=>({index}));},
-    clientIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL||env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL||env.QUOTUM_BENCH_HISTORY_FIRST_NATIVE?{status:'available',sha256:'2'.repeat(64)}:{status:'unavailable'},
+    clientIdentity:()=>env.TEST_CONTROL_CLIENT_UNAVAILABLE?{status:'unavailable'}:env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL||env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL||env.QUOTUM_BENCH_HISTORY_FIRST_NATIVE||env.QUOTUM_BENCH_NATIVE_TARGET==='quota/24h'?{status:'available',sha256:'2'.repeat(64)}:{status:'unavailable'},
   };
   runInNewContext(code,context);
   const selected=(context as unknown as {selected:{main():Promise<void>;parseArgs(args:string[]):unknown}}).selected;
   let error:unknown;try{await selected.main();}catch(caught){error=caught;}
   if(cancellationStarted)await exited;
-  return{calls,saved,journalEvidence,bootstraps,diagnosticFiles,exits,statuses,logs,error,waits,fixtureStart:stand.start,parse:selected.parseArgs};
+  return{calls,saved,journalEvidence,bootstraps,diagnosticFiles,exits,statuses,logs,error,waits,chromeFinds,fixtureStart:stand.start,parse:selected.parseArgs};
 }
 const tail=['measure','work','observed-work','private-work','frequency','panning','credits','money','fixed-activity','measurement-details'];
 const order=(calls:string[])=>calls.filter(call=>call==='history'||call==='openTab'||tail.includes(call));
@@ -809,4 +809,34 @@ for(const [scope,fault] of [['updates','measure'],['updates','credits-throw'],['
   const out=await run(['--scope',scope],fault);assert.notEqual(out.exits[0],0);assert.equal((out.saved.get('coverage') as ReturnType<Coverage['summary']>).status,'incomplete');
   for(const action of ['browser-close','demo-stop','conditioning-close'])assert.equal(out.calls.filter(call=>call===action).length,1);
   assert.deepEqual(out.statuses,[fault==='cancel'?'cancelled':'failed']);
+});
+
+const quota24Control={QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'native-trace',QUOTUM_BENCH_NATIVE_TARGET:'quota/24h',QUOTUM_BENCH_SOURCE_SHA:'1'.repeat(40),QUOTUM_BENCH_EXPECTED_CLIENT_SHA256:'2'.repeat(64),QUOTUM_BENCH_DIAGNOSTICS_DIR:'/fixture/diagnostics'};
+test('quota24 trace enters the actual standalone conditioning and all ten scenarios',async()=>{
+  const result=await run(['--scope','panning'],undefined,quota24Control);
+  assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);
+  assert.deepEqual(order(result.calls),['openTab','panning']);assert.equal(result.chromeFinds,1);
+  for(const name of ['conditioning-quota','conditioning-ordinary','conditioning-observed','conditioning-private','conditioning-verify','frequency-source','saved-frequency','native-target:quota/24h','native-trace-created'])assert.ok(result.calls.includes(name),name);
+  assert.equal((result.saved.get('panning') as {reports:unknown[]}).reports.length,10);
+  assert.deepEqual(result.statuses,['diagnostic']);
+  assert.ok(result.bootstraps.some(source=>source.includes('__quotumPanPreparations')));
+  for(const name of ['stream-close','native-trace-close','browser-close','demo-stop'])assert.equal(result.calls.filter(call=>call===name).length,1);
+});
+
+test('quota24 trace rejects every unowned route, conflicting diagnostic and invalid provenance before preparation',async()=>{
+  for(const [args,patch,ci] of [
+    ...['all','dashboard','history','updates'].map(scope=>[['--scope',scope],{},true]),
+    [['--scope','panning','--cdp','http://fixture'],{},true],[['--scope','panning'],{},false],
+    ...['native-profile','profile','trace',''].map(mode=>[['--scope','panning'],{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode},true]),
+    ...['QUOTUM_BENCH_DIAGNOSTICS_DIR','QUOTUM_BENCH_SOURCE_SHA','QUOTUM_BENCH_EXPECTED_CLIENT_SHA256'].map(key=>[['--scope','panning'],{[key]:''},true]),
+    ...['QUOTUM_BENCH_CAPTION_CONTROL','QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL','QUOTUM_BENCH_HISTORY_SCROLL_CONTROL','QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX','QUOTUM_BENCH_HISTORY_FIRST_NATIVE','QUOTUM_C3_CHROME','QUOTUM_BENCH_DIAGNOSE_NATIVE','QUOTUM_BENCH_REVERSAL_PROBE','QUOTUM_BENCH_DIAGNOSE_PANNING'].map(key=>[['--scope','panning'],{[key]:'1'},true]),
+    ...[{TEST_CONTROL_NO_CHROME:'1'},{TEST_CONTROL_CLIENT_UNAVAILABLE:'1'},{QUOTUM_BENCH_SOURCE_SHA:'main'},{QUOTUM_BENCH_SOURCE_SHA:'3'.repeat(40)},{QUOTUM_BENCH_EXPECTED_CLIENT_SHA256:'bad'},{QUOTUM_BENCH_EXPECTED_CLIENT_SHA256:'3'.repeat(64)},{TEST_CONTROL_DIRTY:' M tracked.ts'}].map(patch=>[['--scope','panning'],patch,true]),
+  ] as [string[],Record<string,string>,boolean][]){
+    const result=await run(args,undefined,{...quota24Control,...patch},ci);assert.ok(result.error,JSON.stringify({args,patch,ci}));assert.deepEqual(result.calls,[],'no preparation, port, fixture or browser work');
+  }
+});
+for(const fault of ['panning','panning-throw','cancel'] as const)test('quota24 trace preserves '+fault+' and closes the original owners',async()=>{
+  const result=await run(['--scope','panning'],fault,quota24Control);assert.deepEqual(result.exits,[1]);
+  for(const name of ['stream-close','native-trace-close','browser-close','demo-stop'])assert.equal(result.calls.filter(call=>call===name).length,1);
+  assert.ok(!result.calls.includes('history'));assert.ok(!result.calls.includes('measure'));
 });

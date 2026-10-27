@@ -304,7 +304,7 @@ test('missing or mismatched source binding cannot credit Clock ownership',()=>{
 // Proposed trace-only controls; these execute no browser and infer no CPU category.
 const nativeMetadata=(pid=101)=>({name:'TracingStartedInBrowser',ph:'I',ts:1,pid:100,tid:100,args:{data:{frames:[{frame:'own-frame',processId:pid,isOutermostMainFrame:true,isInPrimaryMainFrame:true}]}}});
 class NativeCdpFake extends CurrentCdpFake {
-  skipMetadata=false;loss:boolean|undefined=false;loader='loader-1';origin=1000;page=10;
+  inputPump=false;skipMetadata=false;loss:boolean|undefined=false;loader='loader-1';origin=1000;page=10;
   override async evaluate<T>(expression:string,signal?:AbortSignal):Promise<T>{
     signal?.throwIfAborted();this.commands.push('evaluate');
     const start=expression.includes('quotum-native-start');assert.ok(start||expression.includes('quotum-native-end'));
@@ -316,7 +316,7 @@ class NativeCdpFake extends CurrentCdpFake {
     signal?.throwIfAborted();
     if(method==='Page.getFrameTree'){this.commands.push(method);return {frameTree:{frame:{id:'own-frame',loaderId:this.loader}}} as T;}
     if(method==='Tracing.start'){
-      this.commands.push(method);assert.equal((params as {categories:string}).categories,'toplevel,cc,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.frame,disabled-by-default-cc.debug.scheduler');
+      this.commands.push(method);assert.equal((params as {categories:string}).categories,'toplevel,cc,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.frame,disabled-by-default-cc.debug.scheduler'+(this.inputPump?',input':''));
       if(!this.skipMetadata)this.emit('Tracing.dataCollected',{value:[nativeMetadata(),{name:'thread_name',ph:'M',pid:101,tid:101,args:{name:'CrRendererMain'}}]});
       return {} as T;
     }
@@ -335,9 +335,9 @@ const nativeEvents=[
   {name:'RunTask',ph:'E',ts:1_026_000,tts:1400,pid:101,tid:101},
   {name:'MajorGC',ph:'X',ts:1_027_000,dur:300,pid:102,tid:102},
 ];
-async function captureNative(configure?:(cdp:NativeCdpFake)=>void,during?:(cdp:NativeCdpFake)=>void,collection:'native-trace'|'native-profile'='native-trace'){
-  const cdp=new NativeCdpFake({forbidProfiler:collection==='native-trace'}),saved:Saved[]=[];configure?.(cdp);
-  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value,large)=>saved.push({name,value,large}),client,true,collection);
+async function captureNative(configure?:(cdp:NativeCdpFake)=>void,during?:(cdp:NativeCdpFake)=>void,collection:'native-trace'|'native-profile'='native-trace',inputPump=false){
+  const cdp=new NativeCdpFake({forbidProfiler:collection==='native-trace'}),saved:Saved[]=[];cdp.inputPump=inputPump;configure?.(cdp);
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value,large)=>saved.push({name,value,large}),client,true,collection,undefined,inputPump);
   cdp.emit('Network.responseReceived',{type:'Script',requestId:'asset-1',response:{url:asset}});
   await diagnostic.start();cdp.emit('Tracing.dataCollected',{value:nativeEvents});during?.(cdp);
   cdp.commands.push('ORIGINAL.report-frozen');await diagnostic.stop();await diagnostic.bindAndClose();await diagnostic.close();
@@ -561,4 +561,16 @@ test('native-profile owner abort still attempts Profiler.disable when Profiler.s
   for(const name of ['Tracing.end','Runtime.disable','Profiler.stop','Profiler.disable'])assert.equal(cdp.commands.filter(value=>value===name).length,1);
   assert.equal(signals.length,4);assert.ok(signals.every(signal=>signal===signals[0]));
   for(const listeners of cdp.listeners.values())assert.equal(listeners.length,0);
+});
+
+test('quota24 input pump trace retains only the fixed numeric event across distinct processes',async()=>{
+  const pump={name:'SyntheticGestureController::Flush',ph:'X',ts:1_030_000,dur:600,pid:100,tid:109,tts:2,tdur:3,args:{data:{frame:'own-frame',id:7,message:'quotum-native-start'},role:'private-canary',url:'private-canary'}};
+  const result=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:[pump,{...pump,name:'SyntheticGestureController::private-canary'},{...pump,pid:NaN}]}),'native-trace',true);
+  const rows=result.receipt.events as any[],row=rows.find(row=>row.name===pump.name);assert.ok(row);
+  assert.deepEqual([row.phase,row.ts,row.duration,row.threadTs,row.threadDuration,row.pid,row.tid],['X',1030000,600,2,3,100,109]);
+  assert.equal(row.frame,null);assert.equal(row.id,null);assert.equal(row.marker,null);assert.equal(row.source,null);
+  assert.equal(record(result.receipt.scope).pid,101,'pump PID never replaces the actual renderer binding');assert.equal(record(result.receipt.scope).status,'complete');
+  assert.doesNotMatch(JSON.stringify(result.receipt),/private-canary/);assert.equal(record(result.receipt.capture).status,'insufficient-evidence','invalid pump identity stays rejected');
+  const legacy=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:[pump]}));assert.ok(!(legacy.receipt.events as any[]).some(row=>row.name===pump.name));
+  assert.throws(()=>new IdleCpuDiagnostic(new NativeCdpFake() as unknown as Cdp,()=>{},client,true,'native-profile',undefined,true),/requires native-trace/);
 });

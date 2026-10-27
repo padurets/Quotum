@@ -81,7 +81,8 @@ Direct pull-request CI and Desktop runs cancel superseded runs of the same workf
 and PR. Different PRs, main pushes, manual runs and reusable release calls remain
 independent. CPU diagnostics (`trace`,
 `profile`, `native-trace`, `native-profile`) support `all` or `dashboard`; caption control
-requires `dashboard`. The ordinary history job attempts to prepare GDB and matching
+requires `dashboard`. The standalone quota trace described below requires `panning`.
+The ordinary history job attempts to prepare GDB and matching
 Chrome unwind tables in an optional two-minute step inside its existing job limit.
 Its setup result remains visible; setup failure still runs every benchmark check.
 Native capture starts only after the original command deadline fails and retains
@@ -290,6 +291,23 @@ intervals, consumed inputs, wrapped RAF callbacks and preparation slices share a
 4096-entry journal and a 4 MiB artifact bound. Missing coverage or overflow is
 insufficient evidence; trace overlap does not establish causal ownership, and
 instrumented runs cannot satisfy the required benchmark.
+For a standalone quota input-gap capture, owned CI `native-trace` also accepts
+`QUOTUM_BENCH_NATIVE_TARGET=quota/24h` with `--ci --scope panning`. The manual
+`native_trace` and `native_target=quota/24h` inputs select that scope in the existing
+job. This control requires an exact source SHA matching a clean checkout, the expected
+compiled-client SHA256 and a diagnostics directory before fixture preparation. It
+rejects attached browsers, other scopes, CPU profiling and other diagnostic controls.
+It runs the same conditioning and all ten panning cells in their ordinary order;
+only quota/24h receives the detailed journal. Its existing sampler tick counts raw
+callbacks independently of movement. Each maximum timestamp or delivery gap retains
+its own capture-stream adjacent event pair, including ordinals, both clocks, queued
+delay and tick snapshots. Detailed consumed inputs retain their eligible IDs and capture
+ordinals, so their continuity guard can be derived separately from the capture stream.
+Trace category `input` retains the fixed `SyntheticGestureController::Flush` name
+and numeric fields without arguments; other scopes keep their existing redaction.
+A pump PID is not a renderer identity. Existing trace and journal bounds, deadlines and workload budgets
+apply. Missing capture remains insufficient evidence; a capture with no target gap
+has not exercised that condition and cannot establish a canonical pass.
 The optional native trace retains fixed raster, tile preparation and activation scopes
 from its existing `cc` category, with numeric preparation IDs and task counts. These
 IDs are local to a tile manager; completed CPU tasks do not prove GPU readiness or

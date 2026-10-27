@@ -46,7 +46,7 @@ on:
         required: false
         type: choice
         default: activity/24h
-        options: [activity/24h, session/30d]
+        options: [activity/24h, session/30d, quota/24h]
       caption_control:
         description: Compare the previous and current live captions with an A1/B/A2 control
         required: false
@@ -355,13 +355,13 @@ jobs:
           npm run build --prefix "$baseline/hub"
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope "${BENCH_SCOPE}"
         env:
-          BENCH_SCOPE: ${{ (inputs.native_trace || inputs.native_profile || inputs.caption_control) && 'dashboard' || 'updates' }}
+          BENCH_SCOPE: ${{ inputs.native_trace && inputs.native_target == 'quota/24h' && 'panning' || (inputs.native_trace || inputs.native_profile || inputs.caption_control) && 'dashboard' || 'updates' }}
           QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.native_profile && 'native-profile' || inputs.native_trace && 'native-trace' || '' }}
           QUOTUM_BENCH_NATIVE_TARGET: ${{ (inputs.native_trace || inputs.native_profile) && inputs.native_target || '' }}
           QUOTUM_BENCH_SOURCE_SHA: ${{ (inputs.native_trace || inputs.native_profile || inputs.caption_control) && inputs.diagnostic_ref || '' }}
           QUOTUM_BENCH_CAPTION_CONTROL: ${{ inputs.caption_control && '1' || '' }}
           QUOTUM_BENCH_CAPTION_BASELINE_DIR: ${{ runner.temp }}/quotum-caption-baseline/hub/dist/client/assets
-          QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ inputs.caption_control && inputs.expected_client_sha256 || '' }}
+          QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ (inputs.caption_control || (inputs.native_trace && inputs.native_target == 'quota/24h')) && inputs.expected_client_sha256 || '' }}
           QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-bench-dashboard
       - name: Benchmark evidence
         if: always()

@@ -121,6 +121,7 @@ async function main() {
   const captionMode = process.env.QUOTUM_BENCH_CAPTION_CONTROL;
   const nativeFrameMode=idleCpuMode==='native-trace'||idleCpuMode==='native-profile';
   const nativeFrameTarget=process.env.QUOTUM_BENCH_NATIVE_TARGET||'activity/24h';
+  const quota24Trace=idleCpuMode==='native-trace'&&nativeFrameTarget==='quota/24h';
   const poolDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL;
   const scrollControl=process.env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL;
   const historySuffix=process.env.QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX;
@@ -141,30 +142,32 @@ async function main() {
     writeFileSync(path.join(diagnosticDirectory,name+'.json'),Buffer.byteLength(data)<=limit?data:JSON.stringify({mode:'diagnostic',status:'insufficient-evidence',reason:'artifact size',bytes:Buffer.byteLength(data),limit}));
   };
   const bind = process.env.QUOTUM_BIND || '127.0.0.1';
-  let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
+  let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>=null;
   try {
-    if((options.scope==='updates'||options.scope==='panning')&&[idleCpuMode,captionMode,poolDiagnostic,scrollControl,historySuffix,firstNative,process.env.QUOTUM_C3_CHROME,process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE==='1',process.env.QUOTUM_BENCH_REVERSAL_PROBE==='1',process.env.QUOTUM_BENCH_NATIVE_TARGET].some(Boolean))throw new Stop('Leaf benchmark scopes cannot be combined with diagnostics');
+    if(nativeFrameTarget==='quota/24h'&&(!quota24Trace||!options.ci||options.scope!=='panning'||options.cdp||captionMode||poolDiagnostic||scrollControl||historySuffix||firstNative||process.env.QUOTUM_C3_CHROME||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE||process.env.QUOTUM_BENCH_REVERSAL_PROBE||!process.env.QUOTUM_BENCH_DIAGNOSTICS_DIR))throw new Stop('Unknown or conflicting quota24 trace control');
+    if((options.scope==='updates'||options.scope==='panning')&&!quota24Trace&&[idleCpuMode,captionMode,poolDiagnostic,scrollControl,historySuffix,firstNative,process.env.QUOTUM_C3_CHROME,process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE==='1',process.env.QUOTUM_BENCH_REVERSAL_PROBE==='1',process.env.QUOTUM_BENCH_NATIVE_TARGET].some(Boolean))throw new Stop('Leaf benchmark scopes cannot be combined with diagnostics');
     if(firstNative&&(firstNative!=='1'||!options.ci||options.scope!=='history'||options.cdp||scrollControl||historySuffix||idleCpuMode||captionMode||poolDiagnostic||process.env.QUOTUM_C3_CHROME||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE||process.env.QUOTUM_BENCH_REVERSAL_PROBE||!process.env.QUOTUM_BENCH_DIAGNOSTICS_DIR))throw new Stop('Unknown or conflicting first native prefix');
     if(historySuffix&&(historySuffix!=='1'||scrollControl!=='1'||process.env.QUOTUM_C3_CHROME||!process.env.QUOTUM_BENCH_DIAGNOSTICS_DIR))throw new Stop('Unknown or conflicting history suffix');
     const historyPoolControl=poolDiagnostic==='1'&&options.ci&&options.scope==='history'&&!options.cdp&&!idleCpuMode&&!captionMode&&!scrollControl&&!process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE&&!process.env.QUOTUM_BENCH_REVERSAL_PROBE;
     if(scrollControl){
       if(scrollControl!=='1'||!options.ci||options.scope!=='history'||options.cdp||idleCpuMode||captionMode||poolDiagnostic||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE||process.env.QUOTUM_BENCH_REVERSAL_PROBE)throw new Stop('Unknown or conflicting history scroll control');
     }
-    if(scrollControl||historyPoolControl||firstNative){
+    if(scrollControl||historyPoolControl||firstNative||quota24Trace){
       const source=sourceIdentity(),client=clientIdentity(),expected=process.env.QUOTUM_BENCH_EXPECTED_CLIENT_SHA256;
-      if(!/^[a-f0-9]{40}$/.test(source.sourceHead??'')||source.checkoutSha!==source.sourceHead||!/^[a-f0-9]{64}$/.test(expected??'')||client.status!=='available'||client.sha256!==expected||execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim())throw new Stop('History control source or client mismatch');
-      evidence.save(historyPoolControl?'history-pool-source':'history-scroll-source',{mode:'diagnostic',sha:source.sourceHead,checkoutHash:source.checkoutSha,eventHash:source.eventSha,clientHash:client.sha256,expectedClientHash:expected});
+      if(!/^[a-f0-9]{40}$/.test(source.sourceHead??'')||source.checkoutSha!==source.sourceHead||!/^[a-f0-9]{64}$/.test(expected??'')||client.status!=='available'||client.sha256!==expected||execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim())throw new Stop(quota24Trace?'Quota24 trace source or client mismatch':'History control source or client mismatch');
+      evidence.save(quota24Trace?'native-frame-control-source':historyPoolControl?'history-pool-source':'history-scroll-source',{mode:'diagnostic',sha:source.sourceHead,checkoutHash:source.checkoutSha,eventHash:source.eventSha,clientHash:client.sha256,expectedClientHash:expected});
     }
     if (['PANNING', 'IDLE', 'IDLE_TIMING', 'STARTUP_WAITS'].some(mode => process.env['QUOTUM_BENCH_DIAGNOSE_' + mode])) throw new Stop('Removed benchmark diagnostic mode');
     if (captionMode && (captionMode !== '1' || !options.ci || options.scope !== 'dashboard' || options.cdp || idleCpuMode || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting caption control mode');
     const diagnostics = [idleCpuMode&&options.scope==='dashboard'?undefined:idleCpuMode, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE];
     if (options.scope !== 'all' && options.scope !== 'updates' && options.scope !== 'panning' && diagnostics.some(Boolean)&&!historyPoolControl) throw new Stop('Partial benchmark scopes cannot be combined with diagnostics');
+    if(quota24Trace){chrome=findChrome(process.env);if(!chrome)throw new Stop('No Chrome for quota24 trace control');}
     address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
     if (idleCpuMode && (!['trace','profile','native-trace','native-profile'].includes(idleCpuMode) || !options.ci || options.cdp || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
     if (poolDiagnostic && (poolDiagnostic !== '1' || !options.ci || options.cdp || idleCpuMode || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting history pool diagnostic mode');
-    if (process.env.QUOTUM_BENCH_NATIVE_TARGET && (!nativeFrameMode || !['activity/24h','session/30d'].includes(nativeFrameTarget))) throw new Stop('Unknown or conflicting native trace target');
+    if (process.env.QUOTUM_BENCH_NATIVE_TARGET && (!nativeFrameMode || !['activity/24h','session/30d','quota/24h'].includes(nativeFrameTarget))) throw new Stop('Unknown or conflicting native trace target');
     await prepare(address);
-    chrome = options.cdp ? null : findChrome(process.env);
+    if(!quota24Trace)chrome = options.cdp ? null : findChrome(process.env);
     if (!options.cdp && !chrome) throw new Stop('No Chrome to run: set QUOTUM_CHROME, put google-chrome or chromium on PATH, or pass --cdp <http://host:port>.');
     evidence.end();
   } catch (error) {
@@ -336,7 +339,7 @@ async function main() {
           period:p?{generation:p.generation,revision:p.revision,workNeeded:p.workNeeded,dirty:[...p.dirtyScopes],error:p.get().error,calendar:p.calendar.state.error,calendarNeeded:p.calendar.needed,completed:p.transport.completed,failed:p.transport.failed,
             flights:[...p.transport.flights].map(f=>({extras:f.extras,preparing:!!f.preparing,aborted:f.controller.signal.aborted,sections:Object.keys(f.intent.request)}))}:null};
       };};
-      ${nativeFrameMode&&nativeFrameTarget==='session/30d'?`(() => {
+      ${nativeFrameMode&&(nativeFrameTarget==='session/30d'||quota24Trace)?`(() => {
         const inspect=window.__quotumInspectPreparations;
         window.__quotumInspectPreparations=value=>{if(typeof inspect==='function')inspect(value);window.__quotumPanPreparations=value;};
       })();`:''}
@@ -359,7 +362,7 @@ async function main() {
       evidence.begin('panning');
       const nativeFrameTrace=nativeFrameMode?()=>{
         const save=(name:string,value:unknown,large=false)=>large?evidence.saveTrace(name,value):evidence.save(name,value);
-        const trace=new IdleCpuDiagnostic(cdp,save,clientIdentity(),!options.cdp,idleCpuMode==='native-profile'?'native-profile':'native-trace',owner.signal);
+        const trace=new IdleCpuDiagnostic(cdp,save,clientIdentity(),!options.cdp,idleCpuMode==='native-profile'?'native-profile':'native-trace',owner.signal,quota24Trace);
         owner.resource(()=>trace.close());
         evidence.save('native-frame-source',sourceIdentity());
         return trace;
