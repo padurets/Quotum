@@ -16,12 +16,13 @@ import {admitMeasurement, type MeasurementPolicy} from './domain/measurementPoli
 import {MeasurementSelection} from './measurementSelection.js';
 import type {ClientProvider} from './domain/providers.js';
 
-export type IngestResult = {accepted: number; duplicates: number; failures: number; policySuppressed?: number; device: {id: string}};
+export type IngestResult = {accepted: number; duplicates: number; failures: number; completions?: number; policySuppressed?: number; device: {id: string}};
 
 /** What a device is told of each subscription; a device following the hub's pace also learns whether it is on duty and when to ask again. */
 export type CheckinResult = {
   subscriptions: {provider: Provider; measure: boolean; until: string; onDuty?: boolean; askInMs?: number; nextInMs?: number; commandId?: string; accountKey?: string}[];
   policy?: MeasurementPolicy;
+  capabilities:{accountRosters:1;collectionCompletions:1};
 };
 
 /** Who is delivering: a device with its own token, or a machine with its person's machine token. */
@@ -98,15 +99,17 @@ export class Ingest {
     // A measurement from the future would hide every real one after it as a duplicate.
     const future = [...batch.snapshots, ...batch.failures].find(item => item.observedAt + skew > now + CLOCK_TOLERANCE_MS);
     if (future) throw new Invalid('observedAt');
+    if(batch.completions.some(c=>c.completedAt+skew>now+CLOCK_TOLERANCE_MS))throw new Invalid('completedAt');
 
     const attention = this.attention?.begin();
     const accepted = this.directory.transaction(() => {
       const device = this.device(credential, batch, now);
-      const result: IngestResult = {accepted: 0, duplicates: 0, failures: 0, device: {id: device.id}};
+      const result: IngestResult = {accepted: 0, duplicates: 0, failures: 0, completions:0, device: {id: device.id}};
       const policy = this.store.measurementPolicies.device(device.id);
       // Every source the batch is about: its pace and its holder's duty move even when nothing new is recorded.
       const touched = new Set<string>();
       const evidenceGroups=new Map<ClientProvider,Set<string>>();
+      const observations=new Map<ClientProvider,Map<string,number>>();
 
       for (const snapshot of [...batch.snapshots].sort((a, b) => a.observedAt - b.observedAt)) {
         if (admitMeasurement(policy, snapshot.provider, snapshot.attemptContext ?? null) !== 'accepted') {
@@ -118,11 +121,14 @@ export class Ingest {
         const source = this.store.source(snapshot.provider, account, now);
         touched.add(source);
         this.store.hold(source, device.userId, now);
-        this.store.seenDevice(device.id, snapshot.provider, source, now);
+        if(this.store.seenDevice(device.id, snapshot.provider, source, observedAt))this.directory.measurementsChanged(device.userId);
+        let group=observations.get(snapshot.provider);if(!group)observations.set(snapshot.provider,group=new Map());
+        group.set(source,Math.max(group.get(source)??-Infinity,observedAt));
         const previous = this.store.state(source);
         const measurement = {...toMeasurement(snapshot), observedAt};
         const recorded = this.store.record(source, measurement);
-        const acknowledge = this.measurementSelection.acknowledges(account, snapshot.provider, device.id, observedAt, snapshot.attemptContext ?? null, true);
+        const currentMembership=this.store.rosterAllows(device.id,snapshot.provider,account);
+        const acknowledge = currentMembership&&this.measurementSelection.acknowledges(account, snapshot.provider, device.id, observedAt, snapshot.attemptContext ?? null, true);
         if (recorded.accepted) this.store.recordOrigins(source, device.id, snapshot, previous, observedAt);
         if (recorded.accepted) this.notifyMeasurementOwners(source);
         if (recorded.accepted) result.accepted++; else result.duplicates++;
@@ -130,6 +136,7 @@ export class Ingest {
         if (recorded.unavailable) attention?.unavailable(previous, observedAt);
         if(recorded.delivery){let group=evidenceGroups.get(snapshot.provider);if(!group)evidenceGroups.set(snapshot.provider,group=new Set());group.add(account);}
         afterCommit(() => {
+          if(!currentMembership)return;
           const evidence=recorded.delivery ? this.measurementSelection.observe(account, snapshot.provider, device.id, observedAt,120_000,evidenceGroups.get(snapshot.provider)!.size===1) : null;
           this.cadence.settleRefresh(account, this.refreshDuty(account), now);
           let onDuty = false;
@@ -144,7 +151,28 @@ export class Ingest {
           if (recorded.delivery) this.cadence.delivered(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,snapshot.staleAfterMs,this.signals(source,account,now).inUse,now,onDuty,acknowledge);
           else if (recorded.accepted) this.cadence.observed(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,this.signals(source,account,now).inUse,now,acknowledge);
           else if (acknowledge) this.cadence.acknowledge(account,device.id,observedAt);
+          if(acknowledge)this.measurementSelection.commandFinished(account,device.id);
           this.measurementSelection.releaseUnconfigured(account,snapshot.provider,now);
+        });
+      }
+
+      // Unknown recovery needs the final eligible identity, never a unique prefix of this batch.
+      for(const [provider,group] of observations)if(this.store.recoverUnknownDeviceFailure(device.id,provider,group))this.directory.measurementsChanged(device.userId);
+
+      const completedIds=new Set<string>();
+      for(const completion of batch.completions) {
+        const commandKey=`${completion.provider}:${completion.attemptContext.commandId}`;
+        if(completedIds.has(commandKey)){result.duplicates++;continue;}
+        if(admitMeasurement(policy,completion.provider,completion.attemptContext)!=='accepted'){result.policySuppressed=(result.policySuppressed??0)+1;continue;}
+        const matched=this.measurementSelection.completeWithoutData(completion.provider,device.id,completion.completedAt+skew,completion.attemptContext,now);
+        if(!matched){result.duplicates++;continue;}
+        result.completions!++;completedIds.add(commandKey);
+        afterCommit(()=>{
+          this.measurementSelection.completeWithoutData(completion.provider,device.id,completion.completedAt+skew,completion.attemptContext,now,true);
+          if(matched.current){this.duty.finishWithoutData(matched.key,device.id,completion.completedAt+skew);this.cadence.completeWithoutData(matched.key,device.id,now);}
+          if(matched.refresh)this.cadence.refreshWithoutData(matched.key,device.id,now);
+          const source=this.store.findSource(completion.provider,matched.key);
+          if(source)tell(this.observer,o=>o.touchSources([source]));
         });
       }
 
@@ -154,9 +182,9 @@ export class Ingest {
           continue;
         }
         const at = failure.observedAt + skew;
-        this.store.deviceFailed(device.id, failure.provider, failure.error, failure.detail, at);
-        this.directory.measurementsChanged(device.userId);
         const key = this.measurementSelection.failureAccount(failure.provider, device.id, failure.attemptContext ?? null, now);
+        if(!key&&failure.attemptContext?.target.kind==='verified'){result.duplicates++;continue;}
+        if(this.store.deviceFailed(device.id, failure.provider, failure.error, failure.detail, at,key??''))this.directory.measurementsChanged(device.userId);
         if (!key) continue;
         const source = this.store.findSource(failure.provider, key);
         const acknowledge = this.measurementSelection.acknowledges(key, failure.provider, device.id, at, failure.attemptContext ?? null, false);
@@ -170,6 +198,7 @@ export class Ingest {
             if (acknowledge && this.duty.failed(key, device.id, at)) this.cadence.released(key, device.id);
             if (refreshAcknowledged) this.cadence.refreshResult(key, device.id, at, false, now);
           }
+          if(acknowledge)this.measurementSelection.commandFinished(key,device.id);
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
         });
         const paused = key && this.store.findSource(failure.provider, key);
@@ -192,10 +221,10 @@ export class Ingest {
         return policy.enabled && gate.enabled && (!gate.requiresEpoch || [...batch.snapshots,...batch.failures].some(outcome=>outcome.provider===provider && admitMeasurement(policy,provider,outcome.attemptContext??null)==='accepted'));
       }));
       for (const key of held) this.cadence.settleRefresh(key, this.refreshDuty(key), now);
-      this.cadence.heard(device.id, held, now);
+      if(batch.snapshots.length||batch.failures.length)this.cadence.heard(device.id, held, now);
       for (const source of held.flatMap(key => providers.flatMap(provider => this.store.findSource(provider, key) ?? []))) touched.add(source);
       // Waiting protection uses the whole batch's accepted data and bounded evidence of contact.
-      for (const source of touched) this.protect(source, this.store.account(source)!, now);
+      if(batch.snapshots.length||batch.failures.length)for (const source of touched) this.protect(source, this.store.account(source)!, now);
       tell(this.observer, o => o.touchSources([...touched]));
       });
       return result;
@@ -233,11 +262,15 @@ export class Ingest {
       if(!accounts)currentAccounts.set(subscription.provider,accounts=new Set());
       accounts.add(subscriptionKey(subscription,device.userId));
     }
+    for(const roster of request.accountRosters) {
+      this.measurementSelection.completeRoster(device.id,roster.provider,new Set(roster.accounts.map(account=>subscriptionKey({...account,provider:roster.provider},device.userId))),now);
+    }
     this.measurementSelection.current(device.id,currentAccounts,now);
     const iso = (ms: number) => new Date(ms).toISOString();
     // Asking moves the pace and who is on duty, which the board shows.
     tell(this.observer, o => o.touchSources(request.subscriptions.flatMap(s => 'measuredBy' in s ? [] : this.store.findSource(s.provider, subscriptionKey(s, device.userId)) ?? [])));
     return {
+      capabilities:{accountRosters:1,collectionCompletions:1},
       ...(request.measurementPolicy ? {policy} : {}),
       subscriptions: request.subscriptions.map(s => {
         if ('measuredBy' in s) return {provider: s.provider, measure: false, onDuty: false, askInMs: 86_400_000, until: iso(now + 86_400_000)};
@@ -245,6 +278,7 @@ export class Ingest {
           return {provider: s.provider, measure: false, onDuty: false, askInMs: 60_000, until: iso(now+60_000)};
         }
         const key = subscriptionKey(s, device.userId);
+        if(!this.store.rosterAllows(device.id,s.provider,key))return {provider:s.provider,measure:false,onDuty:false,askInMs:60_000,until:iso(now+60_000)};
         const source = this.store.findSource(s.provider, key);
         const before=this.measurementSelection.state(source,s.provider,key,now);
         const reply=(()=>{
@@ -267,7 +301,7 @@ export class Ingest {
             const askInMs = Math.ceil(Math.min(paused - now, 10 * 60_000));
             return {provider: s.provider, measure: false, onDuty: !(holder !== null && holder !== device.id && leased), askInMs, until: iso(now + askInMs)};
           }
-          const directive = this.measurementSelection.claim(source, s.provider, key, device.id, s.active, now);
+          const directive = this.measurementSelection.claim(source, s.provider, key, device.id, s.active, now, false);
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
           if (!directive.measure) {
             return {provider: s.provider, measure: false, onDuty: false, askInMs: directive.until - now, until: iso(directive.until)};
@@ -423,7 +457,7 @@ export class Ingest {
     for (const key of this.cadence.keysOf(devices)) this.cadence.settleRefresh(key, this.refreshDuty(key), now);
     const keys = this.cadence.forget(devices, now);
     const sources = [
-      ...devices.flatMap(device => [...this.live.sourcesOf(device), ...providers.flatMap(provider => this.store.deviceSource(device, provider) ?? [])]),
+      ...devices.flatMap(device => [...this.live.sourcesOf(device), ...((this.directory.deviceById(device)?.userId ? this.store.deviceSources(this.directory.deviceById(device)!.userId).filter(s=>s.device===device).map(s=>s.source) : []))]),
       ...keys.flatMap(key => providers.flatMap(provider => this.store.findSource(provider, key) ?? [])),
     ];
     this.live.forget(devices);
@@ -474,7 +508,7 @@ export class Ingest {
     return this.directory.transaction(() => {
       const name = device.label ?? device.name;
       const legacy = report.sessions.map(({provider, account, accountName, ...session}) => {
-        const source = account || accountName ? this.store.findSource(provider, subscriptionKey({provider, account, accountName}, device.userId)) : this.store.deviceSource(device.id, provider);
+        const source = account || accountName ? this.store.findSource(provider, subscriptionKey({provider, account, accountName}, device.userId)) : this.store.accountRoster(device.id,provider)===null?this.store.deviceSource(device.id, provider):null;
         return {...session, clientId: session.clientId ?? provider, source,
           accountBy: account || accountName ? 'login' as const : source ? 'inferred' as const : null};
       });

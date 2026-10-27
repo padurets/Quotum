@@ -32,6 +32,9 @@ export type ProviderSettings = {
   account?: string;
   client?: string;
   last?: Measured;
+  collector?: boolean;
+  latestStatus?: string | null;
+  accounts?: {account:{account:string}|{accountName:string|null}|null;status:'observed'|'no_new_data'|'failed';completedAt:number;observedAt:number|null;error:string|null}[];
 };
 /** `seq`: a later state has a larger one (desktop/src/notifier.rs); the page keeps the newest. */
 export type AppState = {

@@ -31,6 +31,7 @@ const ASK_TOGETHER_MS: Millis = 5_000;
 #[derive(Clone, Debug)]
 struct Slot {
     blocked: bool,
+    busy: bool,
     base_ms: u64,
     due: Millis,
     /// Current multiple of the base interval (eco mode doubles it while nothing happens).
@@ -57,6 +58,7 @@ impl Slot {
 pub struct Schedule {
     slots: Vec<Slot>,
     eco: bool,
+    vacant: Vec<usize>,
     /// Slots the last check-in cleared to measure, in order, each with the hub's `nextInMs` when paced.
     cleared: VecDeque<(usize, Option<u64>)>,
 }
@@ -72,6 +74,7 @@ impl Schedule {
             .enumerate()
             .map(|(i, &interval)| Slot {
                 blocked: false,
+                busy: false,
                 base_ms: interval.max(MIN_INTERVAL_MS),
                 due: now,
                 stretch: 1,
@@ -83,7 +86,32 @@ impl Schedule {
                 fallback_at: None,
             })
             .collect();
-        Schedule { slots, eco, cleared: VecDeque::new() }
+        Schedule { slots, eco, vacant: Vec::new(), cleared: VecDeque::new() }
+    }
+
+    /// Account slots are reused after withdrawal; removed targets retain no pacing state.
+    pub fn insert(&mut self, interval: u64, now: Millis) -> usize {
+        let slot = Schedule::new(&[interval], now, self.eco).slots.remove(0);
+        if let Some(index) = self.vacant.pop() {
+            self.slots[index] = slot;
+            index
+        } else {
+            self.slots.push(slot);
+            self.slots.len() - 1
+        }
+    }
+    pub fn remove(&mut self, index: usize) {
+        self.block(index, true, 0);
+        if !self.vacant.contains(&index) {
+            self.vacant.push(index);
+        }
+    }
+    /// No-data is a completed attempt, without a fabricated signature or observation.
+    pub fn no_new_data(&mut self, index: usize, now: Millis) -> Millis {
+        let slot = &mut self.slots[index];
+        slot.failures = 0;
+        slot.due = now + slot.interval() as i64;
+        slot.due
     }
 
     /// The slot to run next and when; ties go to the earlier-listed provider.
@@ -91,7 +119,7 @@ impl Schedule {
         self.slots
             .iter()
             .enumerate()
-            .filter(|(_, s)| !s.blocked)
+            .filter(|(_, s)| !s.blocked && !s.busy)
             .min_by_key(|(i, s)| (s.due, *i))
             .map(|(i, s)| (i, s.due))
     }
@@ -107,6 +135,10 @@ impl Schedule {
             slot.due = slot.due.max(now);
         }
         slot.blocked = blocked;
+    }
+
+    pub fn busy(&mut self, index: usize, busy: bool) {
+        self.slots[index].busy = busy;
     }
 
     pub fn has_cleared(&self) -> bool {
@@ -167,13 +199,14 @@ impl Schedule {
     /// any of them is due (they share one timer), and the others due within a few
     /// seconds. None while slots cleared by the last answer wait to be measured.
     pub fn asks(&self, now: Millis) -> Vec<usize> {
-        if !self.cleared.is_empty() || !self.slots.iter().any(|s| !s.blocked && s.due <= now) {
+        if !self.cleared.is_empty() || !self.slots.iter().any(|s| !s.blocked && !s.busy && s.due <= now) {
             return Vec::new();
         }
-        let paced = self.slots.iter().any(|s| !s.blocked && s.paced && s.due <= now + ASK_TOGETHER_MS);
+        let paced = self.slots.iter().any(|s| !s.blocked && !s.busy && s.paced && s.due <= now + ASK_TOGETHER_MS);
         (0..self.slots.len())
             .filter(|&i| {
                 !self.slots[i].blocked
+                    && !self.slots[i].busy
                     && if self.slots[i].paced { paced } else { self.slots[i].due <= now + ASK_TOGETHER_MS }
             })
             .collect()
@@ -257,6 +290,20 @@ impl Schedule {
     /// The next slot cleared to measure now, with the hub's `nextInMs` when it sets the pace.
     pub fn take_cleared(&mut self) -> Option<(usize, Option<u64>)> {
         self.cleared.pop_front()
+    }
+
+    /// Grants for one backend become one invocation; grants for another remain untouched.
+    pub fn take_cleared_for(&mut self, indices: &[usize]) -> Vec<(usize, Option<u64>)> {
+        let mut found = Vec::new();
+        self.cleared.retain(|grant| {
+            if indices.contains(&grant.0) {
+                found.push(*grant);
+                false
+            } else {
+                true
+            }
+        });
+        found
     }
 
     /// A paced slot was measured (or failed to be): the hub promised the next measurement

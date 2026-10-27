@@ -411,7 +411,7 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
       clients: directory.deviceClients(device.id),
       sessions: hub.ingest.live.deviceSessions(user.id, device.id, now).map((session, index) => device.id === details ? {...session, attribution: evidence[index]} : session),
       sources: delivered.filter(d => d.device === device.id).map(({provider, source, seenAt}) => ({provider, source, seenAt})),
-      failures: failures.filter(f => f.device === device.id).map(({provider, error, detail, at}) => ({provider, error, detail, at})),
+      failures: failures.filter(f => f.device === device.id).map(({provider, accountKey, error, detail, at}) => ({provider, ...(accountKey?{accountKey}:{}), error, detail, at})),
       policy: store.measurementPolicies.device(device.id),
       control: store.measurementPolicies.control(device.id),
     }));

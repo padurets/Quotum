@@ -174,6 +174,14 @@ export class Agent {
     return (await call<{accepted: number; duplicates: number; failures: number}>(this.base, 'POST', '/v1/ingest', {body, token: this.token})).body;
   }
 
+  async complete(provider:string,identity:{account?:string;accountName?:string},now:number) {
+    if(!this.policy)throw new Error('missing collection policy');
+    const account=identity.account??`user:${this.owner}/${provider}${identity.accountName?'/'+identity.accountName.trim().toLowerCase():''}`;
+    const attemptContext:AttemptContext={version:1,authority:this.policy.authority,collectorEpoch:this.policy.collectors[provider as ClientProvider].epoch,target:{kind:'verified',accountKey:account},commandId:this.commands.get(account)};
+    const body={version:1,agent:this.reportedVersion,machine:this.machine,sentAt:new Date(now).toISOString(),completions:[{provider,outcome:'no_new_data',completedAt:new Date(now).toISOString(),attemptContext}]};
+    return (await call(this.base,'POST','/v1/ingest',{body,token:this.token})).body;
+  }
+
   /** Asks whether to measure its subscriptions now, following the hub's pace (spec: Asking whether to measure). */
   async checkin(subscriptions: object[], paced = true) {
     const body = {version: 1, agent: this.reportedVersion, paced, machine: this.machine, subscriptions,...(this.configuredCollectors?{collectors:this.configuredCollectors}:{}),...(this.measurementControl?{capabilities:{measurementPolicy:1,attemptContext:1},...(this.policy?{policyAck:{authority:this.policy.authority,revision:this.policy.revision}}:{})}:{})};

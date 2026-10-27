@@ -42,8 +42,8 @@ export type Directive = {measure: boolean; until: number};
 export class Duty {
   private readonly holders = new Map<string, Holder>();
 
-  /** A device asks whether it should measure a subscription now. */
-  claim(subscription: string, device: string, active: boolean, now: number): Directive {
+  /** A device asks to measure; paced callers defer a starter lease until an actual command. */
+  claim(subscription: string, device: string, active: boolean, now: number, starter = true): Directive {
     const holder = this.holders.get(subscription);
     const mine = holder?.device === device;
     const activeAt = active ? now : mine ? holder!.activeAt : 0;
@@ -62,13 +62,13 @@ export class Duty {
         subscription,
         mine && (leaseOf(holder!) > now || askedAt !== null)
           ? {...holder!, until: holder!.until > now ? holder!.until : Math.max(holder!.until, holder!.askedAt !== null && holder!.answering ? holder!.askedAt + FIRST_LEASE_MS : 0), activeAt, askedAt, answering}
-          : {device, until: now + FIRST_LEASE_MS, activeAt, askedAt, answering},
+          : {device, until: starter ? now + FIRST_LEASE_MS : mine ? holder!.until : 0, activeAt, askedAt, answering},
       );
       return {measure: true, until: now};
     }
     // Nor does a device where someone works take over halfway through the holder's measuring.
     if (active && now - holder.activeAt > HANDOVER_IDLE_MS && !measuring(holder, now)) {
-      this.holders.set(subscription, {device, until: now + FIRST_LEASE_MS, activeAt: now, askedAt: null, answering: true});
+      this.holders.set(subscription, {device, until: starter ? now + FIRST_LEASE_MS : 0, activeAt: now, askedAt: null, answering: true});
       return {measure: true, until: now};
     }
     // Come back when its measurement goes stale, as if it were not measuring: it may ask
@@ -81,7 +81,10 @@ export class Duty {
   /** The holder was told to measure: it keeps duty while it does, as a new holder does until it delivers. */
   asked(subscription: string, device: string, now: number) {
     const holder = this.holders.get(subscription);
-    if (holder?.device === device) this.holders.set(subscription, {...holder, askedAt: now, scheduledUntil: null});
+    if (holder?.device === device) {
+      const initial = holder.until === 0 && holder.askedAt === null && holder.answering;
+      this.holders.set(subscription, {...holder, until: initial ? now + FIRST_LEASE_MS : holder.until, askedAt: now, scheduledUntil: null});
+    }
   }
 
   /** A silent holder may lose waiting protection when its plan shortens, but cannot receive more. */
@@ -105,6 +108,12 @@ export class Duty {
     if (holder?.device === device && answers(holder, at)) {
       this.holders.set(subscription, {...holder, until: Math.max(holder.until, leaseOf(holder)), askedAt:null, answering:true});
     }
+  }
+
+  /** Completing a command without evidence removes execution protection, never renews it. */
+  finishWithoutData(subscription:string,device:string,at:number) {
+    const holder=this.holders.get(subscription);
+    if(holder?.device===device&&answers(holder,at))this.holders.set(subscription,{...holder,askedAt:null,answering:true,scheduledUntil:null});
   }
 
   /** A measurement arrived: its sender holds duty until the measurement goes stale. */

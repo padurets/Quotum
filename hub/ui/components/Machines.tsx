@@ -29,7 +29,7 @@ export type Device = {
   sources: {provider: string; source: string; seenAt: number}[];
   clients?: {clientId: string; version: string | null; seenAt: number;observedAt?:number|null}[];
   sessions?: (LiveSession & {source: string | null; attribution?: LinkEvidence})[];
-  failures: {provider: string; error: string; detail: string | null; at: number}[];
+  failures: {provider: string; accountKey?:string; error: string; detail: string | null; at: number}[];
   policy?: MeasurementPolicy;
   control?: {capable:boolean;confirmedRevision:number|null};
 };
@@ -164,7 +164,7 @@ export function Devices({local,onBusyChange}: {local: boolean;onBusyChange?:(bus
       {!local&&details.policy&&<Segmented label={t('connections.deviceSections')} radioName={tabs} value={tab} disabled={busy} options={[["measurements",t('measurements.participation')],["diagnostics",t('connections.diagnostics')]]} onChange={next=>leave(()=>setTab(next))}/>}
       {!local&&details.policy&&tab==='measurements'?<ParticipationSettings key={details.id} device={details} reload={load} onStateChange={setFormState}/>:<>
         <VersionInfo agent={details.agent} hub={hubVersion}/>
-        {!!details.failures.length&&<section className="settings-section"><h3>{t('measurements.lastFailure')}</h3><ul className="settings-list">{details.failures.map(failure=><li className="settings-list-row popover-row" key={failure.provider}><div className="settings-item-main"><b>{PROVIDERS[failure.provider]?.name ?? failure.provider}</b><small>{errorText(failure.error)}</small>{failure.detail&&<small>{failure.detail}</small>}</div><div className="settings-item-detail">{stamp(failure.at)}</div></li>)}</ul></section>}
+        {!!details.failures.length&&<section className="settings-section"><h3>{t('measurements.lastFailure')}</h3><ul className="settings-list">{details.failures.map(failure=><li className="settings-list-row popover-row" key={`${failure.provider}:${failure.accountKey??""}`}><div className="settings-item-main"><b>{PROVIDERS[failure.provider]?.name ?? failure.provider}</b><small>{errorText(failure.error)}</small>{failure.accountKey&&<small>{/^[a-f0-9]{24}$/.test(failure.accountKey)?failure.accountKey.slice(0,8):failure.accountKey.split("/").slice(2).join("/")||t("measure.defaultAccount")}</small>}{failure.detail&&<small>{failure.detail}</small>}</div><div className="settings-item-detail">{stamp(failure.at)}</div></li>)}</ul></section>}
         <div className="settings-section"><h3>{t('devices.clients')}</h3><ul className="settings-list">
           {(details.clients ?? []).map(client=><li className="settings-list-row popover-row" key={client.clientId}><div className="settings-item-main"><b>{clientName(client.clientId)}</b><small>{client.version ?? t('devices.versionUnknown')}</small></div><div className="settings-item-detail">{client.observedAt ? stamp(client.observedAt) : t('measurements.originUnknown')}</div><div className="settings-item-actions"><button className="button" onClick={()=>openClientLinks({deviceId:details.id,clientId:client.clientId})}>{t('links.manage')}</button></div></li>)}
         </ul>{!details.clients?.length&&<p className="dialog-text">{t('devices.noClientData')}</p>}</div>

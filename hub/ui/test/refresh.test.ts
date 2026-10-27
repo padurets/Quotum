@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {isSending, refreshRowPending, refreshChangesAt, refreshPending, refreshText, refreshErrorText, refreshErrorChangesAt, requestRefresh, requestRefreshAll, startRefreshRows, observeRefreshRows, answerRefreshRow} from '../lib/refresh';
+import {isSending, refreshRowPending, refreshRowSucceeded, refreshChangesAt, refreshPending, refreshText, refreshErrorText, refreshErrorChangesAt, requestRefresh, requestRefreshAll, startRefreshRows, observeRefreshRows, answerRefreshRow} from '../lib/refresh';
 import {ApiError} from '../lib/http';
 import {setLocale} from '../i18n';
 import type {Refresh} from '../lib/types';
@@ -238,4 +238,13 @@ test('a row that has not seen its request takes only one made before its reply',
   assert.equal(early[0].status, 'unknown');
   assert.equal(observeRefreshRows(early, {a: later})[0].status, 'unknown');
   assert.equal(observeRefreshRows(early, {a: own})[0].status, 'queued');
+});
+
+test('no-data is a successful retained receipt without claiming updated resources',()=>{
+  setLocale('en');
+  const state={...queued,request:{...queued.request!,status:'no_new_data' as const,finishedAt:20_000}};
+  const rows=observeRefreshRows(startRefreshRows(['a'],{a:queued}),{a:state});
+  assert.equal(rows[0].status,'no_new_data');assert.equal(refreshRowPending(rows[0]),false);assert.equal(refreshRowSucceeded(rows[0]),true);
+  assert.equal(observeRefreshRows(rows,{a:{...state,request:null}},true),rows);
+  assert.match(refreshText(state,20_000),/without new data/);
 });

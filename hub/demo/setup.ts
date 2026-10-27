@@ -433,6 +433,7 @@ export class Live {
               this.pending.delete(card.id);
               if(card.failure&&t>=card.failure.from) await agent.ingest([], [{provider:card.provider,observedAt:new Date(now).toISOString(),error:card.failure.error,measurementTarget:accountOf(card)}],now);
               else if (this.requested.has(card.id) && card.refresh?.response === 'failed') await agent.ingest([], [{provider: card.provider, observedAt: new Date(now).toISOString(), error: 'failed',measurementTarget:accountOf(card)}], now);
+              else if (this.requested.has(card.id) && card.refresh?.response === 'no_new_data') await agent.complete(card.provider,accountOf(card),now);
               else if (!this.requested.has(card.id) || card.refresh?.response !== 'lost') await agent.ingest([snapshot(card, start, t, pending.next)], [], now);
             }
           }

@@ -21,8 +21,9 @@ export class MeasurementSelection {
   constructor(private readonly store: Store, private readonly directory: Directory, private readonly duty: Duty, private readonly cadence: Cadence,private readonly changed:(key:string)=>void=()=>{}) {}
 
   observe(key: string, provider: ClientProvider, device: string, now: number, nextAskMs = 120_000, replace = true) {
+    if(!this.store.rosterAllows(device,provider,key))return {changed:false,current:false,expiresAt:0};
     const before = this.devices.get(device)?.get(key);
-    const latest=Math.max(-Infinity,...[...(this.devices.get(device)?.values()??[])].filter(candidate=>candidate.provider===provider).map(candidate=>candidate.seenAt));
+    const latest=this.store.accountRoster(device,provider)!==null ? before?.seenAt??-Infinity : Math.max(-Infinity,...[...(this.devices.get(device)?.values()??[])].filter(candidate=>candidate.provider===provider).map(candidate=>candidate.seenAt));
     if(now<latest)return {changed:false,current:!!before,expiresAt:before?.expiresAt??0};
     if(replace && !before)this.current(device,new Map([[provider,new Set([key])]]),now);
     const command=this.commands.get(key);
@@ -70,6 +71,7 @@ export class MeasurementSelection {
   /** Multiplexed account groups may span batches; a singleton is evidence of a changed login. */
   current(device:string,accounts:Map<ClientProvider,Set<string>>,now:number) {
     for(const before of [...(this.devices.get(device)?.values() ?? [])]) {
+      if(this.store.accountRoster(device,before.provider)!==null)continue;
       const current=accounts.get(before.provider);
       if(current?.has(before.key) || before.expiresAt>now && (!current || current.size!==1))continue;
       this.duty.release(before.key,device);
@@ -78,6 +80,27 @@ export class MeasurementSelection {
       this.remove(before);
       this.changed(before.key);
     }
+  }
+
+  completeRoster(device:string,provider:ClientProvider,accounts:Set<string>,now:number) {
+    this.store.replaceAccountRoster(device,provider,accounts,now);
+    for(const before of [...(this.devices.get(device)?.values()??[])]) {
+      if(before.provider!==provider||accounts.has(before.key))continue;
+      this.duty.release(before.key,device);this.cadence.withdraw(before.key,device,now);
+      this.forgetCommands(before.key,device);this.remove(before);this.changed(before.key);
+    }
+  }
+
+  completeWithoutData(provider:ClientProvider,device:string,at:number,context:AttemptContext,now:number,consume=false):{key:string;current:boolean;refresh:boolean}|null {
+    const key=this.failureAccount(provider,device,context,now);
+    if(!key||!this.store.rosterAllows(device,provider,key))return null;
+    const command=this.commands.get(key);
+    const current=!!command && command.deadline>=now && this.duty.holder(key)===device && this.cadence.awaiting(key,device) && this.matches(command,provider,device,at,context,false);
+    const refresh=(this.refreshCommands.get(key)?.deadline??-Infinity)>=now&&this.acknowledgesRefreshFailure(key,provider,device,at,context);
+    if(!current&&!refresh)return null;
+    if(consume&&current)this.commands.delete(key);
+    if(consume&&refresh)this.refreshCommands.delete(key);
+    return {key,current,refresh};
   }
 
   private remove(candidate: Candidate) {
@@ -119,7 +142,7 @@ export class MeasurementSelection {
       pending:source!==null&&this.pending(source,provider,key,now)};
   }
 
-  claim(source: string | null, provider: ClientProvider, key: string, device: string, active: boolean, now: number) {
+  claim(source: string | null, provider: ClientProvider, key: string, device: string, active: boolean, now: number, starter = true) {
     this.releaseUnconfigured(key,provider,now);
     if(!this.configured(device,provider,now))return {measure:false,until:now+60_000};
     const preferred = this.preferred(source, provider, key, now), holder = this.duty.holder(key);
@@ -132,7 +155,7 @@ export class MeasurementSelection {
       }
       // A preferred holder cannot lose authority merely to another candidate's activity.
     }
-    return this.duty.claim(key, device, active, now);
+    return this.duty.claim(key, device, active, now, starter);
   }
 
   issue(key: string, provider: ClientProvider, device: string, modern: boolean, now: number): string | undefined {
@@ -154,6 +177,10 @@ export class MeasurementSelection {
   acknowledgesRefreshFailure(key:string,provider:ClientProvider,device:string,at:number,context:AttemptContext|null):boolean {
     const request=this.cadence.dispatched(key),command=this.refreshCommands.get(key);
     return !!request&&!!command&&request.device===command.device&&request.at===command.at&&this.matches(command,provider,device,at,context,false);
+  }
+
+  commandFinished(key:string,device:string) {
+    if(this.commands.get(key)?.device===device)this.commands.delete(key);
   }
 
   private forgetCommands(key:string,device:string) {

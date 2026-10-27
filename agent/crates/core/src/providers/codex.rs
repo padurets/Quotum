@@ -2,6 +2,7 @@
 //! Codex IDE extensions use. Codex answers from its own login and refreshes its own
 //! tokens.
 
+use crate::model::exact_credits;
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -242,39 +243,6 @@ fn credit_balance(value: Option<&Value>) -> CreditBalance {
 }
 
 /// Normalize bounded plain decimals using integer digits alone, without rounding.
-fn exact_credits(value: &str) -> Option<String> {
-    if value.len() > 128 || !value.is_ascii() {
-        return None;
-    }
-    let negative = value.starts_with('-');
-    let digits = value.strip_prefix('-').unwrap_or(value);
-    let (whole, fraction) = match digits.split_once('.') {
-        Some((whole, fraction)) if !fraction.is_empty() => (whole, fraction),
-        Some(_) => return None,
-        None => (digits, ""),
-    };
-    if whole.is_empty()
-        || whole.len() > 1 && whole.starts_with('0')
-        || !whole.bytes().chain(fraction.bytes()).all(|b| b.is_ascii_digit())
-    {
-        return None;
-    }
-    let fraction = fraction.trim_end_matches('0');
-    if fraction.len() > 18 {
-        return None;
-    }
-    let coefficient: i64 = format!("{whole}{fraction}").parse().ok()?;
-    if coefficient == 0 {
-        return Some("0".into());
-    }
-    Some(format!(
-        "{}{}{}",
-        if negative { "-" } else { "" },
-        whole,
-        if fraction.is_empty() { String::new() } else { format!(".{fraction}") }
-    ))
-}
-
 /// Free rate-limit resets the account holds (`rateLimitResetCredits`): the available ones,
 /// each with its own expiry time.
 fn reset_credits(value: &Value) -> Option<Resets> {

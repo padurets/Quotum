@@ -60,7 +60,7 @@ Timestamps are RFC 3339 strings. Optional fields may be omitted or `null`. A hub
 ignores fields it does not know (older agents sent an `owner`).
 
 **Limits.** Text fields (names, ids, labels, plan, versions) are 1 to 120 characters.
-A batch holds at most 500 snapshots and 500 failures, a snapshot at most 32 windows. A
+A batch holds at most 500 snapshots, 500 failures and 500 completions, a snapshot at most 32 windows. A
 hub refuses a batch that breaks any rule of this format whole, so an agent should make
 what it sends fit (the reference agent trims and cuts before sending).
 
@@ -194,7 +194,7 @@ given), never per machine. The same keys decide duty in check-ins.
 
 ## Response
 
-`200` with `{"accepted": n, "duplicates": n, "failures": n, "device": {"id": …}}`.
+`200` with `{"accepted": n, "duplicates": n, "failures": n, "completions": n, "device": {"id": …}}`.
 A snapshot with no newer resource observation counts as a duplicate. A late snapshot
 with a newer independent resource counts once as accepted, so resending after a lost
 answer is safe.
@@ -383,6 +383,64 @@ A paced device that gets no answer keeps asking every 15 seconds, and measures o
 once the hub has been silent for 4 minutes and the promised time has passed. An answer
 that does not have `askInMs` is read as one without `"paced"`.
 
+## Account membership and completion without data
+
+A check-in may include `accountRosters`, independently of its due `subscriptions`:
+
+```json
+{"accountRosters":[{"provider":"codex","accounts":[{"account":"0123456789abcdef01234567"}]}]}
+```
+
+There is at most one group per client provider, with at most 16 unique canonical
+accounts per group; up to 48 subscriptions may be requested. Supplier providers use
+`account`; Antigravity uses required `accountName`, including explicit null for the
+known unnamed default. An empty group withdraws all this device's membership for that
+provider. An absent group changes nothing. Hub-measured providers are ignored before
+parsing their account fields. Membership persists across restart, but does not create
+sources, holdings, candidate evidence or duty. A due subset does not remove other
+members. A late withdrawn-account observation can preserve history but cannot restore
+its current device association, authority or command. Accepted observations retain raw
+device/source provenance, including a first observation delivered after withdrawal,
+so disconnecting the last contributing device can release its holdings. This retained
+provenance supplies no candidate, activity or funding evidence. Device/source recency
+uses adjusted observation time, keeping each source's latest accepted time; late older
+observations cannot replace newer account evidence. Without an explicit roster, only
+a uniquely latest account is current; equal latest observations of different accounts
+leave current identity unknown. Rejoining explicit current membership requires a new
+full roster.
+
+Clients advertise `capabilities.accountRosters: 1` and
+`capabilities.collectionCompletions: 1`; the normal check-in reply confirms both at
+version 1. A client requiring them waits with an explicit unsupported error when the
+reply lacks support. It does not infer support from an unrelated reply or treat a
+known unsupported server as temporarily offline.
+
+An ingest batch may also contain `completions`:
+
+```json
+{"completions":[{"provider":"codex","outcome":"no_new_data","completedAt":"2026-10-26T12:00:01Z","attemptContext":{"version":1,"authority":"11111111-1111-4111-8111-111111111111","collectorEpoch":2,"target":{"kind":"verified","accountKey":"0123456789abcdef01234567"},"commandId":"22222222-2222-4222-8222-222222222222"}}]}
+```
+
+The device supplies completion time separately from observation time. Existing batch
+size, skew and future-time checks apply. Admission requires current policy, verified
+account evidence and exact immutable command context. Two matches are independent:
+the current holder's command and a still-pending refresh's retained original command.
+A retained-only match finishes that refresh without touching the replacement command,
+its cadence or duty. Each effective item counts once in the response's `completions`
+integer, even when both matches apply. A later paced wait does not renew an expired
+starter lease; only an actual new command grants execution protection. Replays and
+unmatched items count as duplicates; policy denials count as `policySuppressed`.
+Commands are volatile across hub restart.
+A completion-bearing client requires the `completions` response counter before dropping
+its persisted item. Completion shares the ordinary ingest spool and retry path.
+
+A current completion removes execution protection without extending a representative
+or waiting lease. It anchors the next ordinary attempt at completion plus the effective
+interval, respecting configured minimums, without failure backoff or resource recovery.
+It never changes resource values, timestamps, validity, history or observation-derived
+forecasts. A matching refresh finishes as `no_new_data`, retained for the usual 60
+seconds. There is no fabricated Snapshot and no new source or holding.
+
 ## Managed measurement participation
 
 A dispatched refresh keeps its original command binding and deadline across a
@@ -445,7 +503,11 @@ counts and the whole delivered chunk can be drained. Clock correction never prov
 a launch happened after re-enable. Untouched legacy successful traffic is accepted.
 Legacy provider-only failures and unknown-target failures remain private device
 errors, with no source pause or command/refresh completion. Verified failures require
-current account evidence; failing a command or refresh also requires its exact issued
+current account evidence. If a native identity witness changes during collection,
+the agent may derive an unknown-target, no-command failure context from the captured
+authority and epoch. This narrows the error scope without changing the original launch
+evidence or rebinding it to a new account or newer policy. Failing a command or refresh
+also requires its exact issued
 command, account, device, collector, authority and epoch.
 
 Successful resource admission and command acknowledgement are independent. Missing
@@ -892,6 +954,17 @@ boolean. It sends no process list, paths, configuration values, environment or c
 The raw scope and route-policy snapshots remain private. Shared boards can receive a
 source-level quota-growth finding and its quality, with no holder or device identity.
 
+The reference agent's optional local hooks use a separate
+[local JSON contract](../docs/hook-collectors.md), independent of the generic roster and completion contract above. It hashes
+hook-supplied Claude and Codex supplier identities with the native pseudonym function
+and delivers ordinary snapshots (`via: "local-collector/v1"`) and failures through the
+existing connection. Antigravity's user-chosen `accountName` is sent in check-ins and
+snapshots and can enter the agent's spool, just as with native collection. Its identity
+uses the trimmed, lowercased name. Raw hook replies, command arguments and parser
+diagnostics are never included.
+Participation epochs and per-account command contexts are captured before invocation;
+a pooled account does not establish the login of a native client.
+
 What never leaves the machine: provider tokens, cookies, account ids and emails,
 prompts, file contents, file paths.
 
@@ -1013,3 +1086,12 @@ sessions and from ancestor CPU; unsafe reaping uses the existing birth-scoped ru
 On macOS and Windows this invocation proof is unavailable: native OpenCode presence is
 reported without project attribution. Node/bun installs are outside detection capability.
 No prompts, transcripts, tool output, configuration endpoints or model requests are used.
+
+Local observer payloads contain normalized resources, a pseudonym or declared account
+reference, local attempt ID and completion time. They contain no raw supplier identity,
+provider credentials, hub tokens, device/owner metadata or executable arguments. Unknown
+native identity is null and never inferred from prior success; known unnamed
+Antigravity remains an explicit null accountName. Observer output and raw parser/process
+errors are not delivered to the hub or retained in diagnostics. Generic rosters and
+completions disclose only existing canonical account references and immutable policy
+context; they carry no hook transport configuration.
