@@ -9,10 +9,12 @@ import {activityCreditProblems,HISTORY_BYTES_PER_MEASUREMENT,renderProblems} fro
 import type {Counted} from '../probe.js';
 import {PeriodActivity} from '../../server/domain/periodActivity.js';
 import type {WorkTrace} from '../../server/domain/periodWork.js';
+import {Requests} from '../requests.js';
 
-type Options={setupMs?:number;creditMs?:number;activity?:boolean;reads?:number;bytes?:number;financial?:boolean;ackMs?:number;invalidationMs?:number;retiring?:boolean};
+type Audit={events:string[];saved:Map<string,any>};
+type Options={setupMs?:number;creditMs?:number;activity?:boolean;reads?:number;bytes?:number;financial?:boolean;ackMs?:number;invalidationMs?:number;retiring?:boolean;captureFails?:boolean;cleanupReportFails?:boolean;cleanupLinkFails?:boolean;checkerFails?:boolean;audit?:Audit};
 /** Run the production phase, including its browser scripts, against a virtual clock and DOM. */
-async function phase({setupMs=1500,creditMs=200,activity=true,reads=1,bytes=100,financial=false,ackMs=0,invalidationMs=0,retiring=false}:Options={}) {
+async function phase({setupMs=1500,creditMs=200,activity=true,reads=1,bytes=100,financial=false,ackMs=0,invalidationMs=0,retiring=false,captureFails=false,cleanupReportFails=false,cleanupLinkFails=false,checkerFails=false,audit={events:[],saved:new Map()}}:Options={}) {
   const start=Date.parse('2026-10-15T04:50:58Z'),source='openrouter:linked';
   const invalidatedAt=start+invalidationMs;
   let now=start,readyAt=Infinity,probeFrom=now,calls=0;
@@ -48,15 +50,28 @@ async function phase({setupMs=1500,creditMs=200,activity=true,reads=1,bytes=100,
   },__quotumWalletState:(_source:string,authority:string)=>({authorityReady:now>=invalidatedAt&&authority==='new',periodLoading:loading(),workNeeded:loading(),work:work()?{activeMs:value()}:null}),
   __quotumBench:{reset:()=>{probeFrom=now;},read},localStorage:{getItem:()=>null},URLSearchParams,location:{search:''},window:{} as Record<string,unknown>};
   browser.window=browser;
-  const cdp={evaluate:async(script:string)=>runInNewContext(script,browser)};
-  class Requests {
-    counting=false;historyRequests=reads;historyBytes=bytes;
-    private initial=calls===0;
-    get historyPending(){return this.initial&&loading()?1:0;}
-  }
+  const listeners=new Map<string,((value:any)=>void)[]>(),body=JSON.stringify({basis:{run:'fixture',revision:'1',evaluatedAt:start,range:{from:start-86_400_000,to:start}},quota:{state:'complete',value:{chunks:[]}}});
+  const emit=(name:string,value:unknown)=>{for(const listener of listeners.get(name)??[])listener(value);};
+  const originalCommandFailure={method:'Runtime.evaluate',status:'failed'};
+  const cdp={evaluate:async(script:string)=>{if(checkerFails&&calls===2&&script==='__quotumBench.read()')throw Error('original checker failed');return runInNewContext(script,browser);},
+    on:(name:string,listener:(value:any)=>void)=>{const group=listeners.get(name)??[];group.push(listener);listeners.set(name,group);},
+    snapshot:()=>({failure:originalCommandFailure}),at:(stage:string)=>{audit.events.push(stage);},
+    send:async(method:string)=>{
+      assert.equal(method,'Network.getResponseBody');assert.equal(calls,5,'all three credits and the cleanup report precede capture');
+      assert.ok(audit.events.includes('cleanup-link'),'link cleanup precedes capture');assert.ok(audit.saved.has('linked-wallet'),'original verdict is saved before capture');
+      audit.events.push(method);if(captureFails)throw Error('body capture unavailable');return{body,base64Encoded:false};
+    }};
   const owner={base:'http://fixture',cookie:'fixture',get:async()=>({revision:'0',workAuthority:'new'}),post:async()=>({revision:'1',links:[{id:'rule'}]})};
   const demo={reportNow:async()=>{
     calls++;const at=now;
+    if(calls===5){audit.events.push('cleanup-report');if(cleanupReportFails)throw Error('original cleanup report failed');}
+    if(calls<=4)for(let index=0;index<reads;index++){
+      const requestId=`${calls}:${index}`,wireBytes=index===0?bytes:0;
+      emit('Network.requestWillBeSent',{requestId,type:'Fetch',request:{url:'http://fixture/api/boards/b/period',postData:JSON.stringify({selection:{mode:'live',periodMs:86_400_000},evaluatedAt:at,quota:{cell:'300000',from:String(at-300000),to:String(at+300000)},sessions:{cursor:'private-cursor'}})}});
+      emit('Network.responseReceived',{requestId,response:{status:200,headers:{'content-length':String(body.length)}}});
+      emit('Network.dataReceived',{requestId,encodedDataLength:body.length,dataLength:body.length});
+      emit('Network.loadingFinished',{requestId,encodedDataLength:wireBytes});
+    }
     if(calls===1)readyAt=now+setupMs;
     else if(calls<=4)updates.push({at,shown:at+creditMs});
     advance(ackMs);return at;
@@ -65,11 +80,11 @@ async function phase({setupMs=1500,creditMs=200,activity=true,reads=1,bytes=100,
   const file=ts.createSourceFile('index.ts',readFileSync(new URL('../index.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
   const declaration=file.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='workLinkedWallet');assert.ok(declaration);
   class Stop extends Error {at=now;reports=calls;}
-  const context={Date:browser.Date,Requests,SHOWN_WITHIN:5000,Stop,people,randomUUID:()=> 'request',URL,fetch:async()=>({ok:true}),console:{error:()=>{}},say:()=>{},
+  const context={Date:browser.Date,Requests,SHOWN_WITHIN:5000,Stop,people,randomUUID:()=> 'request',URL,fetch:async()=>{audit.events.push('cleanup-link');return{ok:!cleanupLinkFails};},console:{error:()=>{}},say:()=>{},
     activityCreditProblems,HISTORY_BYTES_PER_MEASUREMENT,renderProblems,sleep:async(ms:number)=>advance(ms),drain:async()=>advance(500)};
   runInNewContext(ts.transpileModule(declaration.getText(file)+'\nglobalThis.phase=workLinkedWallet;', {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
-  const result=await (context as unknown as {phase:(...args:unknown[])=>Promise<{setup:{waitMs:number};reports:{at:number;activeMs:number}[];problems:string[]}>}).phase(demo,stand,cdp,source);
-  return{result,calls,now,start};
+  const result=await (context as unknown as {phase:(...args:unknown[])=>Promise<{setup:{waitMs:number};reports:{at:number;activeMs:number}[];problems:string[];traffic:{originalCommandFailure:unknown;reports:{status:string;body?:{partition:number;decodedBytes:number}}[]}}>}).phase(demo,stand,cdp,source,{save:(name:string,value:unknown)=>{audit.events.push('save/'+name);audit.saved.set(name,structuredClone(value));}});
+  return{result,calls,now,start,audit,originalCommandFailure};
 }
 
 test('linked wallet qualifies a cold baseline separately from three work credits',async()=>{
@@ -132,4 +147,38 @@ test('linked wallet requires Activity growth independently of wallet work',async
 
 for(const options of [{reads:2},{bytes:HISTORY_BYTES_PER_MEASUREMENT+1},{financial:true}])test('linked wallet retains traffic and financial isolation guards '+JSON.stringify(options),async()=>{
   const {result}=await phase(options);assert.ok(result.problems.length>0);
+});
+
+test('linked wallet freezes all original verdicts and cleanup before three actual response partitions',async()=>{
+  const {result,audit,originalCommandFailure}=await phase({bytes:HISTORY_BYTES_PER_MEASUREMENT+1});
+  const original=audit.saved.get('linked-wallet');
+  assert.equal(original.reports.length,3);assert.equal(original.problems.length,3);
+  assert.ok(original.problems.every((problem:string)=>problem.includes(String(HISTORY_BYTES_PER_MEASUREMENT+1))));
+  assert.deepEqual(Array.from(result.problems),original.problems);
+  assert.deepEqual(result.traffic.originalCommandFailure,originalCommandFailure);
+  assert.equal(audit.events.filter(event=>event==='Network.getResponseBody').length,3);
+  assert.ok(audit.events.indexOf('cleanup-report')<audit.events.indexOf('cleanup-link'));
+  assert.ok(audit.events.indexOf('cleanup-link')<audit.events.indexOf('save/linked-wallet'));
+  assert.ok(audit.events.indexOf('save/linked-wallet')<audit.events.indexOf('Network.getResponseBody'));
+  for(const report of result.traffic.reports){assert.equal(report.status,'complete');assert.equal(report.body!.partition,report.body!.decodedBytes);}
+  assert.equal(JSON.stringify(audit.saved.get('linked-wallet-traffic').reports),JSON.stringify(result.traffic.reports));
+  assert.equal(original.traffic.reports.length,3);
+  for(const report of original.traffic.reports){assert.equal(report.reads[0].request.sections[0].cells,'read');assert.equal(report.reads[0].request.sessionsCursor,true);}
+});
+
+test('unavailable linked bodies retain the same saved original byte failures and timestamps',async()=>{
+  const successful=await phase({bytes:4953}),unavailable=await phase({bytes:4953,captureFails:true});
+  assert.deepEqual(JSON.parse(JSON.stringify(unavailable.result.reports)),JSON.parse(JSON.stringify(successful.result.reports)));
+  assert.deepEqual(Array.from(unavailable.result.problems),Array.from(successful.result.problems));
+  assert.equal(unavailable.result.problems.length,3);
+  assert.deepEqual(unavailable.audit.saved.get('linked-wallet').reports,successful.audit.saved.get('linked-wallet').reports);
+  assert.ok(unavailable.result.traffic.reports.every(report=>report.status==='insufficient-evidence'));
+  assert.equal(unavailable.audit.events.filter(event=>event==='Network.getResponseBody').length,3);
+});
+
+for(const failure of ['checker','cleanup report','cleanup link'] as const)test('linked diagnostics cannot replace an original '+failure+' failure',async()=>{
+  const audit:Audit={events:[],saved:new Map()};
+  await assert.rejects(phase({audit,captureFails:true,checkerFails:failure==='checker',cleanupReportFails:failure==='cleanup report',cleanupLinkFails:failure==='cleanup link'}),new RegExp(failure==='cleanup link'?'could not remove its rule':'original '+failure+' failed'));
+  assert.equal(audit.events.filter(event=>event==='Network.getResponseBody').length,0);
+  assert.equal(audit.saved.has('linked-wallet-traffic'),false);
 });

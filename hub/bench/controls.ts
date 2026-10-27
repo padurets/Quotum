@@ -3,10 +3,12 @@ import {reload} from './reload.js';
 
 /** A saved radio remains focused, so the next native arrow can save another choice. */
 export async function frequencyKeys(cdp: Cdp) {
-  await cdp.evaluate(`(() => {
+  const source=await cdp.evaluate<string>(`(() => {
     const trigger = document.querySelector('.card-head .picker > button');
     if (!trigger) throw new Error('no card menu');
-    trigger.focus(); trigger.click();
+    const source=trigger.closest('[data-card]')?.getAttribute('data-card');
+    if(!source)throw new Error('first card has no source');
+    trigger.focus(); trigger.click();return source;
   })()`);
   await cdp.evaluate(`(async () => {
     const end = Date.now() + 5000;
@@ -32,6 +34,23 @@ export async function frequencyKeys(cdp: Cdp) {
   }
   await cdp.send('Input.dispatchKeyEvent', {type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});
   await cdp.send('Input.dispatchKeyEvent', {type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});
+  return source;
+}
+
+/** The standalone producer saves the same card targeted by the native keyboard check. */
+export function frequencySource(cdp:Cdp) {return cdp.evaluate<string>(`(()=>{const source=document.querySelector('.card-head .picker > button')?.closest('[data-card]')?.getAttribute('data-card');if(!source)throw Error('first card has no source');return source;})()`);}
+
+/** The updates leaf enters its financial phases with a fresh live one-day document. */
+export async function normalizeUpdates(cdp:Cdp) {
+  await cdp.send('Emulation.setCPUThrottlingRate',{rate:1});
+  await cdp.send('Emulation.clearDeviceMetricsOverride');
+  await cdp.send('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:-1,uploadThroughput:-1});
+  await cdp.send('Fetch.disable');
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+  await cdp.evaluate(`(()=>{window.__quotumPan?.cleanup();document.getElementById('quotum-pan-layout')?.remove();const prefs=JSON.parse(localStorage.getItem('quotum.prefs')||'{}');prefs.range='24h';localStorage.setItem('quotum.prefs',JSON.stringify(prefs));const url=new URL(location.href);url.searchParams.delete('from');url.searchParams.delete('to');history.replaceState(null,'',url);})()`);
+  await reload(cdp);
+  await cdp.evaluate(`(async()=>{const until=Date.now()+5000;while(!window.__quotumBench||!['quota-history','quota-session-history','activity','budget-history','subscription-funds'].every(id=>document.querySelector('[data-widget="'+id+'"] .chart>svg')?.dataset.drawReady==='true')||document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading')){if(Date.now()>until)throw Error('live update baseline did not return');await new Promise(requestAnimationFrame);}window.__quotumBench.reset();})()`);
 }
 
 /** Each phase keeps its intended monetary selection across the page reload. */

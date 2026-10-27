@@ -155,7 +155,7 @@ export class IdleCpuDiagnostic {
   private rejectNative(event:RawEvent,reason:'identity'|'timestamp'|'phase'|'duration'|'frame-metadata'|'commit-metadata'|'scheduler-metadata'){
     this.invalid++;
     if(this.nativeRejected.length>=8)return;
-    const metadata=event.name==='thread_name'||event.name==='TracingStartedInBrowser',known=NATIVE_NAMES.has(event.name),frame=event.args?.data?.frame;
+    const metadata=event.name==='thread_name'||event.name==='TracingStartedInBrowser',known=NATIVE_NAMES.has(event.name)||this.inputPump&&event.name==='SyntheticGestureController::Flush',frame=this.inputPump&&event.name==='SyntheticGestureController::Flush'?undefined:event.args?.data?.frame;
     this.nativeRejected.push({name:known||metadata?event.name:'other',kind:metadata?'metadata':known?'known':'other',
       phase:['B','E','X','I','M','i','b','e','n','s','t','f','C','R','S','T','F','P','N','O','D'].includes(event.ph)?event.ph:null,
       pid:Number.isSafeInteger(event.pid)?event.pid:null,tid:Number.isSafeInteger(event.tid)?event.tid:null,
@@ -163,14 +163,14 @@ export class IdleCpuDiagnostic {
   }
   private collectNative(events:RawEvent[]){
     for(const event of events){
-      const metadata=event.name==='thread_name'||event.name==='TracingStartedInBrowser',known=NATIVE_NAMES.has(event.name);
+      const metadata=event.name==='thread_name'||event.name==='TracingStartedInBrowser',known=NATIVE_NAMES.has(event.name)||this.inputPump&&event.name==='SyntheticGestureController::Flush';
       const flow=PIPELINE_NAMES.has(event.name)&&(event.ph==='s'||event.ph==='f');
       if(!metadata&&!known&&event.ph!=='B'&&event.ph!=='E')continue;
       if(!Number.isSafeInteger(event.pid)||event.pid!<=0||!Number.isSafeInteger(event.tid)||event.tid!<=0){this.rejectNative(event,'identity');continue;}
       if(!metadata&&!finite(event.ts)){this.rejectNative(event,'timestamp');continue;}
       if(!flow&&!['B','E','X','I','M'].includes(event.ph)){this.rejectNative(event,'phase');continue;}
       if(event.ph==='X'&&!finite(event.dur)){this.rejectNative(event,'duration');continue;}
-      const data=event.args?.data,marker=data?.message==='quotum-native-start'?1:data?.message==='quotum-native-end'?2:null;
+      const data=this.inputPump&&event.name==='SyntheticGestureController::Flush'?undefined:event.args?.data,marker=data?.message==='quotum-native-start'?1:data?.message==='quotum-native-end'?2:null;
       if(event.name==='TimeStamp'&&marker===null&&event.ph!=='B'&&event.ph!=='E')continue;
       const row:NativeRow={name:known||metadata?event.name:'other',phase:event.ph,ts:finite(event.ts)?event.ts!:null,duration:finite(event.dur)?event.dur!:null,
         threadTs:finite(event.tts)?event.tts!:null,threadDuration:finite(event.tdur)?event.tdur!:null,pid:event.pid!,tid:event.tid!,frame:data?.frame?data.frame===this.frame?1:2:null,
@@ -250,7 +250,8 @@ export class IdleCpuDiagnostic {
     }
   }
 
-  constructor(private readonly cdp:Cdp,private readonly save:Save,client:Client,ownedSynthetic:boolean,private readonly collection:'profile'|'trace'|'native-trace'|'native-profile'='profile',private readonly nativeSignal?:AbortSignal){
+  constructor(private readonly cdp:Cdp,private readonly save:Save,client:Client,ownedSynthetic:boolean,private readonly collection:'profile'|'trace'|'native-trace'|'native-profile'='profile',private readonly nativeSignal?:AbortSignal,private readonly inputPump=false){
+    if(inputPump&&collection!=='native-trace')throw Error('Input pump trace requires native-trace');
     if(!ownedSynthetic)throw Error('Idle CPU diagnostics require an owned synthetic browser');
     this.clockSource=this.native?null:clockTimerSource(client);
     this.binding=new ScriptBinding(cdp,client,(name,value)=>{if(name.startsWith('source-family-'))this.sourceBinding=value;save((this.native?'native-frame-':'idle-cpu-')+name,value);});
@@ -281,7 +282,7 @@ export class IdleCpuDiagnostic {
     }
     if(!this.native)await this.clock('start');
     this.active=true;this.tracing=true;
-    await this.cdp.send('Tracing.start',{categories:this.native?'toplevel,cc,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.frame,disabled-by-default-cc.debug.scheduler':'devtools.timeline,disabled-by-default-devtools.timeline.stack',transferMode:'ReportEvents'},this.nativeSignal);
+    await this.cdp.send('Tracing.start',{categories:this.native?'toplevel,cc,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.frame,disabled-by-default-cc.debug.scheduler'+(this.inputPump?',input':''):'devtools.timeline,disabled-by-default-devtools.timeline.stack',transferMode:'ReportEvents'},this.nativeSignal);
     if(this.native)await this.nativeClock('start');
     if(this.profiling)await this.cdp.send('Profiler.start',{},this.nativeSignal);
   }

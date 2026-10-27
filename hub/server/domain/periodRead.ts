@@ -11,7 +11,7 @@ export type PeriodScope = typeof PERIOD_SCOPES[number];
 export type WorkChoices = {projects:(string|null)[];devices:{id:string;name:string}[];clients:(string|null)[];funding:('unknown'|'notProvided')[]};
 export type WorkFacets = WorkChoices & {retained?:WorkChoices;ranges?:import('./period.js').PeriodRange[]};
 
-export type HistoryQuery = {cell?:string;from?:string;to?:string;meters?:string;unit?:string;currency?:string;meta?:string;scope?:string;work?:string;evidence?:string;cells?:string;sources?:string};
+export type HistoryQuery = {cell?:string;from?:string;to?:string;meters?:string;unit?:string;currency?:string;meta?:string;scope?:string;work?:string;evidence?:string;cellsCursor?:string;cells?:string;sources?:string};
 export type PeriodRequest = {
   version:1;selection:PeriodSelection;evaluatedAt:number;
   quota?:HistoryQuery;budget?:HistoryQuery;funds?:HistoryQuery;

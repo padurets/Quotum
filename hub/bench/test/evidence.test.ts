@@ -7,6 +7,10 @@ import path from 'node:path';
 import {clientIdentity, Evidence, safeEvidence} from '../evidence.js';
 import {measuredProblems} from '../budget.js';
 
+test('saved activity drawing mode survives without admitting arbitrary request text',()=>{
+  assert.deepEqual(safeEvidence({sections:[{scope:'quota',cells:'activity',evidence:'cursor'},{cells:'private-value',evidence:'private-cursor'}]}),{sections:[{scope:'quota',cells:'activity',evidence:'cursor'},{cells:'[text omitted]',evidence:'[text omitted]'}]});
+});
+
 test('saved measurements retain the card identity needed to replay their render budget', t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-evidence-test-'));
   t.after(() => rmSync(dir, {recursive: true, force: true}));
@@ -116,4 +120,53 @@ test('missing and ambiguous client bundles leave explicit unavailable identity',
   writeFileSync(path.join(dir, 'index-one.js'), 'one');
   writeFileSync(path.join(dir, 'index-two.js'), 'two');
   assert.deepEqual(clientIdentity(dir), {status: 'unavailable'});
+});
+
+test('the phase journal retains the first failed checker without blaming successful cleanup', t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-evidence-test-'));
+  t.after(() => rmSync(dir, {recursive: true, force: true}));
+  const evidence = new Evidence(dir);evidence.plan('all');evidence.end();
+  evidence.begin('preparation');evidence.end();
+  evidence.begin('idle');evidence.save('idle', {seconds: 120});evidence.fail('budget');
+  const active = JSON.parse(readFileSync(path.join(dir, evidence.id, 'manifest.json'), 'utf8')).journal.find((row: {phase: string}) => row.phase === 'idle');
+  assert.equal(active.outcome, 'failed');assert.equal(active.endMs, undefined, 'later safe observations remain in the original phase duration');
+  evidence.checked([]);
+  evidence.begin('cleanup');evidence.end();evidence.finish('failed', {status: 'closed'});
+  const saved = JSON.parse(readFileSync(path.join(dir, evidence.id, 'manifest.json'), 'utf8'));
+  assert.deepEqual(saved.primaryFailure, {phase: 'idle', classification: 'budget'});
+  const idle = saved.journal.find((row: {phase: string}) => row.phase === 'idle');
+  assert.equal(idle.outcome, 'failed');assert.deepEqual(idle.artifactIds, ['idle.json']);
+  assert.ok(idle.startMs >= 0 && idle.endMs >= idle.startMs && idle.durationMs === idle.endMs - idle.startMs);
+  const cleanup = saved.journal.find((row: {phase: string}) => row.phase === 'cleanup');
+  assert.equal(cleanup.outcome, 'passed');assert.equal(cleanup.classification, undefined);
+  assert.equal(saved.journal.find((row: {phase: string}) => row.phase === 'measurements').outcome, 'unreached');
+  assert.equal(saved.status, 'failed');
+});
+
+test('cancellation keeps completed artifacts and a cancelled current phase through cleanup', t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-evidence-test-'));
+  t.after(() => rmSync(dir, {recursive: true, force: true}));
+  const evidence = new Evidence(dir);evidence.end();evidence.begin('work');evidence.save('work', {count: 3});evidence.end();
+  evidence.begin('panning');evidence.end('cancelled', 'cancelled');evidence.begin('cleanup');evidence.end();evidence.finish('cancelled', {});
+  const saved = JSON.parse(readFileSync(path.join(dir, evidence.id, 'manifest.json'), 'utf8'));
+  assert.deepEqual(saved.primaryFailure, {phase: 'panning', classification: 'cancelled'});
+  assert.equal(saved.journal.find((row: {phase: string}) => row.phase === 'work').outcome, 'passed');
+  assert.equal(saved.journal.find((row: {phase: string}) => row.phase === 'panning').outcome, 'cancelled');
+  assert.equal(saved.journal.find((row: {phase: string}) => row.phase === 'cleanup').outcome, 'passed');
+  assert.deepEqual(JSON.parse(readFileSync(path.join(dir, evidence.id, 'work.json'), 'utf8')), {count: 3});
+});
+
+
+test('a real cleanup failure has its own outcome and preserves an earlier runtime failure', t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-evidence-test-'));
+  t.after(() => rmSync(dir, {recursive: true, force: true}));
+  for (const earlier of [false, true]) {
+    const evidence = new Evidence(dir);evidence.end();
+    if (earlier) {evidence.begin('panning');evidence.end('failed', 'runtime');}
+    evidence.begin('cleanup');evidence.end('failed', 'cleanup');evidence.finish('failed', {status: 'incomplete'});
+    const saved = JSON.parse(readFileSync(path.join(dir, evidence.id, 'manifest.json'), 'utf8'));
+    assert.deepEqual(saved.primaryFailure, earlier ? {phase: 'panning', classification: 'runtime'} : {phase: 'cleanup', classification: 'cleanup'});
+    const cleanup = saved.journal.find((row: {phase: string}) => row.phase === 'cleanup');
+    assert.equal(cleanup.outcome, 'failed');assert.equal(cleanup.classification, 'cleanup');
+  }
 });

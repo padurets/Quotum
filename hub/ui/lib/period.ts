@@ -688,7 +688,7 @@ class BoardPeriod {
             const visible=(scope==='quota'?[ACTIVITY,...QUOTA_WIDGETS]:scope==='funds'?[SUBSCRIPTION_FUNDS]:BUDGET_WIDGETS).some(id=>widgetVisible(board.view,id,board.lineup.length));
             if(!visible)continue;
             const selected=scope==='quota'?new Set(sources):new Set(moneyReadSelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view,scope==='funds'?prefs().funds:prefs().money,board.currencies,scope==='funds'?'funds':'budget')?.ids.map(([id])=>id));
-            if(scope==='quota'&&own||(hub.data.changes?hub.data.changes.some(c=>selected.has(c.source)&&c.scope===(scope==='funds'?'budget':scope)&&(c.workSince===undefined||c.since<c.workSince||scope==='budget'&&JSON.parse(this.scopeKeys.budget??'[]')[3]==='1')&&(selection.mode==='live'||c.since<selection.to)):hub.data.sources.some(id=>selected.has(id))))this.dirtyScopes.add(scope);
+            if(scope==='quota'&&own||(hub.data.changes?(hub.data.sources.some(id=>selected.has(id)&&!hub.data.changes!.some(c=>c.source===id))&&(selection.mode==='live'||hub.data.since<selection.to)||hub.data.changes.some(c=>selected.has(c.source)&&c.scope===(scope==='funds'?'budget':scope)&&(c.workOnly!==true||c.workSince===undefined||scope==='budget'&&JSON.parse(this.scopeKeys.budget??'[]')[3]==='1')&&(selection.mode==='live'||c.since<selection.to))):hub.data.sources.some(id=>selected.has(id))))this.dirtyScopes.add(scope);
           }
           const work=hub.data.changes?.some(c=>sources.includes(c.source)&&c.scope==='quota'&&c.workSince!==undefined)??true;if(retired||work||own)this.workNeeded=wantsWork;this.revision++;this.transport.change();
         }

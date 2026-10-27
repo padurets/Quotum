@@ -17,6 +17,7 @@ export const CLOCK_TOLERANCE_MS = 30_000;
 export const cellOf = (span: number) => CELLS.find(cell => span / cell <= MAX_CELLS * 1.05) ?? CELLS.at(-1)!;
 export const READ_CELLS = CELLS.filter(cell => cell <= cellOf(31 * 86_400_000));
 export const cellStart = (at: number, cell: number) => Math.floor(at / cell) * cell;
+export const historyReadTo = (to:number,cell:number,now:number) => Math.min(Math.ceil(to/cell)*cell,cellStart(now+CLOCK_TOLERANCE_MS,cell)+cell);
 export const tileOf = (at: number, cell: number) => Math.floor(at / (cell * TILE_CELLS));
 export const tileStart = (tile: number, cell: number) => tile * cell * TILE_CELLS;
 export const tileEnd = (tile: number, cell: number) => tileStart(tile + 1, cell);
@@ -69,9 +70,9 @@ export function planRowAt(row:PlanRow,now:number):PlanRow|null {
 export const planRowDeadline=(row:PlanRow)=>Math.min(row[4],row[3]?row[4]-row[1]+row[3].at:Infinity);
 export type HistoryMeta = {now: number; historyStart: number; known: {own?: number; work: number; sources: Record<string, number>;sessions?:number|null;sourceWork?:Record<string,number>}; meta?: string};
 export const workKnownFrom = (known:HistoryMeta['known']):number|null => known.sessions!==undefined?known.sessions:Math.max(known.own??known.work,...(known.own===undefined&&Object.keys(known.sources).length?[Math.min(...Object.values(known.sources))]:[]));
-export type HistoryAnswer = HistoryMeta & {run: string; chunks: Chunk[]};
+export type HistoryAnswer = HistoryMeta & {run: string; chunks: Chunk[];cells?:'activity';cellsCursor?:string};
 export type HistoryBasis = HistoryMeta & {run: string};
-export type HistoryReply = (HistoryAnswer | {now: number; run: string; meta: string; chunks: Chunk[]}) & {tape?:import('./periodTape.js').PeriodTape};
+export type HistoryReply = (HistoryAnswer | {now: number; run: string; meta: string; chunks: Chunk[]}) & {cells?:'activity';cellsCursor?:string;tape?:import('./periodTape.js').PeriodTape};
 
 /** A compact reply can borrow only the metadata captured by its own request. */
 export function expandHistory(reply: HistoryReply, prior?: HistoryBasis): HistoryAnswer {

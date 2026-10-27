@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {panTransactionsScript, panPartialScript, type PanTransactions} from '../panEvidence.js';
+import {Coverage} from '../coverage.js';
 import {deadline} from '../deadline.js';
 import {panningSettlement} from '../panningFailure.js';
 import {safeEvidence} from '../evidence.js';
@@ -37,7 +38,7 @@ test('native diagnostics restore CPU after the frozen report and bind even when 
   });
 });
 
-function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quota', typed = false, diagnostic = false,detailed=false,scheduler?:unknown) {
+function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quota', typed = false, diagnostic = false,detailed=false,scheduler?:unknown,diagnosticPeriod='30d') {
   let time = 0;const reads={rect:0,style:0,fetch:0};
   let observe:(records:unknown[])=>void=()=>{};
   const callbacks: ((stamp: number) => void)[] = [], listeners = new Map<string, (event: object) => void>(), bubble = new Map<string, (event: object) => void>();
@@ -86,7 +87,7 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quo
     Object.assign(owner,{computedStyleMap:()=>new Map([['transform',computed.get(owner)==='none'?{value:'none'}:{toMatrix:()=>new context.DOMMatrix(computed.get(owner))}]])});
   }
   const paintFold = (owner:{style:{transform:string}},transform:string) => {if (typed) computed.set(owner,transform);else owner.style.transform=transform;};
-  const script = runInNewContext('`' + probe + '`', {initiator, period: detailed?'30d':'24h', panTransactionsScript, detailed, evidence: diagnostic ? {selection: 'quota24'} : undefined});
+  const script = runInNewContext('`' + probe + '`', {initiator, period: detailed?diagnosticPeriod:'24h', panTransactionsScript, detailed, evidence: diagnostic ? {selection: 'quota24'} : undefined});
   runInNewContext(script, context);
   const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {running:boolean; feeding: boolean; cleanup(): void; readTransactions(): PanTransactions; pending: object[]; readDiagnostic?():NativePanReceipt;readSettlements?():PanSettlements;markSettlement?:unknown;samples: NonNullable<PanReading['outliers']>}}).__quotumPan;
   for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg, sessionSvg]) Object.assign(svg.dataset, {panMinEnd: '-1000000000', panMaxEnd: '1000000000'});
@@ -211,7 +212,8 @@ test('actual postconditions preserve failure and cleanup after motion sampling s
     const evidence=fail?{save:(name:string,value:unknown)=>files.set(name,value)}:undefined;
     const reports:PanReading[]=[],traceCalls:string[]=[];
     const traced=native?{stop:async()=>{assert.equal(reports.length,1);assert.equal(f.reading.running,false);traceCalls.push('stop');},bindAndClose:async()=>{assert.deepEqual(traceCalls,['stop']);traceCalls.push('bind');}}:undefined;
-    const sandbox={...globals,cdp,evidence,traced,detailed:false,deadline,panPartialScript,panningSettlement,selector:'[data-widget="quota-history"]',initiator:'quota',period:'24h',geometry:{x:0,y:0,series:12,sessionSeries:12,budgetSeries:12,fundsSeries:12,charts:5},edgeSeries:[],costStart:undefined,costEnd:undefined,reports,scenario:{initiator:'quota',period:'24h'},failed:false,stage:'controlled',interception:false,originalHorizon:'auto',click:async()=>{},at:(value:string)=>{context=value;},progress:(value:string)=>{
+    const coverage=new Coverage('dashboard');
+    const sandbox={...globals,cdp,evidence,traced,coverage,panningProblems,detailed:false,deadline,panPartialScript,panningSettlement,selector:'[data-widget="quota-history"]',initiator:'quota',period:'24h',geometry:{x:0,y:0,series:12,sessionSeries:12,budgetSeries:12,fundsSeries:12,charts:5},edgeSeries:[],costStart:undefined,costEnd:undefined,reports,scenario:{initiator:'quota',period:'24h'},failed:false,stage:'controlled',interception:false,originalHorizon:'auto',click:async()=>{},at:(value:string)=>{context=value;},progress:(value:string)=>{
       if(value.endsWith('/complete'))complete=true;
     }};
     runInNewContext(ts.transpileModule(script,{compilerOptions:{target:ts.ScriptTarget.ES2023}}).outputText,sandbox);
@@ -221,6 +223,7 @@ test('actual postconditions preserve failure and cleanup after motion sampling s
       const partial=files.get('panning-partial').partial;
       assert.equal(partial.status,'unavailable');assert.equal(partial.frames,undefined);assert.equal(complete,false);
     }else{await run();assert.equal(complete,true);}
+    assert.equal(coverage.summary().observed.length,fail?0:1,'the frozen report is not terminal until every native postcondition passes');
     assert.equal(held,true);assert.equal(f.reading.running,false);assert.equal(sandbox.reports.length,1);
     assert.deepEqual(traceCalls,native?['stop','bind']:[]);
     assert.equal(cleanupCalls,2,'both the report and outer finally must run the actual cleanup');
@@ -891,13 +894,43 @@ test('selected native trace targets exactly its original cell and keeps the defa
   assert.deepEqual(initiators,['quota','session','activity','budget','funds']);assert.deepEqual(periods.map(row=>row[0]),['24h','30d']);
   assert.ok(selected.get('familyTrace'));assert.ok(selected.get('traced'));
   assert.ok(source.indexOf('const familyTrace=')<source.indexOf('await panningReload('),'source binding begins before the selected family reload');
-  for(const target of ['activity/24h','session/30d']){
-    const observed:string[]=[],created:string[]=[];
+  for(const target of ['activity/24h','session/30d','quota/24h']){
+    const observed:string[]=[],created:string[]=[],detailedCells:string[]=[];
     for(const initiator of initiators){
       const context={initiator,nativeTarget:target,nativeTrace:()=>{created.push(initiator);return{};}};
       runInNewContext(`const ${selected.get('familyTrace')};globalThis.family=familyTrace;`,context);
-      for(const [period] of periods){const cell={period,nativeTarget:target,familyTrace:(context as typeof context&{family:unknown}).family};runInNewContext(`const ${selected.get('traced')};globalThis.active=!!traced;`,cell);if((cell as typeof cell&{active:boolean}).active)observed.push(initiator+'/'+period);}
+      for(const [period] of periods){const cell={period,nativeTarget:target,familyTrace:(context as typeof context&{family:unknown}).family};runInNewContext(`const ${selected.get('traced')};const ${selected.get('detailed')};globalThis.active=!!traced;globalThis.detail=detailed;`,cell);if((cell as typeof cell&{active:boolean}).active)observed.push(initiator+'/'+period);if((cell as typeof cell&{detail:boolean}).detail)detailedCells.push(initiator+'/'+period);}
     }
-    assert.deepEqual(created,[target.split('/')[0]]);assert.deepEqual(observed,[target]);
+    assert.deepEqual(created,[target.split('/')[0]]);assert.deepEqual(observed,[target]);assert.deepEqual(detailedCells,target==='activity/24h'?[]:[target]);
   }
+});
+
+test('quota24 detailed trace counts existing stationary ticks and retains each actual worst pair',()=>{
+  const off=fixture('quota',true),on=fixture('quota',true,false,true,new Preparations({now:()=>0,post:()=>{}}),'24h');
+  for(const f of [off,on]){
+    f.reading.feeding=true;f.wheel(10,10);f.requestFrame(()=>f.update(1,20));f.runFrame(20);f.runFrame(30);
+    f.wheel(110,115);f.requestFrame(()=>f.update(2,120));f.runFrame(120);f.runFrame(140);f.runFrame(160);
+    f.wheel(130,300);f.requestFrame(()=>f.update(3,316));f.runFrame(316);
+  }
+  assert.deepEqual(canonical(on),canonical(off));assert.equal(off.reading.readDiagnostic,undefined);
+  assert.deepEqual(Object.keys(off.reading.readTransactions()).sort(),['status','wheelEvents','invalidClocks','stampRegressions','maxStampGap','maxDeliveryGap','pushesDuring','omitted','writes'].sort());
+  const report=on.freeze(),d=report.nativeDiagnostic!;assert.equal(d.status,'complete');assert.equal(d.rawTicks,6);assert.equal(d.frames.length,0,'stationary ticks do not manufacture movement frames');
+  assert.deepEqual(Array.from(d.inputs,row=>[row.id,row.captureOrdinal,row.rawTicks]),[[1,1,0],[2,2,2],[3,3,5]]);
+  const transactions=report.transactions!;assert.equal(transactions.maxStampPair?.kind,'capture-wheel');assert.equal(transactions.maxStampGap,100);assert.equal(transactions.maxDeliveryGap,185);
+  const stamp=transactions.maxStampPair!,delivery=transactions.maxDeliveryPair!;
+  assert.deepEqual([stamp.previous.ordinal,stamp.current.ordinal,stamp.previous.ticks,stamp.current.ticks],[1,2,0,2]);
+  assert.deepEqual([delivery.previous.ordinal,delivery.current.ordinal,delivery.previous.ticks,delivery.current.ticks],[2,3,2,5]);
+  assert.deepEqual([delivery.previous.stamp,delivery.current.stamp,delivery.current.delivered,delivery.current.queued,delivery.stampGap,delivery.deliveryGap],[110,130,300,170,20,185]);
+});
+
+test('quota24 capture pairs remain distinct from the eligible wheel guard and consumed inputs',()=>{
+  const f=fixture('quota',true,false,true,new Preparations({now:()=>0,post:()=>{}}),'24h');f.reading.feeding=true;
+  f.wheel(10,10);f.requestFrame(()=>f.update(1,20));f.runFrame(20);
+  f.wheel(200,200,0,()=>{},0); // A captured vertical-only event is not an eligible horizontal input.
+  f.wheel(310,310);f.requestFrame(()=>f.update(2,320));f.runFrame(320);
+  const report=f.freeze(),pairs=report.transactions!,inputs=report.nativeDiagnostic!.inputs;
+  assert.equal(pairs.maxStampGap,190);assert.equal(report.wheelGapMs,300);
+  assert.equal(pairs.maxStampPair!.kind,'capture-wheel');assert.deepEqual(Array.from(inputs,row=>[row.id,row.captureOrdinal,row.rawTicks]),[[1,1,0],[2,3,1]]);
+  assert.equal(inputs[1].at-inputs[0].at,report.wheelGapMs,'the guard gap is independently derived from eligible input clocks');
+  assert.deepEqual(JSON.parse(JSON.stringify(safeEvidence(pairs))),JSON.parse(JSON.stringify(pairs)),'numeric pairs and their fixed provenance survive export');
 });

@@ -6,6 +6,11 @@ on:
     branches: [main]
   pull_request:
   workflow_call:
+    inputs:
+      reusable_call:
+        description: Keep called workflows separate from direct pull-request runs
+        type: boolean
+        default: true
   workflow_dispatch:
     inputs:
       diagnostic_ref:
@@ -41,7 +46,7 @@ on:
         required: false
         type: choice
         default: activity/24h
-        options: [activity/24h, session/30d]
+        options: [activity/24h, session/30d, quota/24h]
       caption_control:
         description: Compare the previous and current live captions with an A1/B/A2 control
         required: false
@@ -82,6 +87,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && !inputs.reusable_call && format('quotum-ci-pr-{0}', github.event.pull_request.number) || format('quotum-ci-run-{0}-{1}', github.run_id, github.run_attempt) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !inputs.reusable_call }}
 
 jobs:
   dev-tooling:
@@ -135,17 +144,18 @@ jobs:
   # A release does not wait for it: the commit it tags already passed it.
   bench:
     if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && always() && !inputs.diagnostic_ref && !startsWith(github.ref, 'refs/tags/') }}
-    needs: [bench-history, bench-dashboard]
+    needs: [bench-history, bench-dashboard, bench-panning]
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
-      - name: Require both benchmark scopes
+      - name: Require all three benchmark scopes
         env:
           HISTORY_RESULT: ${{ needs['bench-history'].result }}
           DASHBOARD_RESULT: ${{ needs['bench-dashboard'].result }}
+          PANNING_RESULT: ${{ needs['bench-panning'].result }}
         run: |
-          if [ "$HISTORY_RESULT" != success ] || [ "$DASHBOARD_RESULT" != success ]; then
-            echo 'Both benchmark jobs must succeed.'
+          if [ "$HISTORY_RESULT" != success ] || [ "$DASHBOARD_RESULT" != success ] || [ "$PANNING_RESULT" != success ]; then
+            echo 'All three benchmark jobs must succeed.'
             exit 1
           fi
 
@@ -298,7 +308,7 @@ jobs:
   bench-dashboard:
     if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.history_pool_control && !startsWith(github.ref, 'refs/tags/') && !inputs.native_postmortem_control && !inputs.history_scroll_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
     runs-on: ubuntu-latest
-    # Independent traffic checks run on another runner; every dashboard phase stays here.
+    # Ordinary updates and native panning have independent runners and deadlines.
     timeout-minutes: 20
     defaults:
       run:
@@ -343,14 +353,15 @@ jobs:
           git -C "$GITHUB_WORKSPACE" archive 9e4b1422961b8a3d5b9e2f9894d3db5584c65a43 hub | tar -x -C "$baseline"
           ln -s "$GITHUB_WORKSPACE/hub/node_modules" "$baseline/hub/node_modules"
           npm run build --prefix "$baseline/hub"
-      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope dashboard
+      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope "${BENCH_SCOPE}"
         env:
+          BENCH_SCOPE: ${{ inputs.native_trace && inputs.native_target == 'quota/24h' && 'panning' || (inputs.native_trace || inputs.native_profile || inputs.caption_control) && 'dashboard' || 'updates' }}
           QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.native_profile && 'native-profile' || inputs.native_trace && 'native-trace' || '' }}
           QUOTUM_BENCH_NATIVE_TARGET: ${{ (inputs.native_trace || inputs.native_profile) && inputs.native_target || '' }}
           QUOTUM_BENCH_SOURCE_SHA: ${{ (inputs.native_trace || inputs.native_profile || inputs.caption_control) && inputs.diagnostic_ref || '' }}
           QUOTUM_BENCH_CAPTION_CONTROL: ${{ inputs.caption_control && '1' || '' }}
           QUOTUM_BENCH_CAPTION_BASELINE_DIR: ${{ runner.temp }}/quotum-caption-baseline/hub/dist/client/assets
-          QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ inputs.caption_control && inputs.expected_client_sha256 || '' }}
+          QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ (inputs.caption_control || (inputs.native_trace && inputs.native_target == 'quota/24h')) && inputs.expected_client_sha256 || '' }}
           QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-bench-dashboard
       - name: Benchmark evidence
         if: always()
@@ -358,6 +369,33 @@ jobs:
         with:
           name: bench-dashboard-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/quotum-bench-dashboard
+          if-no-files-found: warn
+
+  bench-panning:
+    if: ${{ !inputs.history_preinput_binding && !startsWith(github.ref, 'refs/tags/') && !inputs.diagnostic_ref && !inputs.trace_only && !inputs.original_timing && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control && !inputs.history_pool_control && !inputs.startup_io_control && !inputs.compositor_guard_control }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope panning
+        env:
+          QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-bench-panning
+      - name: Benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-panning-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quotum-bench-panning
           if-no-files-found: warn
 
   idle-cpu-control:

@@ -61,15 +61,28 @@ unrelated updates fail. This exception permits no extra page rendering or reques
 retains the 1 ms/s idle script budget.
 The idle artifact retains the original performance timestamps, script-duration counters
 and unrounded probe time used in its calculation, so the reported rate can be recomputed.
-CI runs the unchanged history traffic matrix and dashboard phases on separate runners,
-each with a 20-minute job limit. `--scope history` selects the matrix, including native
-traffic and cancellation checks; `--scope dashboard` selects idle, measurements, work,
-frequency, all ten native panning scenarios, subscription credits, currency checks and fixed Activity shared filters.
-The `bench` check passes only when both jobs succeed; a failed, skipped or cancelled job
-fails this check. The default `--scope all` runs the history matrix first, then every
-dashboard phase in the same order as `--scope dashboard`. CPU diagnostics (`trace`,
+CI runs history, updates and panning on three independent runners, each with a
+20-minute job limit. `--scope history` selects the complete traffic and cancellation
+matrix. `--scope updates` selects idle, measurements, work, frequency, subscription
+credits, wallet and currency checks, fixed Activity and measurement disclosures.
+`--scope panning` selects all ten native chart/period scenarios, after reproducing
+the preceding quota, work and frequency conditioning without their measurement checks.
+Each leaf prepares and closes its own fixture and browser.
+The `bench` check passes only when all three jobs succeed; a failed, skipped or
+cancelled job fails it. The existing `bench-dashboard` check runs updates in ordinary CI.
+The default `--scope all` runs history first, then the original dashboard sequence.
+`--scope dashboard` keeps that same sequence without history, including panning between
+frequency and subscription credits. Each run requires the named scenarios of its
+selected scope: missing, duplicate, failed or undersampled results fail coverage.
+The full command requires 218 results: 132 history, 76 updates and ten panning results.
+Evidence retains phase start/end/duration, partial coverage and the original failure
+before cleanup; an unreached phase cannot count as passed.
+Direct pull-request CI and Desktop runs cancel superseded runs of the same workflow
+and PR. Different PRs, main pushes, manual runs and reusable release calls remain
+independent. CPU diagnostics (`trace`,
 `profile`, `native-trace`, `native-profile`) support `all` or `dashboard`; caption control
-requires `dashboard`. The ordinary history job attempts to prepare GDB and matching
+requires `dashboard`. The standalone quota trace described below requires `panning`.
+The ordinary history job attempts to prepare GDB and matching
 Chrome unwind tables in an optional two-minute step inside its existing job limit.
 Its setup result remains visible; setup failure still runs every benchmark check.
 Native capture starts only after the original command deadline fails and retains
@@ -278,6 +291,25 @@ intervals, consumed inputs, wrapped RAF callbacks and preparation slices share a
 4096-entry journal and a 4 MiB artifact bound. Missing coverage or overflow is
 insufficient evidence; trace overlap does not establish causal ownership, and
 instrumented runs cannot satisfy the required benchmark.
+For a standalone quota input-gap capture, owned CI `native-trace` also accepts
+`QUOTUM_BENCH_NATIVE_TARGET=quota/24h` with `--ci --scope panning`. The manual
+`native_trace` and `native_target=quota/24h` inputs select that scope in the existing
+job. This control requires an exact source SHA matching a clean checkout, the expected
+compiled-client SHA256 and a diagnostics directory before fixture preparation. It
+rejects attached browsers, other scopes, CPU profiling and other diagnostic controls.
+Chrome discovery is checked before preparation; an explicit `QUOTUM_CHROME`
+override keeps its existing validation at launch.
+It runs the same conditioning and all ten panning cells in their ordinary order;
+only quota/24h receives the detailed journal. Its existing sampler tick counts raw
+callbacks independently of movement. Each maximum timestamp or delivery gap retains
+its own capture-stream adjacent event pair, including ordinals, both clocks, queued
+delay and tick snapshots. Detailed consumed inputs retain their eligible IDs and capture
+ordinals, so their continuity guard can be derived separately from the capture stream.
+Trace category `input` retains the fixed `SyntheticGestureController::Flush` name
+and numeric fields without arguments; other scopes keep their existing redaction.
+A pump PID is not a renderer identity. Existing trace and journal bounds, deadlines and workload budgets
+apply. Missing capture remains insufficient evidence; a capture with no target gap
+has not exercised that condition and cannot establish a canonical pass.
 The optional native trace retains fixed raster, tile preparation and activation scopes
 from its existing `cc` category, with numeric preparation IDs and task counts. These
 IDs are local to a tile manager; completed CPU tasks do not prove GPU readiness or

@@ -1,3 +1,4 @@
+import {ACTIVITY_CASES, activityScenario, type Coverage} from './coverage.js';
 import assert from 'node:assert/strict';
 import {cards,people,DAY} from '../demo/model.js';
 import type {Stand} from '../demo/setup.js';
@@ -252,7 +253,7 @@ export function retainInterruptedActivity(cdp:Pick<Cdp,'snapshot'>,days:number,e
 }
 
 /** Actual mounted widget and shared work filters, including late work and retired responses. */
-export async function fixedActivity(browser:Browser,stand:Stand,evidence?:Pick<Evidence,'save'>){
+export async function fixedActivity(browser:Browser,stand:Stand,evidence?:Pick<Evidence,'save'>,coverage?:Coverage){
   const owner=stand.people.get(people(stand.set)[0].id)!,card=cards(stand.set).find(card=>card.id==='antigravity')!,reports:Record<string,unknown>[]=[];
   // Earlier money scenarios save a one-account selection. This scenario needs
   // the stand's full resource cohort before applying its own project filter.
@@ -261,7 +262,7 @@ export async function fixedActivity(browser:Browser,stand:Stand,evidence?:Pick<E
     const actor=await ObservedWork.open(owner,card),tab=await openTab(browser),{cdp}=tab;
     const bodies=traffic(cdp),selection={mode:'range' as const,from:actor.floorAt+1000-days*DAY+123,to:actor.floorAt+1000};
     const releaseInterrupted=retainInterruptedActivity(cdp,days,browser.owner?.evidence);
-    let poolSaved=false,lastPool:{phase:string;receipt:PoolReceipt}|undefined;
+    let failed=false,poolSaved=false,lastPool:{phase:string;receipt:PoolReceipt}|undefined;
     cdp.at(`fixed-activity/${days}d/setup`);
     try{
       await pause(Math.max(0,selection.to+10-Date.now()));
@@ -533,11 +534,24 @@ export async function fixedActivity(browser:Browser,stand:Stand,evidence?:Pick<E
       evidence?.save(`fixed-activity-pool-${days===1?'24h':'30d'}`,{days,receipt});
       poolSaved=true;
       assert.equal(receipt.status,'complete',JSON.stringify(Object.fromEntries(['status','attached','registrationOrderQualified','omitted','errors','snapshotOmitted','summaryOmitted','nearOmitted','sendingUnknown','lastCheckpoint'].map(key=>[key,receipt[key]]))));assert.equal(receipt.members.length,4);assert.ok(!receipt.members.some(member=>member.kind==='activity'));
+    }catch(error){failed=true;throw error;
     }finally{
       // Keep the last measured phase before closing a failed page; add no recovery read.
       if(!poolSaved&&lastPool)try{evidence?.save(`fixed-activity-pool-${days===1?'24h':'30d'}`,{days,...lastPool,partial:true});}catch{/* Preserve the original scenario failure. */}
-      releaseInterrupted();await tab.close();await actor.close();
+      const errors:unknown[]=[],failures:{stage:string;status:'failed'}[]=[];
+      for(const [stage,close] of [['listener',async()=>releaseInterrupted()],['tab',()=>tab.close()],['actor',()=>actor.close()]] as const)try{await close();}catch(error){
+        errors.push(error);failures.push({stage,status:'failed'});browser.owner?.failures.push(`fixed Activity ${stage} cleanup failed`);
+      }
+      if(errors.length){
+        try{evidence?.save(`fixed-activity-cleanup-${days===1?'24h':'30d'}`,{days,status:'failed',failures});}catch{browser.owner?.failures.push('fixed Activity cleanup evidence failed');}
+        if(!failed)throw errors[0];
+      }
     }
+    // Reports precede several assertions. The period is terminal only after its pool and cleanup.
+    const period=days===1?'24h':'30d';
+    for(const name of ACTIVITY_CASES)coverage?.record(activityScenario(period,name), [], reports.filter(row=>row.days===days&&row.name===name).length===1?1:0);
+    coverage?.record(`updates/activity/${period}/pool`);
+    evidence?.save('fixed-activity-progress',{reports});
   }
   return {reports,problems:[] as string[]};
 }
