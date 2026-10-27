@@ -61,13 +61,25 @@ unrelated updates fail. This exception permits no extra page rendering or reques
 retains the 1 ms/s idle script budget.
 The idle artifact retains the original performance timestamps, script-duration counters
 and unrounded probe time used in its calculation, so the reported rate can be recomputed.
-CI runs the unchanged history traffic matrix and dashboard phases on separate runners,
-each with a 20-minute job limit. `--scope history` selects the matrix, including native
-traffic and cancellation checks; `--scope dashboard` selects idle, measurements, work,
-frequency, all ten native panning scenarios, subscription credits, currency checks and fixed Activity shared filters.
-The `bench` check passes only when both jobs succeed; a failed, skipped or cancelled job
-fails this check. The default `--scope all` runs the history matrix first, then every
-dashboard phase in the same order as `--scope dashboard`. CPU diagnostics (`trace`,
+CI runs history, updates and panning on three independent runners, each with a
+20-minute job limit. `--scope history` selects the complete traffic and cancellation
+matrix. `--scope updates` selects idle, measurements, work, frequency, subscription
+credits, wallet and currency checks, fixed Activity and measurement disclosures.
+`--scope panning` selects all ten native chart/period scenarios, after reproducing
+the preceding quota, work and frequency conditioning without their measurement checks.
+Each leaf prepares and closes its own fixture and browser.
+The `bench` check passes only when all three jobs succeed; a failed, skipped or
+cancelled job fails it. The existing `bench-dashboard` check runs updates in ordinary CI.
+The default `--scope all` runs history first, then the original dashboard sequence.
+`--scope dashboard` keeps that same sequence without history, including panning between
+frequency and subscription credits. Each run requires the named scenarios of its
+selected scope: missing, duplicate, failed or undersampled results fail coverage.
+The full command requires 218 results: 132 history, 76 updates and ten panning results.
+Evidence retains phase start/end/duration, partial coverage and the original failure
+before cleanup; an unreached phase cannot count as passed.
+Direct pull-request CI and Desktop runs cancel superseded runs of the same workflow
+and PR. Different PRs, main pushes, manual runs and reusable release calls remain
+independent. CPU diagnostics (`trace`,
 `profile`, `native-trace`, `native-profile`) support `all` or `dashboard`; caption control
 requires `dashboard`. The ordinary history job attempts to prepare GDB and matching
 Chrome unwind tables in an optional two-minute step inside its existing job limit.

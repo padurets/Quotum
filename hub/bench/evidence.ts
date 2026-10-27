@@ -3,10 +3,10 @@ import {execFileSync} from 'node:child_process';
 import {mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {SCENARIO_IDS, type BenchScope, type CoverageSummary} from './coverage.js';
+import {SCENARIO_IDS, suitesFor, type BenchScope, type CoverageSummary} from './coverage.js';
 import {providerOf} from '../server/domain/providers.js';
 
-export type BenchPhase = 'startup' | 'preparation' | 'fixture' | 'browser' | 'history-traffic' | 'dashboard-setup' | 'warmup' | 'idle-alignment' | 'idle' | 'measurements' | 'work' | 'observed-work' | 'private-work' | 'frequency' | 'panning' | 'credits' | 'money' | 'fixed-activity' | 'measurement-details' | 'coverage' | 'cleanup' | 'history-suffix' | 'caption-control';
+export type BenchPhase = 'startup' | 'preparation' | 'fixture' | 'browser' | 'history-traffic' | 'dashboard-setup' | 'warmup' | 'idle-alignment' | 'idle' | 'measurements' | 'work' | 'observed-work' | 'private-work' | 'frequency' | 'conditioning' | 'panning' | 'credits' | 'money' | 'fixed-activity' | 'measurement-details' | 'coverage' | 'cleanup' | 'history-suffix' | 'caption-control';
 const LIMIT = 1024 * 1024;
 const forbidden = /cookie|authorization|password|secret|credential|commandLine|expression|scriptSource|environment|stdout|stderr|stack/i;
 const labels = new Set(['status', 'stage', 'mode', 'method', 'scenario', 'phase', 'kind', 'event', 'name', 'period', 'initiator', 'segment', 'version', 'executable', 'platform', 'failure', 'reason', 'context', 'node', 'region', 'coding', 'type', 'state', 'birth', 'signal', 'spawnCode', 'native', 'cleanup', 'collection', 'livenessStatus', 'page', 'scheduler', 'byteVerdict', 'stagingDisposition', 'mechanism', 'metricsStatus']);
@@ -98,8 +98,14 @@ export class Evidence {
   }
 
   plan(scope: BenchScope) {
-    const phases: BenchPhase[] = ['preparation', 'fixture', 'browser', ...(scope !== 'dashboard' ? ['history-traffic' as const] : []),
-      ...(scope !== 'history' ? ['dashboard-setup', 'warmup', 'idle-alignment', 'idle', 'measurements', 'work', 'observed-work', 'private-work', 'frequency', 'panning', 'credits', 'money', 'fixed-activity', 'measurement-details'] as const : []), 'coverage', 'cleanup'];
+    const suites=suitesFor(scope);
+    const phases: BenchPhase[] = ['preparation','fixture','browser',...(suites.includes('history')?['history-traffic' as const]:[]),
+      ...(suites.includes('updates')||suites.includes('panning')?['dashboard-setup'] as const:[]),
+      ...(scope==='panning'?['conditioning'] as const:[]),
+      ...(suites.includes('updates')||suites.includes('panning')?['warmup'] as const:[]),
+      ...(suites.includes('updates')?['idle-alignment','idle','measurements','work','observed-work','private-work','frequency'] as const:[]),
+      ...(suites.includes('panning')?(scope==='panning'?['panning'] as const:['conditioning','panning'] as const):[]),
+      ...(suites.includes('updates')?['credits','money','fixed-activity','measurement-details'] as const:[]),'coverage','cleanup'];
     this.journal.push(...phases.map(phase => ({phase, startMs: null, outcome: 'unreached' as const, artifactIds: []})));this.manifest();
   }
   begin(phase: BenchPhase) {

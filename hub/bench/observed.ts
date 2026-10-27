@@ -61,6 +61,13 @@ export class ObservedWork {
     return this.send(to,next,true);
   }
 
+  /** Synthetic binding and accepted cursor, without the fixture's authentication material. */
+  binding() {
+    const context=this.state.contexts[0];
+    return {machineId:(this.sender as {machine:{id:string}}).machine.id,sessionId:context.sessionId!,contextId:context.contextId,
+      floorAt:this.floorAt,acknowledgedThrough:this.sequence-1};
+  }
+
   async close() {
     const response=await fetch(this.owner.base+'/api/tokens/'+this.credential.id,{method:'DELETE',headers:{cookie:this.owner.cookie,origin:new URL(process.env.QUOTUM_PUBLIC_URL??this.owner.base).origin}});
     if(!response.ok)throw new Error(`Observed work cleanup: HTTP ${response.status}`);

@@ -31,7 +31,7 @@ test('the independent manifest preserves the complete current workload and runti
   }
 });
 
-for (const scope of ['all', 'dashboard', 'history'] as const) test(`coverage rejects empty, missing, duplicate, incomplete and diagnostic-only ${scope}`, () => {
+for (const scope of ['all', 'dashboard', 'history', 'updates', 'panning'] as const) test(`coverage rejects empty, missing, duplicate, incomplete and diagnostic-only ${scope}`, () => {
   const empty = new Coverage(scope);
   assert.equal(empty.summary().status, 'incomplete');assert.ok(empty.summary().missing.length);
   const missing = new Coverage(scope), id = missing.summary().expected[0];complete(missing, id);
@@ -131,4 +131,12 @@ test('coverage classifies only the current record and stop never repeats an old 
   coverage.stop();
   coverage.record('updates/frequency');
   assert.deepEqual(seen, ['coverage', 'budget', undefined, undefined]);
+});
+
+
+test('leaf coverage is the exact disjoint union used by the legacy composites',()=>{
+  const ids=(scope:ConstructorParameters<typeof Coverage>[0])=>new Coverage(scope).summary().expected;
+  assert.deepEqual(new Set(ids('all')),new Set([...ids('history'),...ids('updates'),...ids('panning')]));
+  assert.deepEqual(new Set(ids('dashboard')),new Set([...ids('updates'),...ids('panning')]));
+  assert.equal(new Set([...ids('history'),...ids('updates'),...ids('panning')]).size,218);
 });

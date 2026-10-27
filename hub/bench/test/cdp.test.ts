@@ -409,6 +409,9 @@ test('the actual work phase freezes all three original verdicts before body diag
   const source=readFileSync(new URL('../index.ts',import.meta.url),'utf8'),ast=ts.createSourceFile('index.ts',source,ts.ScriptTarget.Latest,true);
   const node=ast.statements.find((node):node is ts.FunctionDeclaration=>ts.isFunctionDeclaration(node)&&node.name?.text==='work')!;
   const code=ts.transpileModule('('+node.getText(ast)+')',{compilerOptions:{target:ts.ScriptTarget.ESNext}}).outputText;
+  const producers=ts.createSourceFile('conditioning.ts',readFileSync(new URL('../conditioning.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
+  const ordinary=producers.statements.find((node):node is ts.FunctionDeclaration=>ts.isFunctionDeclaration(node)&&node.name?.text==='ordinaryProducer')!;
+  const ordinaryProducer=runInNewContext(ts.transpileModule('('+ordinary.getText(producers).replace('export async function','async function')+')',{compilerOptions:{target:ts.ScriptTarget.ESNext}}).outputText,{pause:async()=>{}});
   for(const overBudget of [false,true])for(const failedBody of [false,true]){
     const events=browser(),order:string[]=[],saved:unknown[]=[],originalFailure={method:'Original.command',id:99};let reports=0,calendar=0;
     const cdp={...events,evaluate:async(expression:string)=>expression.startsWith('Array.from')?++calendar:expression==='__quotumBench.read()'?{renders:[],mutations:[]}:undefined,
@@ -416,7 +419,7 @@ test('the actual work phase freezes all three original verdicts before body diag
     const demo={work:()=>{},nextReport:async()=>{order.push('report'+(++reports));if(reports>1){const requestId=String(reports),bytes=overBudget&&reports===2?4712:3842;
       events.emit('Network.requestWillBeSent',{requestId,type:'Fetch',request:{url:'http://localhost/api/boards/b/period',postData:'{"selection":{"mode":"live","periodMs":86400000}}'}});
       events.emit('Network.loadingFinished',{requestId,encodedDataLength:bytes});}return reports*1000;}};
-    const work=runInNewContext(code,{Requests,Date,MEASURED:'measured',HISTORY_BYTES_PER_MEASUREMENT,renderProblems,sleep:async()=>{},drain:async(requests:Requests)=>assert.equal(requests.historyPending,0)});
+    const work=runInNewContext(code,{ordinaryProducer,Requests,Date,MEASURED:'measured',HISTORY_BYTES_PER_MEASUREMENT,renderProblems,sleep:async()=>{},drain:async(requests:Requests)=>assert.equal(requests.historyPending,0)});
     const result=await work(demo,{sources:new Map([['measured','source']])},cdp,{save:(_name:string,value:unknown)=>{order.push('save');saved.push(JSON.parse(JSON.stringify(value)));}});
     assert.equal(result.reports.length,3);assert.equal(saved.length,1);
     assert.deepEqual(Array.from(result.reports,(row:{bytes:number})=>row.bytes),overBudget?[4712,3842,3842]:[3842,3842,3842]);

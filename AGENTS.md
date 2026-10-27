@@ -59,6 +59,12 @@ limits. Legend emphasis adds no reader and has no extra-read allowance. Run it w
 have Chrome (`QUOTUM_CHROME`, one on `PATH`, or `--cdp` to one already running); CI fails over budget. After the readings,
 it also checks consecutive measuring-frequency saves with native arrow keys and fails
 if saving loses focus.
+The default command retains history followed by the full dashboard sequence. CI runs
+`--scope history`, `--scope updates` and `--scope panning` on independent runners with
+20-minute limits; all three must succeed. `--scope dashboard` retains the composite
+dashboard sequence for local use and existing diagnostics. New leaf scopes reject
+diagnostic modes. Named coverage and minimum samples are mandatory; partial phase
+evidence must preserve failures and cleanup outcomes.
 Native horizontal wheel and Shift-drag scenarios start separately from each of the five
 charts (five-hour limits, weekly limits, activity, balance and subscription funds), moving all five at 24h and 30d
 with at least twelve real series per resource family and CPU throttled fourfold, including an unread edge,

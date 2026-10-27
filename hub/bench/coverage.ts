@@ -3,7 +3,8 @@ export const PAN_INITIATORS = ['quota', 'session', 'activity', 'budget', 'funds'
 export const ACTIVITY_CASES = ['emphasis', 'historical gesture and Back preparation', 'isolated', 'burst before dispatch', 'news during response', 'cancelled A to B to A', 'through upper bound', 'outside range'] as const;
 const activityKeys = ['emphasis', 'historical-gesture', 'isolated', 'burst', 'news-during-response', 'cancelled-a-b-a', 'upper-bound', 'outside-range'] as const;
 export type Suite = 'updates' | 'panning' | 'history';
-export type BenchScope = 'all' | 'dashboard' | 'history';
+export const BENCH_SCOPES = ['all','history','dashboard','updates','panning'] as const;
+export type BenchScope = typeof BENCH_SCOPES[number];
 type Period = typeof PERIODS[number];
 type Day = '1d' | '30d';
 type Cohort = `${Day}/${'history' | 'activity'}/${0 | 100 | 400}ms/${'0.5' | '0.04'}`;
@@ -42,7 +43,7 @@ export const REQUIRED_COVERAGE: readonly Requirement[] = [
   ]),
 ];
 export const SCENARIO_IDS = new Set<string>(REQUIRED_COVERAGE.map(row => row.scenarioId));
-export function suitesFor(scope: BenchScope): readonly Suite[] {return scope === 'all' ? ['history', 'updates', 'panning'] : scope === 'dashboard' ? ['updates', 'panning'] : ['history'];}
+export function suitesFor(scope: BenchScope): readonly Suite[] {return scope === 'all' ? ['history', 'updates', 'panning'] : scope === 'dashboard' ? ['updates', 'panning'] : [scope];}
 export function activityScenario(period: Period, name: typeof ACTIVITY_CASES[number]): ScenarioId {return `updates/activity/${period}/${activityKeys[ACTIVITY_CASES.indexOf(name)]}`;}
 
 export type CoverageSummary = ReturnType<Coverage['summary']>;

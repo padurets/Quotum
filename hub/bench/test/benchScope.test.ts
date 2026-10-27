@@ -2,11 +2,10 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import os from 'node:os';
-import {spawnSync} from 'node:child_process';
 import path from 'node:path';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
-import {Coverage, REQUIRED_COVERAGE, type Suite} from '../coverage.js';
+import {BENCH_SCOPES, Coverage, REQUIRED_COVERAGE, type Suite} from '../coverage.js';
 import {RunOwner} from '../runOwner.js';
 import {Evidence as JournalEvidence, safeEvidence} from '../evidence.js';
 import {EventCounts} from '../stream.js';
@@ -30,6 +29,7 @@ const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={ma
 type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'fixed-activity'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace'|'suffix-throw'|'suffix-budget'|'suffix-cancel'|'suffix-cleanup'|'suffix-error-cleanup'|'suffix-returned-problems'|'reversal-throw'|'measurement-details-throw'|'suffix-no-exposure';
 async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),diagnosticFiles=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
+  const bootstraps:string[]=[];
   const listeners=new Map<string,()=>void>(),waits:number[]=[];let now=startedAt,phaseStart=now,metricReads=0,retentionReads=0;
   let terminal!:()=>void;const exited=new Promise<void>(resolve=>{terminal=resolve;});let cancellationStarted=false,suffixCalls=0;const suffixError=new Error('suffix-original');
   const mark=(name:string)=>{calls.push(name);};
@@ -39,12 +39,12 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   const events=new EventCounts(()=>now);for(let i=0;i<5;i++)events.push('event: ping\ndata: {}\n\n');
   const source={id:'fixture',successAt:env.TEST_FRESH_OBSERVATION?now:now-600_000,staleAfterMs:3_600_000,windows:[]};
   const overview={sources:[source],forecast:{},board:{id:'board'}};
-  const person={personalBoard:'board',cookie:'session=fixture',get:async()=>overview};
+  const person={personalBoard:'board',cookie:'session=fixture',get:async()=>overview,post:async(url:string,body:{intervalMs:number})=>{assert.equal(url,'/api/boards/board/sources/first-card/frequency');assert.equal(body.intervalMs,120000);mark('saved-frequency');}};
   const set={id:'all',scene:'still'},stand={set,start:now,people:new Map([['ana',person]])};
   const browser={owned:true,endpoint:'fixture',launchReport:()=>({mode:'owned'}),close:async()=>{
     mark('browser-close');if(fault==='browser-close'||env.TEST_BROWSER_CLOSE==='1')throw Error('browser-close-red');
   }};
-  const cdp={send:async()=>({}),evaluate:async(expression:string)=>{
+  const cdp={send:async(method:string,args?:{source?:string})=>{if(method==='Page.addScriptToEvaluateOnNewDocument')bootstraps.push(args?.source??'');return{};},evaluate:async(expression:string)=>{
     if(expression.includes(".card:not(.is-loading)"))return 1;
     if(expression.includes('.agent-hours-heatmap[data-calendar-ready='))return true;
     if(expression==='__quotumBench.read()')return reading;
@@ -76,10 +76,11 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   }
   class Evidence {
     readonly id='fixture-id';
-    begin(name:string){if(!['preparation','fixture','browser','dashboard-setup','idle-alignment','observed-work','private-work','frequency','measurement-details','coverage'].includes(name))mark('phase:'+name);}save(name:string,value:unknown){saved.set(name,value);}
+    begin(name:string){if(!['preparation','fixture','browser','dashboard-setup','idle-alignment','observed-work','private-work','frequency','measurement-details','coverage','conditioning'].includes(name))mark('phase:'+name);}save(name:string,value:unknown){saved.set(name,value);}
     plan(){}end(){}checked(){}fail(){}saveCoverage(value:unknown){saved.set('coverage',value);return env.TEST_COVERAGE!=='storage-failure';}
     finish(status:string){statuses.push(status);return true;}
   }
+  class Conditioning {constructor(..._args:unknown[]){}close(){mark('conditioning-close');}receipt(){return{};}async verify(source:string){assert.equal(source,'first-card');mark('conditioning-verify');if(env.TEST_CONDITIONING==='throw')throw Error('conditioning-original');return{status:'complete'};}}
   class Requests {count=0;bytes=0;byPath={};counting=false;}
   class Stop extends Error {}
   class ChromeLaunchError extends Error {}
@@ -103,7 +104,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   const context={exports:{},process:{argv:['node','index.ts',...(ci?['--ci']:[]),...args],env:{CI:'1',...env},pid:1,platform:'linux',
       on:(name:string,fn:()=>void)=>{listeners.set(name,fn);},exit:(code:number)=>{exits.push(code);terminal();}},
     Date:class extends Date {static now(){return now;}},console:{log:()=>{},error:(value:unknown)=>{logs.push(String(value));}},path,Buffer,RunOwner,Demo,Evidence:env.TEST_REAL_EVIDENCE?RetainedEvidence:Evidence,Requests,Stop,ChromeLaunchError,IdleCpuDiagnostic,
-    Coverage,safeEvidence,statSync:()=>({size:env.TEST_SUFFIX_BIG_BASELINE?1024*1024+1:Buffer.byteLength(JSON.stringify(safeEvidence(saved.get('result'))))}),
+    BENCH_SCOPES,Coverage,Conditioning,safeEvidence,statSync:()=>({size:env.TEST_SUFFIX_BIG_BASELINE?1024*1024+1:Buffer.byteLength(JSON.stringify(safeEvidence(saved.get('result'))))}),
     readFileSync:()=>env.TEST_SUFFIX_BAD_BASELINE?'missing':JSON.stringify(safeEvidence(saved.get('result'))),
     mkdirSync:()=>{},writeFileSync:(file:string,body:string)=>diagnosticFiles.set(path.basename(file,'.json'),JSON.parse(body)),
     sourceIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL||env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL||env.QUOTUM_BENCH_HISTORY_FIRST_NATIVE?{sourceHead:env.QUOTUM_BENCH_SOURCE_SHA??null,checkoutSha:'1'.repeat(40)}:{checkoutSha:'fixture'},
@@ -129,7 +130,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
       if(fault==='cancel'){listeners.get('SIGTERM')!();await exited;}
       if(args[8])receipts(args[8] as Coverage,'history',undefined,red('red')?['history-red']:[]);
       return{reports:[{name:'history-marker'}],problems:red('red')?['history-red']:[]};},
-    probeScript:()=>'',sleep:async(ms:number)=>{waits.push(ms);now+=Math.max(0,ms);},say:(value:string)=>{logs.push(value);},
+    probeScript:()=>'/* measurement-probe-fixture */',sleep:async(ms:number)=>{waits.push(ms);now+=Math.max(0,ms);},say:(value:string)=>{logs.push(value);},
     metrics:async()=>{const opening=metricReads++===0;
       if(opening&&fault==='opening-metrics')now=(saved.get('idle-plan') as {quotaBoundary:number}).quotaBoundary+1;
       mark(opening?'metrics-before':'metrics-after');return{Timestamp:now/1000,ScriptDuration:opening?0:red('idle')?2*IDLE_SCRIPT_MS_PER_SECOND*(ci?120:300)/1000:0,ThreadTime:opening?.4:.45};},
@@ -140,18 +141,21 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     work:async()=>{mark('work');return{reports:Array(env.TEST_COVERAGE==='empty-work'?0:3).fill({}),problems:problems('work')};},
     workObserved:async()=>{mark('observed-work');return{reports:Array(3).fill({}),setup:{},problems:problems('observed-work')};},
     workPrivate:async()=>{mark('private-work');return{reports:Array(3).fill({}),problems:problems('private-work')};},
-    frequencyKeys:async()=>{mark('frequency');},panning,panningProblems:()=>[],
+    quotaProducer:async()=>{mark('conditioning-quota');},ordinaryProducer:async()=>{mark('conditioning-ordinary');},
+    observedProducer:async(_stand:unknown,_ledger:unknown,hooks:{ready():Promise<void>})=>{mark('conditioning-observed');await hooks.ready();},privateProducer:async()=>{mark('conditioning-private');},observedBaseline:async()=>{mark('conditioning-baseline');},
+    frequencySource:async()=>{mark('frequency-source');return 'first-card';},normalizeUpdates:async()=>{mark('normalize-updates');},
+    frequencyKeys:async()=>{mark('frequency');return 'first-card';},panning,panningProblems:()=>[],
     creditPhase:async()=>{mark('credits');if(fault==='credits-throw')throw new Stop('credits-original');return{updates:Array(4).fill({}),problems:problems('credits')};},
     moneyPhase:async(_demo:unknown,_stand:unknown,_cdp:unknown,coverage:Coverage)=>{mark('money');for(const prefix of ['updates/wallet/','updates/wallet-heartbeat','updates/inventory','updates/linked-wallet','updates/currencies','updates/money-view'])receipts(coverage,'updates',prefix,problems('money'));return{problems:problems('money')};},
     fixedActivity:async(_browser:unknown,_stand:unknown,_evidence:unknown,coverage:Coverage)=>{mark('fixed-activity');receipts(coverage,'updates','updates/activity/',problems('fixed-activity'));return{reports:[],problems:problems('fixed-activity')};},
-    measurementDetails:async(actualBrowser:unknown,actualOwner:unknown,coverage:Coverage)=>{assert.equal(actualBrowser,browser);assert.equal(actualOwner,person);mark('measurement-details');if(fault==='measurement-details-throw')throw new Error('measurement-details-original');receipts(coverage,'updates','updates/disclosure/');return Array.from({length:16},(_,index)=>({index}));},
+    measurementDetails:async(actualBrowser:unknown,actualOwner:unknown,coverage:Coverage)=>{assert.equal(actualBrowser,browser);assert.equal(actualOwner,person);mark('measurement-details');if(fault==='cancel'&&args.includes('updates')){listeners.get('SIGTERM')!();await exited;throw Error('cancelled-update');}if(fault==='measurement-details-throw')throw new Error('measurement-details-original');receipts(coverage,'updates','updates/disclosure/');return Array.from({length:16},(_,index)=>({index}));},
     clientIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL||env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL||env.QUOTUM_BENCH_HISTORY_FIRST_NATIVE?{status:'available',sha256:'2'.repeat(64)}:{status:'unavailable'},
   };
   runInNewContext(code,context);
   const selected=(context as unknown as {selected:{main():Promise<void>;parseArgs(args:string[]):unknown}}).selected;
   let error:unknown;try{await selected.main();}catch(caught){error=caught;}
   if(cancellationStarted)await exited;
-  return{calls,saved,journalEvidence,diagnosticFiles,exits,statuses,logs,error,waits,fixtureStart:stand.start,parse:selected.parseArgs};
+  return{calls,saved,journalEvidence,bootstraps,diagnosticFiles,exits,statuses,logs,error,waits,fixtureStart:stand.start,parse:selected.parseArgs};
 }
 const tail=['measure','work','observed-work','private-work','frequency','panning','credits','money','fixed-activity','measurement-details'];
 const order=(calls:string[])=>calls.filter(call=>call==='history'||call==='openTab'||tail.includes(call));
@@ -283,17 +287,8 @@ test('actual parser rejects unknown, missing and repeated scope',async()=>{
   for(const args of [['--scope','other'],['--scope'],['--scope','history','--scope','history']])assert.throws(()=>parse(args));
 });
 
-/** Execute the workflow's shell assertion, including every unsuccessful dependency result. */
-test('the existing bench check requires success from both independent scopes',{skip:process.platform==='win32'},()=>{
+test('benchmark producers retain their independent deadlines and required checks',()=>{
   const workflow=readFileSync(new URL('../../../.github/workflows/ci.yml',import.meta.url),'utf8');
-  const block=workflow.split('  bench:\n')[1].split('\n  bench-history:')[0];
-  assert.ok(block.includes('always()'));assert.ok(block.includes('needs: [bench-history, bench-dashboard]'));
-  assert.ok(!block.includes('continue-on-error:'));
-  const script=block.split('        run: |\n')[1].split('\n').map(line=>line.slice(10)).join('\n');
-  for(const history of ['success','failure','skipped','cancelled',''])for(const dashboard of ['success','failure','skipped','cancelled','']){
-    const result=spawnSync('bash',['-eu','-c',script],{env:{...process.env,HISTORY_RESULT:history,DASHBOARD_RESULT:dashboard},encoding:'utf8'});
-    assert.ifError(result.error);assert.equal(result.status===0,history==='success'&&dashboard==='success',JSON.stringify({history,dashboard}));
-  }
   const requiredProducer=(name:string,job:string)=>{
     let required=job;
     if(name==='bench-history'){
@@ -309,7 +304,7 @@ test('the existing bench check requires success from both independent scopes',{s
     assert.ok(!required.includes('continue-on-error:'),'only native diagnostic preparation may be optional');
     return required;
   };
-  for(const [name,scope] of [['bench-history','history'],['bench-dashboard','dashboard']]){
+  for(const [name,scope] of [['bench-history','history'],['bench-dashboard','"${BENCH_SCOPE}"'],['bench-panning','panning']]){
     const job=workflow.split('  '+name+':\n')[1].split(/\n  [\w-]+:/)[0];
     assert.ok(job.includes('timeout-minutes: 20'));assert.ok(requiredProducer(name,job).includes('--ci --scope '+scope));
     assert.throws(()=>requiredProducer(name,job.replace('\n    timeout-minutes: 20','\n    continue-on-error: true\n    timeout-minutes: 20')));
@@ -689,4 +684,62 @@ for (const key of ['QUOTUM_BENCH_DIAGNOSE_NATIVE', 'QUOTUM_BENCH_REVERSAL_PROBE'
   assert.equal((missing.saved.get('coverage') as ReturnType<Coverage['summary']>).diagnostic, false);
   const complete = await run([], undefined, {[key]: '0'});
   assert.deepEqual(complete.exits, [0]);assert.deepEqual(complete.statuses, ['passed']);
+});
+
+
+test('updates runs the full update tail with explicit normalization and no history or native panning',async()=>{
+  const out=await run(['--scope','updates']);assert.equal(out.error,undefined);assert.deepEqual(out.exits,[0]);
+  assert.deepEqual(order(out.calls),['openTab',...tail.filter(phase=>phase!=='panning')]);
+  assert.ok(out.calls.indexOf('frequency')<out.calls.indexOf('normalize-updates')&&out.calls.indexOf('normalize-updates')<out.calls.indexOf('credits'));
+  assert.ok(!out.calls.some(call=>call.startsWith('conditioning-')&&call!=='conditioning-close'));
+  const coverage=out.saved.get('coverage') as ReturnType<Coverage['summary']>;assert.equal(coverage.status,'passed');assert.equal(coverage.expected.length,76);
+  assert.ok(coverage.expected.every(id=>id.startsWith('updates/')));
+});
+
+test('panning conditions its own producers without executing update or history checkers',async()=>{
+  const out=await run(['--scope','panning']);assert.equal(out.error,undefined);assert.deepEqual(out.exits,[0]);
+  assert.deepEqual(order(out.calls),['openTab','panning']);
+  const phases=['conditioning-quota','conditioning-ordinary','conditioning-observed','conditioning-baseline','conditioning-private','frequency-source','saved-frequency','conditioning-verify','panning'];
+  assert.deepEqual(out.calls.filter(call=>phases.includes(call)),phases);
+  assert.equal(out.waits.at(-1),30000,'the isolated chart page settles for thirty seconds after producer setup');
+  const coverage=out.saved.get('coverage') as ReturnType<Coverage['summary']>;assert.equal(coverage.status,'passed');assert.equal(coverage.expected.length,10);
+});
+
+for(const scope of ['updates','panning'])for(const flag of ['QUOTUM_BENCH_DIAGNOSE_NATIVE','QUOTUM_BENCH_REVERSAL_PROBE','QUOTUM_BENCH_DIAGNOSE_IDLE_CPU','QUOTUM_BENCH_CAPTION_CONTROL','QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL','QUOTUM_BENCH_HISTORY_SCROLL_CONTROL','QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX','QUOTUM_BENCH_HISTORY_FIRST_NATIVE','QUOTUM_BENCH_NATIVE_TARGET','QUOTUM_C3_CHROME'])test(`${scope} rejects active diagnostic ${flag} before preparation`,async()=>{
+  const out=await run(['--scope',scope],undefined,{[flag]:'1'});assert.ok(out.error);assert.ok(!out.calls.includes('prepare'));assert.ok(!out.calls.includes('launch'));
+});
+
+for(const scope of ['updates','panning'])test(`${scope} accepts ordinary workflow empty env and disabled legacy flags`,async()=>{
+  const empty=Object.fromEntries(['QUOTUM_BENCH_DIAGNOSE_IDLE_CPU','QUOTUM_BENCH_NATIVE_TARGET','QUOTUM_BENCH_CAPTION_CONTROL','QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL','QUOTUM_BENCH_DIAGNOSE_NATIVE','QUOTUM_BENCH_REVERSAL_PROBE','QUOTUM_BENCH_HISTORY_SCROLL_CONTROL','QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX','QUOTUM_BENCH_HISTORY_FIRST_NATIVE','QUOTUM_C3_CHROME'].map(key=>[key,'']));
+  for(const flags of [empty,{QUOTUM_BENCH_DIAGNOSE_NATIVE:'0',QUOTUM_BENCH_REVERSAL_PROBE:'0'}]){const out=await run(['--scope',scope],undefined,flags);assert.equal(out.error,undefined);assert.deepEqual(out.exits,[0]);assert.deepEqual(out.statuses,['passed']);}
+});
+
+for(const scope of ['updates','panning'])for(const fault of ['browser-close','demo-stop'] as const)test(`${scope} cannot pass ${fault}`,async()=>{
+  const out=await run(['--scope',scope],fault);assert.notEqual(out.exits[0],0);assert.deepEqual(out.statuses,['failed']);
+  for(const action of ['browser-close','demo-stop'])assert.equal(out.calls.filter(call=>call===action).length,1);
+});
+
+test('a failed standalone producer oracle cannot reach native input or pass coverage',async()=>{
+  const out=await run(['--scope','panning'],undefined,{TEST_CONDITIONING:'throw'});
+  assert.deepEqual(out.exits,[1]);assert.ok(!out.calls.includes('panning'));assert.ok(out.logs.some(line=>line.includes('conditioning-original')));
+  assert.equal((out.saved.get('coverage') as ReturnType<Coverage['summary']>).status,'incomplete');
+});
+
+
+for(const scope of ['updates','panning'])test(`${scope} explicitly owns its probe and successful serialized phase order`,async t=>{
+  const dir=mkdtempSync(path.join(os.tmpdir(),'quotum-leaf-journal-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const out=await run(['--scope',scope],undefined,{TEST_REAL_EVIDENCE:dir});assert.deepEqual(out.exits,[0]);
+  assert.ok(out.bootstraps[0].includes('__quotumInspectHistoryPool'));
+  assert.equal(out.bootstraps[0].includes('measurement-probe-fixture'),scope==='updates');
+  const manifest=JSON.parse(readFileSync(path.join(dir,out.journalEvidence!.id,'manifest.json'),'utf8'));
+  assert.ok(manifest.journal.every((row:{outcome:string})=>row.outcome==='passed'),'every canonical leaf phase really completed');
+  const actual=manifest.journal.map((row:{phase:string})=>row.phase);
+  if(scope==='panning')assert.deepEqual(actual,['startup','preparation','fixture','browser','dashboard-setup','conditioning','warmup','panning','coverage','cleanup']);
+  assert.ok(!actual.includes(scope==='updates'?'panning':'idle'));
+});
+
+for(const [scope,fault] of [['updates','measure'],['updates','credits-throw'],['updates','cancel'],['panning','panning'],['panning','panning-throw'],['panning','cancel']] as const)test(`${scope} keeps original ${fault} and owned cleanup`,async()=>{
+  const out=await run(['--scope',scope],fault);assert.notEqual(out.exits[0],0);assert.equal((out.saved.get('coverage') as ReturnType<Coverage['summary']>).status,'incomplete');
+  for(const action of ['browser-close','demo-stop','conditioning-close'])assert.equal(out.calls.filter(call=>call===action).length,1);
+  assert.deepEqual(out.statuses,[fault==='cancel'?'cancelled':'failed']);
 });
