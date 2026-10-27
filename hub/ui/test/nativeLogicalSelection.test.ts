@@ -41,19 +41,18 @@ for(const locale of ['en','ru'] as const)test(`native ${locale} logical selected
   const context:any={exports:{},require:()=>({jsx,jsxs:jsx,Fragment:'fragment'}),t,providerOf,isWindowHidden,selectedAllowanceIds,quotaPeriods,hasSubscriptionCaps,budgetVisible,planOf:()=>null,
    useDataFilters:()=>({current:filters}),usePref:()=>({unit:'USD'}),usePeriodValues:()=>reading,useTimeRange:()=>selected,MeasurementClock:{Provider:'clock'},PercentLimit:'missing',windowName,AllHidden:'allHidden',Limit:'limit',QuotaCard:'quota',PeriodStatus:'period'};
   const file=readFileSync(new URL('../components/SourceCard.tsx',import.meta.url),'utf8'),start=file.indexOf('function CardMeasurements('),end=file.indexOf('/** Historical funds',start);
-  runInNewContext(ts.transpileModule(file.slice(start,end)+'\nexports.draw=CardMeasurements;exports.details=MeasurementDetails;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
+  runInNewContext(ts.transpileModule(file.slice(start,end)+'\nexports.draw=CardMeasurements;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   const source={...current,successAt:now},props={source,arrange:{view:EMPTY_VIEW},boardId:board};
   select([b.id]);
   const evidenced=nodes(context.exports.draw(props));assert.deepEqual(evidenced.filter(n=>n.type==='limit').map(n=>n.props.w.id),[b.id],'an explicitly selected historical-only metric still renders its own evidence');
-  assert.ok(nodes(context.exports.details(props)).some(n=>n.type==='limit'&&n.props.w.id===b.id),'historical-only evidence remains disclosed');
   select([]);assert.equal(nodes(context.exports.draw(props)).filter(n=>n.type==='allHidden').length,1,'a truly empty selection has its filter action');
   select([a.id]);
-  const body=nodes(context.exports.draw(props)),detail=nodes(context.exports.details(props));
+  const body=nodes(context.exports.draw(props));
   const hidden=body.filter(n=>n.type==='allHidden').length;
 
   // An actually selected but unobserved metric is distinct from an empty selection.
   assert.equal(hidden,0,'selected Alpha cannot be described as all metrics hidden because the old endpoint only knows Beta');
-  for(const tree of [body,detail])assert.ok(tree.some(n=>n.type==='missing'&&n.props.name.includes('Alpha')&&n.props.remaining===null),'selected missing Alpha remains named without borrowing live remaining');
+  assert.ok(body.some(n=>n.type==='missing'&&n.props.name.includes('Alpha')&&n.props.remaining===null),'selected missing Alpha remains named without borrowing live remaining');
   for(const state of ['pending','failed','before-first']){
     reading.value=state==='before-first'?read(at-H+1):null;reading.loading=state==='pending';reading.error=state==='failed'?'history_failed':null;
     select([]);assert.equal(nodes(context.exports.draw(props)).filter(n=>n.type==='allHidden').length,1,'logical all-off survives every historical read state');

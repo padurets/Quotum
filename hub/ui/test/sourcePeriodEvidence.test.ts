@@ -47,7 +47,7 @@ test('a historical subscription distinguishes missing observations from hidden l
       usePeriodValues:()=>reading,useTimeRange:()=>reading.basis.range,quotaPeriods,windowName,PercentLimit:'unavailable',hasSubscriptionCaps,providerOf,budgetVisible:money.budgetVisible,
       isWindowHidden:()=>hidden,planOf:()=>null,MeasurementClock:{Provider:'clock'},QuotaCard:'quota',Limit:'limit',AllHidden:'hidden'};
     const card=code('../components/SourceCard.tsx'),start=card.indexOf('function CardMeasurements(');
-    runInNewContext(ts.transpileModule(card.slice(start,card.indexOf('/** Every reader',start))+'\nexports.draw=CardMeasurements;',{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
+    runInNewContext(ts.transpileModule(card.slice(start,card.indexOf('/** Historical funds',start))+'\nexports.draw=CardMeasurements;',{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
     const draw=()=>nodes(context.exports.draw({source,arrange:{view:EMPTY_VIEW},boardId:board}));
     assert.deepEqual(reading.value.meters,[],'the historical endpoint precedes the first observation');
     for(const locale of ['en','ru'] as const){setLocale(locale);for(hidden of [false,true]){
@@ -137,7 +137,7 @@ test('historical wallet disclosures keep the current selected scope before, betw
     const run=(body:string)=>runInNewContext('(function(){'+ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText+'})()',context);
     const funds=code('../components/MoneyCard.tsx');run(funds.slice(funds.indexOf('export function MoneyValues('),funds.indexOf('/** Subscription funds')));context.MoneyValues=context.exports.MoneyValues;
     run(funds.slice(funds.indexOf('export function MoneyCard('),funds.indexOf('type MoneySource=')));context.MoneyCard=context.exports.MoneyCard;
-    const card=code('../components/SourceCard.tsx'),start=card.indexOf('function CardMeasurements(');run(card.slice(start,card.indexOf('/** Every reader',start))+'\nexports.CardMeasurements=CardMeasurements;');
+    const card=code('../components/SourceCard.tsx'),start=card.indexOf('function CardMeasurements(');run(card.slice(start,card.indexOf('/** Historical funds',start))+'\nexports.CardMeasurements=CardMeasurements;');
     for(const locale of ['en','ru'] as const){setLocale(locale);for(const [to,known]of [[at-1,0],[at+M,0],[at+11*M,1],[at+31*M,1]]){
       selected={from:at-H,to};reading={value:read(to),basis:{range:selected},loading:false,error:null};
       const tree=nodes(context.exports.CardMeasurements({source,arrange:{view:EMPTY_VIEW},boardId:'b'}));
