@@ -404,7 +404,7 @@ function AgentsRows({
               {details.length > 0 && (
                 <div className="agents-compact-details">
                   {details.map(column => (
-                    <span key={column} title={fullOf(group, column)}>
+                    <span key={column} className={column==='activity'?'agents-last-activity':undefined} title={fullOf(group, column)}>
                       <span className="sr-only">{t(COLUMNS[column].title)}: </span>
                       {column === 'worked' ? <WorkTime ms={group.workedMs} refs={group.rows.flatMap(row=>row.session.ref?[row.session.ref]:[])} still={still} labeled /> : COLUMNS[column].cell(group, context)}
                     </span>
@@ -606,8 +606,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   const sortBy = useCallback((from: AgentsSort, column: AgentColumn|null, cycle = true) => setPrefs({agentsSort: nextAgentsSort(from, column, cycle)}), []);
   const sorting: Sorting = {active, headers: shown.map(id => ({id, title: COLUMNS[id].title})), sortBy: (column, cycle) => sortBy(active, column, cycle)};
   const single = agentsBy === 'none';
-  const structural=AGENTS_BY.map(by=>columnsOf(by).rest.filter(column=>columnShown(view,AGENTS,column)));
-  const structure=Array.from({length:Math.max(...structural.map(columns=>columns.length))},(_,i)=>Math.max(...structural.map(columns=>AGENT_WIDTHS[columns[i]]??0)));
+  const structure=columns.map(column=>AGENT_WIDTHS[column]);
   const summaryColumns=(['agents','worked','active','concurrency'] as const).filter(column=>columnShown(view,AGENTS,column));
   const footerMetrics=summaryColumns.length;
   const table=useTableWidget(panel,columns.map(column=>AGENT_WIDTHS[column]),NAME_WIDTH,ordered.map(group=>group.key),JSON.stringify([agentsBy,active,selected?timeRangeKey(selected):range]),0,structure,footerMetrics);

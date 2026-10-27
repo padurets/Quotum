@@ -6,7 +6,7 @@ import ts from 'typescript';
 import {Store} from '../../server/store/store';
 import {Directory} from '../../server/store/directory';
 import {periodValues} from '../../server/periodValues';
-import {quotaPeriods,primaryQuotaPeriods} from '../lib/subscription';
+import {quotaPeriods} from '../lib/subscription';
 import {providerOf} from '../../server/domain/providers';
 import {hasSubscriptionCaps} from '../lib/providers';
 import {selectedAllowanceIds} from '../lib/moneySelection';
@@ -31,7 +31,7 @@ for(const language of ['en','ru'] as const)test(`${language} historical idle win
   const historical=periodValues(store,store.sources(board),owner.id,selected.to,()=>{},now)[0];
   const current=periodValues(store,store.sources(board),owner.id,now+1,()=>{},now+1)[0];
   assert.equal(historical.windows[0].observedAt,at);assert.equal(historical.windows[0].remaining,100);
-  const context:any={exports:{},require:()=>({jsx,jsxs:jsx,Fragment:'fragment'}),t,stamp,windowName,quotaPeriods,primaryQuotaPeriods,selectedAllowanceIds,providerOf,hasSubscriptionCaps,budgetVisible,
+  const context:any={exports:{},require:()=>({jsx,jsxs:jsx,Fragment:'fragment'}),t,stamp,windowName,quotaPeriods,selectedAllowanceIds,providerOf,hasSubscriptionCaps,budgetVisible,
    useDataFilters:()=>({current:null}),usePref:()=>({}),usePeriodValues:()=>({value:historical,basis:{range:selected},loading:false,error:null}),useTimeRange:()=>selected,
    isWindowHidden:()=>false,planOf:()=>DEFAULT_PLAN,MeasurementClock:{Provider:'clock'},PercentLimit:'limit',ResetLine:'reset',PeriodStatus:'status',QuotaCard:'quota',AllHidden:'hidden',
    planMark,planNote,planMarkChangesAt,planNoteChangesAt,num,useMeasurementClock:()=>selected.to};

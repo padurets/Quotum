@@ -826,11 +826,11 @@ Add the hashes of any new database layout steps to `RELEASED` in
 Refresh the README screenshots in both languages from the demo board, check the upgrade
 instructions and prepare the release notes outside the repository.
 
-For example, to prepare 0.10.0 on that branch:
+For example, to prepare 0.10.1 on that branch:
 
 ```sh
-(cd hub && npm version 0.10.0 --no-git-tag-version)
-# agent/Cargo.toml and desktop/Cargo.toml: version = "0.10.0"
+(cd hub && npm version 0.10.1 --no-git-tag-version)
+# agent/Cargo.toml and desktop/Cargo.toml: version = "0.10.1"
 (cd agent && cargo metadata --format-version 1 >/dev/null)
 (cd desktop && cargo metadata --format-version 1 >/dev/null)
 ```
@@ -844,8 +844,8 @@ commit to tag. Only after the maintainer approves that specific release:
 git fetch origin
 git switch main
 git pull --ff-only origin main
-git tag -a v0.10.0 -F /path/to/release-notes.md --cleanup=verbatim
-git push origin v0.10.0
+git tag -a v0.10.1 -F /path/to/release-notes.md --cleanup=verbatim
+git push origin v0.10.1
 ```
 
 [release.yml](.github/workflows/release.yml) refuses a tag that is not annotated or

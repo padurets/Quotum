@@ -13,7 +13,7 @@ import {defaultCurrencyContext,currencySymbol} from '../../server/domain/currenc
 import {providerOf} from '../../server/domain/providers';
 import {EMPTY_VIEW} from '../../server/domain/view';
 import * as money from '../lib/money';
-import {quotaPeriods,primaryQuotaPeriods} from '../lib/subscription';
+import {quotaPeriods} from '../lib/subscription';
 import {hasSubscriptionCaps} from '../lib/providers';
 import {readKeyIds} from '../lib/keyReads';
 import {sourceKeyRoutes} from '../../server/routes/sourceKeys';
@@ -50,7 +50,7 @@ test('a selected key beyond the preview keeps its known name across live, pendin
   const modules:Record<string,unknown>={react:hooks,'./moneySelection':{selectedAllowanceIds},'./dataFilters':{useDataFilters:()=>({current:selection})},'./prefs':{usePref:()=>({unit:'USD'})},'./http':{ApiError},'./keyReads':{readKeyIds},'../../server/domain/meterHistory':{MAX_METERS}};
   const hook={exports:{} as typeof import('../lib/moneyKeys'),require:(name:string)=>modules[name],AbortController};
   runInNewContext(ts.transpileModule(code('../lib/moneyKeys.ts'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,hook);
-  const jsx=(type:any,props:any)=>({type,props}),context:any={...money,...filters,selectedAllowanceIds,usePref:()=>({unit:'USD'}),useDataFilters:()=>({current:selection}),exports:{},useRemovalFocus:()=>()=>{},require:()=>({jsx,jsxs:jsx,Fragment:'fragment'}),t,currencySymbol,usePeriodValues:()=>reading,useTimeRange:()=>selected,useCurrencyContext:()=>defaultCurrencyContext,quotaPeriods,primaryQuotaPeriods,windowName,PercentLimit:'unavailable',hasSubscriptionCaps,providerOf,isWindowHidden:()=>false,planOf:()=>null,MeasurementClock:{Provider:'clock'},QuotaCard:'quota',Limit:'limit',AllHidden:'hidden',Popover:'popover',CreditBalanceValue:({children}:any)=>children,ErrorLine:'error',openDataFilters:()=>{},CapMetrics:'unavailable-cap',BudgetKeyMetrics:'key',stamp:String,day:String,ApiError,
+  const jsx=(type:any,props:any)=>({type,props}),context:any={...money,...filters,selectedAllowanceIds,usePref:()=>({unit:'USD'}),useDataFilters:()=>({current:selection}),exports:{},useRemovalFocus:()=>()=>{},require:()=>({jsx,jsxs:jsx,Fragment:'fragment'}),t,currencySymbol,usePeriodValues:()=>reading,useTimeRange:()=>selected,useCurrencyContext:()=>defaultCurrencyContext,quotaPeriods,windowName,PercentLimit:'unavailable',hasSubscriptionCaps,providerOf,isWindowHidden:()=>false,planOf:()=>null,MeasurementClock:{Provider:'clock'},QuotaCard:'quota',Limit:'limit',AllHidden:'hidden',Popover:'popover',CreditBalanceValue:({children}:any)=>children,ErrorLine:'error',openDataFilters:()=>{},CapMetrics:'unavailable-cap',BudgetKeyMetrics:'key',stamp:String,day:String,ApiError,
     useShownKeys:()=>{hookRenders++;cursor=0;const result=hook.exports.useShownKeys(source,EMPTY_VIEW,h.board);effects.splice(0).forEach(run=>run());return result;}};
   const run=(body:string)=>runInNewContext('(function(){'+ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText+'})()',context);
   const mc=code('../components/MoneyCard.tsx');run(mc.slice(mc.indexOf('export function MoneyValues('),mc.indexOf('/** Subscription funds')));context.MoneyValues=context.exports.MoneyValues;

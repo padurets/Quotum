@@ -9,7 +9,7 @@ import {periodValues} from '../../server/periodValues';
 import {EMPTY_VIEW} from '../../server/domain/view';
 import {defaultCurrencyContext} from '../../server/domain/currency';
 import {providerOf} from '../../server/domain/providers';
-import {quotaPeriods,primaryQuotaPeriods} from '../lib/subscription';
+import {quotaPeriods} from '../lib/subscription';
 import {hasSubscriptionCaps} from '../lib/providers';
 import {selectedAllowanceIds} from '../lib/moneySelection';
 import {budgetVisible,historicalCurrencyContext} from '../lib/money';
@@ -45,12 +45,12 @@ test('the source menu names the selected measurement count without an extra read
   setLocale('en');
 });
 
-test('multi-model cards keep the reported session and weekly pair visible through fine measurements',()=>{
+test('multi-model cards show every selected scale in supplier order through fine measurements',()=>{
   const window=(id:string,kind:Win['kind'],label:string|null):Win=>({id,kind,label,minutes:kind==='weekly'?10080:300,used:25,remaining:75,resetAt:null});
   const source={id:'native',provider:'antigravity',successAt:1,windows:[window('gemini:session','session','Gemini Pro'),window('gemini:weekly','weekly','Gemini'),window('claude:weekly','weekly','Claude')]};
   const hidden=new Set<string>();
   const context={exports:{} as Record<string,(props:unknown)=>Node>,draw:undefined as unknown as (props:unknown)=>Node,require:()=>runtime,
-    Name,t,stamp,num,level,windowName,providerOf,quotaPeriods,primaryQuotaPeriods,hasSubscriptionCaps,budgetVisible,historicalCurrencyContext,
+    Name,t,stamp,num,level,windowName,providerOf,quotaPeriods,hasSubscriptionCaps,budgetVisible,historicalCurrencyContext,
     useDataFilters:()=>({current:null}),usePref:()=>({}),selectedAllowanceIds,usePeriodValues:()=>({value:null}),useTimeRange:()=>null,useCurrencyContext:()=>defaultCurrencyContext,
     isWindowHidden:(_view:unknown,_source:string,id:string)=>hidden.has(id),planOf:()=>null,MeasurementClock:{Provider:'clock'},PercentLimit:undefined as unknown,
     ResetLine:'reset',PlanNote:'plan-note',PlanMark:'plan-mark',Limit:undefined as unknown,
@@ -63,23 +63,23 @@ test('multi-model cards keep the reported session and weekly pair visible throug
   const render=()=>nodes(context.draw({source,arrange:{view:EMPTY_VIEW},boardId:'b'}));
   const text=(value:unknown):string=>Array.isArray(value)?value.map(text).join(''):typeof value==='string'||typeof value==='number'?String(value):value&&typeof value==='object'?text(typeof (value as Node).type==='function'?(value as any).type((value as Node).props):(value as Node).props.children):'';
   const labels=(tree:Node[])=>tree.filter(node=>node.props.className==='limit-name').map(node=>text(node.props.children));
-  const pair=[windowName(source.windows[0]),windowName(source.windows[1])];
-  assert.deepEqual(labels(render()),pair,'a second model must not displace the first reported weekly limit');
+  const selected=()=>source.windows.filter(w=>!hidden.has(w.id)).map(windowName);
+  assert.deepEqual(labels(render()),selected(),'all selected models belong on the card');
   for(let i=1;i<=20;i++){
     const remaining=75-i/10;source.windows[1]={...source.windows[1],used:100-remaining,remaining};
     const tree=render(),fills=tree.filter(node=>String(node.props.className).startsWith('fill fill-'));
-    assert.deepEqual(labels(tree),pair);assert.equal(fills.length,2);
+    assert.deepEqual(labels(tree),selected());assert.equal(fills.length,source.windows.length);
     assert.equal((fills[1].props.style as {width:string}).width,`${remaining}%`,'every fine measurement reaches the visible weekly meter');
   }
   source.windows.push(window('claude:session','session','Claude'));
-  assert.deepEqual(labels(render()),pair,'a second session family does not displace the weekly slot');
+  assert.deepEqual(labels(render()),selected(),'a new model adds its own visible scale');
   source.windows.reverse();
-  assert.deepEqual(labels(render()),pair,'identical facts keep the same pair regardless of reply order');
+  assert.deepEqual(labels(render()),selected(),'the supplier order is preserved without ranking a primary pair');
   source.windows.reverse();
   hidden.add('gemini:weekly');
-  assert.deepEqual(labels(render()),[pair[0],windowName(source.windows[2])],'a selected replacement weekly limit keeps the session slot');
+  assert.deepEqual(labels(render()),selected(),'only the explicitly filtered scale disappears');
   source.windows.push(window('session','session',null),window('weekly','weekly',null));
-  assert.deepEqual(labels(render()),source.windows.slice(-2).map(windowName),'general subscription windows lead over model windows');
+  assert.deepEqual(labels(render()),selected(),'general windows do not displace selected model windows');
 });
 
 test('native historical values disclose their actual sample time while live values retain their existing presentation',()=>{
@@ -94,7 +94,7 @@ test('native historical values disclose their actual sample time while live valu
     const reading={value:read(selected.to),basis:{range:selected},loading:false,error:null};
     assert.equal(reading.value.windows[0].observedAt,at);assert.equal(reading.value.windows[0].stale,false);
     const context={useDataFilters:()=>({current:null}),usePref:()=>({}),selectedAllowanceIds,exports:{} as Record<string,(props:unknown)=>Node>,draw:undefined as unknown as (props:unknown)=>Node,require:()=>runtime,
-      Name,t,stamp,num,level,windowName,providerOf,quotaPeriods,primaryQuotaPeriods,hasSubscriptionCaps,budgetVisible,historicalCurrencyContext,
+      Name,t,stamp,num,level,windowName,providerOf,quotaPeriods,hasSubscriptionCaps,budgetVisible,historicalCurrencyContext,
       usePeriodValues:()=>reading,useTimeRange:()=>selected,useCurrencyContext:()=>defaultCurrencyContext,
       isWindowHidden:()=>false,planOf:()=>null,MeasurementClock:{Provider:'clock'},PercentLimit:undefined as unknown,
       ResetLine:'reset',PlanNote:'plan-note',PlanMark:'plan-mark',PeriodStatus:'period-status',QuotaCard:'quota',Limit:undefined as unknown,AllHidden:'hidden',

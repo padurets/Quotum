@@ -1845,11 +1845,13 @@ Every widget is arranged on one grid. A row is 48 px (a 32 px track and a 16 px 
 Content measurements update grid positions and reading order directly, without a
 React render of the grid or neighbouring widgets. Only a widget whose own allocated
 height changes hears a sizing update; layout edits still reconcile through React.
-Each widget establishes its natural height and minimum from its structural shell.
+Each widget reports its content's natural height and minimum.
 The grid rounds that height to whole rows unless the owner chose a height (`h`, in rows),
-clamped to the structural minimum. Data, filters, period navigation and asynchronous
-results do not revise those dimensions. Display configuration and viewport reflow
-can establish a new structure. Spare room stays above a card's tray or at the bottom
+clamped to the content minimum. Unchanged visible content keeps its reading surface
+through refresh and recovery. Selected scales, legend wrapping and the measured rows
+on an automatic table's current page can change natural height. Table/list layout uses
+the columns actually displayed, including after grouping or period changes.
+Spare room stays above a card's tray or at the bottom
 of a panel. All five charts give the allocated content height to their plot while
 keeping their heads, totals and legends whole. The Agent sessions widget gathers the period's sessions
 by project (one name across people, as agent activity counts it), machine or subscription,
@@ -1870,7 +1872,8 @@ edge to edge; a narrow dialog uses an inset compact list. The dialog has no repe
 count or work total above its rows; its toolbar holds only Back and list sorting when
 needed. Board tables share `ui/components/TableWidget.tsx`: one width decision,
 height measurement, page model, pager and sort presentation. Natural pages contain
-ten rows; a chosen height fits as many complete rows as its space allows. Variable row
+up to ten rows and fit their measured current-page content; a chosen height fits as
+many complete rows as its space allows. Variable row
 heights follow row identities through ordering and paging. Static measurement starts
 with fifty candidates and expands to the fitting page and its next row, without clock
 subscriptions. A separate footer puts the whole-selection summary on the left and
@@ -2228,11 +2231,15 @@ a pointer can continue that transaction. A wheel restarting in the same event ke
 the preceding gesture's committed range as its origin, even before that selection
 renders. Publishing it preserves the new gesture; a later navigation still cancels it.
 Neither adds inertia. Holding Shift hides
-chart and activity-legend readouts even before movement starts. The plot and legend
-keep their height through gestures and range changes; extra legend entries scroll
-inside their bounded viewport. Only structural layout, width or language changes
-establish another shell allocation. Data filters and readiness never resize the plot.
-An answered activity frame without work keeps its time axis and legend viewport;
+chart and activity-legend readouts even before movement starts. Legends use their natural
+wrapping, and an observed change in their height updates the panel's allocation even
+during a gesture. Input itself does not measure layout. Changes to the selected
+visible entries can change natural height; ordinary value updates do not. Completing
+a read does not itself change the selected temporal projection or add status rows.
+A manually sized plot keeps enough grid rows for its actual content while its plot
+adjusts to a changed legend or width. The plot still receives the requested
+allocation, so the temporary rows are released when the content fits.
+An answered activity frame without work keeps its time axis and useful summary;
 its empty message sits inside the plot, which still accepts the next gesture.
 
 While panning, the history store keeps the previous complete answer for the table,
@@ -2533,36 +2540,31 @@ values and top-ups compare exact integer millionths from the same accounting
 model as their cells. Unknown values stay last in either direction. Hidden columns
 temporarily use default without losing the saved choice. Default preserves the budget
 series order; live accounting boundaries use the shared page clock and retain cells.
-Each table owns a stable content viewport and footer for its structural column
-configuration. Empty, pending, retained, failed and complete results occupy that
-same viewport; grouping, sorting and paging do not change its capacity or neighbours.
+Manually sized tables keep the owner's allocated viewport and footer. Automatic
+tables fit the measured rows on their current page, including a short last page.
+Pending, retained and failed reads keep valid same-context content and its surface;
+changing the visible row content can change natural height.
 Rows use a bounded preview, with oversized text and complete values reachable through
 the shared Popover. Whole rows page through the full loaded index without an inner
 vertical scroller or another history read.
-Subscription cards keep two primary percentage slots, with a session and weekly
-limit when both families are available. General five-hour and weekly windows lead;
-equal-specificity and equal-duration ties use descending stable IDs, independently
-of supplier reply order or remaining amounts. Every selected native window
-remains in their existing measurement disclosure. Wallet cards show one available
-balance, or the first selected cap when the balance is excluded; other caps and exact
-amounts remain in the balance disclosure.
-Full disclosure names wrap within the glass, including nested historical status labels
-and unavailable allowance names; their values and status marks stay beside the text.
-The first cap follows canonical English key-name and ID order before it joins historical
-evidence, independently of server or browser locale.
-An absent first cap stays unavailable instead of promoting a later arrived cap; unresolved
-selected names keep the primary unknown until their bounded metadata read completes.
-Native choices combine current descriptors with historical-only windows. A selected
-missing window remains named in the disclosure without borrowing a current percentage.
-A successful historical read before any observation shows one empty state inside
-the primary area, replacing empty quota scales rather than appending a row.
-An explicitly empty limit selection keeps its hidden-limits state and filter action.
-Loading extra selected caps never adds a card row or an inventory-wide lookup.
-The allowance count and disclosure use the logical wallet selection shared with
-analytics. Explicit choices remain named with an unavailable value when their cap
-is absent, including beside known caps and before their first historical observation.
-Automatic choices include only the capped preview. Current key names can label an
-older gap, but current amounts cannot fill it. Compact uses the same full disclosure.
+Subscription cards show every selected percentage window in supplier order. Wallet
+cards show the available balance and every selected key allowance beside it; filters
+control which measurements appear. Automatic card height follows those visible scales,
+including when filtering changes their count. Missing selected observations keep their
+own unavailable row rather than promoting another allowance or borrowing a live value
+for historical time. Current names can label an older gap, but amounts and sample times
+always come from the selected historical evidence. An explicitly empty selection keeps
+its hidden-limits state and filter action. Extra selected keys use the existing bounded
+metadata reads, never an inventory-wide lookup.
+
+Chart legends wrap naturally and occupy only the rows their visible entries need.
+They have no fixed-height reserve or internal vertical scrollbar. The panel's natural
+height follows changes to its legend; saved manual heights keep their existing intent
+and allocate the remaining room to the plot. Ordinary value updates and paint-only
+legend emphasis do not change its composition or measure layout on every render.
+Automatic tables use actual measured row heights on their current page, up to their
+ordinary page capacity. They reserve no empty rows for a sparse result or a short
+last page, and short rows do not consume the maximum preview-height budget.
 The budget chart, legend and table name a total balance by its account rather than
 repeating "Available balance". Scoped key limits keep their names; balance components,
 roles and currency provenance remain reachable in card details.
