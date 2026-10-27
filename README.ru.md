@@ -839,11 +839,11 @@ lock-файлы. Шаблон npm-пакета остаётся на `0.0.0`: `n
 не меняется. Переснимите картинки README на обоих языках на демо-доске,
 проверьте инструкцию обновления и подготовьте описание релиза вне репозитория.
 
-Например, для подготовки 0.10.0 в этой ветке:
+Например, для подготовки 0.10.1 в этой ветке:
 
 ```sh
-(cd hub && npm version 0.10.0 --no-git-tag-version)
-# agent/Cargo.toml и desktop/Cargo.toml: version = "0.10.0"
+(cd hub && npm version 0.10.1 --no-git-tag-version)
+# agent/Cargo.toml и desktop/Cargo.toml: version = "0.10.1"
 (cd agent && cargo metadata --format-version 1 >/dev/null)
 (cd desktop && cargo metadata --format-version 1 >/dev/null)
 ```
@@ -857,8 +857,8 @@ squash merge. Дождитесь проверок получившегося к�
 git fetch origin
 git switch main
 git pull --ff-only origin main
-git tag -a v0.10.0 -F /path/to/release-notes.md --cleanup=verbatim
-git push origin v0.10.0
+git tag -a v0.10.1 -F /path/to/release-notes.md --cleanup=verbatim
+git push origin v0.10.1
 ```
 
 [release.yml](.github/workflows/release.yml) не примет тег без аннотации или с версией,

@@ -127,8 +127,8 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     const retained=new Set(keys);for(const key of nextHeights.keys())if(!retained.has(key))nextHeights.delete(key);
     const base=rowBudget;
     const min=shell+rowBudget+multiFooter;
-    const natural=shell+TABLE_PAGE_ROWS*rowBudget+multiFooter;
-    sizing?.report({min:pixels(min),natural:pixels(Math.max(min,natural)),shown:outer,layout:scope});
+    const natural=shell+Math.max(1,Math.min(TABLE_PAGE_ROWS,keys.length))*rowBudget+multiFooter;
+    sizing?.report({min:pixels(min),natural:pixels(Math.max(min,natural)),shown:outer,layout:sizing?.manual?scope:JSON.stringify([scope,Math.min(TABLE_PAGE_ROWS,keys.length)])});
     if(!sizes||!same(sizes.shell,shell)||!same(sizes.footer,multiFooter)||!same(sizes.singleFooter,singleFooter)||!same(sizes.border,border)||!same(sizes.fallback,base)||nextHeights.size!==sizes.heights.size||[...nextHeights].some(([key,height])=>!same(sizes.heights.get(key),height)))
       setMeasurement({scope,heights:nextHeights,fallback:base,head,shell,footer:multiFooter,singleFooter,border});
   };
@@ -157,7 +157,7 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     return ()=>observer.disconnect();
   },[panel,layout,measurable,!!keys.length,keysKey,from,to,sizing?.manual]);
   const report=sizing?.report;useLayoutEffect(()=>()=>report?.(null),[report]);
-  const surfaceHeight=sizing?.manual&&sizes?Math.max(head+rowBudget,sizing.allocated-sizes.shell+head-sizes.footer):head+TABLE_PAGE_ROWS*rowBudget;
+  const surfaceHeight=sizing?.manual&&sizes?Math.max(head+rowBudget,sizing.allocated-sizes.shell+head-sizes.footer):head+Math.max(1,Math.min(TABLE_PAGE_ROWS,keys.length))*rowBudget;
   return useMemo(()=>({layout,measurable,columnWidths:columns,from,to,page,count:keys.length,pages:starts.length,onPage:(page:number)=>setPosition({key:resetKey,page}),live,measured,footer,measuredFooter,measuredSingleFooter,surface,surfaceHeight,rowBudget,footerMetrics,
     measureFrom:from,measureTo:sizing?.manual?Math.min(keys.length,Math.max(from+TABLE_MEASURE_MIN_ROWS,to+1)):from}),[layout,measurable,columnsKey,from,to,page,starts.length,resetKey,sizing?.manual,keys.length,surfaceHeight,rowBudget,footerMetrics]);
 }

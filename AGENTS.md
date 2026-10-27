@@ -169,25 +169,20 @@ and platform smoke checks still apply.
   badge or take space from the plot just to describe a transient read. A useful empty
   state or actionable error uses the existing content area without resizing it.
   A routine refresh must not blank, dim or pulse already valid content.
-- **Widget geometry is stable across data states.** At a given viewport and display
-  configuration, a placed widget keeps its outer size and its plot or table area through
-  loading, refresh, retained results, errors, recovery, empty results and changes to data
-  filters or the analytical period. These transitions must not move neighbouring widgets.
-  A conditional message, a different number or a new status line is never a reason to
-  grow or shrink a widget, including one with automatic height. Define the stable shell
-  before adding a state: keep status indicators in reserved heading or tray slots, put
-  details and retry in the shared Popover, and show initial, empty and unavailable states
-  inside the existing content area. Keep valid same-context data visible during refresh;
-  retire unauthorized or incompatible data without collapsing the shell. Do not add
-  loading/date/error paragraphs above a plot or table, a permanent blank status row,
-  clipped content or an inner page scroller to compensate. Explicit layout edits, display
-  configuration changes and viewport reflow can change geometry; asynchronous data and
-  filter results cannot. Filters, legend emphasis, grouping, sorting, paging and time
-  navigation are data operations, not layout edits. Changing which widgets are shown can
-  reflow the board; a surviving widget must not resize because its result changed.
-  Verify intermediate as well as settled states: widget bounds, plot or table bounds
-  and neighbouring positions must remain stable. A test that only
-  finds the right message or checks the final screenshot does not establish this rule.
+- **Refreshes preserve the reading surface.** With the same visible content and display
+  configuration, loading, refresh, errors and recovery keep valid data and useful plot
+  or table space stable. Status details and retry use existing chrome and disclosures;
+  they never add transient paragraphs, blank rows or healthy-state badges.
+  Automatic height follows visible content: every selected subscription window and
+  wallet allowance is shown on its card, and filters can change the number of scales
+  and the card's height. Do not replace them with a primary pair or move them into
+  settings to impose a constant height. Legends wrap to their actual contents without
+  reserved empty rows, fixed-height viewports or internal vertical scrollbars. A change
+  in visible scales, legend rows or automatic table row count can change natural height;
+  ordinary value updates and paint-only emphasis cannot. Preserve saved manual heights
+  and fill the remaining room with useful content. Do not rewrite layout preferences
+  to conceal a rendering change. Verify populated intermediate and settled states,
+  content visibility and actual geometry in both languages.
 - **Stable geometry must not waste space.** Do not reserve layout height for details
   shown only on hover, focus or touch preview. Such details use the shared glass tooltip
   or Popover beside their trigger; hidden text variants must not set a widget's minimum

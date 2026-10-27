@@ -307,3 +307,12 @@ test('identity heights survive reordering and exclusive last-row borders',()=>{
   assert.deepEqual(tablePages(['tall','short','other'],heights,44,50),[0,1]);
   assert.deepEqual(tablePages(['short','other'],heights,44,49,1),[0]);
 });
+
+
+test('automatic sparse tables fit their actual row count instead of reserving ten rows',()=>{
+  const f=widgetFixture(0,false);f.limit(1);const one=f.render(),natural=f.reports.at(-1)!.natural;
+  f.limit(10);const many=f.render();assert.equal(many.surfaceHeight-one.surfaceHeight,9*60);
+  assert.equal(f.reports.at(-1)!.natural-natural,9*60);
+  f.clear();const empty=f.render();assert.equal(empty.surfaceHeight,one.surfaceHeight);
+  assert.equal(f.reports.at(-1)!.natural,natural,'an empty state needs one useful row, not a ten-row reserve');
+});

@@ -13,7 +13,7 @@ import {providerOf} from '../../server/domain/providers';
 import {publishDataFilters} from '../lib/filterSelection';
 import {isWindowHidden} from '../lib/view';
 import {selectedAllowanceIds} from '../lib/moneySelection';
-import {quotaPeriods,primaryQuotaPeriods} from '../lib/subscription';
+import {quotaPeriods} from '../lib/subscription';
 import {hasSubscriptionCaps} from '../lib/providers';
 import {budgetVisible} from '../lib/money';
 import {t,setLocale} from '../i18n/index';
@@ -32,7 +32,7 @@ for(const locale of ['en','ru'] as const)test(`native ${locale} logical selected
   const select=(ids:string[])=>{filters={...filters,windows:{mode:'include',values:ids.map(key=>[id,key])}};publishDataFilters(filters);};
   select([a.id]);
   const selected={from:at-H,to:at+M},reading:{value:typeof historical|null;basis:{range:typeof selected};loading:boolean;error:string|null}={value:historical,basis:{range:selected},loading:false,error:null};
-  const context:any={exports:{},require:()=>({jsx,jsxs:jsx,Fragment:'fragment'}),t,providerOf,isWindowHidden,selectedAllowanceIds,quotaPeriods,primaryQuotaPeriods,hasSubscriptionCaps,budgetVisible,planOf:()=>null,
+  const context:any={exports:{},require:()=>({jsx,jsxs:jsx,Fragment:'fragment'}),t,providerOf,isWindowHidden,selectedAllowanceIds,quotaPeriods,hasSubscriptionCaps,budgetVisible,planOf:()=>null,
    useDataFilters:()=>({current:filters}),usePref:()=>({unit:'USD'}),usePeriodValues:()=>reading,useTimeRange:()=>selected,MeasurementClock:{Provider:'clock'},PercentLimit:'missing',windowName,AllHidden:'allHidden',Limit:'limit',QuotaCard:'quota',PeriodStatus:'period'};
   const file=readFileSync(new URL('../components/SourceCard.tsx',import.meta.url),'utf8'),start=file.indexOf('function CardMeasurements('),end=file.indexOf('/** Historical funds',start);
   runInNewContext(ts.transpileModule(file.slice(start,end)+'\nexports.draw=CardMeasurements;exports.details=MeasurementDetails;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);

@@ -2228,11 +2228,12 @@ a pointer can continue that transaction. A wheel restarting in the same event ke
 the preceding gesture's committed range as its origin, even before that selection
 renders. Publishing it preserves the new gesture; a later navigation still cancels it.
 Neither adds inertia. Holding Shift hides
-chart and activity-legend readouts even before movement starts. The plot and legend
-keep their height through gestures and range changes; extra legend entries scroll
-inside their bounded viewport. Only structural layout, width or language changes
-establish another shell allocation. Data filters and readiness never resize the plot.
-An answered activity frame without work keeps its time axis and legend viewport;
+chart and activity-legend readouts even before movement starts. Active gestures defer
+content-driven plot allocation. Once the gesture ends, legends use their natural
+wrapping and the panel accounts for their actual height. Changes to the selected
+visible entries can change natural height; ordinary value updates do not. Completing
+a read does not itself change the selected temporal projection or add status rows.
+An answered activity frame without work keeps its time axis and useful summary;
 its empty message sits inside the plot, which still accepts the next gesture.
 
 While panning, the history store keeps the previous complete answer for the table,
@@ -2539,30 +2540,23 @@ same viewport; grouping, sorting and paging do not change its capacity or neighb
 Rows use a bounded preview, with oversized text and complete values reachable through
 the shared Popover. Whole rows page through the full loaded index without an inner
 vertical scroller or another history read.
-Subscription cards keep two primary percentage slots, with a session and weekly
-limit when both families are available. General five-hour and weekly windows lead;
-equal-specificity and equal-duration ties use descending stable IDs, independently
-of supplier reply order or remaining amounts. Every selected native window
-remains in their existing measurement disclosure. Wallet cards show one available
-balance, or the first selected cap when the balance is excluded; other caps and exact
-amounts remain in the balance disclosure.
-Full disclosure names wrap within the glass, including nested historical status labels
-and unavailable allowance names; their values and status marks stay beside the text.
-The first cap follows canonical English key-name and ID order before it joins historical
-evidence, independently of server or browser locale.
-An absent first cap stays unavailable instead of promoting a later arrived cap; unresolved
-selected names keep the primary unknown until their bounded metadata read completes.
-Native choices combine current descriptors with historical-only windows. A selected
-missing window remains named in the disclosure without borrowing a current percentage.
-A successful historical read before any observation shows one empty state inside
-the primary area, replacing empty quota scales rather than appending a row.
-An explicitly empty limit selection keeps its hidden-limits state and filter action.
-Loading extra selected caps never adds a card row or an inventory-wide lookup.
-The allowance count and disclosure use the logical wallet selection shared with
-analytics. Explicit choices remain named with an unavailable value when their cap
-is absent, including beside known caps and before their first historical observation.
-Automatic choices include only the capped preview. Current key names can label an
-older gap, but current amounts cannot fill it. Compact uses the same full disclosure.
+Subscription cards show every selected percentage window in supplier order. Wallet
+cards show the available balance and every selected key allowance beside it; filters
+control which measurements appear. Automatic card height follows those visible scales,
+including when filtering changes their count. Missing selected observations keep their
+own unavailable row rather than promoting another allowance or borrowing a live value
+for historical time. Current names can label an older gap, but amounts and sample times
+always come from the selected historical evidence. An explicitly empty selection keeps
+its hidden-limits state and filter action. Extra selected keys use the existing bounded
+metadata reads, never an inventory-wide lookup.
+
+Chart legends wrap naturally and occupy only the rows their visible entries need.
+They have no fixed-height reserve or internal vertical scrollbar. The panel's natural
+height follows changes to its legend; saved manual heights keep their existing intent
+and allocate the remaining room to the plot. Ordinary value updates and paint-only
+legend emphasis do not change its composition or measure layout on every render.
+Automatic tables reserve rows for their actual selected cohort, up to their ordinary
+page capacity, rather than reserving ten rows for an empty or single-row result.
 The budget chart, legend and table name a total balance by its account rather than
 repeating "Available balance". Scoped key limits keep their names; balance components,
 roles and currency provenance remain reachable in card details.

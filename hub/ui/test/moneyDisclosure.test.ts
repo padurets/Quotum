@@ -47,9 +47,10 @@ for(const locale of ['en','ru'] as const)test(`${locale} selected allowance disc
   }finally{setLocale('en');}
 });
 
-test('compact balance disclosure renders selected allowances in the full detail layout',async()=>{
+test('compact selected allowances stay visible while exact evidence remains in the balance disclosure',async()=>{
   const f=fixture(true);f.render();f.flights[0].resolve({keys:[f.key],meters:[f.cap]});await flush();
-  const metric=f.render().find(n=>n.type==='key');assert.ok(metric);assert.notEqual(metric.props.compact,true,'full disclosure names must wrap instead of using the compact row ellipsis');
+  const tree=f.render(),metric=tree.find(n=>n.type==='key');assert.ok(metric);assert.equal(metric.props.compact,true,'the selected cap is visible in the compact row');
+  assert.ok(tree.some(node=>node.props.children===f.key.name),'the balance disclosure keeps the complete allowance name');
 });
 
 for(const compact of [false,true])for(const locale of ['en','ru'] as const)test(`${locale} ${compact?'compact':'dashboard'} actual extra allowance Retry keeps focus in its surviving disclosure`,async()=>{
@@ -101,15 +102,16 @@ test('an explicit uncapped preview choice owns a named unavailable disclosure',(
   assert.equal(f.flights.length,0,'a known preview key needs no extra lookup');
 });
 
-test('a pending extra allowance cannot promote the next arrived cap before its logical order is known',async()=>{
-  const f=fixture(),known={...f.key,id:'known',name:'Beta known'};
-  f.key.name='Alpha selected extra';f.source.keys.push(known);f.source.meters.push({...f.cap,id:'key:known:cap'});
+test('a pending selected allowance keeps its own visible row beside arrived caps',async()=>{
+  const f=fixture();f.source.keys.push({...f.key,id:'known',name:'Z known'});f.source.meters.push({...f.cap,id:'key:known:cap'});
   f.filters.wallet={mode:'only',values:[{source:'s',kind:'keyCap',key:'known'},{source:'s',kind:'keyCap',key:'extra'}]};
-  const primary=()=>f.render().find(n=>n.type==='popover'&&n.props.triggerClass==='money-primary-trigger')!;
-  assert.equal(primary().props.trigger.type,'unavailable-cap','an unknown selected name may sort before the known key');
-  f.flights[0].reject(new ApiError(503,'unavailable'));await flush();assert.equal(primary().props.trigger.type,'unavailable-cap');
-  f.retry();primary();f.flights[1].resolve({keys:[f.key],meters:[]});await flush();
-  assert.equal(primary().props.trigger.props.name,f.key.name,'missing first amount keeps the now known first identity');
-  f.retry();primary();f.flights[2].resolve({keys:[f.key],meters:[f.cap]});await flush();
-  assert.equal(primary().props.trigger.props.limit.scope.id,'extra');
+  const caps=()=>f.render().filter(n=>n.type==='key'||n.type==='unavailable-cap');
+  const check=()=>{const rows=caps();assert.equal(rows.length,2);assert.ok(rows.some(n=>n.type==='key'&&n.props.limit.scope.id==='known'));return rows;};
+  assert.equal(check().filter(n=>n.type==='unavailable-cap').length,1);
+  assert.ok(check().some(node=>node.props.status?.props.triggerClass==='money-status-trigger'),'caps-only readers can reach loading, failure and retry details');
+  f.flights[0].reject(new ApiError(503,'unavailable'));await flush();check();
+  f.retry();check();f.flights[1].resolve({keys:[f.key],meters:[]});await flush();
+  assert.equal(check().find(n=>n.type==='unavailable-cap')?.props.name,f.key.name,'missing amounts keep their resolved logical name');
+  f.retry();check();f.flights[2].resolve({keys:[f.key],meters:[f.cap]});await flush();
+  assert.deepEqual(check().map(n=>n.props.limit.scope.id),['extra','known'],'both selected caps remain visible after the bounded metadata read');
 });
