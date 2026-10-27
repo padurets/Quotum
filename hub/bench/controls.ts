@@ -62,7 +62,12 @@ export async function selectMoney(cdp: Cdp, ids: [string, string][], family:'bud
     const end = Date.now() + 5000;
     let previous = '', stable = 0;
     while (stable < 3) {
-      if (Date.now() > end) throw new Error('money selection did not load');
+      if (Date.now() > end) throw new Error('money selection did not load: '+JSON.stringify({
+        chart:[...document.querySelectorAll('${panel} .chart>svg')].map(node=>({ready:node.dataset.drawReady,box:node.getBoundingClientRect().toJSON()})),
+        series:[...document.querySelectorAll('${panel} [data-series]')].map(node=>({id:node.getAttribute('data-series'),paths:[...node.querySelectorAll('path.series')].filter(path=>path.getAttribute('d')).length})),
+        waiting:[...document.querySelectorAll('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-draw-ready="false"]')].map(node=>({id:node.closest('[data-widget]')?.dataset.widget,tag:node.tagName,className:node.getAttribute('class')})),
+        moving:document.getAnimations().filter(animation=>animation.playState==='running'&&animation.effect?.target?.matches('.widget,.widget-body')).length
+      }));
       await new Promise(requestAnimationFrame);
       const root = document.querySelector('${panel} .chart > svg');
       const series = Array.from(document.querySelectorAll('${panel} [data-series]'));

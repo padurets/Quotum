@@ -2228,11 +2228,14 @@ a pointer can continue that transaction. A wheel restarting in the same event ke
 the preceding gesture's committed range as its origin, even before that selection
 renders. Publishing it preserves the new gesture; a later navigation still cancels it.
 Neither adds inertia. Holding Shift hides
-chart and activity-legend readouts even before movement starts. Active gestures defer
-content-driven plot allocation. Once the gesture ends, legends use their natural
-wrapping and the panel accounts for their actual height. Changes to the selected
+chart and activity-legend readouts even before movement starts. Legends use their natural
+wrapping, and an observed change in their height updates the panel's allocation even
+during a gesture. Input itself does not measure layout. Changes to the selected
 visible entries can change natural height; ordinary value updates do not. Completing
 a read does not itself change the selected temporal projection or add status rows.
+A manually sized plot keeps enough grid rows for its actual content while its plot
+adjusts to a changed legend or width. The plot still receives the requested
+allocation, so the temporary rows are released when the content fits.
 An answered activity frame without work keeps its time axis and useful summary;
 its empty message sits inside the plot, which still accepts the next gesture.
 
