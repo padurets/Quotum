@@ -1,6 +1,5 @@
 import {createContext, useCallback, useContext, useLayoutEffect, useRef, useState, type RefObject} from 'react';
 import {useLocale} from '../i18n';
-import {pan} from '../lib/pan';
 
 /** What a widget needs, in CSS pixels: at least (`min`), and to show all of itself (`natural`). */
 export type Size = {min: number; natural: number};
@@ -53,7 +52,7 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
   measure.current = () => {
     const root = panel.current;
     const chart = root?.querySelector<HTMLElement>(':scope > .chart');
-    if (!sizing || !root || !chart || pan.active() || pan.shifting()) return;
+    if (!sizing || !root || !chart) return;
     const own = chart.querySelector(':scope > svg') ? base.current : parseFloat(getComputedStyle(chart).minHeight) || 0;
     if (own === null) return;
     const bounds = root.getBoundingClientRect();
@@ -69,7 +68,7 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
   };
   useLayoutEffect(() => measure.current(), [sizing?.manual, sizing?.allocated, sizing?.width, locale]);
   useLayoutEffect(() => {
-    let alive = true, legend: HTMLElement | null = null;
+    let legend: HTMLElement | null = null;
     const observer = new ResizeObserver(() => measure.current());
     const follow = () => {
       const next = panel.current?.querySelector<HTMLElement>(':scope > .legend') ?? null;
@@ -86,10 +85,7 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
       // SVG data changes are below the chart; only replacing the legend changes this subscription.
       mutations.observe(panel.current, {childList: true});
     }
-    const stop = pan.onPhase(() => {
-      if (!pan.active() && !pan.shifting()) queueMicrotask(() => {if (alive) measure.current();});
-    });
-    return () => {alive = false; stop(); mutations.disconnect(); observer.disconnect();};
+    return () => {mutations.disconnect(); observer.disconnect();};
   }, [panel]);
   const report = sizing?.report;
   useLayoutEffect(() => () => report?.(null), [report]);

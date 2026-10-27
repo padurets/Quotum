@@ -10,7 +10,8 @@ export async function inspectMeasurementDetails(cdp:Pick<Cdp,'evaluate'>,reading
     await wait(()=>{card=[...document.querySelectorAll('[data-widget]')].find(e=>e.dataset.widget==='source:'+expected.source);trigger=card?.querySelector('.card-head .picker>button');return trigger;});
     trigger.scrollIntoView({block:'center'});await document.fonts.ready;await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);
     // A newly available meter may add a node inside its already placed data area.
-    const geometry=()=>[...document.querySelectorAll('.widgets>.widget,.card-primary')].map(e=>{const b=e.getBoundingClientRect();return[b.x+scrollX,b.y+scrollY,b.width,b.height];});
+    if(!card.querySelector('.card-measurements'))throw Error('measurement disclosure has no measured card body');
+    const geometry=()=>[...document.querySelectorAll('.widgets>.widget,.card-measurements')].map(e=>{const b=e.getBoundingClientRect();return[b.x+scrollX,b.y+scrollY,b.width,b.height];});
     const before=geometry();trigger.focus();trigger.click();
     const name=()=>[...card.querySelectorAll('.measurement-details .limit-name')].find(e=>e.textContent.includes(expected.label));
     await wait(()=>{

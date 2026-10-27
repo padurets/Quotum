@@ -187,10 +187,12 @@ export function CapMetrics({
 function BudgetKeyMetrics({
   limit,
   context,
+  name,
   compact = false,
 }: {
   limit: BudgetLimit;
   context: CurrencyContext;
+  name?: ReactNode;
   compact?: boolean;
 }) {
   const {part, meter: cap} = limit;
@@ -208,7 +210,7 @@ function BudgetKeyMetrics({
         <div className="compact-window-name">
           <span title={detail}>
             <span>
-              {keyName(part)}
+              {name??keyName(part)}
               <KeyStatus part={part} cap={cap} />
             </span>
           </span>
@@ -230,7 +232,7 @@ function BudgetKeyMetrics({
     <div className={`limit money-limit${stale ? ' is-stale' : ''}`}>
       <div className="limit-top">
         <span className="limit-name" title={detail}>
-          {keyName(part)}
+          {name??keyName(part)}
           <KeyStatus part={part} cap={cap} />
         </span>
         <span
@@ -502,7 +504,8 @@ ${approximate ? '≈ ' : ''}${formatted}`}
       <div className="limits money-limits">
         {selectedKeys.map(key=>{
           const limit=limits.find(limit=>limit.scope.id===key.id);
-          return limit?<BudgetKeyMetrics key={key.id} limit={{...limit,part:{...limit.part,name:key.name}}} context={context} compact={compact}/>:<CapMetrics key={key.id} cap={undefined} name={keyName(key)} compact={compact}
+          return limit?<BudgetKeyMetrics key={key.id} limit={{...limit,part:{...limit.part,name:key.name}}} context={context} compact={compact}
+            name={showBalance?undefined:<Popover label={disclosureLabel} trigger={keyName(key)} triggerClass="money-cap-trigger">{breakdown}</Popover>}/>:<CapMetrics key={key.id} cap={undefined} name={keyName(key)} compact={compact}
             status={showBalance?undefined:<Popover label={disclosureLabel} trigger={<small className="key-status" role="img" aria-label={t('quota.unavailable')}/>} triggerClass="money-status-trigger">{breakdown}</Popover>}/>;
         })}
       </div>

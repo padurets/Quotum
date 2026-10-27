@@ -25,7 +25,7 @@ function fixture(compact=false){
   const modules:Record<string,unknown>={react:hooks,'./moneySelection':{selectedAllowanceIds},'./dataFilters':{useDataFilters:()=>({current:filters})},'./prefs':{usePref:()=>({unit:'USD'})},'../../server/domain/dataFilters':{walletRule},'./view':{keyShown:()=>true},'./http':{ApiError},'../../server/domain/meterHistory':{MAX_METERS},'./keyReads':{readKeyIds:()=>new Promise((resolve,reject)=>flights.push({resolve,reject}))}};
   const keys={exports:{} as typeof import('../lib/moneyKeys'),require:(name:string)=>modules[name],AbortController};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../lib/moneyKeys.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,keys);
-  const jsx=(type:unknown,props:Node['props'])=>({type,props}),context={useRemovalFocus:dom.focus.useRemovalFocus,exports:{} as {MoneyValues:(props:unknown)=>Node},require:()=>({jsx,jsxs:jsx}),...money,currencySymbol,t,useDataFilters:()=>({current:filters}),usePref:()=>({unit:'USD'}),walletRule,matchesWallet,fundsRule,matchesSelection,Popover:'popover',CreditBalanceValue:({children}:{children:unknown})=>children,ErrorLine:'error',CapMetrics:'unavailable-cap',BudgetKeyMetrics:'key',stamp:String,day:String,ApiError};
+  const jsx=(type:unknown,props:Node['props'])=>({type,props}),context={useRemovalFocus:dom.focus.useRemovalFocus,exports:{} as {MoneyValues:(props:unknown)=>Node},require:()=>({jsx,jsxs:jsx}),...money,currencySymbol,t,useDataFilters:()=>({current:filters}),usePref:()=>({unit:'USD'}),walletRule,matchesWallet,fundsRule,matchesSelection,Popover:'popover',CreditBalanceValue:({children}:{children:unknown})=>children,ErrorLine:'error',CapMetrics:'unavailable-cap',BudgetKeyMetrics:(props:Node['props'])=>jsx('key',{...props,children:props.name}),stamp:String,day:String,ApiError};
   const src=readFileSync(new URL('../components/MoneyCard.tsx',import.meta.url),'utf8');
   runInNewContext(ts.transpileModule(src.slice(src.indexOf('export function MoneyValues('),src.indexOf('/** Subscription funds')),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   let latest:ReturnType<typeof keys.exports.useShownKeys>;
@@ -114,4 +114,20 @@ test('a pending selected allowance keeps its own visible row beside arrived caps
   assert.equal(check().find(n=>n.type==='unavailable-cap')?.props.name,f.key.name,'missing amounts keep their resolved logical name');
   f.retry();check();f.flights[2].resolve({keys:[f.key],meters:[f.cap]});await flush();
   assert.deepEqual(check().map(n=>n.props.limit.scope.id),['extra','known'],'both selected caps remain visible after the bounded metadata read');
+});
+
+for(const compact of [false,true])for(const locale of ['en','ru'] as const)test(`${locale} ${compact?'compact':'dashboard'} caps-only disclosure survives a failed refresh with retained amounts`,async()=>{
+  setLocale(locale);const f=fixture(compact);
+  try{
+    f.filters.wallet={mode:'only',values:[{source:'s',kind:'keyCap',key:'extra'}]};
+    f.render();f.flights[0].resolve({keys:[f.key],meters:[f.cap]});await flush();
+    const ready=f.render();assert.equal(ready.filter(n=>n.type==='key').length,1);
+    assert.ok(ready.some(n=>n.type==='popover'),'arrived caps keep exact evidence accessible');
+    assert.ok(ready.some(n=>String(n.props.children).includes(t('source.measured',{at:'1'}))));
+    f.retry();f.render();f.flights[1].reject(new ApiError(503,'unavailable'));await flush();
+    const failed=f.render();assert.equal(failed.filter(n=>n.type==='key').length,1,'retained amounts remain visible');
+    assert.ok(failed.some(n=>n.type==='error'&&n.props.error));
+    const retry=failed.find(n=>n.type==='button'&&n.props.children===t('period.retry'));assert.ok(retry,'failure and Retry stay reachable after all caps have arrived');
+    retry.props.onClick();f.render();assert.equal(f.flights.length,3);
+  }finally{f.dom.hooks.dispose();setLocale('en');}
 });

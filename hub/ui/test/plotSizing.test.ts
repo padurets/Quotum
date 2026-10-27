@@ -58,12 +58,13 @@ test('natural legends grow and shrink the automatic panel without a fixed viewpo
   const before=f.reads;f.mutate();assert.equal(f.reads,before,'ordinary data mutations do not measure layout');f.cleanup();
 });
 
-test('active gestures defer legend sizing without measuring on input',()=>{
+test('actual legend growth updates the slot during a gesture without measuring on input',()=>{
   const f=fixture(),before=f.reads,reports=f.reports.length,token=f.start();
   assert.equal(f.reads,before,'starting input performs no geometry read');
-  f.resize(60);f.mutate();assert.equal(f.reads,before);assert.equal(f.reports.length,reports);
-  f.pan.cancel(token);f.flush();assert.equal((f.reports.at(-1) as any).natural,429.5);
-  assert.equal(f.legend.style.height,'','completion restores natural flow');f.cleanup();
+  f.pan.move(token,-20);f.paint();assert.equal(f.reads,before);assert.equal(f.reports.length,reports);
+  f.resize(260);assert.equal((f.reports.at(-1) as any).natural,629.5,'the slot includes every new legend row before gesture completion');
+  const resized=f.reads;f.mutate();f.pan.move(token,-20);f.paint();assert.equal(f.reads,resized,'subsequent input does not measure unchanged content');
+  f.pan.cancel(token);f.flush();assert.equal(f.reads,resized);f.cleanup();
 });
 
 test('replaced legends are observed and old legends release their subscription',()=>{
@@ -74,7 +75,7 @@ test('replaced legends are observed and old legends release their subscription',
   assert.ok(f.observers.every(observer=>observer.targets.size===0));
 });
 
-test('a deferred gesture completion cannot measure an unmounted panel',()=>{
+test('gesture completion cannot measure an unmounted panel',()=>{
   const f=fixture(),token=f.start();f.pan.cancel(token);f.cleanup();const before=f.reads;
   f.flush();assert.equal(f.reads,before);assert.equal(f.reports.at(-1),null);
 });
