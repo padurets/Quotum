@@ -159,10 +159,11 @@ This preparation is diagnostic and does not run in ordinary benchmarks.
 After the command fails, the control also resolves identity on the original page
 connection using browser navigation evidence retained before the original navigation.
 It must match the pre-input PID and birth at both ends of native capture, within the
-existing collection limits. This independent pre-input oracle remains part of SDK
-qualification; it does not run in the direct history scroll control.
-It holds one synchronous HTTP request from its own fixture page until the original
-30-second command timeout, then requires native main-thread frames and confirmed
+existing collection limits. This comparison with late binding is specific to SDK
+qualification. The paired history route uses the pre-input binding before its ordinary
+gestures. This qualification control holds one synchronous HTTP request from its own
+fixture page until the original 30-second command timeout, then requires native
+main-thread frames and confirmed
 cleanup, including the fixture's pending connection. This exercises native unwinding;
 JIT frame unwinding is not qualified. It does not execute the app client,
 reproduce the original intermittent hang, qualify forced helper failures or replace
