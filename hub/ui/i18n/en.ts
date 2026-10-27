@@ -887,7 +887,6 @@ export const en = {
   'activity.active': 'Active time',
   'activity.activeHint': 'How long at least one agent worked: agents working at the same time count once',
   'activity.atOnce': 'Avg. parallel sessions',
-  'source.measurements': 'Measurements',
   'table.details': 'Full details: {name}',
   'analytics.details': 'Details',
   'activity.atOnceHint': 'Average number of sessions working in parallel during active time: agent-hours divided by active time',

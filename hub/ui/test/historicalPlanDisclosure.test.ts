@@ -20,7 +20,7 @@ const file=new URL('../components/SourceCard.tsx',import.meta.url);
 const code=readFileSync(file,'utf8'),jsx=(type:any,props:any)=>({type,props});
 const nodes=(n:any):any[]=>Array.isArray(n)?n.flatMap(nodes):!n||typeof n!=='object'?[]:typeof n.type==='function'?nodes(n.type(n.props)):[n,...nodes(n.props.children)];
 const compile=(s:string)=>ts.transpileModule(s,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
-for(const language of ['en','ru'] as const)test(`${language} historical idle window primary and disclosure share plan evidence`,()=>{
+for(const language of ['en','ru'] as const)test(`${language} historical idle window keeps its own plan evidence on the card`,()=>{
  const H=3600000,M=60000,now=1800000000000,at=now-2*H,selected={from:at-M,to:at+30*M};
  const store=new Store(':memory:',at-H);setLocale(language);
  try{
@@ -36,14 +36,13 @@ for(const language of ['en','ru'] as const)test(`${language} historical idle win
    isWindowHidden:()=>false,planOf:()=>DEFAULT_PLAN,MeasurementClock:{Provider:'clock'},PercentLimit:'limit',ResetLine:'reset',PeriodStatus:'status',QuotaCard:'quota',AllHidden:'hidden',
    planMark,planNote,planMarkChangesAt,planNoteChangesAt,num,useMeasurementClock:()=>selected.to};
   const start=code.indexOf('function Limit('),end=code.indexOf('\n/**',start),bodyStart=code.indexOf('function CardMeasurements('),bodyEnd=code.indexOf('/** Historical funds',bodyStart);
-  let body=code.slice(code.indexOf('function PlanMark('),code.indexOf('/** When the limit resets'))+'\n'+code.slice(start,end)+'\n'+code.slice(bodyStart,bodyEnd)+'\nexports.body=CardMeasurements;exports.details=MeasurementDetails;';
+  const body=code.slice(code.indexOf('function PlanMark('),code.indexOf('/** When the limit resets'))+'\n'+code.slice(start,end)+'\n'+code.slice(bodyStart,bodyEnd)+'\nexports.body=CardMeasurements;';
   runInNewContext(compile(body),context);
   const props={source:{...current,successAt:now},arrange:{view:EMPTY_VIEW},boardId:board};
-  const primary=nodes(context.exports.body(props)),disclosure=nodes(context.exports.details(props));
-  const primaryMark=primary.find(n=>n.props.className==='pace'),detailMark=disclosure.find(n=>n.props.className==='pace');
+  const primary=nodes(context.exports.body(props));
+  const primaryMark=primary.find(n=>n.props.className==='pace');
   // Resolve the actual Limit children/note through the same renderer slots.
-  assert.ok(primaryMark&&detailMark);
+  assert.ok(primaryMark);
   assert.equal(primaryMark.props.hidden,true,'the actual primary correctly recognizes an idle measurement');
-  assert.equal(detailMark.props.hidden,primaryMark.props.hidden,'the same idle historical limit cannot acquire a started-window plan only in its disclosure');
  }finally{store.close();setLocale('en');}
 });

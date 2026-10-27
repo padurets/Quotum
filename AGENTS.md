@@ -261,6 +261,8 @@ and platform smoke checks still apply.
 - Subscription cards and compact rows share the percentage-limit layout and period
   names. Provider-specific amounts and allowances belong in value details; the
   provider's storage unit does not define a separate card layout.
+  Keep selected scales in the card body. Card settings contain controls and recovery
+  actions, without a second set of measurement scales.
 - Subscription analytics use independent five-hour and weekly chart/table pairs,
   including hub-measured caps. Convert a historical cap with its own reported allowance
   and observation bounds; never reinterpret it using the current allowance or invent
