@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
-import {rendererDocument,historyRendererIdentity} from '../rendererIdentity.js';
+import {rendererDocument,historyRendererIdentity,networkRendererProfile} from '../rendererIdentity.js';
 import {prepareHistoryTarget} from '../historyTrafficBrowser.js';
 import type {ProcessIdentity} from '../browserProcess.js';
 import {observeReversal} from '../reversalDiagnostic.js';
@@ -105,9 +105,16 @@ test('a seed exception retains its original error while disposing passive listen
   const original=new Error('original Network.enable failure'),f=await pageFixture(true,true,false,original);await assert.rejects(f.run(),error=>error===original);await f.owner.close();assert.deepEqual(f.saved,['traffic-seed-failure-fixture']);assert.equal(f.targetCloses(),1);assert.equal(f.listeners.size,0);assert.equal(f.removed(),5);assert.equal(f.resolves(),0);
 });
 
-test('the actual historyPage sandwich produces a document-lived exact PID without a late trace',async()=>{
+const historyProfiles=[
+  {version:'Chrome/155.0.8059.39',sourceRevisionHash:'3ff7ac5a9224be9156d7f8703a06e22890aafd34'},
+  {version:'Chrome/155.0.8059.12',sourceRevisionHash:'384c82079f60e0b79cdca6e49efd5cfceefa5b74'},
+  {version:'Chrome/156.0.8078.47',sourceRevisionHash:'1d17a2e2ee147bb7d6ae2ab6abdb3a2510c17775'},
+];
+
+for(const profile of historyProfiles)test('the actual historyPage sandwich produces a document-lived exact PID without a late trace: '+profile.version,async()=>{
   for(const setupFailure of [undefined,new Error('original setup evaluation failed')]){
     const f=await pageFixture(true,true,false,undefined,false,true,true,setupFailure);
+    f.browser.launchReport=()=>({pid:process.pid,...profile});
     if(setupFailure){await assert.rejects(f.run(),value=>value===setupFailure);await f.owner.close();assert.equal(f.listeners.size,0);assert.equal(f.targetCloses(),1);continue;}
     const page=await f.run();assert.ok(f.order.indexOf('reachable-ack')<f.order.indexOf('before-scan'));assert.ok(f.order.indexOf('before-scan')<f.order.indexOf('seed-probe'));
     const ordinary=await pageFixture(false,true,false,undefined,false,true,true),baseline=await ordinary.run();assert.deepEqual(f.commands,ordinary.commands);assert.deepEqual(f.evaluations,ordinary.evaluations);await baseline.close();await ordinary.owner.close();
@@ -120,30 +127,64 @@ test('the actual historyPage sandwich produces a document-lived exact PID withou
   }
 });
 
-for(const mode of ['bound','navigation','reused-birth','browser-root-mismatch','malformed-signal','disposal'] as const)test('actual historyPage and observer retain the cold witness through successful input and zero-HTTP warm timeout: '+mode,async t=>{
-  const f=await pageFixture(true,true,false,undefined,false,true,true),page=await f.run(),logs:string[]=[];
+for(const profile of historyProfiles)for(const mode of ['bound','navigation','reused-birth','browser-root-mismatch','malformed-signal','disposal','missing-renderer-role','duplicate-renderer-role','before-capture','during-capture','after-capture-readback'] as const)test('actual historyPage and observer retain the cold witness through successful input and zero-HTTP warm timeout: '+profile.version+'/'+mode,async t=>{
+  const f=await pageFixture(true,true,false,undefined,false,true,true);f.browser.launchReport=()=>({pid:process.pid,...profile});
+  const page=await f.run(),logs:string[]=[],commands=[...f.commands],evaluations=[...f.evaluations];
   const native=await nativePostmortem({root:100,live:()=>false,observe:async()=>[]},[],new AbortController().signal);
   t.mock.timers.enable({apis:['setTimeout']});t.mock.method(console,'error',(line:string)=>logs.push(line));
   t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({webSocketDebuggerUrl:'ws://fixture.invalid/browser'})));
-  t.mock.method(Cdp,'connect',async()=>({send:async()=>({processInfo:[{type:'browser',id:mode==='browser-root-mismatch'?99:process.pid,cpuTime:1},{type:'renderer',id:process.pid+1,cpuTime:1},{type:'renderer',id:process.pid+2,cpuTime:999}]}),close(){}} as unknown as Cdp));
-  let calls=0,requests=0;const lateRenderer=mode==='malformed-signal'?{...page.lateRenderer,signal:{aborted:false}}:page.lateRenderer;
+  t.mock.method(Cdp,'connect',async()=>({send:async()=>({processInfo:[{type:'browser',id:mode==='browser-root-mismatch'?99:process.pid,cpuTime:1},
+    ...(mode==='missing-renderer-role'?[]:[{type:'renderer',id:process.pid+1,cpuTime:1}]),
+    ...(mode==='duplicate-renderer-role'?[{type:'renderer',id:process.pid+1,cpuTime:2}]:[]),{type:'renderer',id:process.pid+2,cpuTime:999}]}),close(){}} as unknown as Cdp));
+  const invalidate=()=>f.listeners.get('Page.frameStartedNavigating')!({frameId:'main',loaderId:'replacement',navigationType:'reload'});
+  let calls=0,requests=0,nativeFinished=false,captureSignal:AbortSignal|undefined;
+  const lateRenderer=mode==='malformed-signal'?{...page.lateRenderer,signal:{aborted:false}}:page.lateRenderer;
+  if(mode==='before-capture'||mode==='after-capture-readback'){
+    const resolve=lateRenderer.resolve.bind(lateRenderer);
+    lateRenderer.resolve=async(...args:Parameters<typeof resolve>)=>{
+      const handle=await resolve(...args);assert.equal(handle.valid(),true);
+      if(mode==='before-capture')invalidate();
+      else{
+        const evidence=handle.evidence.bind(handle);
+        handle.evidence=()=>{const snapshot=evidence();if(nativeFinished)invalidate();return snapshot;};
+      }
+      return handle;
+    };
+  }
   const observer=await observeReversal(page.cdp,{...f.browser,nativePostmortem:async(candidates,signal)=>{
-    calls++;assert.equal(signal.aborted,false);assert.deepEqual(candidates,[{pid:process.pid+1,birth:String(process.pid+1),cpuTime:1}]);
-    return{...native,pid:process.pid+1,birth:String(process.pid+1),status:'observed',intervened:true,released:true,reaped:true,pipesClosed:true};
+    calls++;captureSignal=signal;assert.equal(signal.aborted,false);assert.deepEqual(candidates,[{pid:process.pid+1,birth:String(process.pid+1),cpuTime:1}]);
+    if(mode==='during-capture'){invalidate();await new Promise<void>(resolve=>setImmediate(resolve));assert.equal(signal.aborted,true);}
+    nativeFinished=true;return{...native,pid:process.pid+1,birth:String(process.pid+1),status:'observed',intervened:true,released:true,reaped:true,pipesClosed:true};
   }},{postmortem:true,lateRenderer});
   await observer.watch('cold scroll',async()=>{
     requests++;f.listeners.get('Network.requestWillBeSent')!({type:'Fetch',frameId:'main',loaderId:'loader',requestId:(process.pid+1)+'.1',request:{url:'http://fixture.invalid/api/boards/private-canary/period',method:'POST',headers:{'x-quotum-bench-attempt':'b1:1'}}});
   });
   assert.equal(calls,0);const commandStart=performance.now();
-  if(mode==='navigation')f.listeners.get('Page.frameStartedNavigating')!({frameId:'main',loaderId:'replacement',navigationType:'reload'});
+  if(mode==='navigation')invalidate();
   if(mode==='reused-birth')f.rows[1]={...f.rows[1],birth:'999'};
   if(mode==='disposal')await page.lateRenderer.dispose();
   page.cdp.snapshot=()=>({failure:{id:196,method:'Input.synthesizeScrollGesture',started:commandStart},pending:[],socketState:1});
   page.cdp.evaluate=async(_expression:string,signal:AbortSignal)=>new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));
   const original=new Error('original30s warm command failure'),failed=assert.rejects(observer.watch('warm/cached return',async()=>{throw original;}),error=>error===original);
   await new Promise<void>(resolve=>setImmediate(resolve));t.mock.timers.tick(2000);await failed;await observer.close();
-  assert.equal(requests,1);assert.equal(calls,mode==='bound'?1:0);assert.ok(!f.commands.some(command=>/Tracing|Inspector|Debugger|Profiler/.test(command)));
-  const report=JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));assert.equal(report.nativeBinding,mode==='bound');assert.equal(report.command.failure.started,commandStart);
-  if(mode==='bound'){assert.equal(report.rendererAtCapture.witness.input.scenario,'cold scroll');assert.ok(report.rendererAtCapture.witness.received<=commandStart);assert.equal(report.rendererAtCapture.failedCommand.started,commandStart);assert.equal(report.rendererAtCapture.after.status,'observed');}
+  const report=JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));
+  // The same full fixture exposes the old profile rejection before expecting capture.
+  if(mode==='bound'&&!networkRendererProfile(f.browser.launchReport!())){
+    const receipt=(await page.lateRenderer.resolve(new AbortController().signal,{browserPid:process.pid,failedStart:commandStart,after:report.failedProcesses})).evidence();
+    assert.equal(receipt.profile,false);assert.equal(receipt.status,'unknown');assert.equal(receipt.pid,null);assert.equal(calls,0);assert.equal(report.nativeBinding,false);
+    t.diagnostic(JSON.stringify({profile:receipt.profile,status:receipt.status,pid:receipt.pid,nativeCalls:calls,nativeBinding:report.nativeBinding}));
+  }
+  assert.equal(requests,1);assert.equal(calls,['bound','during-capture','after-capture-readback'].includes(mode)?1:0);assert.ok(!f.commands.some(command=>/Tracing|Inspector|Debugger|Profiler/.test(command)));
+  assert.deepEqual(f.commands,commands);assert.deepEqual(f.evaluations,evaluations);assert.equal(f.order.filter(value=>value==='before-scan').length,2);
+  assert.equal(report.nativeBinding,mode==='bound');assert.equal(report.command.failure.started,commandStart);
+  if(report.rendererAtCapture)assert.equal(report.rendererAtCapture.profile,true);
+  if(mode==='bound'){
+    assert.equal(report.rendererAtCapture.status,'known');assert.equal(report.rendererAtCapture.pid,process.pid+1);assert.equal(report.rendererAtCapture.birth,String(process.pid+1));
+    assert.equal(report.rendererAtCapture.witness.input.scenario,'cold scroll');assert.ok(report.rendererAtCapture.witness.received<=commandStart);assert.equal(report.rendererAtCapture.failedCommand.started,commandStart);assert.equal(report.rendererAtCapture.after.status,'observed');
+  }
+  if(mode==='during-capture'||mode==='after-capture-readback'){
+    assert.equal(captureSignal!.aborted,true);assert.equal(report.nativeWait.intervened,true);assert.equal(report.nativeWait.released,true);assert.equal(report.nativeWait.reaped,true);assert.equal(report.nativeWait.pipesClosed,true);assert.equal(report.nativeCleanup,undefined);assert.deepEqual(f.owner.failures,[]);
+    if(mode==='after-capture-readback')assert.equal(report.rendererAfterCapture.status,'known');
+  }
   assert.doesNotMatch(logs.join(''),/private-canary/);await page.close();await f.owner.close();assert.equal(f.listeners.size,0);assert.equal(f.targetCloses(),1);
 });

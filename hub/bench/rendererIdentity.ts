@@ -49,7 +49,8 @@ export type RendererResolution={after:RendererProcessSample;failedStart:number|n
 export function networkRendererProfile(report:unknown):boolean{
   const {version,sourceRevisionHash}=report as {version?:unknown;sourceRevisionHash?:unknown}??{};
   return version==='Chrome/155.0.8059.39'&&sourceRevisionHash==='3ff7ac5a9224be9156d7f8703a06e22890aafd34'
-    ||version==='Chrome/155.0.8059.12'&&sourceRevisionHash==='384c82079f60e0b79cdca6e49efd5cfceefa5b74';
+    ||version==='Chrome/155.0.8059.12'&&sourceRevisionHash==='384c82079f60e0b79cdca6e49efd5cfceefa5b74'
+    ||version==='Chrome/156.0.8078.47'&&sourceRevisionHash==='1d17a2e2ee147bb7d6ae2ab6abdb3a2510c17775';
 }
 
 /** A cold request witnesses this document until its lifetime ends, including HTTP-free returns. */
