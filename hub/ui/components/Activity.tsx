@@ -437,9 +437,17 @@ const Stacks = memo(function Stacks({
   }, [...inputs, requested.from, requested.to, requested.end], `${authority}:${by}:${width}:${height}:${valueContext}`, incomingReady);
   const model = prepared.value;
   const coherent=incomingReady&&prepared.ready;
+  const detailsContext=JSON.stringify([authority,by,valueContext]);
+  const savedDetails=useRef<{context:string;frame:DetailFrame|null}|null>(null);
+  useLayoutEffect(()=>{
+    if(model)savedDetails.current={context:detailsContext,frame:model.detailFrame};
+    else if(savedDetails.current?.context!==detailsContext)savedDetails.current=null;
+  },[model,detailsContext]);
+  const shownDetails=model?model.detailFrame:savedDetails.current?.context===detailsContext?savedDetails.current.frame:null;
   useLayoutEffect(()=>detailFrame?.history?.projection?boardPeriod.retainActivity(detailFrame.history.projection):undefined,[detailFrame?.history?.projection]);
-  useLayoutEffect(()=>model?.detailFrame?.history?.projection?boardPeriod.retainActivity(model.detailFrame.history.projection):undefined,[model?.detailFrame?.history?.projection]);
-  const details=renderDetails(model?.detailFrame??null,!coherent);
+  useLayoutEffect(()=>shownDetails?.history?.projection?boardPeriod.retainActivity(shownDetails.history.projection):undefined,[shownDetails?.history?.projection]);
+  // A geometry-only preparation must not remove the legend and resize its own plot again.
+  const details=renderDetails(shownDetails,!coherent);
   useLayoutEffect(()=>{onDrawing?.(model?.registry??null);},[model?.registry,onDrawing]);
   const basis = model?.basis ?? axis.basis;
   const groups = useMemo(()=>(model?.groups??[]).map(row=>({...row,color:paint.get(row.group.key)??row.color})),[model?.groups,paint]);
