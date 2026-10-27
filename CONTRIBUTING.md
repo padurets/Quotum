@@ -854,8 +854,11 @@ their fixed categories and coordinates.
 Unattributed idle DOM mutations retain up to eight bounded context records, including
 node type, connection state and same-batch removal-owner categories at delivery. They contain no
 text, HTML, class names, card IDs or attribute values. Record and removal scans are
-capped and report truncation. These records preserve the original page-level failure;
-they do not permit extra idle work or infer a time-only exemption.
+capped and report truncation. Detached style changes retain an analytics clock owner
+only after a complete, bounded scan proves one earlier exact removal from that connected
+owner in the same batch, with no reinsertion. Recovery is recorded separately from the
+capped context. Unknown, conflicting or incomplete ownership still fails idle; clock
+work retains its existing rendering, request and script budgets.
 
 The manual `compositor_guard_control` input compares the pending-tree compositor
 guard in pinned Google Chrome Beta 157.0.8103.15. Three independent runners execute
