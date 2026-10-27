@@ -359,7 +359,7 @@ for(const cancellation of ['one of two readers','an older reset epoch'] as const
 for(const changed of [false,true])test(`activity eligibility is checked at physical dispatch after queued native state ${changed?'changes':'stays current'}`,async()=>{
   const pool=new HistoryPool(),blockers=[{role:'visible' as const},{role:'visible' as const}],sent:PeriodRequest[]=[],adopted:PeriodReply[]=[];
   const q=owner();let current=true,started:boolean|undefined;
-  q.value.activityProof=()=>({current,evidence:'published-cell-proof'});q.value.started=value=>{started=value;};
+  q.value.activityProof=()=>({current,cellsCursor:'published-cell-proof'});q.value.started=value=>{started=value;};
   const intent:PeriodIntent={board:'b',generation:1,revision:1,request:{version:1,selection:{mode:'live',periodMs:H},evaluatedAt:NOW,quota:{...query,cells:'skip'}}};
   const transport=new PeriodTransport(pool,()=>intent,reply=>{adopted.push(reply);},async(_board,body)=>{sent.push(structuredClone(body));return{basis:{run:'run',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range:{from:NOW-H,to:NOW}},quota:{state:'complete',basis:{run:'run',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range:{from:NOW-H,to:NOW}},value:{run:'run',now:NOW,historyStart:0,known:{work:0,sources:{}},chunks:[]}}};});
   transport.restoreEvidence(new Map([[JSON.stringify(['b','quota',undefined,undefined,undefined,undefined]),'newer-ledger-proof']]));
@@ -369,19 +369,19 @@ for(const changed of [false,true])test(`activity eligibility is checked at physi
     current=!changed;pool.release(blockers[0]);await flush();await pending;
     assert.equal(sent.length,1);assert.equal(started,!changed);
     assert.equal(sent[0].quota?.cells,changed?undefined:'activity');
-    assert.equal(sent[0].quota?.evidence,changed?'newer-ledger-proof':'published-cell-proof');
+    assert.equal(sent[0].quota?.evidence,'newer-ledger-proof');assert.equal(sent[0].quota?.cellsCursor,changed?undefined:'published-cell-proof');
     assert.ok(adopted[0].quota,'activity cells do not suppress independently wanted native evidence');
   }finally{q.settle();transport.reset();for(const flight of blockers)pool.release(flight);await flush();assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);}
 });
 
 for(const cells of [undefined,'activity'] as const)test(`the actual server ${cells?'activity marker':'full fallback'} controls the returned native proof`,async()=>{
-  const pool=new HistoryPool(),q=owner(),adopted:PeriodReply[]=[];q.value.activityProof=()=>({current:true,evidence:'cached-cell-proof'});
+  const pool=new HistoryPool(),q=owner(),adopted:PeriodReply[]=[];q.value.activityProof=()=>({current:true,cellsCursor:'cached-cell-proof'});
   const basis={run:'run',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range:{from:NOW-H,to:NOW}};
   const intent:PeriodIntent={board:'b',generation:1,revision:1,request:{version:1,selection:{mode:'live',periodMs:H},evaluatedAt:NOW,quota:{...query,cells:'skip'}}};
   const transport=new PeriodTransport(pool,()=>intent,reply=>{adopted.push(reply);},async(_board,body)=>{assert.equal(body.quota?.cells,'activity');return{basis,quota:{state:'complete',basis,value:{run:'run',now:NOW,historyStart:0,known:{work:0,sources:{}},chunks:[],...(cells?{cells}:{}),tape:{from:NOW-H,cut:NOW,replaceFrom:NOW,cursor:'response-native-proof',quota:[],money:[]}}}};});
   try{
     const reply=await transport.read('quota',query,undefined,q.value,true);
-    assert.equal(reply.cells,cells);assert.equal('nativeEvidence'in reply?reply.nativeEvidence:undefined,cells?undefined:'response-native-proof');
+    assert.equal(reply.cells,cells);assert.equal('cellsCursor'in reply?reply.cellsCursor:undefined,cells?undefined:'response-native-proof');
     assert.ok(adopted[0].quota,'both response modes retain native evidence adoption');
     assert.equal(transport.evidence().values().next().value,'response-native-proof');
   }finally{q.settle();transport.reset();await flush();assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);}

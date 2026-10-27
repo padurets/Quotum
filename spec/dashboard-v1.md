@@ -834,7 +834,7 @@ The body is at most 256 KiB:
   version: 1;
   selection: {mode: 'live'; periodMs: number} | {mode: 'range'; from: number; to: number};
   evaluatedAt: number;
-  quota?: {cell: string; from: string; to: string; sources?: string; meters?: string; unit?: string; meta?: string; evidence?: string; cells?: 'skip' | 'activity'};
+  quota?: {cell: string; from: string; to: string; sources?: string; meters?: string; unit?: string; meta?: string; evidence?: string; cellsCursor?: string; cells?: 'skip' | 'activity'};
   budget?: {cell: string; from: string; to: string; meters: string; unit: string; currency?: string; meta?: string; evidence?: string; cells?: 'skip'; work?: '1'};
   funds?: {cell: string; from: string; to: string; meters: string; unit: string; currency?: string; meta?: string; evidence?: string; cells?: 'skip'};
   values?: string[];
@@ -868,16 +868,22 @@ cell, selection and eight-tile limits below. `evidence` is its previously return
 tape cursor; `skip` asks only for cells during progressive panning. Conversely,
 `cells: 'skip'` reads the boundary tape while reusing already cached cells.
 Quota alone also accepts `cells: 'activity'` to refill selected work without
-repeating unchanged native drawing programs. Its `evidence` must be the cursor
-captured with the client's last completely published native drawing over those
-cells, rather than a newer independently adopted tape cursor. Source selections,
-authorization, metadata and native evidence retain their ordinary meaning.
-The hub checks that cursor's identity and retained measurement frontier before
-omitting native cells. A missing, invalid, old or changed proof falls back to a
-full drawing in the same response. Only an actual activity-only drawing carries
-`cells: 'activity'` in its history value; absence means a full drawing.
-The client rechecks native coverage and context before dispatch and publication,
-and keeps this drawing proof independent of subsequent activity or tape updates.
+repeating unchanged native drawing programs. Its separate `cellsCursor` proves the
+client's completely published native drawing over the requested cell range;
+`evidence` remains the independently adopted native tape cursor. Full quota replies
+with a tape include authenticated drawing bounds in the existing tape cursor.
+Full quota replies with skipped evidence instead return `cellsCursor`, a native-only
+drawing proof that cannot confirm a tape delta. Activity-only and tape-only replies
+do not issue drawing coverage. A proof covers only the actual contiguous returned
+cells, including the ordinary capped drawing horizon.
+Source selections, authorization, metadata and native evidence retain their ordinary
+meaning. The hub checks the proof's purpose, identity, cell range and retained
+measurement frontier before omitting native cells. A missing, invalid, old,
+insufficient or changed proof falls back to a full drawing in the same response.
+Only an actual activity-only drawing carries `cells: 'activity'` in its history
+value; absence means a full drawing. The client rechecks native coverage and context
+before dispatch and publication, and stores the proof only after complete native
+publication, independently of subsequent activity or tape updates.
 A standalone tape request may reuse its drawing reader's metadata token from the
 same board and hub run. The browser captures only that token before waiting for
 transport admission; mixed cell and tape requests keep their captured cell bases.

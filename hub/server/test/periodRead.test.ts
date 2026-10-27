@@ -89,7 +89,7 @@ test('activity cells omit native drawing extraction while retaining independent 
   const read=async(request:PeriodRequest)=>{const response=await h.read(request);assert.equal(response.statusCode,200,response.body);const reply=expandPeriod(response.json<PeriodWireReply>());if(reply.quota?.state!=='complete')throw Error('missing quota');return reply;};
   const initial=await read(body);if(initial.quota?.state!=='complete')throw Error('missing initial quota');
   assert.equal(initial.quota.value.chunks[0].series.length,1);
-  const cursor=initial.quota.value.tape!.cursor,query={...body.quota!,evidence:cursor};
+  const cursor=initial.quota.value.tape!.cursor,query={...body.quota!,evidence:cursor,cellsCursor:cursor};
   h.credit(now-10_000,now-5_000);
   const cells=h.store.cells.bind(h.store);let extractions=0;
   t.mock.method(h.store,'cells',(...args:Parameters<typeof cells>)=>{extractions++;return cells(...args);});
@@ -100,7 +100,9 @@ test('activity cells omit native drawing extraction while retaining independent 
   assert.equal(activity.quota.value.cells,'activity');assert.equal(full.quota.value.cells,undefined);
   assert.equal(activity.quota.value.chunks[0].series.length,0);
   assert.deepEqual(activity.quota.value.chunks.map(chunk=>chunk.activity),full.quota.value.chunks.map(chunk=>chunk.activity));
-  assert.deepEqual(activity.quota.value.tape,full.quota.value.tape,'drawing omission leaves native evidence and cursor unchanged');
+  const {cursor:activityCursor,...activityTape}=activity.quota.value.tape!,{cursor:fullCursor,...fullTape}=full.quota.value.tape!;
+  assert.deepEqual(activityTape,fullTape,'drawing omission leaves independent native evidence unchanged');
+  assert.notEqual(activityCursor,fullCursor,'only full native publication can issue new drawing coverage');
   assert.deepEqual(activity.sessions,full.sessions);assert.deepEqual(activity.sourceWork,full.sourceWork);
   assert.equal(activity.quota.value.tape!.quota.length,0,'unchanged native measurements use the ordinary empty delta');
   assert.ok(Buffer.byteLength(JSON.stringify(activity))<Buffer.byteLength(JSON.stringify(full)));
@@ -113,17 +115,17 @@ test('activity drawing falls back to full native cells for missing, invalid, for
   const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,quota:{cell:String(M),from:String(now-M),to:String(now),meta:''}};
   const first=expandPeriod((await h.read(body)).json<PeriodWireReply>());if(first.quota?.state!=='complete')throw Error('missing seed');
   const cursor=first.quota.value.tape!.cursor;
-  for(const evidence of [undefined,'invalid','skip']){
-    const response=await h.read({...body,quota:{...body.quota!,cells:'activity',evidence}});assert.equal(response.statusCode,200,response.body);
+  for(const cellsCursor of [undefined,'invalid','skip']){
+    const response=await h.read({...body,quota:{...body.quota!,cells:'activity',evidence:cursor,cellsCursor}});assert.equal(response.statusCode,200,response.body);
     const part=expandPeriod(response.json<PeriodWireReply>()).quota!;if(part.state!=='complete')throw Error('missing fallback');
     assert.equal(part.value.cells,undefined);assert.equal(part.value.chunks[0].series.length,1);
   }
   const foreign=await h.read({...body,quota:{...body.quota!,sources:'[]'}});
   const other=expandPeriod(foreign.json<PeriodWireReply>()).quota!;if(other.state!=='complete')throw Error('missing foreign proof');
-  const mismatch=expandPeriod((await h.read({...body,quota:{...body.quota!,cells:'activity',evidence:other.value.tape!.cursor}})).json<PeriodWireReply>()).quota!;
+  const mismatch=expandPeriod((await h.read({...body,quota:{...body.quota!,cells:'activity',evidence:cursor,cellsCursor:other.value.tape!.cursor}})).json<PeriodWireReply>()).quota!;
   if(mismatch.state!=='complete')throw Error('missing mismatch fallback');assert.equal(mismatch.value.cells,undefined);assert.equal(mismatch.value.chunks[0].series.length,1);
   record(now-5_000,72);
-  const response=await h.read({...body,quota:{...body.quota!,cells:'activity',evidence:cursor}});assert.equal(response.statusCode,200,response.body);
+  const response=await h.read({...body,quota:{...body.quota!,cells:'activity',evidence:cursor,cellsCursor:cursor}});assert.equal(response.statusCode,200,response.body);
   const changed=expandPeriod(response.json<PeriodWireReply>()).quota!;if(changed.state!=='complete')throw Error('missing changed fallback');
   assert.equal(changed.value.cells,undefined,'a measurement newer than committed native cells requires a full drawing');
   assert.equal(changed.value.chunks[0].series[0].cells.at(-1)![1],72);
@@ -138,7 +140,7 @@ test('activity proof checks native changes through the complete drawing ceiling,
   const first=expandPeriod((await h.read(body)).json<PeriodWireReply>()).quota!;if(first.state!=='complete')throw Error('missing seed');
   for(const [at,remaining] of [[now,72],[now+10_000,61]]){
     record(at,remaining);
-    const response=await h.read({...body,quota:{...body.quota!,cells:'activity',evidence:first.value.tape!.cursor}});assert.equal(response.statusCode,200,response.body);
+    const response=await h.read({...body,quota:{...body.quota!,cells:'activity',evidence:first.value.tape!.cursor,cellsCursor:first.value.tape!.cursor}});assert.equal(response.statusCode,200,response.body);
     const next=expandPeriod(response.json<PeriodWireReply>()).quota!;if(next.state!=='complete')throw Error('missing fallback');
     assert.equal(next.value.cells,undefined,'a newer sample inside the admitted drawing interval requires native cells');
     assert.equal(next.value.chunks.flatMap(chunk=>chunk.series).flatMap(series=>series.cells).at(-1)![1],remaining);
@@ -148,11 +150,63 @@ test('activity proof checks native changes through the complete drawing ceiling,
 test('activity cells preserve quota authorization and reject unsupported family modes',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   const query={cell:String(M),from:String(now-M),to:String(now),cells:'activity'},body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now};
-  for(const scope of ['budget','funds'] as const)assert.equal((await h.read({...body,[scope]:query})).statusCode,400);
+  for(const scope of ['budget','funds'] as const){
+    assert.equal((await h.read({...body,[scope]:query})).statusCode,400);
+    assert.equal((await h.read({...body,[scope]:{...query,cells:'skip',cellsCursor:'proof'}})).statusCode,400);
+  }
   assert.equal((await h.read({...body,quota:{...query,cells:'unknown'}})).statusCode,400);
   const hidden=h.store.source('codex','f'.repeat(24),now-H);
   assert.equal((await h.read({...body,quota:{...query,sources:JSON.stringify([hidden])}})).statusCode,404);
   assert.equal((await h.read({...body,quota:{...query,meters:JSON.stringify([[hidden,'cap']]),unit:'requests'}})).statusCode,404);
+});
+
+test('cold quota drawings issue bounded native-only proof without claiming an exact ledger baseline',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  h.store.record(h.source,{observedAt:now-30_000,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:now+H}]});
+  const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,quota:{cell:String(M),from:String(now-M),to:String(now+M),meta:''}};
+  const read=async(query:PeriodRequest['quota'])=>{const response=await h.read({...body,quota:query});assert.equal(response.statusCode,200,response.body);const part=expandPeriod(response.json<PeriodWireReply>()).quota!;if(part.state!=='complete')throw Error('missing quota');return part.value;};
+  const cold=await read({...body.quota!,evidence:'skip'});assert.equal(cold.tape,undefined);assert.ok(cold.cellsCursor);
+  const proof=cold.cellsCursor;
+  h.credit(now-15_000,now-5_000);
+  const activity=await read({...body.quota!,cells:'activity',cellsCursor:proof});
+  assert.equal(activity.cells,'activity');assert.equal(activity.cellsCursor,undefined);assert.equal(activity.chunks.flatMap(chunk=>chunk.series).length,0);
+  assert.ok(activity.tape!.quota.length,'cold drawing proof does not pretend the native tape was adopted');
+  const misused=await read({...body.quota!,cells:'skip',evidence:proof});
+  assert.ok(misused.tape!.quota.length,'a drawing-only token cannot confirm a ledger delta');assert.equal(misused.cellsCursor,undefined);
+  const ledger=misused.tape!.cursor;
+  const fallback=await read({...body.quota!,cells:'activity',cellsCursor:ledger,evidence:ledger});
+  assert.equal(fallback.cells,undefined,'a ledger-only cursor has no drawing coverage');assert.ok(fallback.chunks.flatMap(chunk=>chunk.series).length);
+  for(const query of [{from:String(now-2*M)},{to:String(now+M+1)},{cell:String(5*M),from:String(Math.floor((now-M)/(5*M))*5*M)}]){
+    const result=await read({...body.quota!,...query,cells:'activity',cellsCursor:proof,evidence:ledger});
+    if(query.to)assert.equal(result.cells,'activity','request suffix is clipped to the actual readable horizon');
+    else assert.equal(result.cells,undefined,'a different cell or uncovered prefix needs full native cells');
+  }
+  const prefix=await read({...body.quota!,to:String(now),evidence:'skip'});
+  assert.equal((await read({...body.quota!,cells:'activity',cellsCursor:prefix.cellsCursor})).cells,undefined,'proof cannot authorize a later cell outside its published range');
+  assert.equal((await read({...body.quota!,cells:'skip',evidence:'skip'})).cellsCursor,undefined);
+});
+
+test('drawing proof expires when the native journal no longer retains its frontier',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const events=new Events(h.hub,undefined,{now:()=>now,after:()=>()=>{}},null),reader=new PeriodReader(h.hub,new HistoryTiles(h.store),events);t.after(()=>events.close());
+  const query={cell:String(M),from:String(now-M),to:String(now)},body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,quota:{...query,evidence:'skip'}};
+  const read=(quota:PeriodRequest['quota'])=>{const part=expandPeriod(JSON.parse(reader.read(h.board,h.user.id,{...body,quota}))).quota!;if(part.state!=='complete')throw Error('missing drawing');return part.value;};
+  const cursor=read(body.quota).cellsCursor;assert.ok(cursor);
+  for(let i=0;i<2049;i++)reader.touch('unrelated',now);
+  assert.equal(read({...query,cells:'activity',cellsCursor:cursor}).cells,undefined);
+});
+
+for(const evidence of ['skip',undefined])for(const offset of [0,10_000])test(`full quota proof rechecks native changes at NOW+${offset} with ${evidence??'native'} evidence`,async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const record=(remaining:number,at:number)=>h.store.record(h.source,{observedAt:at,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:100-remaining,remaining,resetAt:now+H}]});
+  record(83,now-30_000);
+  const cells=h.store.cells.bind(h.store);let changed=false;
+  t.mock.method(h.store,'cells',(...args:Parameters<typeof cells>)=>{const value=cells(...args);if(!changed){changed=true;record(72,now+offset);}return value;});
+  const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,quota:{cell:String(M),from:String(now-M),to:String(now+M),evidence}};
+  const response=await h.read(body);assert.equal(response.statusCode,200,response.body);
+  const part=expandPeriod(response.json<PeriodWireReply>()).quota!;if(part.state!=='complete')throw Error('missing drawing');
+  assert.equal(part.value.chunks.flatMap(chunk=>chunk.series).flatMap(series=>series.cells).at(-1)![1],72,'final validation restarts before publishing stale native proof');
+  assert.ok(part.value.cellsCursor??part.value.tape?.cursor);
 });
 
 test('period cells and baseline tapes borrow only matching captured metadata',async t=>{

@@ -67,7 +67,7 @@ export class HistoryStore {
   private metaSeq = 0;
   private newsSeq = 0;
   private deferredNews: {target:string;epoch:number;since:number;nativeSince:number} | null = null;
-  private nativeProof:{evidence:string;cell:number;from:number;to:number;context:string}|null=null;
+  private nativeProof:{cellsCursor:string;cell:number;from:number;to:number;context:string}|null=null;
   private lineupKey = '';
   private workAuthority: string | undefined;
   private workKey: string | undefined;
@@ -445,7 +445,7 @@ export class HistoryStore {
       for (const tile of tiles.values()) gridBytes += tile.bytes;
       bytes += gridBytes;
     }
-    return bytes+(this.nativeProof?256+2*(this.nativeProof.evidence.length+this.nativeProof.context.length):0);
+    return bytes+(this.nativeProof?256+2*(this.nativeProof.cellsCursor.length+this.nativeProof.context.length):0);
   }
 
   private invalidate() {
@@ -869,7 +869,7 @@ export class HistoryStore {
     let finish:(()=>void)|undefined;
     const finished=this.env.sharedTransport?new Promise<void>(resolve=>{finish=()=>resolve();}):undefined;
     flight.finish=finish;
-    const owner:HistoryReadOwner|undefined=finished?{finished,activityProof:()=>({current:flight.epoch===this.epoch&&nativeVersion===this.nativeVersion&&nativeContext===this.nativeContext()&&this.wantsActivity&&this.nativeFull(target.cell,from,this.nativeRequiredTo(target.cell,to)),evidence:proof?.context===nativeContext&&proof.cell===target.cell&&proof.from<=from&&proof.to>=this.nativeRequiredTo(target.cell,to)?proof.evidence:undefined}),started:(activityOnly)=>{flight.activityOnly=activityOnly??false;flight.started=true;flight.startedAt=this.elapsedNow();},role:()=>this.flights.has(flight)?flight.role:null,cancel:()=>this.abort(flight)}:undefined;
+    const owner:HistoryReadOwner|undefined=finished?{finished,activityProof:()=>({current:flight.epoch===this.epoch&&nativeVersion===this.nativeVersion&&nativeContext===this.nativeContext()&&this.wantsActivity&&this.nativeFull(target.cell,from,this.nativeRequiredTo(target.cell,to)),cellsCursor:proof?.context===nativeContext&&proof.cell===target.cell&&proof.from<=from&&proof.to>=this.nativeRequiredTo(target.cell,to)?proof.cellsCursor:undefined}),started:(activityOnly)=>{flight.activityOnly=activityOnly??false;flight.started=true;flight.startedAt=this.elapsedNow();},role:()=>this.flights.has(flight)?flight.role:null,cancel:()=>this.abort(flight)}:undefined;
     const start=()=>{
       if(flight.controller.signal.aborted||flight.epoch!==this.epoch){this.abort(flight);return;}
       if(flight.activityOnly&&!this.nativeFull(target.cell,from,this.nativeRequiredTo(target.cell,to)))flight.activityOnly=false;
@@ -1020,7 +1020,7 @@ export class HistoryStore {
           const chunks=[...pins.values()].flatMap(pin=>pin.chunks.filter(part=>part.plane!=='activity').map(part=>part.chunk)).sort((a,b)=>a.from-b.from);
           let end=chunks[0]?.from??0;const contiguous=chunks.every(chunk=>{const joined=chunk.from<=end;end=Math.max(end,chunk.to);return joined;});
           // One committed range proves cells; the coordinator's newer tape alone cannot.
-          this.nativeProof=answer.nativeEvidence&&chunks.length===answer.chunks.length&&chunks.length&&contiguous&&this.nativeFull(flight.cell,chunks[0].from,end)?{evidence:answer.nativeEvidence,cell:flight.cell,from:chunks[0].from,to:end,context:this.nativeContext()}:null;
+          this.nativeProof=answer.cellsCursor&&chunks.length===answer.chunks.length&&chunks.length&&contiguous&&this.nativeFull(flight.cell,chunks[0].from,end)?{cellsCursor:answer.cellsCursor,cell:flight.cell,from:chunks[0].from,to:end,context:this.nativeContext()}:null;
         }
         if (flight.seq > this.metaSeq&&!flight.activityOnly) {
           this.metaSeq = flight.seq;

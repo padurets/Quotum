@@ -7,7 +7,7 @@ import type {HistoryPool,HistoryMember} from './historyPool';
 
 export type PeriodIntent={board:string;generation:number;resourceGeneration?:number;facetGeneration?:number;calendarGeneration?:number;revision:number;proofEpoch?:number;request:PeriodRequest};
 export type PeriodReservation=((bytes:number)=>boolean)&{retain?(release:()=>void):void};
-export type HistoryReadOwner={finished:Promise<void>;activityProof?():{current:boolean;evidence?:string};started?(activityOnly?:boolean):void;role():'visible'|'ahead'|null;cancel():void};
+export type HistoryReadOwner={finished:Promise<void>;activityProof?():{current:boolean;cellsCursor?:string};started?(activityOnly?:boolean):void;role():'visible'|'ahead'|null;cancel():void};
 type Demand={scope:PeriodScope;query:HistoryQuery;signal?:AbortSignal;owner?:HistoryReadOwner;activityOnly:boolean;epoch:number;delivered?:boolean;resolve(value:HistoryReply):void;reject(error:unknown):void};
 type Flight={role:'visible'|'ahead';admission?:object;intent:PeriodIntent;controller:AbortController;demands:Demand[];extras:boolean;facets:boolean;started?:boolean;preparing?:boolean;releases:Set<()=>void>};
 const aborted=()=>new DOMException('Aborted','AbortError');
@@ -161,9 +161,9 @@ export class PeriodTransport implements HistoryMember {
       let activityOnly=false;
       for(const demand of demands){
         const proof=demand.activityOnly&&demand.scope==='quota'?demand.owner?.activityProof?.():undefined;
-        demand.activityOnly=demand.activityOnly&&demand.scope==='quota'&&(!proof||proof.current)&&(!intent.request.quota||!!proof?.evidence);
+        demand.activityOnly=demand.activityOnly&&demand.scope==='quota'&&(!proof||proof.current)&&(!intent.request.quota||!!proof?.cellsCursor);
         if(demand.activityOnly&&body.quota){
-          if(intent.request.quota)body.quota={...body.quota,cells:'activity',evidence:proof!.evidence};
+          if(intent.request.quota)body.quota={...body.quota,cells:'activity',cellsCursor:proof!.cellsCursor};
           else{body.quota={cell:demand.query.cell,from:demand.query.from,to:demand.query.to,sources:'[]',evidence:'skip',meta:''};activityOnly=true;}
         }
         demand.owner?.started?.(demand.activityOnly);
@@ -202,7 +202,7 @@ export class PeriodTransport implements HistoryMember {
         }
         for(const demand of demands) {
           const part=activityOnly&&demand.scope!=='quota'?evidenceReply[demand.scope]:reply[demand.scope];
-          if(part?.state==='complete'){if(demand.epoch===this.resetEpoch&&!demand.delivered&&roleOf(demand)!==null){demand.delivered=true;this.delivered++;}const {tape,...value}=part.value;demand.resolve({...value,...(activityOnly&&demand.scope==='quota'?{cells:'activity' as const}:{}),...(demand.scope==='quota'&&!value.cells&&tape?.cursor?{nativeEvidence:tape.cursor}:{})});}
+          if(part?.state==='complete'){if(demand.epoch===this.resetEpoch&&!demand.delivered&&roleOf(demand)!==null){demand.delivered=true;this.delivered++;}const {tape,...value}=part.value;demand.resolve({...value,...(activityOnly&&demand.scope==='quota'?{cells:'activity' as const}:{}),...(demand.scope==='quota'&&!value.cells&&(value.cellsCursor??tape?.cursor)?{cellsCursor:value.cellsCursor??tape?.cursor}:{})});}
           else demand.reject(new ApiError(part?.state==='error'&&part.error==='history_limit'?413:400,part?.state==='error'?part.error:'history_failed'));
         }
       }).catch(error=>{

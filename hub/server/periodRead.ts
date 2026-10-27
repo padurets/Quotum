@@ -28,7 +28,7 @@ import {retainedWorkChoices} from './dataFilters.js';
 
 class PeriodChanged extends Error {}
 
-type Cursor = {identity:string;revision:number;from:number;cut:number;kind?:'calendar';retainedFrom?:number};
+type Cursor = {identity:string;revision:number;from:number;cut:number;kind?:'calendar'|'drawing';cells?:[cell:number,from:number,to:number];retainedFrom?:number};
 type Change = {revision:number;source:string;since:number;owner?:string;device?:string};
 const object=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const number=(v:unknown):v is number=>Number.isSafeInteger(v)&&(v as number)>=0;
@@ -149,8 +149,9 @@ export class PeriodReader {
     const self=this;
     if(!object(raw)||raw.version!==1||!number(raw.evaluatedAt)||Object.keys(raw).some(k=>!['version','selection','evaluatedAt','quota','budget','funds','values','sessions','workFilter','facets','sourceWork','calendar'].includes(k)))fail(400,'invalid_request');
     const selection=parsePeriod(raw.selection);if(!selection)fail(400,'invalid_request');
-    for(const name of PERIOD_SCOPES)if(raw[name]!==undefined&&(!object(raw[name])||Object.values(raw[name]).some(v=>typeof v!=='string')||Object.keys(raw[name]).some(k=>!['cell','from','to','meters','unit','currency','meta','evidence','cells','work','sources'].includes(k))))fail(400,'invalid_request');
+    for(const name of PERIOD_SCOPES)if(raw[name]!==undefined&&(!object(raw[name])||Object.values(raw[name]).some(v=>typeof v!=='string')||Object.keys(raw[name]).some(k=>!['cell','from','to','meters','unit','currency','meta','evidence','cellsCursor','cells','work','sources'].includes(k))))fail(400,'invalid_request');
     for(const name of PERIOD_SCOPES)if(object(raw[name])&&raw[name].cells!==undefined&&raw[name].cells!=='skip'&&(name!=='quota'||raw[name].cells!=='activity'))fail(400,'invalid_request');
+    for(const name of PERIOD_SCOPES)if(object(raw[name])&&raw[name].cellsCursor!==undefined&&name!=='quota')fail(400,'invalid_request');
     for(const name of PERIOD_SCOPES)if(object(raw[name])&&raw[name].work!==undefined&&(name!=='budget'||raw[name].work!=='1'))fail(400,'invalid_request');
     if(raw.values!==undefined&&(!Array.isArray(raw.values)||raw.values.length>2000||raw.values.some(v=>typeof v!=='string'||v.length>256)))fail(400,'invalid_request');
     if(raw.sessions!==undefined&&(!object(raw.sessions)||Object.keys(raw.sessions).some(k=>k!=='cursor')||raw.sessions.cursor!==undefined&&(typeof raw.sessions.cursor!=='string'||raw.sessions.cursor.length>2048)))fail(400,'invalid_request');
@@ -253,7 +254,7 @@ export class PeriodReader {
       let upper=request.values?.length?Math.min(now,selection.mode==='range'?range.to+cell+1:cut):0;
       for(const scope of PERIOD_SCOPES)if(request[scope]){
         const query=request[scope]!;
-        upper=Math.max(upper,scope==='quota'&&query.cells==='activity'?historyReadTo(Number(query.to),Number(query.cell),now):Math.min(now,Number(query.to)),query.evidence==='skip'?0:selection.mode==='range'?fixedRange.to:cut);
+        upper=Math.max(upper,scope==='quota'&&query.cells!=='skip'?historyReadTo(Number(query.to),Number(query.cell),now):Math.min(now,Number(query.to)),query.evidence==='skip'?0:selection.mode==='range'?fixedRange.to:cut);
         if(scope==='quota')for(const id of shown.keys())include(id,'quota');
         if(query.meters){
           try{for(const [id] of selectionOf(JSON.parse(query.meters),query.unit).ids)include(id,scope==='quota'?'quota':'budget');}
@@ -341,23 +342,29 @@ export class PeriodReader {
         const historyScope=scope==='funds'?'budget':scope;
         // Work estimates use the common tape and curves, without a second copy in drawing cells.
         const query=request[scope]!;
-        const tapeIdentity=query.evidence==='skip'?'':createHash('sha256').update(JSON.stringify([board,user,scope,scope==='quota'||query.work==='1'?sourceIdentity:null,[...shown].map(([id,s])=>[id,s.since]),scope==='quota'?null:store.financialKey(board),query.meters,query.unit,query.currency,query.work,query.sources,store.currencies.registryRevision(user)])).digest('base64url');
+        const tapeIdentity=query.evidence==='skip'&&(scope!=='quota'||query.cells==='skip')?'':createHash('sha256').update(JSON.stringify([board,user,scope,scope==='quota'||query.work==='1'?sourceIdentity:null,[...shown].map(([id,s])=>[id,s.since]),scope==='quota'?null:store.financialKey(board),query.meters,query.unit,query.currency,query.work,query.sources,store.currencies.registryRevision(user)])).digest('base64url');
         const previous=self.decode(query.evidence);
-        // Only a cursor captured with committed native cells can authorize this
-        // omission. The browser keeps that proof apart from newer ledger cursors.
+        // Drawing coverage is independent of the exact native ledger's frontier.
+        const drawing=self.decode(query.cellsCursor),bounds=drawing?.cells;
         const drawingTo=historyReadTo(Number(query.to),Number(query.cell),now);
-        const activity=scope==='quota'&&query.cells==='activity'&&previous?.identity===tapeIdentity&&previous.revision>=self.measurementFloor&&previous.revision<=revision&&!self.measurements.some(c=>c.revision>previous.revision&&c.revision<=revision&&shown.has(c.source)&&(!c.scopes||c.scopes.includes('quota'))&&c.since<drawingTo);
+        const activity=scope==='quota'&&query.cells==='activity'&&drawing?.identity===tapeIdentity&&(drawing.kind===undefined||drawing.kind==='drawing')&&Array.isArray(bounds)&&bounds.length===3&&bounds.every(number)&&bounds[0]===Number(query.cell)&&bounds[1]%bounds[0]===0&&bounds[2]%bounds[0]===0&&bounds[1]<=Number(query.from)&&bounds[2]>=drawingTo&&bounds[1]<bounds[2]&&drawing.revision>=self.measurementFloor&&drawing.revision<=revision&&!self.measurements.some(c=>c.revision>drawing.revision&&c.revision<=revision&&shown.has(c.source)&&(!c.scopes||c.scopes.includes('quota'))&&c.since<drawingTo);
         const json=readHistory(self.hub,self.history,self.events,board,user,{...query,scope:historyScope},views,query.cells==='skip'?false:activity?'activity':true,now,false);
         reserve(Buffer.byteLength(json)*2);const value=JSON.parse(json) as HistoryReply;
         if(activity)value.cells='activity';
-        if(query.evidence==='skip')return value;
-        const delta=selection.mode==='live'&&previous&&previous.identity===tapeIdentity&&previous.revision>=Math.max(self.measurementFloor,scope==='quota'||query.work==='1'?self.workFloor:0)&&previous.revision<=revision&&range.from>=previous.from;
+        const chunks=value.chunks;
+        const cells:Cursor['cells']=scope==='quota'&&query.cells!=='skip'&&!activity&&chunks.length&&chunks.every((chunk,index)=>chunk.from<chunk.to&&chunk.from%Number(query.cell)===0&&chunk.to%Number(query.cell)===0&&(!index||chunks[index-1].to===chunk.from))?[Number(query.cell),chunks[0].from,chunks.at(-1)!.to]:undefined;
+        if(query.evidence==='skip'){
+          if(cells){value.cellsCursor=self.encode({kind:'drawing',identity:tapeIdentity,revision,from:cells[1],cut:cells[2],cells});reserve(128+value.cellsCursor.length*2);}
+          return value;
+        }
+        const delta=selection.mode==='live'&&previous&&previous.kind!=='drawing'&&previous.identity===tapeIdentity&&previous.revision>=Math.max(self.measurementFloor,scope==='quota'||query.work==='1'?self.workFloor:0)&&previous.revision<=revision&&range.from>=previous.from;
         const changes=delta?self.measurements.filter(c=>c.revision>previous.revision&&c.revision<=revision&&shown.has(c.source)&&(!c.scopes||c.scopes.includes(historyScope))):[];
         const patch=frontier(delta?previous:null,changes);
         const changed=new Set(changes.map(c=>c.source));
         const admitted=query.sources?new Set<string>(JSON.parse(query.sources)):null;
         const tapeShown=new Map([...shown].filter(([id])=>(!delta||changed.has(id))&&(!admitted||admitted.has(id))));
-        const cursor=self.encode({identity:tapeIdentity,revision,from:patch.coveredFrom,cut:patch.coveredTo});
+        const cursor=self.encode({identity:tapeIdentity,revision,from:patch.coveredFrom,cut:patch.coveredTo,...(cells?{cells}:{})});
+        if(cells)reserve(128+cursor.length*2);
         if(selection.mode==='range'){
           const trace=scope==='quota'||query.work==='1'?yield*retainedWork():null;
           const full=filter&&(scope==='quota'||query.work==='1')?yield*fullSourceCurves(fixedRange):undefined;

@@ -67,7 +67,6 @@ for(const kind of ['cached strip','active strip','late reply','A→B→A','clien
     }else{
       move(d.loader,1);await flush();assert.ok(names(d.loader).includes('B'));
       if(kind!=='active strip')d.loader.endPan(false);await flush();
-      if(kind==='fixed range'){const filters=defaultFilters();filters.projects={mode:'exclude',values:['Absent qualification']};publishDataFilters(filters);await flush();}
       native=buffers(d.loader);assert.ok(native.length);
     }
     const financial=d.loader.getFinancial(),nativePlot=d.loader.getPlot(),requests=h.requests.length;
@@ -79,18 +78,18 @@ for(const kind of ['cached strip','active strip','late reply','A→B→A','clien
     if(kind==='A→B→A'){publishDataFilters(defaultFilters());await flush();}
     if(oldFlight)assert.equal(oldFlight.controller.signal.aborted,true);
     gate?.release();await flush();
+    if(kind==='fixed range'){assert.ok(h.requests.slice(requests).some(body=>body.quota&&body.quota.cells!=='activity'),'the last pan prefix proof does not cover the whole fixed filter read');const geometry=(history:History)=>history.series.map(({work,selectedWork,...row})=>row);assert.deepEqual(geometry(d.loader.getFinancial().history!),geometry(financial.history!));}
     const expected=kind==='A→B→A';
     assert.equal(h.period.get().rows.some((row:{project:string})=>row.project==='B'),expected);
     assert.equal(d.render().history.activity.by.project.some((row:{name:string})=>row.name==='B'),expected);
     const c=consumer({...h,...d});assert.equal(c.settle().names.includes('B'),expected);
-    if(native.length){
+    if(native.length&&kind!=='fixed range'){
       assert.ok(native.every(value=>buffers(d!.loader).includes(value)),'native typed buffers survive selected activity replacement');
       assert.equal(d.loader.getFinancial(),financial,'a work-only refresh does not publish another native frame');
       if(kind==='active strip')assert.equal(d.loader.getPlot(),nativePlot,'selected replacement keeps the exact prepared native strip');
       const refresh=h.requests.slice(requests).filter(body=>body.quota);
       assert.ok(refresh.length);
-      if(kind!=='fixed range')assert.ok(refresh.every(body=>body.quota!.sources==='[]'&&body.quota!.evidence==='skip'),'cached native cells request activity alone');
-      else assert.ok(refresh.some(body=>body.quota!.evidence!=='skip'),'a pending native summary still obtains its own evidence');
+      assert.ok(refresh.every(body=>body.quota!.sources==='[]'&&body.quota!.evidence==='skip'),'cached native cells request activity alone');
     }
     move(d.loader,2);await flush();c.pan();
     assert.equal(names(d.loader).includes('B'),expected,'the cached strip has the selected cohort');
@@ -195,7 +194,7 @@ for(const scope of ['quota','budget'] as const)for(const cold of [false,true])fo
 });
 
 
-test('a cold pan needs one fixed native proof, then later work filters reuse its drawing',async()=>{
+test('a cold pan with insufficient proof range falls back once and then reuses native cells',async()=>{
   const originalNow=Date.now;Date.now=()=>NOW;publishDataFilters(defaultFilters());
   const h=await fixture({personal:true,fixed:true});let d:Awaited<ReturnType<typeof drawings>>|undefined,stop=()=>{};
   try{
@@ -205,7 +204,7 @@ test('a cold pan needs one fixed native proof, then later work filters reuse its
     const before=values(),events=native().events;
     h.requests.length=0;publishDataFilters(excludeB());await flush();
     assert.equal(h.requests.length,1,'cold cache proof and selected work share one HTTP request');
-    assert.ok(h.requests[0].quota&&h.requests[0].quota.cells!=='activity','an evidence-skipping pan cannot prove native cells unchanged');
+    assert.ok(h.requests[0].quota&&h.requests[0].quota.cells!=='activity','the last one-minute pan proof does not cover the full fixed filter range');
     assert.deepEqual(values(),before);assert.deepEqual(native().events,events);
     assert.equal(d.render().history!.activity.by.project.some((row:{name:string})=>row.name==='B'),false);
     const owned=buffers(d.loader),financial=d.loader.getFinancial();

@@ -2416,13 +2416,17 @@ keep the same transport slots and memory budget. A hidden activity widget defers
 refill until shown; activity failures do not discard the native frame.
 Confirmed work-only news also preserves native cell coverage. When the same read
 needs native evidence, quota `cells: 'activity'` retains its full source selection
-and uses a cursor captured with the last completely published native drawing.
+and sends a separate `cellsCursor` captured with the last completely published
+native drawing. Its exact evidence cursor remains independently owned.
 An independently updated tape cannot advance that drawing proof. The server
 checks the original measurement frontier and returns full cells if it has changed,
 including when its notification has not reached the browser. The response marks
 an actual activity-only drawing; otherwise the reader merges full native cells.
-Missing proof or coverage uses the ordinary full path once; a later work update
-over that published range can reuse its native buffers. Dispatch and publication
+Full native quota replies authenticate their actual contiguous cell bounds in the
+existing tape cursor. When evidence is skipped, a separate native-only `cellsCursor`
+proves the cold drawing without claiming receipt of the native tape. A drawing-only
+proof cannot confirm a tape delta, and an activity-only reply cannot advance drawing
+coverage. Missing proof or insufficient coverage uses the ordinary full path. Dispatch and publication
 recheck the native context, and selected-work commits preserve newer native
 invalidation boundaries within the same tile.
 Their error state and retry belong to activity alone: new native measurements still

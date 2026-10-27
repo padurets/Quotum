@@ -159,13 +159,15 @@ for(const offset of [0,10_000])test(`activity preparation revalidates the comple
   const request={version:1 as const,selection:{mode:'range' as const,from:NOW-H,to:NOW},evaluatedAt:NOW,quota:{cell:String(M),from:String(NOW-M),to:String(NOW+M)}};
   const initial=JSON.parse(h.reader.read(h.board,h.user.id,request)) as PeriodReply;
   if(initial.quota?.state!=='complete')throw Error('missing seed');
+  const history=(h.reader as unknown as {history:HistoryTiles}).history,read=history.read.bind(history);let nativeReads=0;
+  t.mock.method(history,'read',(...args:Parameters<typeof read>)=>{nativeReads++;return read(...args);});
   let attempts=0;const original=PeriodAccounting.prepare;
   t.mock.method(PeriodAccounting,'prepare',function*(...args:Parameters<typeof original>){
-    if(++attempts===1)setImmediate(()=>{h.record(28,NOW+offset);h.reader.touch(h.source,NOW+offset,['quota']);});
+    if(++attempts===1){assert.equal(nativeReads,0,'the first preparation actually omitted native drawings');setImmediate(()=>{h.record(28,NOW+offset);h.reader.touch(h.source,NOW+offset,['quota']);});}
     const until=performance.now()+12;do{yield;}while(performance.now()<until);
     return yield*original(...args);
   });
-  const reply=JSON.parse(await h.reader.readAsync(h.board,h.user.id,{...request,quota:{...request.quota,cells:'activity',evidence:initial.quota.value.tape!.cursor}})) as PeriodReply;
+  const reply=JSON.parse(await h.reader.readAsync(h.board,h.user.id,{...request,quota:{...request.quota,cells:'activity',cellsCursor:initial.quota.value.tape!.cursor,evidence:initial.quota.value.tape!.cursor}})) as PeriodReply;
   assert.equal(attempts,2,'a sample arriving after drawing qualification restarts the original bounded preparation');
   assert.equal(reply.basis.revision,'1');if(reply.quota?.state!=='complete')throw Error('missing fallback');
   assert.equal(reply.quota.value.cells,undefined);

@@ -370,13 +370,14 @@ test('work diagnostics partition the original compact body without changing phys
   const body='{"basis":{"evidenceCut":3e3,"run":"private-run"},"sessions":{"state":"delta","value":{"cursor":"private-cursor","refs":["private-ref"]}},"calendar":{"value":{"updates":[[0,3e3]]}},"private-key":[1,2]}';
   const cdp={...events,send:async<T>(method:string)=>{calls.push(method);return {body,base64Encoded:false} as T;}};
   const requests=new Requests(cdp as unknown as Cdp,true);requests.counting=true;
-  const postData=JSON.stringify({selection:{mode:'live',periodMs:86400000,private:'private-selection'},evaluatedAt:3000,quota:{from:'0',to:'3000',cell:'1000',cells:'skip',evidence:'private-evidence'},sessions:{cursor:'private-cursor'},calendar:{zone:'private-zone',cursor:'private-calendar'}});
+  const postData=JSON.stringify({selection:{mode:'live',periodMs:86400000,private:'private-selection'},evaluatedAt:3000,quota:{from:'0',to:'3000',cell:'1000',cells:'skip',evidence:'private-evidence',cellsCursor:'private-drawing-proof'},sessions:{cursor:'private-cursor'},calendar:{zone:'private-zone',cursor:'private-calendar'}});
   cdp.emit('Network.requestWillBeSent',{requestId:'private-request',type:'Fetch',request:{url:'http://localhost/api/boards/private-board/period',postData}});
   cdp.emit('Network.responseReceived',{requestId:'private-request',response:{status:200,headers:{'Content-Encoding':'gzip','Content-Length':'4300',Authorization:'private-header'}}});
   cdp.emit('Network.dataReceived',{requestId:'private-request',encodedDataLength:4200,dataLength:Buffer.byteLength(body)});
   requests.counting=false;
   cdp.emit('Network.loadingFinished',{requestId:'private-request',encodedDataLength:4712});
   assert.deepEqual(calls,[],'the measurement sends no body command');
+  assert.equal((requests.trafficReading.reads[0].request as {sections:{cellsCursor:boolean}[]}).sections[0].cellsCursor,true);
   assert.equal(requests.historyBytes,4712);assert.equal(requests.historyRequests,1);assert.equal(requests.historyPending,0);
   const result=await requests.diagnose(cdp);assert.equal(result.status,'complete');assert.ok('body' in result);
   assert.equal(result.body.partition,Buffer.byteLength(body));assert.equal(result.body.decodedBytes,Buffer.byteLength(body));

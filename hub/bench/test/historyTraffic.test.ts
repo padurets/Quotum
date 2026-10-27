@@ -585,12 +585,13 @@ test('activity-only drawing reads remain counted and keep their diagnostic mode'
   const cdp={on:<T>(name:string,fn:(event:T)=>void)=>listeners.set(name,fn as (event:never)=>void),send:<T>()=>Promise.reject<T>(Error('unexpected command'))};
   const observer=new HistoryBodies(cdp),emit=(name:string,event:object)=>listeners.get(name)?.(event as never);
   observer.phase='work';
-  emit('Network.requestWillBeSent',{requestId:'activity',request:{url:'http://localhost/api/boards/private-board/period',postData:JSON.stringify({quota:{cell:'1000',from:'0',to:'2000',cells:'activity',evidence:'private-cursor'}})}});
+  emit('Network.requestWillBeSent',{requestId:'activity',request:{url:'http://localhost/api/boards/private-board/period',postData:JSON.stringify({quota:{cell:'1000',from:'0',to:'2000',cells:'activity',evidence:'private-cursor',cellsCursor:'private-drawing-proof'}})}});
   emit('Network.dataReceived',{requestId:'activity',encodedDataLength:123});
   emit('Network.loadingFailed',{requestId:'activity',canceled:true});
   assert.equal(observer.resources.length,1,'activity cells still own a measured resource read');
   const diagnostic=observer.diagnostic('work');
   assert.equal(diagnostic.attempts,1);assert.equal(diagnostic.reads[0].request?.sections[0].cells,'activity');
+  assert.equal(diagnostic.reads[0].request?.sections[0].cellsCursor,true);
   assert.equal(diagnostic.reads[0].encodedLower,123);assert.equal(diagnostic.reads[0].canceled,true);
   assert.equal(JSON.stringify(diagnostic).includes('private'),false);
 });
@@ -615,7 +616,7 @@ test('warm failure diagnostics distinguish exact reads and gesture stages withou
   const diagnostic=observer.diagnostic('warm');
   assert.equal(diagnostic.attempts,2);assert.equal(diagnostic.omitted,0);
   assert.deepEqual(diagnostic.reads[0],{stage:'cached return',endpoint:'period',request:{selection:{mode:'live',periodMs:30*86_400_000},evaluatedAt:900,
-    sections:[{scope:'quota',cell:1,from:0,to:60,cells:'skip',evidence:'cursor'},{scope:'funds',cell:1,from:0,to:60,cells:'read',evidence:'skip'}],values:1,sessions:true,sessionsCursor:true,sourceWork:false,sourceWorkCursor:false,calendar:true,calendarCursor:true},requestBytes:Buffer.byteLength(postData),errorCode:null,httpStatus:null,canceled:true,complete:false,decoded:undefined,encodedLower:123,encodedUpper:undefined,body:null});
+    sections:[{scope:'quota',cell:1,from:0,to:60,cells:'skip',evidence:'cursor',cellsCursor:false},{scope:'funds',cell:1,from:0,to:60,cells:'read',evidence:'skip',cellsCursor:false}],values:1,sessions:true,sessionsCursor:true,sourceWork:false,sourceWorkCursor:false,calendar:true,calendarCursor:true},requestBytes:Buffer.byteLength(postData),errorCode:null,httpStatus:null,canceled:true,complete:false,decoded:undefined,encodedLower:123,encodedUpper:undefined,body:null});
   assert.equal(diagnostic.reads[1].stage,'cached repeat');assert.equal(diagnostic.reads[1].endpoint,'period/sessions');
   assert.deepEqual(diagnostic.reads[1].request?.selection,{mode:'range',from:10,to:20});
   assert.equal(JSON.stringify(diagnostic).includes('private'),false);

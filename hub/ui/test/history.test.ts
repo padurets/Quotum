@@ -2049,7 +2049,7 @@ for(const change of ['native','windows','outside same tile'] as const)test(`acti
     const initial=pending(h)[0];assert.ok(initial);
     const chunks:Chunk[]=[];
     for(let from=initial.from;from<initial.to;){const to=Math.min(initial.to,tileEnd(tileOf(from,initial.cell),initial.cell));chunks.push({...empty(from,to),series:[{source:'s',window:'w',hold:M,open:80,cells:Array.from({length:(to-from)/initial.cell},(_,i)=>[i,80,0,M])}]});from=to;}
-    await initial.answer({chunks,nativeEvidence:'committed-cell-proof'});await finish();
+    await initial.answer({chunks,cellsCursor:'committed-cell-proof'});await finish();
     const range={from:NOW-15*M,to:NOW-10*M};h.store.choose('1h',range);await flush();await finish();await h.advance(300);
     h.store.news(NOW-12*M,undefined,NOW-12*M,Infinity);
     // Submit one real bounded visible demand before the scheduled pump coalesces its suffix.

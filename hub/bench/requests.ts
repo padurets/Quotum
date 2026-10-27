@@ -63,7 +63,7 @@ export class Requests {
         if(event.request.postData!==undefined)try{
           const body=JSON.parse(event.request.postData) as PeriodRequest,selection=body.selection;
           request={selection:selection?.mode==='live'?{mode:'live',periodMs:Number(selection.periodMs)}:selection?.mode==='range'?{mode:'range',from:Number(selection.from),to:Number(selection.to)}:null,
-            evaluatedAt:Number(body.evaluatedAt),sections:PERIOD_SCOPES.flatMap(scope=>{const q=body[scope];return q?[{scope,from:Number(q.from),to:Number(q.to),cell:Number(q.cell),cells:q.cells==='skip'?'skip':q.cells==='activity'?'activity':'read',evidence:q.evidence==='skip'?'skip':q.evidence?'cursor':'baseline'}]:[];}),
+            evaluatedAt:Number(body.evaluatedAt),sections:PERIOD_SCOPES.flatMap(scope=>{const q=body[scope];return q?[{scope,from:Number(q.from),to:Number(q.to),cell:Number(q.cell),cells:q.cells==='skip'?'skip':q.cells==='activity'?'activity':'read',evidence:q.evidence==='skip'?'skip':q.evidence?'cursor':'baseline',cellsCursor:!!q.cellsCursor}]:[];}),
             values:body.values?.length??0,sessions:!!body.sessions,sessionsCursor:!!body.sessions?.cursor,sourceWork:!!body.sourceWork,sourceWorkCursor:!!body.sourceWork?.cursor,calendar:!!body.calendar,calendarCursor:!!body.calendar?.cursor,facets:!!body.facets};
         }catch{/* Missing or malformed shape remains unknown. */}
         this.traffic.set(event.requestId,{endpoint:url.pathname==='/api/history'?'history':url.pathname.endsWith('/sessions')?'period/sessions':'period',requestBytes:event.request.postData===undefined?null:Buffer.byteLength(event.request.postData),request,complete:false,encodedBodyLower:0,decodedObserved:0,coding:'unknown'});

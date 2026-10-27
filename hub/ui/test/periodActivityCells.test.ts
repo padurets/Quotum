@@ -48,12 +48,8 @@ async function warm(t:TestContext){
   assert.equal(native().series.length,3,'the cache contains several native series');
   assert.deepEqual([activity().activeMs,activity().agentMs,activity().agents],[20_000,30_000,2]);
   assert.ok(buffers(d.loader).length>=3);
-  // A natural work update can qualify a cold full drawing whose first read skipped evidence.
-  h.requests.length=0;h.credit(NOW-19_000,NOW-18_000);h.events.flush();await flush();
-  assert.equal(h.requests.length,1);
-  assert.deepEqual([activity().activeMs,activity().agentMs,activity().agents],[21_000,31_000,2]);
-  const published=[...replies].reverse().find(({reply})=>nativeRows(reply).length===3&&reply.quota?.state==='complete'&&reply.quota.value.tape?.cursor);
-  assert.ok(published,'an actually published full native drawing and its tape cursor establish the baseline');
+  const published=[...replies].reverse().find(({reply})=>nativeRows(reply).length===3&&reply.quota?.state==='complete');
+  assert.ok(published,'the actual cold baseline published full native cells');
   h.requests.length=0;h.frames.length=0;
   replies.length=0;
   return {h,d,other,record,replies,activity,native,published};
@@ -72,7 +68,7 @@ test('work-only live cells update exact Activity without resending unchanged nat
     assert.ok(notices.flatMap(event=>event.changes??[]).some(change=>change.source===h.source&&change.scope==='quota'&&change.workOnly===true&&change.workSince===from),'the server positively confirms independent work-only news');
     assert.ok(notices.flatMap(event=>event.changes??[]).every(change=>change.workOnly===true));
     assert.equal(h.page.get().board!.workAuthority,authority);
-    assert.deepEqual([activity().activeMs,activity().agentMs,activity().agents],[26_000+i*5_000,36_000+i*5_000,2]);
+    assert.deepEqual([activity().activeMs,activity().agentMs,activity().agents],[25_000+i*5_000,35_000+i*5_000,2]);
     assert.deepEqual(native().series.map(row=>({source:row.sourceId,window:row.windowId,points:row.points})),geometry);
     assert.deepEqual(native().series.map(row=>[row.sourceId,row.windowId,row.remainingAtEnd]),readout);
     assert.equal(h.period.quotaAt({sourceId:h.source,windowId:'w'},NOW,'1h').remainingAtEnd,83);
@@ -98,7 +94,7 @@ for(const later of [false,true])for(const workFirst of [false,true])test(`coales
   assert.ok(changes.some(change=>change.workOnly===true&&change.workSince===from));
   assert.ok(changes.some(change=>change.workOnly!==true&&change.since===at),'the actual producer retains independent native news even when since >= workSince');
   assert.equal(h.page.get().board!.workAuthority,authority);
-  assert.deepEqual([activity().activeMs,activity().agentMs,activity().agents],[31_000,41_000,2]);
+  assert.deepEqual([activity().activeMs,activity().agentMs,activity().agents],[30_000,40_000,2]);
   assert.equal(h.page.get().board!.cards[h.source].windows.find(window=>window.id==='w')!.remaining,72);
   assert.equal(h.period.quotaAt({sourceId:h.source,windowId:'w'},NOW,'1h').remainingAtEnd,72);
   const series=native().series.find(row=>row.sourceId===h.source&&row.windowId==='w');assert.ok(series);
@@ -122,7 +118,7 @@ const rawRemaining=(loader:HistoryStore,source:string)=>loader.getFinancial().hi
 
 for(const offset of [-5_000,0,10_000])test(`a newer independently adopted native ledger cannot qualify an older drawing for activity-only reuse: native at ${offset<0?'NOW-5000':offset===0?'NOW':'NOW+10000'}`,async t=>{
   const {h,d,record,replies,activity,published}=await warm(t);
-  assert.ok(published.reply.quota?.state==='complete');const cursor=published.reply.quota.value.tape!.cursor;
+  assert.ok(published.reply.quota?.state==='complete');const cursor=published.reply.quota.value.cellsCursor??published.reply.quota.value.tape?.cursor;assert.ok(cursor);
   const authority=h.page.get().board!.workAuthority;
   record(NOW+offset,72);
   // The server has changed, but its native SSE notification has not reached the drawing.
@@ -138,13 +134,13 @@ for(const offset of [-5_000,0,10_000])test(`a newer independently adopted native
   replies.length=0;h.requests.length=0;
   h.event({type:'history',data:{...actual.data,sources:[...new Set(changes.map(change=>change.source))],since:Math.min(...changes.map(change=>change.since)),changes}});await flush();
   assert.equal(h.page.get().board!.workAuthority,authority);
-  assert.deepEqual([activity().activeMs,activity().agentMs,activity().agents],[31_000,41_000,2]);
+  assert.deepEqual([activity().activeMs,activity().agentMs,activity().agents],[30_000,40_000,2]);
   assert.equal(rawRemaining(d.loader,h.source),72,'the reader-local older drawing proof must cause full native fallback');
   assert.equal(h.period.quotaAt({sourceId:h.source,windowId:'w'},NOW,'1h').remainingAtEnd,expected);
   assert.ok(replies.some(({reply})=>nativeRows(reply).some(row=>row.source===h.source&&row.window==='w')));
   assert.equal(h.requests.length,1);
-  assert.equal(h.requests[0].quota?.cells,'activity');assert.equal(h.requests[0].quota?.evidence,cursor,'the drawing offers its captured proof, not the independently advanced shared cursor');
-  assert.notEqual(h.requests[0].quota?.evidence,newerCursor);
+  assert.equal(h.requests[0].quota?.cells,'activity');assert.equal(h.requests[0].quota?.cellsCursor,cursor,'the drawing offers its published proof separately from the exact ledger');assert.equal(h.requests[0].quota?.evidence,newerCursor);
+  assert.notEqual(h.requests[0].quota?.cellsCursor,newerCursor);
   assert.equal(replies.length,1);assert.ok(replies[0].reply.quota?.state==='complete');
   assert.equal(replies[0].reply.quota.value.cells,undefined,'the changed native cell forces a full response, including at the cutoff and in its drawing horizon');
   const ordinaryRequest=JSON.parse(JSON.stringify({...published.request,sessions:undefined,sourceWork:undefined,quota:{...published.request.quota,from:String(NOW-H),to:String(NOW+60_000),cells:undefined,evidence:undefined,meta:''}}));
@@ -169,7 +165,7 @@ test('legacy unconfirmed combined news refreshes native drawings and the account
   assert.ok(changes.some(change=>change.workOnly===true));assert.ok(changes.some(change=>change.workOnly!==true));
   assert.equal(rawRemaining(d.loader,h.source),83);
   h.event({type:'history',data:{...actual.data,changes:[{source:h.source,scope:'quota',since:from,workSince:from}]}});await flush();
-  assert.deepEqual([activity().activeMs,activity().agentMs,activity().agents],[31_000,41_000,2]);
+  assert.deepEqual([activity().activeMs,activity().agentMs,activity().agents],[30_000,40_000,2]);
   assert.equal(rawRemaining(d.loader,h.source),72);
   assert.equal(h.period.quotaAt({sourceId:h.source,windowId:'w'},NOW,'1h').remainingAtEnd,72,'an unconfirmed since === workSince must not hide native evidence');
   assert.ok(replies.some(({reply})=>nativeRows(reply).some(row=>row.source===h.source&&row.window==='w')));
