@@ -404,7 +404,7 @@ function AgentsRows({
               {details.length > 0 && (
                 <div className="agents-compact-details">
                   {details.map(column => (
-                    <span key={column} title={fullOf(group, column)}>
+                    <span key={column} className={column==='activity'?'agents-last-activity':undefined} title={fullOf(group, column)}>
                       <span className="sr-only">{t(COLUMNS[column].title)}: </span>
                       {column === 'worked' ? <WorkTime ms={group.workedMs} refs={group.rows.flatMap(row=>row.session.ref?[row.session.ref]:[])} still={still} labeled /> : COLUMNS[column].cell(group, context)}
                     </span>
