@@ -165,15 +165,31 @@ const tail=['measure','work','observed-work','private-work','frequency','panning
 const order=(calls:string[])=>calls.filter(call=>call==='history'||call==='openTab'||tail.includes(call));
 for(const scope of ['all','dashboard','updates'])test(`${scope} stops scheduled money polls before opening fixed Activity`,async()=>{
   const out=await run(['--scope',scope]);assert.equal(out.error,undefined);assert.deepEqual(out.exits,[0]);
-  const expected=['money','stop-hub-sources','phase:fixed-activity','fixed-activity'];
+  const expected=['money','phase:fixed-activity','stop-hub-sources','fixed-activity'];
   assert.deepEqual(out.calls.filter(call=>expected.includes(call)),expected);
 });
 for(const scope of ['all','updates'])test(`${scope} refuses fixed Activity after a failed producer stop and still cleans up`,async()=>{
   const out=await run(['--scope',scope],'stop-hub-sources');assert.deepEqual(out.exits,[1]);
   assert.ok(out.logs.some(line=>line.includes('stop-hub-sources-original')));
-  assert.ok(!out.calls.includes('phase:fixed-activity'));assert.ok(!out.calls.includes('fixed-activity'));
+  assert.ok(out.calls.includes('phase:fixed-activity'));assert.ok(!out.calls.includes('fixed-activity'));
   assert.ok(!out.calls.includes('measurement-details'));
   assert.equal((out.saved.get('coverage') as ReturnType<Coverage['summary']>).status,'incomplete');
+  for(const action of ['stream-close','conditioning-close','browser-close','demo-stop'])assert.equal(out.calls.filter(call=>call===action).length,1);
+});
+for(const scope of ['all','updates'])for(const cleanupFails of [false,true])test(`${scope} attributes a failed producer stop to fixed Activity with cleanup failure=${cleanupFails}`,async t=>{
+  const dir=mkdtempSync(path.join(os.tmpdir(),'quotum-stop-journal-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const out=await run(['--scope',scope],'stop-hub-sources',{TEST_REAL_EVIDENCE:dir,...(cleanupFails?{TEST_BROWSER_CLOSE:'1'}:{})});
+  assert.equal(out.error,undefined);assert.deepEqual(out.exits,[1]);
+  const manifest=JSON.parse(readFileSync(path.join(dir,out.journalEvidence!.id,'manifest.json'),'utf8'));
+  assert.deepEqual(manifest.primaryFailure,{phase:'fixed-activity',classification:'runtime'});
+  assert.equal(manifest.journal.find((row:{phase:string})=>row.phase==='money').outcome,'passed');
+  const activity=manifest.journal.find((row:{phase:string})=>row.phase==='fixed-activity');
+  assert.equal(activity.outcome,'failed');assert.equal(activity.classification,'runtime');
+  assert.equal(manifest.journal.find((row:{phase:string})=>row.phase==='measurement-details').outcome,'unreached');
+  const cleanup=manifest.journal.filter((row:{phase:string})=>row.phase==='cleanup');
+  assert.equal(cleanup.length,1);assert.equal(cleanup[0].outcome,cleanupFails?'failed':'passed');
+  assert.equal(cleanup[0].classification,cleanupFails?'cleanup':undefined);
+  assert.ok(!out.calls.includes('fixed-activity'));assert.ok(!out.calls.includes('measurement-details'));
   for(const action of ['stream-close','conditioning-close','browser-close','demo-stop'])assert.equal(out.calls.filter(call=>call===action).length,1);
 });
 test('actual main ages the whole fixture and still waits for the opened page to settle',async()=>{
