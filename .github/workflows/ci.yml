@@ -13,6 +13,11 @@ on:
         default: true
   workflow_dispatch:
     inputs:
+      combined_benchmark:
+        description: Run the complete canonical benchmark alone with pinned source and client
+        required: false
+        type: boolean
+        default: false
       diagnostic_ref:
         description: Full public commit SHA for diagnostic controls; leave empty for ordinary CI
         required: false
@@ -94,7 +99,7 @@ concurrency:
 
 jobs:
   dev-tooling:
-    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
+    if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -119,7 +124,7 @@ jobs:
           if-no-files-found: warn
 
   hub:
-    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
+    if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref) }}
     runs-on: ubuntu-latest
     # It takes about a minute; a test that hangs fails it instead of holding the runner.
     timeout-minutes: 15
@@ -143,7 +148,7 @@ jobs:
   # What an open dashboard costs, measured in Chrome on the built hub and page (hub/bench).
   # A release does not wait for it: the commit it tags already passed it.
   bench:
-    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && always() && !inputs.diagnostic_ref && !startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && always() && !inputs.diagnostic_ref && !startsWith(github.ref, 'refs/tags/')) }}
     needs: [bench-history, bench-dashboard, bench-panning]
     runs-on: ubuntu-latest
     timeout-minutes: 1
@@ -161,7 +166,7 @@ jobs:
 
   bench-history:
     name: ${{ inputs.compositor_guard_control && !inputs.history_preinput_binding && format('bench-history ({0})', matrix.arm) || 'bench-history' }}
-    if: ${{ inputs.history_preinput_binding || (github.event_name == 'workflow_dispatch' && (inputs.compositor_guard_control || inputs.history_pool_control)) || (!startsWith(github.ref, 'refs/tags/') && !inputs.startup_io_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && inputs.history_scroll_control))) }}
+    if: ${{ !inputs.combined_benchmark && (inputs.history_preinput_binding || (github.event_name == 'workflow_dispatch' && (inputs.compositor_guard_control || inputs.history_pool_control)) || (!startsWith(github.ref, 'refs/tags/') && !inputs.startup_io_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && inputs.history_scroll_control)))) }}
     strategy:
       fail-fast: false
       matrix:
@@ -306,7 +311,7 @@ jobs:
           if-no-files-found: warn
 
   bench-dashboard:
-    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.history_pool_control && !startsWith(github.ref, 'refs/tags/') && !inputs.native_postmortem_control && !inputs.history_scroll_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
+    if: ${{ inputs.combined_benchmark || (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.history_pool_control && !startsWith(github.ref, 'refs/tags/') && !inputs.native_postmortem_control && !inputs.history_scroll_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control)))) }}
     runs-on: ubuntu-latest
     # Ordinary updates and native panning have independent runners and deadlines.
     timeout-minutes: 20
@@ -314,6 +319,21 @@ jobs:
       run:
         working-directory: hub
     steps:
+      - name: Require the isolated pinned combined benchmark
+        if: ${{ inputs.combined_benchmark }}
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        env:
+          CONTROL_EVENT: ${{ github.event_name }}
+          CONTROL_REF: ${{ github.ref }}
+          DIAGNOSTIC_REF: ${{ inputs.diagnostic_ref }}
+          EXPECTED_CLIENT: ${{ inputs.expected_client_sha256 }}
+          CONFLICTING_MODE: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control || inputs.history_scroll_control || inputs.history_preinput_binding || inputs.history_pool_control || inputs.startup_io_control || inputs.compositor_guard_control }}
+        run: |
+          if [[ "$CONTROL_EVENT" != workflow_dispatch || "$CONTROL_REF" == refs/tags/* || ! "$DIAGNOSTIC_REF" =~ ^[a-f0-9]{40}$ || ! "$EXPECTED_CLIENT" =~ ^[a-f0-9]{64}$ || "$CONFLICTING_MODE" == true ]]; then
+            printf '%s\n' 'Choose only the manual combined benchmark with pinned source and client, outside tags.' >&2
+            exit 1
+          fi
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.diagnostic_ref || github.sha }}
@@ -325,12 +345,12 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Verify the requested source and received-client identity
-        if: ${{ inputs.native_trace || inputs.native_profile || inputs.caption_control }}
+        if: ${{ inputs.combined_benchmark || inputs.native_trace || inputs.native_profile || inputs.caption_control }}
         run: |
           node --import tsx --input-type=module <<'JS'
           import {execFileSync} from 'node:child_process';
           import {clientIdentity} from './bench/idleCpuDiagnostic.ts';
-          if([process.env.TRACE_ONLY,process.env.ORIGINAL_TIMING,process.env.NATIVE_TRACE,process.env.NATIVE_PROFILE,process.env.CAPTION_CONTROL].filter(value=>value==='true').length!==1)throw Error('Choose one diagnostic mode');
+          if([process.env.COMBINED_BENCHMARK,process.env.TRACE_ONLY,process.env.ORIGINAL_TIMING,process.env.NATIVE_TRACE,process.env.NATIVE_PROFILE,process.env.CAPTION_CONTROL].filter(value=>value==='true').length!==1)throw Error('Choose one diagnostic mode');
           const requested=process.env.QUOTUM_BENCH_SOURCE_SHA,expected=process.env.EXPECTED_CLIENT_SHA256;
           const actual=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),client=clientIdentity();
           if(!/^[a-f0-9]{40}$/.test(requested??'')||actual!==requested||!/^[a-f0-9]{64}$/.test(expected??'')||client.status!=='available'||client.sha256!==expected)throw Error('Diagnostic control source or client mismatch');
@@ -339,6 +359,7 @@ jobs:
         env:
           QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
           EXPECTED_CLIENT_SHA256: ${{ inputs.expected_client_sha256 }}
+          COMBINED_BENCHMARK: ${{ inputs.combined_benchmark }}
           TRACE_ONLY: ${{ inputs.trace_only }}
           ORIGINAL_TIMING: ${{ inputs.original_timing }}
           NATIVE_TRACE: ${{ inputs.native_trace }}
@@ -355,13 +376,13 @@ jobs:
           npm run build --prefix "$baseline/hub"
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope "${BENCH_SCOPE}"
         env:
-          BENCH_SCOPE: ${{ inputs.native_trace && inputs.native_target == 'quota/24h' && 'panning' || (inputs.native_trace || inputs.native_profile || inputs.caption_control) && 'dashboard' || 'updates' }}
+          BENCH_SCOPE: ${{ inputs.combined_benchmark && 'all' || inputs.native_trace && inputs.native_target == 'quota/24h' && 'panning' || (inputs.native_trace || inputs.native_profile || inputs.caption_control) && 'dashboard' || 'updates' }}
           QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.native_profile && 'native-profile' || inputs.native_trace && 'native-trace' || '' }}
           QUOTUM_BENCH_NATIVE_TARGET: ${{ (inputs.native_trace || inputs.native_profile) && inputs.native_target || '' }}
-          QUOTUM_BENCH_SOURCE_SHA: ${{ (inputs.native_trace || inputs.native_profile || inputs.caption_control) && inputs.diagnostic_ref || '' }}
+          QUOTUM_BENCH_SOURCE_SHA: ${{ (inputs.combined_benchmark || inputs.native_trace || inputs.native_profile || inputs.caption_control) && inputs.diagnostic_ref || '' }}
           QUOTUM_BENCH_CAPTION_CONTROL: ${{ inputs.caption_control && '1' || '' }}
           QUOTUM_BENCH_CAPTION_BASELINE_DIR: ${{ runner.temp }}/quotum-caption-baseline/hub/dist/client/assets
-          QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ (inputs.caption_control || (inputs.native_trace && inputs.native_target == 'quota/24h')) && inputs.expected_client_sha256 || '' }}
+          QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ (inputs.combined_benchmark || inputs.caption_control || (inputs.native_trace && inputs.native_target == 'quota/24h')) && inputs.expected_client_sha256 || '' }}
           QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-bench-dashboard
       - name: Benchmark evidence
         if: always()
@@ -372,7 +393,7 @@ jobs:
           if-no-files-found: warn
 
   bench-panning:
-    if: ${{ !inputs.history_preinput_binding && !startsWith(github.ref, 'refs/tags/') && !inputs.diagnostic_ref && !inputs.trace_only && !inputs.original_timing && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control && !inputs.history_pool_control && !inputs.startup_io_control && !inputs.compositor_guard_control }}
+    if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !startsWith(github.ref, 'refs/tags/') && !inputs.diagnostic_ref && !inputs.trace_only && !inputs.original_timing && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control && !inputs.history_pool_control && !inputs.startup_io_control && !inputs.compositor_guard_control) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -399,7 +420,7 @@ jobs:
           if-no-files-found: warn
 
   idle-cpu-control:
-    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.history_pool_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control }}
+    if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.history_pool_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -449,7 +470,7 @@ jobs:
           if-no-files-found: warn
 
   native-postmortem-control:
-    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && inputs.native_postmortem_control }}
+    if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && inputs.native_postmortem_control) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -525,7 +546,7 @@ jobs:
           if-no-files-found: warn
 
   startup-io-control:
-    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && github.event_name == 'workflow_dispatch' && inputs.startup_io_control }}
+    if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && github.event_name == 'workflow_dispatch' && inputs.startup_io_control) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -595,7 +616,7 @@ jobs:
           if-no-files-found: warn
 
   managed-keys:
-    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
+    if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref) }}
     strategy:
       fail-fast: false
       matrix:
@@ -619,7 +640,7 @@ jobs:
 
   # On every system the agent ships for: its process handling differs between them.
   agent:
-    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
+    if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref) }}
     strategy:
       fail-fast: false
       matrix:
@@ -646,7 +667,7 @@ jobs:
   # The installers run on people's machines straight from a download: they must at least
   # be sound as scripts (shellcheck is on the runner; pwsh parses without running).
   installers:
-    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
+    if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
