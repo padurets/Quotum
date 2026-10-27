@@ -534,7 +534,7 @@ async function main() {
     evidence.save('credits', credits);
     problems.push(...credits.problems);
     evidence.begin('money');
-    const monetary=await moneyPhase(demo,stand,cdp,coverage);
+    const monetary=await moneyPhase(demo,stand,cdp,coverage,evidence);
     evidence.checked(monetary.problems);
     evidence.save('money', monetary);
     evidence.begin('fixed-activity');
@@ -734,7 +734,7 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
   return {source,qualification:{from:qualifiedFrom,to:qualifiedTo,waits},updates,problems};
 }
 
-async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp,coverage?:Coverage) {
+async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp,coverage?:Coverage,evidence?:Pick<Evidence,'save'>) {
   const owner=stand.people.get(people(stand.set)[0].id)!;
   say('checking money updates, partial inventory, pagination, selection and unchanged observations');
   // The panning scenarios finish at 30d; this phase measures one-day cell updates.
@@ -818,7 +818,7 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
     problems.push(...renderProblems({card:source,renders:heartbeatReading.renders,mutations:heartbeatReading.mutations,from:heartbeatFrom,to:Date.now()}));
   }finally{ledger.close();}
   coverage?.record('updates/wallet-heartbeat', problems);
-  const linkedWork=await workLinkedWallet(demo,stand,cdp,source);problems.push(...linkedWork.problems);
+  const linkedWork=await workLinkedWallet(demo,stand,cdp,source,evidence);problems.push(...linkedWork.problems);
   coverage?.record('updates/linked-wallet', linkedWork.problems, linkedWork.reports.length === 3 ? 3 : 0);
   const currencies=await currencyPhase(demo,stand,cdp,source,record.id);problems.push(...currencies.problems);
   coverage?.record('updates/currencies', currencies.problems);
@@ -837,7 +837,7 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
 }
 
 /** Attributed wallet credit updates work readers once while financial drawing stays still. */
-async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp,source:string) {
+async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp,source:string,evidence?:Pick<Evidence,'save'>) {
   say('checking linked wallet credit with Activity, money work columns and a stable financial chart');
   const owner=stand.people.get(people(stand.set)[0].id)!,agent=stand.agents.get('laptop')!,start=Date.now();
   const initial=new Requests(cdp);initial.counting=true;
@@ -872,11 +872,11 @@ async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>
   }
   initial.counting=false;
   const setup={waitMs:Date.now()-setupFrom,historyRequests:initial.historyRequests,historyBytes:initial.historyBytes};
-  const reports:{at:number;capturedAt:number;reads:number;bytes:number;activeMs:number;activityAgentMs:number;activeMsLatency:number|null;activityMsLatency:number|null}[]=[],problems:string[]=[];
+  const reports:{at:number;capturedAt:number;reads:number;bytes:number;activeMs:number;activityAgentMs:number;activeMsLatency:number|null;activityMsLatency:number|null}[]=[],problems:string[]=[],traffic:Requests[]=[];
   for(let i=0;i<3;i++) {
     const before=await active(),beforeAgent=await agentTime(),drawing=await geometry();
     if(before<0||beforeAgent<0)await unavailable();
-    await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp);requests.counting=true;const from=Date.now();
+    await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp,true);requests.counting=true;traffic.push(requests);const from=Date.now();
     await cdp.evaluate(`(()=>{
       let activeAt=null,activityAt=null;
       const values=()=>({activeMs:Number(document.querySelector('[data-work-source="${source}"]')?.getAttribute('data-active-ms')??-1),activityAgentMs:${activityRead}});
@@ -907,7 +907,16 @@ async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>
   agent.trackClients([],[]);await demo.reportNow('laptop');
   const response=await fetch(owner.base+'/api/links/'+created.links.at(-1)!.id,{method:'DELETE',headers:{cookie:owner.cookie,origin:new URL(owner.base).origin,'content-type':'application/json'},body:JSON.stringify({expectedRevision:created.revision,requestId:randomUUID()})});
   if(!response.ok)throw new Stop('linked wallet fixture could not remove its rule');
-  return {setup,activityProject:session.project,reports,problems};
+  const originalCommandFailure=cdp.snapshot().failure;
+  const original={setup,activityProject:session.project,reports,problems,traffic:{originalCommandFailure,reports:traffic.map(requests=>requests.trafficReading)}};
+  evidence?.save('linked-wallet',original);
+  // Original measurements and actor cleanup finish before any body capture.
+  cdp.at('money/linked-wallet/traffic-diagnostic');
+  const diagnostics=await Promise.all(traffic.map(requests=>requests.diagnose(cdp)));
+  cdp.at('money');
+  const captured={originalCommandFailure,reports:diagnostics};
+  evidence?.save('linked-wallet-traffic',captured);
+  return {...original,traffic:captured};
 }
 
 /** The personal display path uses the same measurement and render budgets as native money. */
