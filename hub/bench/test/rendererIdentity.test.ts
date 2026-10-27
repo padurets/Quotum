@@ -121,16 +121,23 @@ for(const mode of ['wrong-pid','multiple-pid','omission','loss','changed-birth',
   assert.equal(h.valid(),false);assert.equal(h.pid,null);assert.equal(m.listeners(),0);await h.dispose();await m.owner.close().catch(()=>{});
 });
 
+const networkProfiles=[
+  {version:'Chrome/155.0.8059.39',sourceRevisionHash:'3ff7ac5a9224be9156d7f8703a06e22890aafd34'},
+  {version:'Chrome/155.0.8059.12',sourceRevisionHash:'384c82079f60e0b79cdca6e49efd5cfceefa5b74'},
+  {version:'Chrome/156.0.8078.47',sourceRevisionHash:'1d17a2e2ee147bb7d6ae2ab6abdb3a2510c17775'},
+];
+const networkSource=ts.createSourceFile('rendererIdentity.ts',readFileSync(new URL('../rendererIdentity.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
+const networkDeclaration=networkSource.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='historyRendererIdentity')!;
+const networkCode=ts.transpileModule(networkDeclaration.getText(networkSource).replace(/^export /,'')+'\nhistoryRendererIdentity;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 // Execute the production producer with controlled OS reads and a monotonic host clock.
-function networkFixture(mode='ok'){
-  const m=mock(),proof=documentProof(m),source=ts.createSourceFile('rendererIdentity.ts',readFileSync(new URL('../rendererIdentity.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
-  const declaration=source.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='historyRendererIdentity')!;
+function networkFixture(mode='ok',profile=networkProfiles[0]){
+  const m=mock(),proof=documentProof(m);
   let now=10,scans=0,links=0,finishScan!:(rows:ProcessIdentity[])=>void;const linkPaths:string[]=[];
   const rows:ProcessIdentity[]=[{pid:100,parent:1,group:100,session:100,birth:'1000',state:'S',minorFaults:null,majorFaults:null,userTicks:null,systemTicks:null,blockIoTicks:null},
     {pid:101,parent:100,group:100,session:100,birth:'1001',state:'S',minorFaults:null,majorFaults:null,userTicks:null,systemTicks:null,blockIoTicks:null}];
-  m.browser.launchReport=()=>({pid:100,version:mode==='wrong-version'?'Chrome/155.0.8059.40':'Chrome/155.0.8059.39',sourceRevisionHash:mode==='wrong-revision'?'f'.repeat(40):'3ff7ac5a9224be9156d7f8703a06e22890aafd34'});
+  m.browser.launchReport=()=>({pid:100,...profile,version:mode==='wrong-version'?profile.version+'0':profile.version,sourceRevisionHash:mode==='wrong-revision'?'f'.repeat(40):profile.sourceRevisionHash});
   m.browser.observeProcesses=async()=>{scans++;if(mode==='scan-failure')throw Error('private-canary');if(mode==='scan-pending')return new Promise(resolve=>{finishScan=resolve;});return rows.map(row=>({...row}));};
-  const create=runInNewContext(ts.transpileModule(declaration.getText(source).replace(/^export /,'')+'\nhistoryRendererIdentity;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,
+  const create=runInNewContext(networkCode,
     {AbortController,AbortSignal,URL,performance:{now:()=>++now},deadline,networkRendererProfile,accountingPath,HISTORY_ATTEMPT_HEADER,
       readlink:async(file:string)=>{links++;linkPaths.push(file);if(mode==='namespace-missing')throw Error('private-canary');return mode==='namespace-mismatch'&&links===2?'pid:[2]':'pid:[1]';}}) as typeof historyRendererIdentity;
   const provider=create(m.cdp,m.browser,proof,'https://fixture.invalid',()=> 'b1');
@@ -141,16 +148,19 @@ function networkFixture(mode='ok'){
   return {...m,eventEmit:m.emit,proof,provider,event,emit,setup,context,rows,linkPaths,finishScan:()=>finishScan(rows),now:()=>++now,scans:()=>scans,links:()=>links};
 }
 
-test('only the two source-qualified version/revision pairs admit the network PID contract',()=>{
-  for(const [version,sourceRevisionHash] of [['Chrome/155.0.8059.39','3ff7ac5a9224be9156d7f8703a06e22890aafd34'],['Chrome/155.0.8059.12','384c82079f60e0b79cdca6e49efd5cfceefa5b74']]){
+test('only the three source-qualified version/revision pairs admit the network PID contract',()=>{
+  for(const {version,sourceRevisionHash} of networkProfiles){
     assert.equal(networkRendererProfile({version,sourceRevisionHash}),true);
-    for(const bad of [{version},{sourceRevisionHash},{version:version+'0',sourceRevisionHash},{version,sourceRevisionHash:sourceRevisionHash.toUpperCase()},{version,sourceRevisionHash:'private-canary'}])assert.equal(networkRendererProfile(bad),false);
+    for(const bad of [{version},{sourceRevisionHash},{version:null,sourceRevisionHash},{version,sourceRevisionHash:null},
+      {version:version+'0',sourceRevisionHash},{version:version.replace(/\d$/,digit=>String(Number(digit)+1)),sourceRevisionHash},
+      {version,sourceRevisionHash:sourceRevisionHash.toUpperCase()},{version,sourceRevisionHash:sourceRevisionHash.slice(1)},
+      {version,sourceRevisionHash:'private-canary'},...networkProfiles.filter(profile=>profile.version!==version).map(profile=>({version,sourceRevisionHash:profile.sourceRevisionHash}))])assert.equal(networkRendererProfile(bad),false);
   }
   assert.equal(networkRendererProfile(undefined),false);assert.equal(networkRendererProfile(null),false);
 });
 
-test('a qualified cold witness survives successful cold input and a later HTTP-free warm failure',async()=>{
-  const f=networkFixture();await f.setup();f.provider.input('cohort/cold scroll',f.now());f.provider.input('cohort/cold/request wait',f.now());f.emit();
+for(const profile of networkProfiles)test('a qualified cold witness survives successful cold input and a later HTTP-free warm failure: '+profile.version,async()=>{
+  const f=networkFixture('ok',profile);await f.setup();f.provider.input('cohort/cold scroll',f.now());f.provider.input('cohort/cold/request wait',f.now());f.emit();
   // Returning successfully does not resolve, consume or reset the document witness.
   f.provider.input('cohort/warm/cached return',f.now());const context=f.context(),h=await f.provider.resolve(new AbortController().signal,context);
   assert.equal(h.valid(),true);assert.equal(h.pid,101);assert.equal(h.birth,'1001');assert.equal(f.scans(),1);assert.equal(f.links(),2);assert.deepEqual(f.calls,[]);
@@ -162,34 +172,35 @@ test('a qualified cold witness survives successful cold input and a later HTTP-f
   await f.provider.dispose();assert.equal(h.valid(),false);assert.equal(h.signal?.aborted,true);f.proof.dispose();await f.owner.close();assert.equal(f.listeners(),0);
 });
 
-test('an unfinished BEFORE scan consumes at most its one-second window and cannot publish a late reply',async t=>{
-  t.mock.timers.enable({apis:['setTimeout']});const f=networkFixture('scan-pending'),before=f.provider.before();
+for(const profile of networkProfiles)test('an unfinished BEFORE scan consumes at most its one-second window and cannot publish a late reply: '+profile.version,async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const f=networkFixture('scan-pending',profile),before=f.provider.before();
   await new Promise<void>(resolve=>setImmediate(resolve));t.mock.timers.tick(1000);await before;f.finishScan();await new Promise<void>(resolve=>setImmediate(resolve));
   f.provider.setupSent();f.provider.setupComplete();f.provider.input('cold',f.now());f.emit();const h=await f.provider.resolve(new AbortController().signal,f.context());
-  assert.equal(h.valid(),false);assert.equal((h.evidence() as any).before.status,'unavailable');assert.deepEqual(f.calls,[]);await f.provider.dispose();f.proof.dispose();await f.owner.close();
+  assert.equal(h.valid(),false);assert.equal((h.evidence() as any).profile,true);assert.equal((h.evidence() as any).before.status,'unavailable');assert.deepEqual(f.calls,[]);await f.provider.dispose();f.proof.dispose();await f.owner.close();
 });
 
-for(const mode of ['wrong-version','wrong-revision','namespace-missing','namespace-mismatch','scan-failure'])test('network binding fails closed without affecting page commands: '+mode,async()=>{
-  const f=networkFixture(mode);await f.setup();f.provider.input('cold',f.now());f.emit();const h=await f.provider.resolve(new AbortController().signal,f.context());
-  assert.equal(h.valid(),false);assert.equal(h.pid,null);assert.deepEqual(f.calls,[]);await f.provider.dispose();f.proof.dispose();await f.owner.close();
+for(const profile of networkProfiles)for(const mode of ['wrong-version','wrong-revision','namespace-missing','namespace-mismatch','scan-failure'])test('network binding fails closed without affecting page commands: '+profile.version+'/'+mode,async()=>{
+  const f=networkFixture(mode,profile);await f.setup();f.provider.input('cold',f.now());f.emit();const h=await f.provider.resolve(new AbortController().signal,f.context());
+  assert.equal(h.valid(),false);assert.equal(h.pid,null);assert.equal((h.evidence() as any).profile,!['wrong-version','wrong-revision'].includes(mode));assert.deepEqual(f.calls,[]);await f.provider.dispose();f.proof.dispose();await f.owner.close();
 });
 
-for(const mode of ['missing-frame','missing-loader','foreign-frame','foreign-loader','worker','keepalive','redirect','bad-pid','unsafe-pid','bad-counter','wrong-attempt','missing-attempt','get','conflict'])test('actual request producer rejects non-witness events: '+mode,async()=>{
-  const f=networkFixture();await f.setup();f.provider.input('cold',f.now());
+for(const profile of networkProfiles)for(const mode of ['missing-frame','missing-loader','foreign-frame','foreign-loader','worker','keepalive','navigation-producer','redirect','bad-pid','unsafe-pid','bad-counter','unsafe-counter','wrong-attempt','missing-attempt','get','conflict'])test('actual request producer rejects non-witness events: '+profile.version+'/'+mode,async()=>{
+  const f=networkFixture('ok',profile);await f.setup();f.provider.input('cold',f.now());
   const event=structuredClone(f.event) as any;
   if(mode==='missing-frame')delete event.frameId;if(mode==='missing-loader')delete event.loaderId;
   if(mode==='foreign-frame')event.frameId='foreign';if(mode==='foreign-loader')event.loaderId='foreign';
   if(mode==='worker'){event.frameId='';event.loaderId='';}if(mode==='keepalive')event.loaderId=event.requestId;
+  if(mode==='navigation-producer'){event.type='Document';event.requestId=event.loaderId;}
   if(mode==='redirect')event.redirectResponse={url:'https://private-canary.invalid'};
-  if(mode==='bad-pid')event.requestId='0.1';if(mode==='unsafe-pid')event.requestId='9007199254740992.1';if(mode==='bad-counter')event.requestId='101.0';
+  if(mode==='bad-pid')event.requestId='0.1';if(mode==='unsafe-pid')event.requestId='9007199254740992.1';if(mode==='bad-counter')event.requestId='101.0';if(mode==='unsafe-counter')event.requestId='101.9007199254740992';
   if(mode==='wrong-attempt')event.request.headers[HISTORY_ATTEMPT_HEADER]='b2:1';if(mode==='missing-attempt')event.request.headers={};if(mode==='get')event.request.method='GET';
   if(mode==='conflict'){f.emit();event.requestId='102.2';}f.emit(event);
-  const h=await f.provider.resolve(new AbortController().signal,f.context());assert.equal(h.valid(),false);assert.equal(h.pid,null);assert.equal(f.provider.signal.aborted,true);
+  const h=await f.provider.resolve(new AbortController().signal,f.context());assert.equal(h.valid(),false);assert.equal(h.pid,null);assert.equal((h.evidence() as any).profile,true);assert.equal(f.provider.signal.aborted,true);
   await f.provider.dispose();f.proof.dispose();await f.owner.close();
 });
 
-for(const boundary of ['seed-only','before-scan','before-setup-ack','failed-setup','queued-old-reply','reused-birth','root-birth','root-missing','root-mismatch','after-omitted','after-unavailable','late-event','crash','detach','navigation','disposal','cancel'])test('actual producer keeps continuity and lifetime fail-closed: '+boundary,async()=>{
-  const f=networkFixture();
+for(const profile of networkProfiles)for(const boundary of ['seed-only','before-scan','before-setup-ack','failed-setup','queued-old-reply','reused-birth','root-birth','root-missing','root-mismatch','renderer-group','renderer-session','renderer-exited','renderer-missing','renderer-duplicate','root-group','root-session','root-exited','root-duplicate','after-omitted','after-unavailable','late-event','crash','detach','navigation','disposal','cancel'])test('actual producer keeps continuity and lifetime fail-closed: '+profile.version+'/'+boundary,async()=>{
+  const f=networkFixture('ok',profile);
   if(boundary==='seed-only'||boundary==='before-scan'){f.emit();f.provider.input('stale input',f.now());}
   if(boundary==='queued-old-reply')f.provider.setupSent();
   await f.provider.before();if(boundary!=='queued-old-reply')f.provider.setupSent();
@@ -199,6 +210,11 @@ for(const boundary of ['seed-only','before-scan','before-setup-ack','failed-setu
   const context=f.context();
   if(boundary==='reused-birth')context.after.processes![1].birth='999';if(boundary==='root-birth')context.after.processes![0].birth='999';
   if(boundary==='root-missing')context.after.processes!.shift();if(boundary==='root-mismatch')context.browserPid=99;
+  if(boundary==='renderer-group')context.after.processes![1].group=99;if(boundary==='renderer-session')context.after.processes![1].session=99;
+  if(boundary==='renderer-exited')context.after.processes![1].state='Z';if(boundary==='renderer-missing')context.after.processes!.pop();
+  if(boundary==='renderer-duplicate')context.after.processes!.push({...context.after.processes![1]});
+  if(boundary==='root-group')context.after.processes![0].group=99;if(boundary==='root-session')context.after.processes![0].session=99;
+  if(boundary==='root-exited')context.after.processes![0].state='X';if(boundary==='root-duplicate')context.after.processes!.push({...context.after.processes![0]});
   if(boundary==='after-omitted')context.after.omitted=1;if(boundary==='after-unavailable')context.after.status='unavailable';
   if(boundary==='late-event')context.after.fromMs=1;
   if(boundary==='crash'||boundary==='detach'||boundary==='navigation'){
@@ -207,7 +223,7 @@ for(const boundary of ['seed-only','before-scan','before-setup-ack','failed-setu
   }
   if(boundary==='disposal')await f.provider.dispose();
   const pending=new AbortController();if(boundary==='cancel')pending.abort();
-  const h=await f.provider.resolve(pending.signal,context);assert.equal(h.valid(),false,boundary);assert.equal(h.pid,null);assert.equal(h.birth,null);assert.equal(f.provider.signal.aborted,true);
+  const h=await f.provider.resolve(pending.signal,context);assert.equal(h.valid(),false,boundary);assert.equal((h.evidence() as any).profile,true);assert.equal(h.pid,null);assert.equal(h.birth,null);assert.equal(f.provider.signal.aborted,true);
   assert.equal((await f.provider.resolve(new AbortController().signal,f.context())).valid(),false);
   await f.provider.dispose();f.proof.dispose();await f.owner.close();assert.equal(f.listeners(),0);
 });

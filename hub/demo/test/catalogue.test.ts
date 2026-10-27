@@ -18,9 +18,7 @@ import {compose, targetOf, type HistoryAnswer} from '../../server/domain/history
 import {periodOf} from '../../ui/lib/periods.js';
 import {test, type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
-import {tmpdir} from 'node:os';
-import path from 'node:path';
+import {readFileSync} from 'node:fs';
 import type {AddressInfo} from 'node:net';
 import {buildApp} from '../../server/api.js';
 import {Duty} from '../../server/duty.js';
@@ -95,8 +93,8 @@ const timeoutOf = (scene: string) =>
 
 /** A hub in this process on a free port, its trackers read from the stand-in's `scene`. */
 async function hubFor(trackers: Trackers, scene: string, start: number) {
-  const dir = mkdtempSync(path.join(tmpdir(), 'quotum-demo-test-'));
-  const store = new Store(path.join(dir, 'db.sqlite'), start);
+  // These state checks never reopen a hub's database.
+  const store = new Store(':memory:', start);
   const directory = new Directory(store.db);
   const urls = trackers.urls(scene);
   const resets = new ResetFeed((provider, reset) => store.announce(provider, reset), () => {}, {enabled: true, codexApi: urls.codex, claudeApi: urls.claude, timeoutMs: timeoutOf(scene)});
@@ -114,7 +112,6 @@ async function hubFor(trackers: Trackers, scene: string, start: number) {
     async close() {
       await app.close();
       store.close();
-      rmSync(dir, {recursive: true, force: true});
     },
   };
 }

@@ -162,11 +162,13 @@ second, sits between the existing reachable-target evaluation and the acknowledg
 traffic-probe setup evaluation. It also checks that the observer and browser root share
 a PID namespace. Missing identity never gates successful input.
 Only Chrome 155.0.8059.39 at source revision
-`3ff7ac5a9224be9156d7f8703a06e22890aafd34` and 155.0.8059.12 at
-`384c82079f60e0b79cdca6e49efd5cfceefa5b74` qualify the internal request-ID PID
+`3ff7ac5a9224be9156d7f8703a06e22890aafd34`, 155.0.8059.12 at
+`384c82079f60e0b79cdca6e49efd5cfceefa5b74` and 156.0.8078.47 at
+`1d17a2e2ee147bb7d6ae2ab6abdb3a2510c17775` qualify the internal request-ID PID
 contract. The revision comes from the existing version reply. A subsequent controlled
 accounting POST Fetch must name the pinned main frame and loader. Its cold-input witness
 survives successful cold input and HTTP-free cached return/repeat on that document.
+This witnesses the recorded loader, frame and renderer, not HTTP success or immutable DOM.
 After the original failure, the existing process scan and browser liveness reply must
 confirm the same owned birth, renderer role and launcher root. Missing, unsupported or
 conflicting evidence permits no native or debugger fallback on this route. Navigation,
