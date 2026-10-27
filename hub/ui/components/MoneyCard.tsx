@@ -280,12 +280,10 @@ export function QuotaCard({
   source,
   ids = QUOTA_IDS,
   compact = false,
-  details = false,
 }: {
   source: Pick<Card,'meters'>;
   ids?: readonly string[];
   compact?: boolean;
-  details?: boolean;
 }) {
   return (
     <>
@@ -293,18 +291,16 @@ export function QuotaCard({
         const cap = source.meters?.find((m) => m.id === id),
           used = cap ? capPercent(cap) : null;
         const detail = cap
-          ? `${money(capLeft(cap), cap.unit, true)}\n${t('money.of', {amount: money(cap.limit, cap.unit, true)})}\n${cap.resetAt === null ? t('limit.resetUnknown') : stamp(cap.resetAt)}${used === null ? `\n${t('money.exhausted')}` : ''}`
+          ? [money(capLeft(cap), cap.unit, true),t('money.of', {amount: money(cap.limit, cap.unit, true)}),cap.resetAt === null ? t('limit.resetUnknown') : stamp(cap.resetAt),used === null ? t('money.exhausted') : null,t('source.measured',{at:stamp(cap.at)}),cap.stale?t('money.stale'):null].filter(Boolean).join('\n')
           : t('quota.unavailable');
-        const limit=<PercentLimit key={id}
+        return <PercentLimit key={id}
             name={capName({id, scope: null, label: null})}
             remaining={used === null ? null : 100 - used}
             valueTitle={detail}
             status={<CapStatus cap={cap} />}
             reset={<QuotaReset resetAt={cap?.resetAt ?? null} short={compact} />}
             compact={compact}
-            precise={details}
           />;
-        return details?<div key={id}>{limit}<small className="measurement-proof">{detail}{cap?`\n${t('source.measured',{at:stamp(cap.at)})}`:''}{cap?.stale?`\n${t('money.stale')}`:''}</small></div>:limit;
       })}
     </>
   );
