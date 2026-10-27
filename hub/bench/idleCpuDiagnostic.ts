@@ -9,7 +9,8 @@ import {ScriptBinding} from './scriptBinding.js';
 import type {Reading} from './probe.js';
 
 type Client={status:'available';name:string;bytes:number;sha256:string}|{status:'unavailable'};
-type RawEvent={name:string;ph:string;id?:unknown;bp?:unknown;ts?:number;dur?:number;tts?:number;tdur?:number;pid?:number;tid?:number;args?:{name?:unknown;layerTreeId?:unknown;prepare_tiles_id?:unknown;source_prepare_tiles_id?:unknown;count?:unknown;pending_gpu_work_tiles?:unknown;cc_scheduler_state?:{state_machine?:{minor_state?:Record<string,unknown>}};data?:{frame?:string;frameId?:unknown;id?:number;timerId?:number;timeout?:number;singleShot?:boolean;scriptId?:string|number;lineNumber?:number;columnNumber?:number;stackTrace?:unknown;message?:string;frames?:{frame?:string;processId?:number;isOutermostMainFrame?:boolean;isInPrimaryMainFrame?:boolean}[]}}};
+type RawEvent={name:string;ph:string;cat?:unknown;id?:unknown;bp?:unknown;ts?:number;dur?:number;tts?:number;tdur?:number;pid?:number;tid?:number;args?:{name?:unknown;layerTreeId?:unknown;prepare_tiles_id?:unknown;source_prepare_tiles_id?:unknown;count?:unknown;pending_gpu_work_tiles?:unknown;cc_scheduler_state?:{state_machine?:{minor_state?:Record<string,unknown>}};data?:{frame?:string;frameId?:unknown;id?:number;timerId?:number;timeout?:number;singleShot?:boolean;scriptId?:string|number;lineNumber?:number;columnNumber?:number;stackTrace?:unknown;message?:string;frames?:{frame?:string;processId?:number;isOutermostMainFrame?:boolean;isInPrimaryMainFrame?:boolean}[]}}};
+type NativeRejectionReason='identity'|'timestamp'|'phase'|'duration'|'frame-metadata'|'commit-metadata'|'scheduler-metadata';
 type CounterWindow={before:Record<string,number>;after:Record<string,number>;instrumentMs:number;seconds:number};
 type Save=(name:string,value:unknown,large?:boolean)=>void;
 type Profile=Parameters<typeof numericProfile>[0];
@@ -28,7 +29,7 @@ type NativeRow={name:string;phase:string;ts:number|null;duration:number|null;thr
   source:ReturnType<typeof location>;id:number|null;marker:number|null;kind?:string;processId?:number|null;outermost?:boolean;primary?:boolean;flowId?:number;flowEnd?:true;hostId?:number;sourceFrame?:number;prepareId?:number|null;rasterTasks?:number|null;pendingGpuTasks?:number|null;scheduler?:Record<typeof SCHEDULER_FIELDS[number],boolean>};
 const SCHEDULER_FIELDS=['has_pending_tree','pending_tree_is_ready_for_activation','active_tree_needs_first_draw','active_tree_is_ready_to_draw',
   'processing_animation_worklets_for_pending_tree','processing_paint_worklets_for_pending_tree','current_pending_tree_is_impl_side','can_draw'] as const;
-const PIPELINE_NAMES=new Set(['ProxyMain::BeginMainFrame','ProxyMain::BeginMainFrame::commit','ProxyImpl::ReadyToCommit','ProxyImpl::Commit']);
+const PIPELINE_NAMES=new Set(['ProxyMain::BeginMainFrame','ProxyMain::BeginMainFrame::commit','ProxyImpl::ReadyToCommit','ProxyImpl::Commit','LayerTreeHostImpl::ActivateSyncTree']);
 const NATIVE_NAMES=new Set(['RunTask','FunctionCall','FireAnimationFrame','RequestAnimationFrame','CancelAnimationFrame','MinorGC','MajorGC','Layout','UpdateLayoutTree','RunMicrotasks','EventDispatch','TimerFire','TimeStamp','PrePaint','Paint','Layerize','CompositeLayers',
   'PageAnimator::serviceScriptedAnimations','WebFrameWidgetImpl::UpdateLifecycle','LayerTreeHost::WaitForCommitCompletion',...PIPELINE_NAMES,'BeginMainThreadFrame','HoldCommit','ReleaseCommitbyActivation','SchedulerStateMachine',
   'TileManager::PrepareTiles','TileManager::ScheduleTasks','RasterizerTaskImpl::RunOnWorkerThread',
@@ -118,6 +119,8 @@ export class IdleCpuDiagnostic {
   private nativeCleaning:Promise<void>|undefined;
   private nativeProfile:ReturnType<typeof numericProfile>|null=null;
   private readonly nativeRejected:Record<string,unknown>[]=[];
+  private ignoredIdleMetadata=0;
+  private readonly nativeRejectionReasons:Record<NativeRejectionReason,number>={identity:0,timestamp:0,phase:0,duration:0,'frame-metadata':0,'commit-metadata':0,'scheduler-metadata':0};
   private readonly nativeClocks:{stage:'start'|'end';lo:number;hi:number;timeOrigin:number}[]=[];
   private readonly nativeInvalidated=()=>{this.nativeLifecycle++;};
   private get native(){return this.collection==='native-trace'||this.collection==='native-profile';}
@@ -152,8 +155,8 @@ export class IdleCpuDiagnostic {
   private readonly completed=(message?:{dataLossOccurred?:unknown})=>{
     this.ended=true;if(this.native)this.nativeLoss=typeof message?.dataLossOccurred==='boolean'?message.dataLossOccurred:null;this.complete();
   };
-  private rejectNative(event:RawEvent,reason:'identity'|'timestamp'|'phase'|'duration'|'frame-metadata'|'commit-metadata'|'scheduler-metadata'){
-    this.invalid++;
+  private rejectNative(event:RawEvent,reason:NativeRejectionReason){
+    this.invalid++;this.nativeRejectionReasons[reason]++;
     if(this.nativeRejected.length>=8)return;
     const metadata=event.name==='thread_name'||event.name==='TracingStartedInBrowser',known=NATIVE_NAMES.has(event.name)||this.inputPump&&event.name==='SyntheticGestureController::Flush',frame=this.inputPump&&event.name==='SyntheticGestureController::Flush'?undefined:event.args?.data?.frame;
     this.nativeRejected.push({name:known||metadata?event.name:'other',kind:metadata?'metadata':known?'known':'other',
@@ -163,6 +166,8 @@ export class IdleCpuDiagnostic {
   }
   private collectNative(events:RawEvent[]){
     for(const event of events){
+      // The reserved idle metadata schema is inert and cannot identify an owner.
+      if(event.name==='thread_name'&&event.ph==='M'&&event.cat==='__metadata'&&event.pid===0&&event.tid===0&&event.ts===0&&event.args?.name==='swapper'){this.ignoredIdleMetadata++;continue;}
       const metadata=event.name==='thread_name'||event.name==='TracingStartedInBrowser',known=NATIVE_NAMES.has(event.name)||this.inputPump&&event.name==='SyntheticGestureController::Flush';
       const flow=PIPELINE_NAMES.has(event.name)&&(event.ph==='s'||event.ph==='f');
       if(!metadata&&!known&&event.ph!=='B'&&event.ph!=='E')continue;
@@ -224,7 +229,7 @@ export class IdleCpuDiagnostic {
     const start=markers.filter(row=>row.marker===1),end=markers.filter(row=>row.marker===2);
     const stamps=start.length===1&&end.length===1&&start[0].phase==='I'&&end[0].phase==='I'&&Number.isSafeInteger(start[0].ts)&&Number.isSafeInteger(end[0].ts)&&end[0].ts!>start[0].ts!;
     this.save('native-frame-trace',{mode:'diagnostic',status:'unqualified',kind:'Recorded scopes only; wall minus thread time does not identify descheduling, blocking or throttling.',
-      capture:{status:cleanup==='complete'&&this.ended&&this.nativeLoss===false&&!this.omitted&&!this.invalid?'complete':'insufficient-evidence',cleanup,ended:this.ended,dataLossOccurred:this.nativeLoss,omitted:this.omitted,invalid:this.invalid,bytes:this.bytes},
+      capture:{status:cleanup==='complete'&&this.ended&&this.nativeLoss===false&&!this.omitted&&!this.invalid?'complete':'insufficient-evidence',cleanup,ended:this.ended,dataLossOccurred:this.nativeLoss,omitted:this.omitted,invalid:this.invalid,rejectionReasons:{...this.nativeRejectionReasons},ignoredIdleMetadata:this.ignoredIdleMetadata,bytes:this.bytes},
       scope:{status:scope?'complete':'unknown',frame:1,pid:pid??null,tid,lifecycleEvents:this.nativeLifecycle,stableFrame:this.nativeStable},
       clocks:{status:scope&&clock&&stamps?'recorded-unqualified':'unknown',readings:this.nativeClocks,markers},
       source:this.sourceBinding??{status:'unknown'},events:rows,rejected:this.nativeRejected,omittedRejections:Math.max(0,this.invalid-this.nativeRejected.length),

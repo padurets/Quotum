@@ -335,9 +335,9 @@ const nativeEvents=[
   {name:'RunTask',ph:'E',ts:1_026_000,tts:1400,pid:101,tid:101},
   {name:'MajorGC',ph:'X',ts:1_027_000,dur:300,pid:102,tid:102},
 ];
-async function captureNative(configure?:(cdp:NativeCdpFake)=>void,during?:(cdp:NativeCdpFake)=>void,collection:'native-trace'|'native-profile'='native-trace',inputPump=false){
+async function captureNative(configure?:(cdp:NativeCdpFake)=>void,during?:(cdp:NativeCdpFake)=>void,collection:'native-trace'|'native-profile'='native-trace',inputPump=false,onTrace?:(receipt:Record<string,unknown>)=>void){
   const cdp=new NativeCdpFake({forbidProfiler:collection==='native-trace'}),saved:Saved[]=[];cdp.inputPump=inputPump;configure?.(cdp);
-  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value,large)=>saved.push({name,value,large}),client,true,collection,undefined,inputPump);
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value,large)=>{saved.push({name,value,large});if(name==='native-frame-trace')onTrace?.(record(value));},client,true,collection,undefined,inputPump);
   cdp.emit('Network.responseReceived',{type:'Script',requestId:'asset-1',response:{url:asset}});
   await diagnostic.start();cdp.emit('Tracing.dataCollected',{value:nativeEvents});during?.(cdp);
   cdp.commands.push('ORIGINAL.report-frozen');await diagnostic.stop();await diagnostic.bindAndClose();await diagnostic.close();
@@ -573,4 +573,77 @@ test('quota24 input pump trace retains only the fixed numeric event across disti
   assert.doesNotMatch(JSON.stringify(result.receipt),/private-canary/);assert.equal(record(result.receipt.capture).status,'insufficient-evidence','invalid pump identity stays rejected');
   const legacy=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:[pump]}));assert.ok(!(legacy.receipt.events as any[]).some(row=>row.name===pump.name));
   assert.throws(()=>new IdleCpuDiagnostic(new NativeCdpFake() as unknown as Cdp,()=>{},client,true,'native-profile',undefined,true),/requires native-trace/);
+});
+
+const idleMetadata={name:'thread_name',ph:'M',cat:'__metadata',pid:0,tid:0,ts:0,args:{name:'swapper'}};
+const activationFlow={name:'LayerTreeHostImpl::ActivateSyncTree',cat:'cc,benchmark',ph:'s',pid:101,tid:105,ts:2_000_000,id:0};
+test('source-shaped activation flow keeps edge zero and its finish without changing the timed scope',async()=>{
+  const events=[activationFlow,{...activationFlow,ph:'f',bp:'e',ts:2_000_100},{...activationFlow,ph:'X',dur:90}];
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:events}));
+  assert.equal(record(receipt.capture).invalid,0,JSON.stringify(receipt.rejected));
+  const rows=(receipt.events as any[]).filter(row=>row.name===activationFlow.name);
+  assert.deepEqual(rows.map(row=>[row.phase,row.flowId??null,row.flowEnd??false,row.duration]),[['s',0,false,null],['f',0,true,null],['X',null,false,90]]);
+  assert.equal(record(receipt.capture).status,'complete');assert.equal(record(receipt.scope).pid,101);assert.equal(record(receipt.scope).tid,101);
+});
+test('source-shaped idle metadata is counted without entering events or owner and clock binding',async()=>{
+  const plain=await captureNative(),withIdle=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:[idleMetadata]}));
+  assert.equal(record(withIdle.receipt.capture).invalid,0,JSON.stringify(withIdle.receipt.rejected));
+  assert.equal(record(withIdle.receipt.capture).ignoredIdleMetadata,1);assert.equal(record(withIdle.receipt.capture).status,'complete');
+  assert.deepEqual(withIdle.receipt.events,plain.receipt.events);assert.deepEqual(withIdle.receipt.scope,plain.receipt.scope);assert.deepEqual(withIdle.receipt.clocks,plain.receipt.clocks);
+  assert.doesNotMatch(JSON.stringify(withIdle.receipt),/swapper|__metadata/);
+});
+
+test('idle metadata discard requires every exact typed field and cannot spoof a renderer',async()=>{
+  const variants=[
+    ...[undefined,'TracingStartedInBrowser'].map(name=>({...idleMetadata,name})),
+    ...[undefined,'I',0].map(ph=>({...idleMetadata,ph})),
+    ...[undefined,'metadata',0,['__metadata']].map(cat=>({...idleMetadata,cat})),
+    ...[undefined,'0',false,1,NaN].map(pid=>({...idleMetadata,pid})),
+    ...[undefined,'0',false,1,NaN].map(tid=>({...idleMetadata,tid})),
+    ...[undefined,'0',false,1,NaN].map(ts=>({...idleMetadata,ts})),
+    ...[undefined,null,{}, {name:'CrRendererMain'},{name:'private-idle-canary'},{name:0}].map(args=>({...idleMetadata,args})),
+  ];
+  // An actually unknown M name keeps the old skip; recognized zero shapes remain invalid.
+  const unknown=variants.shift()!;
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:[unknown,...variants,{...idleMetadata,name:'process_name'}]}));
+  const capture=record(receipt.capture);assert.equal(capture.ignoredIdleMetadata,0);assert.equal(capture.invalid,variants.length);assert.equal(capture.status,'insufficient-evidence');
+  assert.equal(record(capture.rejectionReasons).identity,variants.length);assert.equal(record(receipt.scope).pid,101);assert.equal(record(receipt.scope).tid,101);
+  assert.ok((receipt.events as any[]).every(row=>row.pid>0&&row.tid>0));assert.doesNotMatch(JSON.stringify(receipt),/private-idle-canary|swapper|__metadata/);
+  const unbound=await captureNative(cdp=>{cdp.skipMetadata=true;},cdp=>cdp.emit('Tracing.dataCollected',{value:[idleMetadata]}));
+  assert.equal(record(unbound.receipt.capture).ignoredIdleMetadata,1);assert.equal(record(unbound.receipt.scope).status,'unknown');assert.equal(record(unbound.receipt.clocks).status,'unknown');
+  assert.ok(!(unbound.receipt.events as any[]).some(row=>row.name==='thread_name'||row.name==='TracingStartedInBrowser'));
+});
+test('activation flows reject malformed IDs, finish bindings, clocks and unrelated phases',async()=>{
+  const ids=[undefined,null,'0','0x0',-1,.5,Number.MAX_SAFE_INTEGER+1,Infinity,NaN,{}];
+  const bad=[...ids.map(id=>({...activationFlow,id})),
+    ...[undefined,'s',0,false].map(bp=>({...activationFlow,ph:'f',bp})),
+    ...['t','b','e'].map(ph=>({...activationFlow,ph,id:0})),
+    ...[0,NaN,'101'].map(pid=>({...activationFlow,pid})),
+    ...[0,NaN,'105'].map(tid=>({...activationFlow,tid})),
+    ...[undefined,-1,NaN,'2000000'].map(ts=>({...activationFlow,ts})),
+    {...activationFlow,name:'Layout'},
+  ];
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:bad}));
+  const capture=record(receipt.capture),reasons=record(capture.rejectionReasons);
+  assert.equal(capture.invalid,bad.length);assert.equal(capture.status,'insufficient-evidence');
+  assert.deepEqual(reasons,{identity:6,timestamp:4,phase:4,duration:0,'frame-metadata':0,'commit-metadata':14,'scheduler-metadata':0});
+  assert.ok(!(receipt.events as any[]).some(row=>row.flowId!==undefined));
+});
+test('all seven rejection counters count beyond eight examples and exported snapshots cannot mutate the collector',async()=>{
+  const base={name:'Layout',ph:'X',pid:101,tid:101,ts:2_000_000,dur:1,args:{data:{frame:'own-frame',url:'https://private-reason-canary.invalid'}}};
+  const failures=[{...base,pid:0},{...base,ts:NaN},{...base,ph:'s'},{...base,dur:undefined},
+    {...base,name:'TracingStartedInBrowser',ph:'I'},
+    {...activationFlow,ph:'f'},
+    {...base,name:'SchedulerStateMachine'}];
+  const bad=failures.flatMap(row=>Array.from({length:3},()=>row));let first:Record<string,unknown>|undefined;
+  const {receipt}=await captureNative(undefined,cdp=>cdp.emit('Tracing.dataCollected',{value:[idleMetadata,...bad]}),'native-trace',false,value=>{
+    const counts=record(record(value.capture).rejectionReasons);
+    if(!first){first=counts;counts.identity=999;}
+  });
+  const capture=record(receipt.capture),counts=record(capture.rejectionReasons);
+  assert.deepEqual(counts,{identity:3,timestamp:3,phase:3,duration:3,'frame-metadata':3,'commit-metadata':3,'scheduler-metadata':3});
+  assert.notEqual(counts,first);assert.equal(first!.identity,999);assert.equal(Object.values(counts).reduce<number>((sum,value)=>sum+Number(value),0),capture.invalid);
+  assert.equal(capture.invalid,21);assert.equal(capture.ignoredIdleMetadata,1);assert.equal(capture.status,'insufficient-evidence');assert.equal((receipt.rejected as unknown[]).length,8);assert.equal(receipt.omittedRejections,13);
+  assert.equal((receipt.rejected as any[]).filter(row=>row.reason==='phase').length,2,'later rejection classes have no example slots');
+  const exported=record(record(safeEvidence(receipt)).capture);assert.deepEqual(exported.rejectionReasons,counts);assert.doesNotMatch(JSON.stringify(receipt),/private-reason-canary|swapper|__metadata/);
 });
