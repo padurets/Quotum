@@ -350,10 +350,10 @@ body.is-resizing-bottom-right, body.is-resizing-bottom-right * { cursor: nwse-re
 
 .limits { display: flex; flex-direction: column; gap: 20px; }
 .card-measurements { min-width: 0; }
-.card-measurements .limit-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.card-measurements .limit-name { min-width: 0; overflow-wrap: anywhere; }
+.card-measurements > .limit .cap-label > span { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
 .card-measurements .limit-value { flex-shrink: 0; }
-.card-measurements .limit-bottom { white-space: nowrap; }
-.card-measurements .limit-bottom > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.card-measurements .limit-bottom > span { min-width: 0; overflow-wrap: anywhere; }
 .measurement-details { display: flex; flex-direction: column; gap: 20px; min-width: 0; overflow-wrap: anywhere; }
 .measurement-proof { display: block; white-space: pre-line; margin-top: 8px; color: var(--text-3); }
 .measurement-details .limit-name { min-width: 0; white-space: pre-line; overflow-wrap: anywhere; }

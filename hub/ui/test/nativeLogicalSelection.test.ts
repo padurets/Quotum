@@ -19,6 +19,12 @@ import {budgetVisible} from '../lib/money';
 import {t,setLocale} from '../i18n/index';
 const jsx=(type:any,props:any)=>({type,props});
 const nodes=(v:any):any[]=>Array.isArray(v)?v.flatMap(nodes):!v||typeof v!=='object'?[]:typeof v.type==='function'?nodes(v.type(v.props)):[v,...nodes(v.props.children)];
+test('historical native windows keep supplier order and append only missing current descriptors',()=>{
+ const win=(id:string,label:string)=>({id,label,kind:'weekly' as const,minutes:10080,used:25,remaining:75,resetAt:1});
+ const source={provider:'antigravity',windows:[win('a','Current A'),win('c','Current C'),win('b','Current B')]};
+ const periods=quotaPeriods(source,[win('b','Historical B'),win('a','Historical A')]);
+ assert.deepEqual(periods.map(w=>[w.id,w.label]),[['b','Historical B'],['a','Historical A'],['c','Current C']]);
+});
 for(const locale of ['en','ru'] as const)test(`native ${locale} logical selected A with only historical B`,()=>{
  const now=1800000000000,H=3600000,M=60000,at=now-2*H,store=new Store(':memory:',at-H);setLocale(locale);
  try{

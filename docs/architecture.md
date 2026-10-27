@@ -1845,11 +1845,13 @@ Every widget is arranged on one grid. A row is 48 px (a 32 px track and a 16 px 
 Content measurements update grid positions and reading order directly, without a
 React render of the grid or neighbouring widgets. Only a widget whose own allocated
 height changes hears a sizing update; layout edits still reconcile through React.
-Each widget establishes its natural height and minimum from its structural shell.
+Each widget reports its content's natural height and minimum.
 The grid rounds that height to whole rows unless the owner chose a height (`h`, in rows),
-clamped to the structural minimum. Data, filters, period navigation and asynchronous
-results do not revise those dimensions. Display configuration and viewport reflow
-can establish a new structure. Spare room stays above a card's tray or at the bottom
+clamped to the content minimum. Unchanged visible content keeps its reading surface
+through refresh and recovery. Selected scales, legend wrapping and the measured rows
+on an automatic table's current page can change natural height. Table/list layout uses
+the columns actually displayed, including after grouping or period changes.
+Spare room stays above a card's tray or at the bottom
 of a panel. All five charts give the allocated content height to their plot while
 keeping their heads, totals and legends whole. The Agent sessions widget gathers the period's sessions
 by project (one name across people, as agent activity counts it), machine or subscription,
@@ -1870,7 +1872,8 @@ edge to edge; a narrow dialog uses an inset compact list. The dialog has no repe
 count or work total above its rows; its toolbar holds only Back and list sorting when
 needed. Board tables share `ui/components/TableWidget.tsx`: one width decision,
 height measurement, page model, pager and sort presentation. Natural pages contain
-ten rows; a chosen height fits as many complete rows as its space allows. Variable row
+up to ten rows and fit their measured current-page content; a chosen height fits as
+many complete rows as its space allows. Variable row
 heights follow row identities through ordering and paging. Static measurement starts
 with fifty candidates and expands to the fitting page and its next row, without clock
 subscriptions. A separate footer puts the whole-selection summary on the left and
@@ -2537,9 +2540,10 @@ values and top-ups compare exact integer millionths from the same accounting
 model as their cells. Unknown values stay last in either direction. Hidden columns
 temporarily use default without losing the saved choice. Default preserves the budget
 series order; live accounting boundaries use the shared page clock and retain cells.
-Each table owns a stable content viewport and footer for its structural column
-configuration. Empty, pending, retained, failed and complete results occupy that
-same viewport; grouping, sorting and paging do not change its capacity or neighbours.
+Manually sized tables keep the owner's allocated viewport and footer. Automatic
+tables fit the measured rows on their current page, including a short last page.
+Pending, retained and failed reads keep valid same-context content and its surface;
+changing the visible row content can change natural height.
 Rows use a bounded preview, with oversized text and complete values reachable through
 the shared Popover. Whole rows page through the full loaded index without an inner
 vertical scroller or another history read.
@@ -2558,8 +2562,9 @@ They have no fixed-height reserve or internal vertical scrollbar. The panel's na
 height follows changes to its legend; saved manual heights keep their existing intent
 and allocate the remaining room to the plot. Ordinary value updates and paint-only
 legend emphasis do not change its composition or measure layout on every render.
-Automatic tables reserve rows for their actual selected cohort, up to their ordinary
-page capacity, rather than reserving ten rows for an empty or single-row result.
+Automatic tables use actual measured row heights on their current page, up to their
+ordinary page capacity. They reserve no empty rows for a sparse result or a short
+last page, and short rows do not consume the maximum preview-height budget.
 The budget chart, legend and table name a total balance by its account rather than
 repeating "Available balance". Scoped key limits keep their names; balance components,
 roles and currency provenance remain reachable in card details.

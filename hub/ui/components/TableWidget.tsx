@@ -72,9 +72,9 @@ export function useTableLayout(box:RefObject<HTMLElement|null>,columns:readonly 
 /** All board tables share width, height, row measurement and page ownership. */
 export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonly number[],nameWidth:number,keys:readonly string[],resetKey:string,edges?:number,structure:readonly number[]=columns,footerMetrics=0){
   const locale=useLocale();
-  const sizing=useSizing(),{layout,width}=useTableLayout(panel,structure,nameWidth,edges,sizing?.width);
+  const sizing=useSizing(),{layout,width}=useTableLayout(panel,columns,nameWidth,edges,sizing?.width);
   const live=useRef<HTMLElement>(null),measured=useRef<HTMLElement>(null),footer=useRef<HTMLElement>(null),measuredFooter=useRef<HTMLElement>(null),measuredSingleFooter=useRef<HTMLElement>(null),surface=useRef<HTMLDivElement>(null);
-  const scope=JSON.stringify([layout,width,structure,nameWidth,edges,locale,footerMetrics]);
+  const scope=JSON.stringify([layout,width,columns,structure,nameWidth,edges,locale,footerMetrics]);
   const [measurement,setMeasurement]=useState<Measurement|null>(null),[position,setPosition]=useState({key:resetKey,page:0});
   const seen=useRef<{key:string;outer:number;live:number;layer:number;footer:number;singleFooter:number}|null>(null);
   const rowBoxes=useRef(new WeakMap<Element,{width:number;height:number}>());
@@ -83,7 +83,7 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
   const hidden=width===0||!!panel.current&&suspended.current===panel.current;
   const measurable=!hidden;
   const sizes=measurement?.scope===scope||hidden?measurement:null;
-  const rowBudget=hidden&&sizes?sizes.fallback:layout==='table'?60:Math.max(90,44+Math.ceil(Math.max(0,structure.length-1)/2)*36),head=hidden&&sizes?sizes.head:layout==='table'?56:18;
+  const rowBudget=hidden&&sizes?sizes.fallback:layout==='table'?60:Math.max(90,44+Math.ceil(Math.max(0,columns.length-1)/2)*36),head=hidden&&sizes?sizes.head:layout==='table'?56:18;
   const fallback=rowBudget,heights=sizes?.heights??new Map<string,number>();
   let starts:number[];
   if(sizing?.manual&&sizes){
@@ -126,9 +126,11 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     }
     const retained=new Set(keys);for(const key of nextHeights.keys())if(!retained.has(key))nextHeights.delete(key);
     const base=rowBudget;
-    const min=shell+rowBudget+multiFooter;
-    const natural=shell+Math.max(1,Math.min(TABLE_PAGE_ROWS,keys.length))*rowBudget+multiFooter;
-    sizing?.report({min:pixels(min),natural:pixels(Math.max(min,natural)),shown:outer,layout:sizing?.manual?scope:JSON.stringify([scope,Math.min(TABLE_PAGE_ROWS,keys.length)])});
+    const shownHeights=keys.slice(from,to).map(key=>nextHeights.get(key)??rowBudget);
+    const content=shownHeights.length?shownHeights.reduce((sum,height)=>sum+height,0):rowBudget;
+    const min=shell+(sizing?.manual?rowBudget:shownHeights.length?Math.max(...shownHeights):rowBudget)+multiFooter;
+    const natural=shell+(sizing?.manual?Math.max(1,Math.min(TABLE_PAGE_ROWS,keys.length))*rowBudget:content)+multiFooter;
+    sizing?.report({min:pixels(min),natural:pixels(Math.max(min,natural)),shown:outer,layout:sizing?.manual?scope:JSON.stringify([scope,from,to,pixels(content)])});
     if(!sizes||!same(sizes.shell,shell)||!same(sizes.footer,multiFooter)||!same(sizes.singleFooter,singleFooter)||!same(sizes.border,border)||!same(sizes.fallback,base)||nextHeights.size!==sizes.heights.size||[...nextHeights].some(([key,height])=>!same(sizes.heights.get(key),height)))
       setMeasurement({scope,heights:nextHeights,fallback:base,head,shell,footer:multiFooter,singleFooter,border});
   };
@@ -157,7 +159,8 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     return ()=>observer.disconnect();
   },[panel,layout,measurable,!!keys.length,keysKey,from,to,sizing?.manual]);
   const report=sizing?.report;useLayoutEffect(()=>()=>report?.(null),[report]);
-  const surfaceHeight=sizing?.manual&&sizes?Math.max(head+rowBudget,sizing.allocated-sizes.shell+head-sizes.footer):head+Math.max(1,Math.min(TABLE_PAGE_ROWS,keys.length))*rowBudget;
+  const contentHeight=keys.slice(from,to).reduce((sum,key)=>sum+(heights.get(key)??rowBudget),0)||rowBudget;
+  const surfaceHeight=sizing?.manual&&sizes?Math.max(head+rowBudget,sizing.allocated-sizes.shell+head-sizes.footer):head+contentHeight;
   return useMemo(()=>({layout,measurable,columnWidths:columns,from,to,page,count:keys.length,pages:starts.length,onPage:(page:number)=>setPosition({key:resetKey,page}),live,measured,footer,measuredFooter,measuredSingleFooter,surface,surfaceHeight,rowBudget,footerMetrics,
     measureFrom:from,measureTo:sizing?.manual?Math.min(keys.length,Math.max(from+TABLE_MEASURE_MIN_ROWS,to+1)):from}),[layout,measurable,columnsKey,from,to,page,starts.length,resetKey,sizing?.manual,keys.length,surfaceHeight,rowBudget,footerMetrics]);
 }

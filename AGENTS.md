@@ -178,7 +178,7 @@ and platform smoke checks still apply.
   and the card's height. Do not replace them with a primary pair or move them into
   settings to impose a constant height. Legends wrap to their actual contents without
   reserved empty rows, fixed-height viewports or internal vertical scrollbars. A change
-  in visible scales, legend rows or automatic table row count can change natural height;
+  in visible scales, legend rows or measured rows on an automatic table's current page can change natural height;
   ordinary value updates and paint-only emphasis cannot. Preserve saved manual heights
   and fill the remaining room with useful content. Do not rewrite layout preferences
   to conceal a rendering change. Verify populated intermediate and settled states,
@@ -235,7 +235,10 @@ and platform smoke checks still apply.
   at the bottom right. A separate footer puts complete-period totals above the pager
   and row count. Wide totals align with their columns without repeating headings;
   narrow lists label them in a fixed grid. Row capacity follows height without a fixed
-  page cap, using the complete shared index without new reads. Session grouping uses
+  page cap, using the complete shared index without new reads. Table/list layout uses
+  the displayed columns; hidden columns from another
+  grouping or period never force a list. Automatic table height fits the measured
+  rows on the current page, including a short last page. Session grouping uses
   the shared segmented control. No more/all popup substitutes for paging. Wide tables sort in
   their headers; only narrow lists show a sort icon. Headers cycle ascending,
   descending, reset; reset clears the selected header and restores the default order.

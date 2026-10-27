@@ -135,10 +135,7 @@ const WindowForecast = memo(function WindowForecast({arrange,kind='weekly'}: {ar
   const panel = useRef<HTMLElement>(null);
   const definitions = modeColumns.map(id => ({id, title: heading(id, range), width: FORECAST_WIDTHS[id], hint: HEADINGS[id].hint ? t(HEADINGS[id].hint!) : undefined}));
   const visible = definitions.filter(column => columns.includes(column.id));
-  const structure=useMemo(()=>{
-    const modes=[LIVE_COLUMNS,RANGE_COLUMNS].map(mode=>mode.filter(id=>columnShown(view,widget,id)).map(id=>FORECAST_WIDTHS[id]));
-    return Array.from({length:Math.max(...modes.map(columns=>columns.length))},(_,i)=>Math.max(...modes.map(columns=>columns[i]??0)));
-  },[view.columns,view.shownColumns,widget]);
+  const structure=visible.map(column=>column.width);
   /** Every cell of a line, by column. */
   const cellsOf = (line: Line): Record<ForecastColumn, Cell | TimedCell> => {
     const source = sources.find(s => s.id === line.sourceId);
