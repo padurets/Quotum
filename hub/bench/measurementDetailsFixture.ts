@@ -1,3 +1,4 @@
+import type {Coverage, ScenarioId} from './coverage.js';
 import {randomUUID} from 'node:crypto';
 import {Agent,type Person} from '../demo/client.js';
 import {pseudonym} from '../demo/model.js';
@@ -36,9 +37,10 @@ export async function measurementDetailsFixture(owner:Person){
 }
 
 /** Runs after all measurements, with a separate board and tab; restores shared preferences. */
-export async function measurementDetails(browser:Browser,owner:Person){
+export async function measurementDetails(browser:Browser,owner:Person,coverage?:Coverage){
   const fixture=await measurementDetailsFixture(owner),tab=await openTab(browser).catch(async error=>{try{await fixture.close();}catch(cleanup){throw new AggregateError([error,cleanup],'Measurement tab and cleanup failed',{cause:error});}throw error;}),{cdp}=tab;
   let saved:Record<string,string|null>|undefined;
+  const completed:ScenarioId[]=[];
   const reports:unknown[]=[];let failed=false,primary:unknown;
   const navigate=async(url:string)=>{
     let timer:ReturnType<typeof setTimeout>;
@@ -61,7 +63,10 @@ export async function measurementDetails(browser:Browser,owner:Person){
         await navigate(url);
         const actual=await cdp.evaluate<{url:string;width:number;locale:string}>('({url:location.href,width:innerWidth,locale:document.documentElement.lang})');
         if(actual.url!==url||actual.width!==width||actual.locale!==locale)throw Error('measurement fixture document did not match its scenario');
-        for(const reading of historical?fixture.cases:[{...fixture.cases[0],status:'live' as const}])reports.push({locale,width,...await inspectMeasurementDetails(cdp,reading)});
+        for(const reading of historical?fixture.cases:[{...fixture.cases[0],status:'live' as const}]) {
+          reports.push({locale,width,...await inspectMeasurementDetails(cdp,reading)});
+          completed.push(`updates/disclosure/${locale}/${width}/${reading.status}` as ScenarioId);
+        }
       }
     }
     return reports;
@@ -70,5 +75,6 @@ export async function measurementDetails(browser:Browser,owner:Person){
     const errors=[];
     for(const cleanup of [async()=>{if(saved)await cdp.evaluate(`(()=>{for(const [key,value] of Object.entries(${JSON.stringify(saved)}))if(value===null)localStorage.removeItem(key);else localStorage.setItem(key,value);})()`);},()=>tab.close(),()=>fixture.close()])try{await cleanup();}catch(error){errors.push(error);}
     if(errors.length)throw new AggregateError(failed?[primary,...errors]:errors,'Measurement disclosure cleanup failed',{cause:primary});
+    if(!failed)for(const id of completed)coverage?.record(id);
   }
 }

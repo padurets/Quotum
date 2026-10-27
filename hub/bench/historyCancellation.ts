@@ -1,3 +1,4 @@
+import {historyScenario, type Coverage} from './coverage.js';
 import assert from 'node:assert/strict';
 import {cellOf, cellStart, compose, targetOf, type Chunk, type HistoryAnswer} from '../server/domain/history';
 import {HistoryStore, followPan} from '../ui/lib/history';
@@ -12,7 +13,7 @@ const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 type Attempt = {phase: string; cell: number; from: number; to: number; signal?: AbortSignal; count?: BodyCount; failed?: boolean};
 
 /** Real HTTP completion and numerical staging have different cancellation boundaries. */
-export async function cancellationTraffic(proxy: Awaited<ReturnType<typeof historyProxy>>, cookie: string, board: string, windows: string[]) {
+export async function cancellationTraffic(proxy: Awaited<ReturnType<typeof historyProxy>>, cookie: string, board: string, windows: string[], coverage?:Coverage) {
   const reports = [], invalidated = [];
   for (const length of [DAY, 30 * DAY]) for (const mode of ['before-headers', 'during-staging', 'reversal'] as const) {
     for (let take = 1; take <= HISTORY_COHORT_TAKES; take++) {
@@ -37,6 +38,7 @@ export async function cancellationTraffic(proxy: Awaited<ReturnType<typeof histo
       const gesture = new Pan({now: () => anchor, commit: range => {assert.ok(range); selected = range; store.choose('24h', range);}, requestFrame: run => {frames.push(run); return run;}, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}});
       const source = Symbol('history'); gesture.register(source, () => ({end: selected.to, future: 0}));
       const unsubscribe = followPan(store, gesture, () => selected);
+      let complete=false;
       try {
         proxy.phase(phase);
         const hello = await historyBody(url(cellStart(origin.from, cell), Math.ceil(origin.to / cell) * cell), cookie) as HistoryAnswer;
@@ -77,10 +79,11 @@ export async function cancellationTraffic(proxy: Awaited<ReturnType<typeof histo
         assert.deepEqual(store.get().history, {...compose(chunks, meta, target, new Set(windows)), board});
         const report = {name, attempted: attempts.length, completed: attempts.filter(r => r.count?.complete).length, failed: attempts.filter(r => r.failed && !r.signal?.aborted).length, aborted, discardedDelivered, ...totals, finalComplete: true, requests: attempts.map(r => ({from: r.from, to: r.to, id: r.count!.id, aborted: r.signal?.aborted}))};
         reports.push(report); console.error(`bench: ${name}: ${report.attempted} attempts, ${aborted} aborted, ${discardedDelivered} delivered/discarded, ${totals.byteVerdict} body proof`);
-        break;
+        complete=true;
       } catch(error) {
         invalidated.push({...historyCutInvalidation(error,name,take),reads:reads.map(r=>({phase:r.phase,from:r.from,to:r.to,count:r.count}))});
       } finally {unsubscribe(); store.close(); preparations.dispose(); await Promise.allSettled([...pending]);}
+      if(complete){const report=reports.find(report=>report.name===name)!;coverage?.record(historyScenario(name), [], report.finalComplete&&report.attempted>0?1:0);break;}
     }
   }
   return {reports,invalidated};

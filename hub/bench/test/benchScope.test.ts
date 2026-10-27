@@ -1,12 +1,14 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
+import os from 'node:os';
 import {spawnSync} from 'node:child_process';
 import path from 'node:path';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
+import {Coverage, REQUIRED_COVERAGE, type Suite} from '../coverage.js';
 import {RunOwner} from '../runOwner.js';
-import {safeEvidence} from '../evidence.js';
+import {Evidence as JournalEvidence, safeEvidence} from '../evidence.js';
 import {EventCounts} from '../stream.js';
 import {cellOf} from '../../server/domain/history.js';
 import {idleProblems,chartProblems,measuredProblems,percentile,HISTORY_BYTES_PER_MEASUREMENT,IDLE_SCRIPT_MS_PER_SECOND} from '../budget.js';
@@ -40,7 +42,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   const person={personalBoard:'board',cookie:'session=fixture',get:async()=>overview};
   const set={id:'all',scene:'still'},stand={set,start:now,people:new Map([['ana',person]])};
   const browser={owned:true,endpoint:'fixture',launchReport:()=>({mode:'owned'}),close:async()=>{
-    mark('browser-close');if(fault==='browser-close')throw Error('browser-close-red');
+    mark('browser-close');if(fault==='browser-close'||env.TEST_BROWSER_CLOSE==='1')throw Error('browser-close-red');
   }};
   const cdp={send:async()=>({}),evaluate:async(expression:string)=>{
     if(expression.includes(".card:not(.is-loading)"))return 1;
@@ -63,12 +65,20 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   class Demo {
     constructor(options:{start:number;onHistoryLimit?:(report:HistoryLimitReport)=>void}){stand.start=options.start;if(env.TEST_SERVER_LIMIT==='1')options.onHistoryLimit?.({event:'history_limit',physicalAttemptBound:false,stage:'work-access',limit:{requested:11,reserved:90,budget:100},evaluatedAt:now,selection:{mode:'live',periodMs:86400000},quota:true,wallet:false,funds:false,sessions:true,sourceWork:true,calendar:true});}
     dir='/unused';async run(){mark('demo');return stand;}async settled(){}
-    async stop(){mark('demo-stop');if(fault==='demo-stop')throw Error('demo-stop-red');}
+    async stop(){mark('demo-stop');if(fault==='demo-stop'||env.TEST_DEMO_STOP==='1')throw Error('demo-stop-red');}
+  }
+  const receipts=(coverage:Coverage,suite:Suite,prefix?:string,bad:readonly string[]=[])=>{if(suite==='history'&&env.TEST_COVERAGE==='empty-history')return;for(const row of REQUIRED_COVERAGE.filter(row=>row.suite===suite&&(!prefix||row.scenarioId.startsWith(prefix)))){if(suite==='history'&&env.TEST_COVERAGE==='missing-history'&&row.scenarioId==='history/browser/30d/activity/400ms/0.04/funds')continue;coverage.record(row.scenarioId,bad,row.minimumSamples);if(suite==='history'&&env.TEST_COVERAGE==='duplicate-history'&&row.scenarioId==='history/controlled/1d/history/0ms/0.5')coverage.record(row.scenarioId,bad,row.minimumSamples);}};
+  let journalEvidence: JournalEvidence | undefined;
+  class RetainedEvidence extends JournalEvidence {
+    constructor() {super(env.TEST_REAL_EVIDENCE);journalEvidence=this;}
+    override save(name:string,value:unknown) {super.save(name,value);saved.set(name,value);}
+    override saveCoverage(value:ReturnType<Coverage['summary']>) {saved.set('coverage',value);return super.saveCoverage(value);}
   }
   class Evidence {
     readonly id='fixture-id';
-    begin(name:string){mark('phase:'+name);}save(name:string,value:unknown){saved.set(name,value);}
-    finish(status:string){statuses.push(status);}
+    begin(name:string){if(!['preparation','fixture','browser','dashboard-setup','idle-alignment','observed-work','private-work','frequency','measurement-details','coverage'].includes(name))mark('phase:'+name);}save(name:string,value:unknown){saved.set(name,value);}
+    plan(){}end(){}checked(){}fail(){}saveCoverage(value:unknown){saved.set('coverage',value);return env.TEST_COVERAGE!=='storage-failure';}
+    finish(status:string){statuses.push(status);return true;}
   }
   class Requests {count=0;bytes=0;byPath={};counting=false;}
   class Stop extends Error {}
@@ -85,19 +95,20 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     traceReceipt(from:number,to:number,cellMs:number){assert.equal(to-from,120000);assert.equal(cellMs,300000);mark('idle-trace-receipt');return{status:fault==='idle-trace'?'insufficient-evidence':'complete'};}
     async close(){if(this.mode.startsWith('native-')){assert.equal(this.signal?.aborted,true);mark('native-trace-close');}else mark('idle-trace-close');}
   }
-  const panning=async(_cdp?:unknown,_pace?:unknown,_output?:unknown,_reload?:unknown,trace?:()=>IdleCpuDiagnostic,target?:string)=>{mark('panning');if(target)mark('native-target:'+target);trace?.();if(fault==='panning-throw')throw Error('panning-original');
+  const panning=async(_cdp?:unknown,_pace?:unknown,_output?:unknown,_reload?:unknown,trace?:()=>IdleCpuDiagnostic,target?:string,coverage?:Coverage)=>{mark('panning');if(target)mark('native-target:'+target);trace?.();if(fault==='panning-throw')throw Error('panning-original');
     if(fault==='cancel'){listeners.get('SIGTERM')!();await exited;throw Error('cancelled-panning');}
+    if(coverage)receipts(coverage,'panning',undefined,problems('panning'));
     return{problems:problems('panning'),reports:['quota','session','activity','budget','funds'].flatMap(initiator=>['24h','30d'].map(period=>({initiator,period,frames:[16],latency:[16]})))};
   };
   const context={exports:{},process:{argv:['node','index.ts',...(ci?['--ci']:[]),...args],env:{CI:'1',...env},pid:1,platform:'linux',
       on:(name:string,fn:()=>void)=>{listeners.set(name,fn);},exit:(code:number)=>{exits.push(code);terminal();}},
-    Date:class extends Date {static now(){return now;}},console:{log:()=>{},error:(value:unknown)=>{logs.push(String(value));}},path,Buffer,RunOwner,Demo,Evidence,Requests,Stop,ChromeLaunchError,IdleCpuDiagnostic,
-    safeEvidence,statSync:()=>({size:env.TEST_SUFFIX_BIG_BASELINE?1024*1024+1:Buffer.byteLength(JSON.stringify(safeEvidence(saved.get('result'))))}),
+    Date:class extends Date {static now(){return now;}},console:{log:()=>{},error:(value:unknown)=>{logs.push(String(value));}},path,Buffer,RunOwner,Demo,Evidence:env.TEST_REAL_EVIDENCE?RetainedEvidence:Evidence,Requests,Stop,ChromeLaunchError,IdleCpuDiagnostic,
+    Coverage,safeEvidence,statSync:()=>({size:env.TEST_SUFFIX_BIG_BASELINE?1024*1024+1:Buffer.byteLength(JSON.stringify(safeEvidence(saved.get('result'))))}),
     readFileSync:()=>env.TEST_SUFFIX_BAD_BASELINE?'missing':JSON.stringify(safeEvidence(saved.get('result'))),
     mkdirSync:()=>{},writeFileSync:(file:string,body:string)=>diagnosticFiles.set(path.basename(file,'.json'),JSON.parse(body)),
     sourceIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL||env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL||env.QUOTUM_BENCH_HISTORY_FIRST_NATIVE?{sourceHead:env.QUOTUM_BENCH_SOURCE_SHA??null,checkoutSha:'1'.repeat(40)}:{checkoutSha:'fixture'},
     execFileSync:()=>env.TEST_CONTROL_DIRTY??'',
-    USAGE:'fixture usage',IDLE:{ci:120,full:300},SHOWN_MS:30_000,MEASURED:'fixture',HISTORY_BYTES_PER_MEASUREMENT,
+    USAGE:'fixture usage',IDLE:{ci:120,full:300},SHOWN_MS:30_000,MEASURED:'fixture',MEASUREMENTS:20,HISTORY_BYTES_PER_MEASUREMENT,
     SETS:[set],fixtureTiming,panningSet:(value:unknown)=>value,people:()=>[{id:'ana'}],freePort:async()=>{mark('freePort');return 1234;},
     addressOf:()=>({base:'http://127.0.0.1:1234'}),prepare:async()=>{mark('prepare');},findChrome:()=>'/unused/chrome',
     seedPanningBudgets:()=>{mark('seed');},hear:async()=>({close:()=>{mark('stream-close');},reset:(window?:{from:number;to:number})=>{events.reset(window);for(let i=0;i<5;i++)events.push('event: ping\ndata: {}\n\n');},counts:()=>events.counts(),boardCounts:()=>events.boardCounts(),calendar:()=>events.calendar(),contacts:()=>events.contacts(),hints:()=>events.hints()}),
@@ -116,6 +127,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     diagnoseReversal:async()=>{mark('reversal-replay');throw Error('secondary-replay-red');},
     historyTraffic:async(...args:unknown[])=>{mark('history');if(args[6])mark('scroll-control');if(args[7])mark('first-native');if(fault==='throw')throw new Stop('history-original');if(fault==='reversal-throw')throw Error('browser/1d/reversal original-first');
       if(fault==='cancel'){listeners.get('SIGTERM')!();await exited;}
+      if(args[8])receipts(args[8] as Coverage,'history',undefined,red('red')?['history-red']:[]);
       return{reports:[{name:'history-marker'}],problems:red('red')?['history-red']:[]};},
     probeScript:()=>'',sleep:async(ms:number)=>{waits.push(ms);now+=Math.max(0,ms);},say:(value:string)=>{logs.push(value);},
     metrics:async()=>{const opening=metricReads++===0;
@@ -123,23 +135,23 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
       mark(opening?'metrics-before':'metrics-after');return{Timestamp:now/1000,ScriptDuration:opening?0:red('idle')?2*IDLE_SCRIPT_MS_PER_SECOND*(ci?120:300)/1000:0,ThreadTime:opening?.4:.45};},
     cellOf,idleProblems,chartProblems,measuredProblems,percentile,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil,idleRetentionScript,idleRetentionProblems,
     delta,round,scriptPerSecond,tally,measure:async()=>{mark('measure');return{source:'fixture',from:now,to:now,
-      ingestLatencies:[1],latencies:[red('measure')?Infinity:1],chartLatencies:[red('measure')?Infinity:1],historyBytes:1,
-      reading:{...reading,renders:[{node:'card',region:'card:fixture',time:false,kind:null,count:1}]}};},
-    work:async()=>{mark('work');return{reports:[],problems:problems('work')};},
-    workObserved:async()=>{mark('observed-work');return{reports:[],setup:{},problems:problems('observed-work')};},
-    workPrivate:async()=>{mark('private-work');return{reports:[],problems:problems('private-work')};},
+      ingestLatencies:Array(20).fill(1),latencies:Array(20).fill(red('measure')?Infinity:1),chartLatencies:Array(20).fill(red('measure')?Infinity:1),historyBytes:1,
+      reading:{...reading,renders:[{node:'card',region:'card:fixture',time:false,kind:null,count:20}]}};},
+    work:async()=>{mark('work');return{reports:Array(env.TEST_COVERAGE==='empty-work'?0:3).fill({}),problems:problems('work')};},
+    workObserved:async()=>{mark('observed-work');return{reports:Array(3).fill({}),setup:{},problems:problems('observed-work')};},
+    workPrivate:async()=>{mark('private-work');return{reports:Array(3).fill({}),problems:problems('private-work')};},
     frequencyKeys:async()=>{mark('frequency');},panning,panningProblems:()=>[],
-    creditPhase:async()=>{mark('credits');if(fault==='credits-throw')throw new Stop('credits-original');return{updates:[],problems:problems('credits')};},
-    moneyPhase:async()=>{mark('money');return{problems:problems('money')};},
-    fixedActivity:async()=>{mark('fixed-activity');return{reports:[],problems:problems('fixed-activity')};},
-    measurementDetails:async(actualBrowser:unknown,actualOwner:unknown)=>{assert.equal(actualBrowser,browser);assert.equal(actualOwner,person);mark('measurement-details');if(fault==='measurement-details-throw')throw new Error('measurement-details-original');return Array.from({length:16},(_,index)=>({index}));},
+    creditPhase:async()=>{mark('credits');if(fault==='credits-throw')throw new Stop('credits-original');return{updates:Array(4).fill({}),problems:problems('credits')};},
+    moneyPhase:async(_demo:unknown,_stand:unknown,_cdp:unknown,coverage:Coverage)=>{mark('money');for(const prefix of ['updates/wallet/','updates/wallet-heartbeat','updates/inventory','updates/linked-wallet','updates/currencies','updates/money-view'])receipts(coverage,'updates',prefix,problems('money'));return{problems:problems('money')};},
+    fixedActivity:async(_browser:unknown,_stand:unknown,_evidence:unknown,coverage:Coverage)=>{mark('fixed-activity');receipts(coverage,'updates','updates/activity/',problems('fixed-activity'));return{reports:[],problems:problems('fixed-activity')};},
+    measurementDetails:async(actualBrowser:unknown,actualOwner:unknown,coverage:Coverage)=>{assert.equal(actualBrowser,browser);assert.equal(actualOwner,person);mark('measurement-details');if(fault==='measurement-details-throw')throw new Error('measurement-details-original');receipts(coverage,'updates','updates/disclosure/');return Array.from({length:16},(_,index)=>({index}));},
     clientIdentity:()=>env.QUOTUM_BENCH_HISTORY_SCROLL_CONTROL||env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL||env.QUOTUM_BENCH_HISTORY_FIRST_NATIVE?{status:'available',sha256:'2'.repeat(64)}:{status:'unavailable'},
   };
   runInNewContext(code,context);
   const selected=(context as unknown as {selected:{main():Promise<void>;parseArgs(args:string[]):unknown}}).selected;
   let error:unknown;try{await selected.main();}catch(caught){error=caught;}
   if(cancellationStarted)await exited;
-  return{calls,saved,diagnosticFiles,exits,statuses,logs,error,waits,fixtureStart:stand.start,parse:selected.parseArgs};
+  return{calls,saved,journalEvidence,diagnosticFiles,exits,statuses,logs,error,waits,fixtureStart:stand.start,parse:selected.parseArgs};
 }
 const tail=['measure','work','observed-work','private-work','frequency','panning','credits','money','fixed-activity','measurement-details'];
 const order=(calls:string[])=>calls.filter(call=>call==='history'||call==='openTab'||tail.includes(call));
@@ -618,4 +630,63 @@ test('an unexposed alignment fails after all24 suffix cases while retaining the 
   assert.deepEqual(safeEvidence(out.saved.get('history-suffix-result')),{mode:'diagnostic',status:'inconclusive',completed:24,expected:24,canonicalPass:false});
   const alignment=out.saved.get('history-suffix-retirement') as {used:boolean;status:string;canonicalPass:boolean};assert.equal(alignment.used,false);assert.equal(alignment.status,'inconclusive');assert.equal(alignment.canonicalPass,false);
   assert.equal(out.calls.filter(name=>name==='suffix-close').length,1);assert.equal(out.calls.filter(name=>name==='browser-close').length,1);assert.equal(out.calls.filter(name=>name==='demo-stop').length,1);
+});
+
+for(const variant of ['empty-history','missing-history','duplicate-history','storage-failure'])test('actual canonical history cannot pass '+variant,async()=>{
+  const out=await run(['--scope','history'],undefined,{TEST_COVERAGE:variant});
+  assert.equal(out.error,undefined);assert.deepEqual(out.exits,[1]);assert.deepEqual(out.statuses,['failed']);
+  assert.ok(out.logs.some(line=>line.startsWith('coverage incomplete:')));
+  const coverage=out.saved.get('coverage') as ReturnType<Coverage['summary']>;
+  if(variant==='empty-history')assert.equal(coverage.observed.length,0);
+  if(variant==='missing-history')assert.deepEqual(coverage.missing,['history/browser/30d/activity/400ms/0.04/funds']);
+  if(variant==='duplicate-history')assert.deepEqual(coverage.duplicates,['history/controlled/1d/history/0ms/0.5']);
+  for(const action of ['browser-close','demo-stop'])assert.equal(out.calls.filter(call=>call===action).length,1);
+});
+
+test('actual main rejects an empty work phase despite an otherwise successful complete tail',async()=>{
+  const out=await run(['--scope','dashboard'],undefined,{TEST_COVERAGE:'empty-work'});
+  assert.deepEqual(out.exits,[1]);assert.deepEqual(order(out.calls),['openTab',...tail]);
+  const coverage=out.saved.get('coverage') as ReturnType<Coverage['summary']>;
+  assert.deepEqual(coverage.incomplete,['updates/work/ordinary']);
+});
+
+test('original history failure survives simultaneous owned browser and demo cleanup failures',async()=>{
+  const out=await run(['--scope','history'],'throw',{TEST_BROWSER_CLOSE:'1',TEST_DEMO_STOP:'1'});
+  assert.deepEqual(out.exits,[2]);assert.deepEqual(out.statuses,['failed']);assert.ok(out.logs.includes('history-original'));
+  for(const action of ['browser-close','demo-stop'])assert.equal(out.calls.filter(call=>call===action).length,1);
+  assert.equal((out.saved.get('coverage') as ReturnType<Coverage['summary']>).status,'incomplete');
+});
+
+
+for (const [fault, variant, primaryPhase, classification, cleanupFailed] of [
+  ['panning', '', 'panning', 'budget', false],
+  ['panning-throw', '', 'panning', 'runtime', false],
+  [undefined, 'empty-history', 'coverage', 'coverage', false],
+  [undefined, 'missing-history', 'coverage', 'coverage', false],
+  [undefined, 'duplicate-history', 'history-traffic', 'coverage', false],
+  [undefined, 'empty-work', 'work', 'coverage', false],
+  ['cancel', '', 'history-traffic', 'cancelled', false],
+  ['browser-close', '', 'cleanup', 'cleanup', true],
+] as const) test(`actual main journal attributes ${fault ?? variant} independently from cleanup`, async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-main-journal-'));
+  t.after(() => rmSync(dir, {recursive: true, force: true}));
+  const scope = primaryPhase === 'panning' || variant === 'empty-work' ? 'dashboard' : 'history';
+  const out = await run(['--scope', scope], fault, {TEST_REAL_EVIDENCE: dir, TEST_COVERAGE: variant});
+  assert.equal(out.error, undefined);assert.notEqual(out.exits[0], 0);
+  const manifest = JSON.parse(readFileSync(path.join(dir, out.journalEvidence!.id, 'manifest.json'), 'utf8'));
+  assert.deepEqual(manifest.primaryFailure, {phase: primaryPhase, classification});
+  const cleanup = manifest.journal.find((row: {phase: string}) => row.phase === 'cleanup');
+  assert.equal(cleanup.outcome, cleanupFailed ? 'failed' : 'passed');
+  assert.equal(cleanup.classification, cleanupFailed ? 'cleanup' : undefined);
+  if (fault === 'panning' || variant === 'empty-work') {
+    assert.equal(manifest.journal.find((row: {phase: string}) => row.phase === 'measurement-details').outcome, 'passed', 'earlier failure cannot blame a later successful phase');
+  }
+});
+
+for (const key of ['QUOTUM_BENCH_DIAGNOSE_NATIVE', 'QUOTUM_BENCH_REVERSAL_PROBE']) test('disabled legacy diagnostic preserves canonical coverage: '+key, async () => {
+  const missing = await run([], undefined, {[key]: '0', TEST_COVERAGE: 'empty-history'});
+  assert.deepEqual(missing.exits, [1]);assert.deepEqual(missing.statuses, ['failed']);
+  assert.equal((missing.saved.get('coverage') as ReturnType<Coverage['summary']>).diagnostic, false);
+  const complete = await run([], undefined, {[key]: '0'});
+  assert.deepEqual(complete.exits, [0]);assert.deepEqual(complete.statuses, ['passed']);
 });

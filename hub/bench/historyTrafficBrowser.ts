@@ -1,3 +1,4 @@
+import {historyScenario, type Coverage} from './coverage.js';
 import {writeFileSync} from 'node:fs';
 import {accountingPath} from './accountingTraffic';
 import {PERIOD_SCOPES,type PeriodScope,type PeriodReply,type PeriodRequest} from '../server/domain/periodRead';
@@ -337,7 +338,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
 }
 
 /** Separate tabs use the fixed-codec proxy; this never changes the native perf route. */
-export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProxy, cookie: string, board: string, evidence?: Pick<Evidence, 'save'>, suffix?:{pair:number;cohort:'history'|'activity'},alignment?:RetirementAlignment) {
+export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProxy, cookie: string, board: string, evidence?: Pick<Evidence, 'save'>, suffix?:{pair:number;cohort:'history'|'activity'},alignment?:RetirementAlignment,coverage?:Coverage) {
   if(suffix&&(!Number.isInteger(suffix.pair)||suffix.pair<1||suffix.pair>12||!['history','activity'].includes(suffix.cohort)))throw new Error('Unknown history suffix cohort');
   const reports = [], invalidated = [], problems: string[] = [];
   for (const length of [DAY, 30 * DAY]) for (const future of [DAY, 0]) for (const latency of [0, 100, 400]) for (const fraction of [.5, .04]) {
@@ -431,7 +432,6 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         }
         status=reports.filter(report=>report.name.startsWith(name+'/')).some(report=>trafficProblems(report).length)?'over-budget':'passed';
         if(suffix&&problems.length)throw new Error('History suffix exceeded its original traffic budget');
-        break;
       } catch (error) {
         if(suffix){status='failed';throw error;}
         const cut=historyCutInvalidation(error,name,take);
@@ -447,6 +447,10 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         try{await close();}catch(error){cleanupErrors.push(error);}
         if(status!=='failed'&&cleanupErrors.length)throw cleanupErrors[0];
       }
+      if(status==='passed'||status==='over-budget'){
+        if(!suffix)for(const report of reports.filter(report=>report.name.startsWith(name+'/')))coverage?.record(historyScenario(report.name), trafficProblems(report));
+        break;
+      }
     }
   }
   return {reports, invalidated, problems};
@@ -454,7 +458,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
 
 /** Native cancellation/reversal keeps one Shift-wheel token while responses are owned. */
 type CancellationState={tokens:string[];poses:{end:number;origin:number}[];pushes:number;selected:boolean;attempts:Record<string,{aborted:boolean}>};
-export async function browserCancellationTraffic(browser: Browser, proxy: TrafficProxy, cookie: string,diagnostic=false,profileBeforeInput=false,evidence?:Pick<Evidence,'save'>) {
+export async function browserCancellationTraffic(browser: Browser, proxy: TrafficProxy, cookie: string,diagnostic=false,profileBeforeInput=false,evidence?:Pick<Evidence,'save'>,coverage?:Coverage) {
   const reports = [], invalidated = [];
   for (const length of [DAY, 30 * DAY]) for (const mode of ['before-headers', 'after-delivery', 'reversal'] as const) {
     if(diagnostic&&(length!==DAY||mode!=='reversal'))continue;
@@ -523,7 +527,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
         stableHistoryReads(bodies.resources.filter(r=>r.phase===phase), seeds, cell);
         const report = {name, attempted: attempts.length, completed: attempts.filter(r => r.count?.complete).length, failed: attempts.filter(r => !r.count?.complete && !r.canceled && !state.attempts[r.count!.id!]?.aborted).length, aborted, transportAbortedDelivered: attempts.filter(r => r.count?.complete && state.attempts[r.count!.id!]?.aborted).length, stagingDisposition: 'not-observed', ...totals, finalComplete: true, movement: {tokens: state.tokens.length, poses: state.poses.length, pushes: state.pushes}, requests: attempts.map(r => ({from: r.from, to: r.to, id: r.count!.id, canceled: r.canceled}))};
         reports.push(report); console.error(`bench: ${name}: ${report.attempted} attempts, ${aborted} aborted, ${totals.byteVerdict} body proof`);
-        status='passed';break;
+        status='passed';
       } catch (error) {
         console.error(`bench: ${name}: failed at ${stage}; HTTP ${JSON.stringify({active: bodies.activeCount, pending: bodies.pending.size, reads: reads().map(r => ({from: r.from, to: r.to, canceled: r.canceled, complete: r.count?.complete}))})}`);
         cdp.at(`${name}/failure state`);
@@ -544,6 +548,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
         try{await close();console.error(`bench: ${name}: page closed`);}catch(error){cleanupErrors.push(error);}
         if(status!=='failed'&&cleanupErrors.length)throw cleanupErrors[0];
       }
+      if(status==='passed'){const report=reports.find(report=>report.name===name)!;if(!diagnostic)coverage?.record(historyScenario(name), [], report.finalComplete&&report.attempted>0?1:0);break;}
     }
   }
   return {reports,invalidated};

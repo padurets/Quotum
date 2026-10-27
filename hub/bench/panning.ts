@@ -1,3 +1,4 @@
+import type {Coverage} from './coverage.js';
 import type {Cdp} from './cdp.js';
 import type {IdleCpuDiagnostic} from './idleCpuDiagnostic.js';
 import {panningProblems, type PanReading,type NativePanTarget} from './panningBudget.js';
@@ -7,7 +8,7 @@ import {panningReload,type ReloadDiagnostic} from './panningReload.js';
 import {panningSettlement} from './panningFailure.js';
 
 /** Native input against the real charts; the temporary layout brings all five into view. */
-export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp, 'at'|'off'|'snapshot'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), options?: {save(name: string, value: unknown): void; saveTrace?(name:string,value:unknown):void; selection?: 'quota24'}|ReloadDiagnostic, diagnoseReload?:ReloadDiagnostic, nativeTrace?:()=>IdleCpuDiagnostic, nativeTarget:NativePanTarget='activity/24h') {
+export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp, 'at'|'off'|'snapshot'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), options?: {save(name: string, value: unknown): void; saveTrace?(name:string,value:unknown):void; selection?: 'quota24'}|ReloadDiagnostic, diagnoseReload?:ReloadDiagnostic, nativeTrace?:()=>IdleCpuDiagnostic, nativeTarget:NativePanTarget='activity/24h', coverage?:Coverage) {
   const evidence=typeof options==='function'?undefined:options;
   diagnoseReload??=typeof options==='function'?options:undefined;
   cdp.at?.('panning/setup');
@@ -421,6 +422,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       await cdp.evaluate(`history.back()`);
       await settled();
       progress(`${initiator}/${period}/complete`);
+      coverage?.record(`panning/${initiator}/${period}`, panningProblems(report), report.frames.length);
     }
       await cdp.evaluate(`document.getElementById('quotum-pan-layout')?.remove()`);
     }

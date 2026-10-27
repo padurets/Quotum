@@ -208,7 +208,7 @@ async function originalIndex(collection:''|'trace'|'profile',boundaryFailure?:'o
     overview:async()=>[],stillProblems:()=>[],Stop:Error,say:()=>{},heard,requests:{counting:false,count:0,byPath:{}},
     metrics:async()=>{cdp.commands.push(metricCalls++?'ORIGINAL.after-metrics':'ORIGINAL.before-metrics');return metricCalls===1?traceWindow.before:traceWindow.after;},
     idleTimingDiagnostic:undefined,idleDiagnostic:undefined,traffic:undefined,
-    evidence:{begin:()=>{},save:(name:string,value:unknown)=>evidenceSaved.push({name,value})},
+    evidence:{begin:()=>{},end:()=>{},checked:()=>{},save:(name:string,value:unknown)=>evidenceSaved.push({name,value})},coverage:{record:()=>{}},
     round:(value:number)=>value,scriptPerSecond:()=>.1,idleProblems:()=>[],saveDiagnostic:(name:string,value:unknown)=>saved.push({name,value}),finish:async()=>{},run:undefined as unknown as()=>Promise<unknown>};
   runInNewContext(ts.transpileModule(`async function run(){${source.slice(start,end)}\nreturn {from,to};}globalThis.run=run;`,{compilerOptions:{target:ts.ScriptTarget.ES2023}}).outputText,context);
   let failure:unknown;

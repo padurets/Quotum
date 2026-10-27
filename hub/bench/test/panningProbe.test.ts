@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {panTransactionsScript, panPartialScript, type PanTransactions} from '../panEvidence.js';
+import {Coverage} from '../coverage.js';
 import {deadline} from '../deadline.js';
 import {panningSettlement} from '../panningFailure.js';
 import {safeEvidence} from '../evidence.js';
@@ -211,7 +212,8 @@ test('actual postconditions preserve failure and cleanup after motion sampling s
     const evidence=fail?{save:(name:string,value:unknown)=>files.set(name,value)}:undefined;
     const reports:PanReading[]=[],traceCalls:string[]=[];
     const traced=native?{stop:async()=>{assert.equal(reports.length,1);assert.equal(f.reading.running,false);traceCalls.push('stop');},bindAndClose:async()=>{assert.deepEqual(traceCalls,['stop']);traceCalls.push('bind');}}:undefined;
-    const sandbox={...globals,cdp,evidence,traced,detailed:false,deadline,panPartialScript,panningSettlement,selector:'[data-widget="quota-history"]',initiator:'quota',period:'24h',geometry:{x:0,y:0,series:12,sessionSeries:12,budgetSeries:12,fundsSeries:12,charts:5},edgeSeries:[],costStart:undefined,costEnd:undefined,reports,scenario:{initiator:'quota',period:'24h'},failed:false,stage:'controlled',interception:false,originalHorizon:'auto',click:async()=>{},at:(value:string)=>{context=value;},progress:(value:string)=>{
+    const coverage=new Coverage('dashboard');
+    const sandbox={...globals,cdp,evidence,traced,coverage,panningProblems,detailed:false,deadline,panPartialScript,panningSettlement,selector:'[data-widget="quota-history"]',initiator:'quota',period:'24h',geometry:{x:0,y:0,series:12,sessionSeries:12,budgetSeries:12,fundsSeries:12,charts:5},edgeSeries:[],costStart:undefined,costEnd:undefined,reports,scenario:{initiator:'quota',period:'24h'},failed:false,stage:'controlled',interception:false,originalHorizon:'auto',click:async()=>{},at:(value:string)=>{context=value;},progress:(value:string)=>{
       if(value.endsWith('/complete'))complete=true;
     }};
     runInNewContext(ts.transpileModule(script,{compilerOptions:{target:ts.ScriptTarget.ES2023}}).outputText,sandbox);
@@ -221,6 +223,7 @@ test('actual postconditions preserve failure and cleanup after motion sampling s
       const partial=files.get('panning-partial').partial;
       assert.equal(partial.status,'unavailable');assert.equal(partial.frames,undefined);assert.equal(complete,false);
     }else{await run();assert.equal(complete,true);}
+    assert.equal(coverage.summary().observed.length,fail?0:1,'the frozen report is not terminal until every native postcondition passes');
     assert.equal(held,true);assert.equal(f.reading.running,false);assert.equal(sandbox.reports.length,1);
     assert.deepEqual(traceCalls,native?['stop','bind']:[]);
     assert.equal(cleanupCalls,2,'both the report and outer finally must run the actual cleanup');
