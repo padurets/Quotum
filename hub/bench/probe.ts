@@ -87,12 +87,12 @@ export type Reading = {
   renders: Counted[];
   /** Once per MutationObserver callback for every part of the page the DOM changed in. */
   mutations: Counted[];
-  /** Capped context for otherwise unattributed mutations; never an idle exemption. */
+  /** Capped context when live ancestry is unavailable, including proven clock removals. */
   unattributedMutations?: {samples: {
     at: number; index: number; type: 'attributes'|'characterData'|'childList'|'other'; reason: string;
     targetNodeType: number; connected: boolean|null; hasParent: boolean; targetIsBody: boolean;
     removals: {index: number; kind: 'exact'|'subtree'; region: string; time: boolean; ownerFound: boolean}[];
-    limited: boolean;
+    limited: boolean; recovered?: boolean;
   }[]; omitted: number};
   /** When the DOM of each card first changed outside what shows time, as `Date.now()` in the page. */
   cardChanged: Record<string, number>;
@@ -106,12 +106,15 @@ export type Reading = {
  */
 export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf}, selector: string) {
   type Element = {
+    readonly nodeType: 1;
+    parentElement: Element|null;
     closest(selector: string): Element | null;
     hasAttribute(name: string): boolean;
     getAttribute(name: string): string | null;
     querySelectorAll(selector: string): Iterable<Element>;
     tagName: string;
     className: unknown;
+    isConnected?: boolean;
   };
   type Target = {nodeType: number; parentElement: Element|null; isConnected?: boolean; contains?(node: unknown): boolean};
   type Mutation = {type: string; attributeName?: string|null; target: Target; addedNodes?: Iterable<{nodeType: number}>; removedNodes?: Iterable<Target>};
@@ -199,6 +202,41 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
     const began = clock.now();
     const nodes = new Set<Element | null>();
     const at = clock.timeOrigin + clock.now();
+    let removalOwners: Map<Target, {owner: Element|null; parent: Element|null; index: number}|null> | undefined;
+    let removalsComplete = true;
+    const ownershipChanges = new Set<Target>();
+    const removedClock = (target: Target, index: number): Element|null => {
+      if (records.length > 4096) return null;
+      if (!removalOwners) {
+        removalOwners = new Map();
+        const added = new Set<Target>();
+        let scanned = 0;
+        for (let n = 0; n < records.length; n++) {
+          const record = records[n];
+          if (record.type === 'attributes' && ['data-time','data-card','data-series-details','data-series-legend','class'].includes(record.attributeName ?? '')) ownershipChanges.add(record.target);
+          if (record.type !== 'childList') continue;
+          const parent = record.target.nodeType === 1 ? record.target as unknown as Element : record.target.parentElement;
+          for (const removed of record.removedNodes ?? []) {
+            if (++scanned > 4096) {removalsComplete = false;return null;}
+            ownershipChanges.add(removed);
+            const owner = parent?.isConnected === true ? parent.closest(selector) : null;
+            removalOwners.set(removed, removalOwners.has(removed) || added.has(removed) ? null : {owner, parent, index: n});
+          }
+          for (const node of record.addedNodes ?? []) {
+            if (++scanned > 4096) {removalsComplete = false;return null;}
+            const target = node as Target;added.add(target);
+            ownershipChanges.add(target);
+            if (removalOwners.has(target)) removalOwners.set(target, null);
+          }
+        }
+      }
+      const removal = removalsComplete ? removalOwners.get(target) : null;
+      const owner = removal && removal.index < index ? removal.owner : null;
+      if (owner?.isConnected !== true || !owner.hasAttribute('data-time') || regionOf(owner) !== 'analytics') return null;
+      // Delivery-time ancestry cannot prove an owner that was retagged or moved in this batch.
+      for (const changed of ownershipChanges) if (changed === removal!.parent || changed.contains?.(removal!.parent)) return null;
+      return owner;
+    };
     const changedSeries = (series: Element | null | undefined) => {
       if (!series) return;
       const key = `${series.getAttribute('data-series')}\n${series.getAttribute('data-last')}`;
@@ -213,15 +251,17 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
     let index = 0;
     for (const record of records) {
       const element = record.target.nodeType === 1 ? (record.target as unknown as Element) : record.target.parentElement;
-      const owner = element ? element.closest(selector) : null;
+      const liveOwner = element ? element.closest(selector) : null;
+      // An observed subtree still reports style changes until its removal is delivered.
+      // Recover only a unique earlier exact removal, never a detached-node exemption.
+      const owner = liveOwner ?? (record.type === 'attributes' && record.attributeName === 'style' && record.target.nodeType === 1 && record.target.isConnected === false && record.target.parentElement === null ? removedClock(record.target, index) : null);
       nodes.add(owner);
-      if (!owner) {
+      if (!liveOwner) {
         if (unattributedMutations.samples.length >= 8) unattributedMutations.omitted++;
         else {
           const removals: NonNullable<Reading['unattributedMutations']>['samples'][number]['removals'] = [];
           let scanned = 0, limited = records.length > 64;
-          // Removed text can have lost its parent by delivery. Retain same-batch
-          // removal context without changing the original page-level verdict.
+          // Diagnostic context stays separately bounded; it cannot establish uniqueness.
           outer: for (let n = 0; n < Math.min(records.length, 64); n++) {
             for (const removed of records[n].removedNodes ?? []) {
               if (++scanned > 64) {limited = true; break outer;}
@@ -236,7 +276,7 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
           }
           const type = record.type === 'attributes' || record.type === 'characterData' || record.type === 'childList' ? record.type : 'other';
           const attribute = ['class','style','hidden','aria-hidden'].includes(record.attributeName ?? '') ? record.attributeName : 'other';
-          unattributedMutations.samples.push({at, index, type, reason: type === 'attributes' ? 'attribute:' + attribute : 'no-attribute', targetNodeType: record.target.nodeType, connected: typeof record.target.isConnected === 'boolean' ? record.target.isConnected : null, hasParent: record.target.parentElement !== null, targetIsBody: record.target === page.document.body, removals, limited});
+          unattributedMutations.samples.push({at, index, type, reason: type === 'attributes' ? 'attribute:' + attribute : 'no-attribute', targetNodeType: record.target.nodeType, connected: typeof record.target.isConnected === 'boolean' ? record.target.isConnected : null, hasParent: record.target.parentElement !== null, targetIsBody: record.target === page.document.body, removals, limited, recovered: owner !== null});
         }
       }
       index++;

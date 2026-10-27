@@ -20,6 +20,10 @@ class Element {
   getAttribute(name: string) {
     return this.attributes[name] ?? null;
   }
+  contains(node: unknown): boolean {
+    for (let element = node as Element|null; element; element = element.parentElement) if (element === this) return true;
+    return false;
+  }
   private matches(selector: string) {
     const attribute = selector.match(/^\[([\w-]+)\]$/);
     if (attribute) return this.hasAttribute(attribute[1]);
@@ -372,4 +376,66 @@ test('diagnostic removal context does not name nodes ahead of the original count
   const p=page(),card=el('article',null,{'data-card':'s1'}),clock=el('span',card,{'data-time':'reset'}),text={nodeType:3,parentElement:null,isConnected:false};
   p.record({type:'attributes',target:card},{type:'characterData',target:text},{type:'childList',target:clock,removedNodes:[text]});
   const r=p.bench.read();assert.match(r.mutations[0].node,/#1$/);assert.match(r.mutations[2].node,/#2$/);assert.equal(r.unattributedMutations!.samples[0].removals[0].time,true);
+});
+
+test('late styles of uniquely removed clock labels retain their chart owner across a large batch',()=>{
+  const p=page(),clocks=Array.from({length:5},()=>Object.assign(el('g',el('section',null,{},'history'),{'data-time':'axis'}),{isConnected:true}));
+  const labels=clocks.map(()=>Object.assign(el('text',null),{isConnected:false}));
+  p.record(...clocks.map((target,index)=>({type:'childList',target,removedNodes:[labels[index]]})),
+    ...Array.from({length:75},()=>({type:'attributes',attributeName:'style',target:clocks[0]})),
+    ...labels.map(target=>({type:'attributes',attributeName:'style',target})));
+  const reading=p.bench.read();
+  assert.equal(reading.mutations.length,5);
+  assert.ok(reading.mutations.every(row=>row.time&&row.region==='analytics'&&row.count===1));
+  assert.deepEqual(idleObservationProblems({from:0,to:120000,cellMs:300000,requests:{count:0,byPath:{}},events:{ping:5},renders:reading.renders,mutations:reading.mutations,scriptMsPerSecond:0}),[]);
+  assert.equal(reading.unattributedMutations!.samples.length,5);
+  assert.ok(reading.unattributedMutations!.samples.every(sample=>sample.recovered===true&&sample.limited));
+});
+
+test('removed clock attribution never exempts unrelated or ambiguous page changes',()=>{
+  const scenarios=['no-removal','conflict-after64','card','header','non-time','disconnected-owner','unknown-owner-connection','connected-label','before-removal','subtree','added-again','record-limit','node-limit','unowned-sibling','retagged-owner','retagged-ancestor','moved-owner'] as const;
+  for(const scenario of scenarios){
+    const p=page(),panel=el('section',null,{},'history');
+    const parent=scenario==='card'?el('article',null,{'data-card':'s1'}):scenario==='header'?el('header',null,{},'topbar'):panel;
+    const clock=Object.assign(el('g',parent,scenario==='non-time'?{}:{'data-time':'axis'}),{isConnected:scenario!=='disconnected-owner'});
+    if(scenario==='unknown-owner-connection')delete (clock as {isConnected?:boolean}).isConnected;
+    const label=Object.assign(el('text',null),{isConnected:scenario==='connected-label'});
+    const style={type:'attributes',attributeName:'style',target:label},remove={type:'childList',target:clock,removedNodes:[label]};
+    let records:Parameters<typeof p.record>=scenario==='no-removal'?[style]:[remove,style];
+    if(scenario==='before-removal')records=[style,remove];
+    if(scenario==='conflict-after64')records=[remove,...Array.from({length:70},()=>({type:'attributes',target:clock})),{...remove,target:el('div',null)},style];
+    if(scenario==='subtree')records=[{...remove,removedNodes:[{nodeType:1,contains:(node:unknown)=>node===label}]},style];
+    if(scenario==='added-again')records=[remove,{type:'childList',target:clock,addedNodes:[label]},style];
+    if(scenario==='record-limit')records=[remove,...Array.from({length:4096},()=>({type:'attributes',target:clock})),style];
+    if(scenario==='node-limit')records=[{...remove,removedNodes:[label,...Array.from({length:4096},()=>({nodeType:1}))]},style];
+    if(scenario==='unowned-sibling')records.push({type:'attributes',attributeName:'style',target:Object.assign(el('i',null),{isConnected:false})});
+    if(scenario==='retagged-owner')records=[remove,{type:'attributes',attributeName:'data-time',target:clock},style];
+    if(scenario==='retagged-ancestor')records=[remove,{type:'attributes',attributeName:'class',target:panel},style];
+    if(scenario==='moved-owner')records=[remove,{type:'childList',target:panel,removedNodes:[clock],addedNodes:[clock]},style];
+    p.record(...records);
+    const reading=p.bench.read();
+    assert.ok(reading.mutations.some(row=>row.region==='page'&&!row.time),scenario);
+    if(scenario!=='unowned-sibling')assert.equal(reading.unattributedMutations!.samples.find(sample=>sample.type==='attributes'&&sample.reason==='attribute:style')?.recovered,false,scenario);
+    assert.ok(idleObservationProblems({from:0,to:120000,cellMs:300000,requests:{count:0,byPath:{}},events:{ping:5},renders:reading.renders,mutations:reading.mutations,scriptMsPerSecond:0}).some(problem=>problem.includes('changed outside what shows time')),scenario);
+  }
+});
+
+test('a removal in an earlier observer batch cannot authorize a later detached style',()=>{
+  const p=page(),clock=Object.assign(el('g',el('section',null,{},'history'),{'data-time':'axis'}),{isConnected:true}),label=Object.assign(el('text',null),{isConnected:false});
+  p.record({type:'childList',target:clock,removedNodes:[label]});p.bench.reset();
+  p.record({type:'attributes',attributeName:'style',target:label});
+  assert.ok(p.bench.read().mutations.some(row=>row.region==='page'&&!row.time));
+});
+
+test('moving the removal container under a clock cannot authorize its earlier removal',()=>{
+  const p=page(),panel=el('section',null,{},'history'),clock=Object.assign(el('g',panel,{'data-time':'axis'}),{isConnected:true});
+  // At delivery this previously ordinary container is already inside the clock.
+  const holder=Object.assign(el('g',clock),{isConnected:true}),label=Object.assign(el('text',null),{isConnected:false});
+  p.record({type:'childList',target:holder,removedNodes:[label]},
+    {type:'childList',target:panel,removedNodes:[holder]},
+    {type:'childList',target:clock,addedNodes:[holder]},
+    {type:'attributes',attributeName:'style',target:label});
+  const reading=p.bench.read();
+  assert.equal(reading.unattributedMutations!.samples[0].recovered,false);
+  assert.ok(reading.mutations.some(row=>row.region==='page'&&!row.time));
 });
