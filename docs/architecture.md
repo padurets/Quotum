@@ -2160,7 +2160,7 @@ fill alone; their tooltip keeps the complete name. Owner punctuation stays liter
 Recovery controls return keyboard focus before they disappear. A removed Retry
 returns to its surviving disclosure button; a retiring disclosure returns to an
 available control in the same widget, or its heading when no control remains.
-This covers source measurement details, session trays and wallet allowances as
+This covers source history recovery, session trays and wallet allowances as
 well as analytics. A disclosure owns its portaled panel, while its stable return
 target belongs to the widget that holds its trigger. Each attached recovery node
 keeps its own removal cleanup, including details reused by several disclosures.

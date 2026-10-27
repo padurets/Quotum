@@ -17,7 +17,7 @@ test('history cleanup releases its owned target when the renderer cannot answer'
   assert.ok(start >= 0 && end > start);
   let closed = 0, evaluations = 0;
   const contexts: string[] = [];
-  const fixture = {name: 'fixture', renderer:undefined, binding:undefined,document:undefined, cdp: {at: (value: string) => contexts.push(value),
+  const fixture = {name: 'fixture', passive:undefined, renderer:undefined, binding:undefined,document:undefined, cdp: {at: (value: string) => contexts.push(value),
     evaluate() {evaluations++; return new Promise(() => {});}},
   tab: {async close() {closed++;}}, close: null as unknown as () => Promise<void>};
   runInNewContext(ts.transpileModule(`${source.slice(start, end)}\nglobalThis.close=close;`, {
@@ -647,7 +647,7 @@ test('history closes its owned target even when renderer binding disposal fails'
   const source=readFileSync(new URL('../historyTrafficBrowser.ts',import.meta.url),'utf8');
   const start=source.indexOf('  const close = async () =>'),end=source.indexOf('\n  try {',start);
   const error=new Error('dispose failure'),order:string[]=[];
-  const fixture={name:'fixture',cdp:{at(){}},binding:undefined,document:undefined,renderer:{dispose:async()=>{order.push('dispose');throw error;}},tab:{close:async()=>{order.push('target');}},close:null as unknown as ()=>Promise<void>};
+  const fixture={name:'fixture',passive:undefined,cdp:{at(){}},binding:undefined,document:undefined,renderer:{dispose:async()=>{order.push('dispose');throw error;}},tab:{close:async()=>{order.push('target');}},close:null as unknown as ()=>Promise<void>};
   runInNewContext(ts.transpileModule(`${source.slice(start,end)}\nglobalThis.close=close;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,fixture);
   await assert.rejects(fixture.close(),e=>e===error);assert.deepEqual(order,['dispose','target']);
 });
@@ -672,7 +672,7 @@ test('direct history cleanup drains its pending binding and closes the document 
   for(const rejected of [false,true]){
     const order:string[]=[],error=new Error('binding failed');let resolve!:()=>void,reject!:(error:Error)=>void;
     const binding=new Promise<void>((done,failed)=>{resolve=done;reject=failed;});
-    const fixture={name:'fixture',binding,renderer:rejected?undefined:{dispose:async()=>{order.push('renderer');}},document:{dispose(){order.push('document');}},
+    const fixture={name:'fixture',passive:undefined,binding,renderer:rejected?undefined:{dispose:async()=>{order.push('renderer');}},document:{dispose(){order.push('document');}},
       cdp:{at(){},evaluate(){throw Error('renderer cleanup must not evaluate');}},tab:{close:async()=>{order.push('target');}},close:null as unknown as ()=>Promise<void>};
     runInNewContext(ts.transpileModule(`${source.slice(start,end)}\nglobalThis.close=close;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,fixture);
     const closed=fixture.close();assert.deepEqual(order,[],'close must await the owned binding');
@@ -684,7 +684,7 @@ test('direct history releases its owned target even when document disposal throw
   const source=readFileSync(new URL('../historyTrafficBrowser.ts',import.meta.url),'utf8');
   const start=source.indexOf('  const close = async () =>'),end=source.indexOf('\n  try {',start);assert.ok(start>=0&&end>start);
   const order:string[]=[],error=new Error('document dispose failed');
-  const fixture={name:'fixture',binding:undefined,renderer:undefined,document:{dispose(){order.push('document');throw error;}},cdp:{at(){}},tab:{close:async()=>{order.push('target');}},close:null as unknown as ()=>Promise<void>};
+  const fixture={name:'fixture',passive:undefined,binding:undefined,renderer:undefined,document:{dispose(){order.push('document');throw error;}},cdp:{at(){}},tab:{close:async()=>{order.push('target');}},close:null as unknown as ()=>Promise<void>};
   runInNewContext(ts.transpileModule(`${source.slice(start,end)}\nglobalThis.close=close;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,fixture);
   await assert.rejects(fixture.close(),value=>value===error);assert.deepEqual(order,['document','target']);
 });

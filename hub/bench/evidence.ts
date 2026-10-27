@@ -30,6 +30,7 @@ export function safeEvidence(value: unknown, key = '', depth = 0, entryLimit = 1
   if (depth > 24) return '[depth limit]';
   if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
   if (typeof value === 'string') {
+    if (key === 'sourceRevisionHash') return /^[a-f0-9]{40}$/.test(value) ? value : '[text omitted]';
     if (['sampleFromNs','sampleToNs','terminationAttemptNs'].includes(key)) return /^(?:0|[1-9]\d{0,19})$/.test(value) && BigInt(value) <= 18446744073709551615n ? value : '[text omitted]';
     if (['scenarioId', 'expected', 'missing', 'duplicates', 'incomplete'].includes(key)) return SCENARIO_IDS.has(value) ? value : '[text omitted]';
     // Request classifications survive without admitting resource names or cursor text.

@@ -38,7 +38,7 @@ test('the source menu names the selected measurement count without an extra read
   const windows=Array.from({length:5},(_,i)=>({id:String(i),kind:'weekly',label:'Model '+i,minutes:10080}));
   const source={id:'s',provider:'antigravity',windows};
   const context={exports:{} as {draw:(props:unknown)=>Node},require:()=>runtime,t,num,quotaPeriods,isWindowHidden:(_view:unknown,_source:string,id:string)=>hidden.has(id),
-    useDataFilters:()=>{},usePeriodValues:()=>({value:missing?null:source,loading:false,error:null}),useTimeRange:()=>historical?{from:0,to:1}:null,useMine:()=>false,useState:(initial:unknown)=>[initial,()=>{}],planOf:()=>null,Popover:'popover',SlidersIcon:'icon',MeasurementDetails:'details',Frequency:'frequency',RefreshAction:'refresh'};
+    useDataFilters:()=>{},usePeriodValues:()=>({value:missing?null:source,loading:false,error:null}),useTimeRange:()=>historical?{from:0,to:1}:null,useMine:()=>false,useState:(initial:unknown)=>[initial,()=>{}],planOf:()=>null,Popover:'popover',SlidersIcon:'icon',PeriodStatus:'period-status',Frequency:'frequency',RefreshAction:'refresh'};
   runInNewContext(ts.transpileModule(card.slice(start,end)+'\nexports.draw=SourceSettings;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   const label=()=>String(context.exports.draw({source,title:'Account',arrange:{owner:false,view:EMPTY_VIEW},boardId:'b',takeOff:false}).props.label);
   for(const locale of ['en','ru'] as const){setLocale(locale);assert.ok(label().includes(t('source.selectedMeasurements',{count:5})));hidden.add('1');assert.ok(label().includes(t('source.selectedMeasurements',{count:4})));historical=true;missing=true;assert.ok(!label().includes(t('source.selectedMeasurements',{count:0})),'unknown evidence is never a zero selection');historical=false;missing=false;hidden.clear();}
@@ -108,7 +108,7 @@ test('native historical values disclose their actual sample time while live valu
     for(const locale of ['en','ru'] as const) {
       setLocale(locale);selected={from:at-60_000,to:at+180_000};reading.value=read(selected.to);reading.basis.range=selected;
       let tree=render(),value=tree.find(node=>String(node.props.className).startsWith('limit-value '))!;
-      assert.equal(value.props.title,t('source.measured',{at:stamp(at)}));
+      assert.equal(value.props.title,[`${num(94.6,2)}%`,t('source.measured',{at:stamp(at)})].join('\n'));
       assert.equal((value.props.children as unknown[])[0],num(94.6));
       assert.equal(String(value.props.title).includes(stamp(selected.to)),false,'the period edge is not an observation');
       assert.equal(String(value.props.title).includes(stamp(now)),false,'current operational success is not the historical sample');
@@ -116,10 +116,10 @@ test('native historical values disclose their actual sample time while live valu
       selected={from:at-60_000,to:at+660_000};reading.value=read(selected.to);reading.basis.range=selected;
       assert.equal(reading.value.windows[0].stale,true);
       tree=render();value=tree.find(node=>String(node.props.className).startsWith('limit-value '))!;
-      assert.equal(value.props.title,[t('source.measured',{at:stamp(at)}),t('money.stale')].join('\n'));
+      assert.equal(value.props.title,[`${num(94.6,2)}%`,t('source.measured',{at:stamp(at)}),t('money.stale')].join('\n'));
       assert.equal(tree.find(node=>node.props.className==='key-status')?.props['aria-hidden'],false);
       selected=null;tree=render();value=tree.find(node=>String(node.props.className).startsWith('limit-value '))!;
-      assert.equal(value.props.title,undefined);assert.equal((value.props.children as unknown[])[0],num(23));
+      assert.equal(value.props.title,[`${num(23,2)}%`,t('source.measured',{at:stamp(now)})].join('\n'));assert.equal((value.props.children as unknown[])[0],num(23));
       assert.equal(tree.some(node=>node.props.className==='key-status'),false);
     }
   } finally {setLocale('en');store.close();}

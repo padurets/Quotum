@@ -20,7 +20,7 @@ const evaluate=(text:string,inputs:object={},github:object={})=>runInNewContext(
   format:(pattern:string,...values:unknown[])=>pattern.replace(/\{(\d+)\}/g,(_,index)=>String(values[Number(index)])),
 });
 const selected=(name:string,inputs:object={},github:object={})=>Boolean(evaluate(expression(job(name),'if'),inputs,github));
-const modes=['trace_only','original_timing','native_trace','native_profile','caption_control','native_postmortem_control','history_scroll_control','history_pool_control','startup_io_control','compositor_guard_control'];
+const modes=['trace_only','original_timing','native_trace','native_profile','caption_control','native_postmortem_control','history_scroll_control','history_preinput_binding','history_pool_control','startup_io_control','compositor_guard_control'];
 
 test('ordinary CI requires all three independent producers, including every unsuccessful result',{skip:process.platform==='win32'},()=>{
   const aggregate=job('bench');

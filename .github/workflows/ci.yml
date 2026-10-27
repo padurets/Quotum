@@ -62,6 +62,11 @@ on:
         required: false
         type: boolean
         default: false
+      history_preinput_binding:
+        description: With history_scroll_control, bind each renderer before the full history matrix
+        required: false
+        type: boolean
+        default: false
       history_pool_control:
         description: Observe cache ownership in the unchanged full history matrix
         required: false
@@ -89,7 +94,7 @@ concurrency:
 
 jobs:
   dev-tooling:
-    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
+    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -100,7 +105,7 @@ jobs:
       - name: Require a pinned source for diagnostic modes
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
-          HAS_DIAGNOSTIC_MODE: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control || inputs.history_scroll_control || inputs.history_pool_control || inputs.compositor_guard_control }}
+          HAS_DIAGNOSTIC_MODE: ${{ inputs.history_preinput_binding || inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control || inputs.history_scroll_control || inputs.history_pool_control || inputs.compositor_guard_control }}
         run: node -e 'if(process.env.HAS_DIAGNOSTIC_MODE==="true")throw Error("Diagnostic modes require diagnostic_ref")'
       - run: make dev-test
         env:
@@ -114,7 +119,7 @@ jobs:
           if-no-files-found: warn
 
   hub:
-    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
+    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
     runs-on: ubuntu-latest
     # It takes about a minute; a test that hangs fails it instead of holding the runner.
     timeout-minutes: 15
@@ -138,7 +143,7 @@ jobs:
   # What an open dashboard costs, measured in Chrome on the built hub and page (hub/bench).
   # A release does not wait for it: the commit it tags already passed it.
   bench:
-    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && always() && !inputs.diagnostic_ref && !startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && always() && !inputs.diagnostic_ref && !startsWith(github.ref, 'refs/tags/') }}
     needs: [bench-history, bench-dashboard, bench-panning]
     runs-on: ubuntu-latest
     timeout-minutes: 1
@@ -155,18 +160,33 @@ jobs:
           fi
 
   bench-history:
-    name: ${{ inputs.compositor_guard_control && format('bench-history ({0})', matrix.arm) || 'bench-history' }}
-    if: ${{ (github.event_name == 'workflow_dispatch' && (inputs.compositor_guard_control || inputs.history_pool_control)) || (!startsWith(github.ref, 'refs/tags/') && !inputs.startup_io_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && inputs.history_scroll_control))) }}
+    name: ${{ inputs.compositor_guard_control && !inputs.history_preinput_binding && format('bench-history ({0})', matrix.arm) || 'bench-history' }}
+    if: ${{ inputs.history_preinput_binding || (github.event_name == 'workflow_dispatch' && (inputs.compositor_guard_control || inputs.history_pool_control)) || (!startsWith(github.ref, 'refs/tags/') && !inputs.startup_io_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && inputs.history_scroll_control))) }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.compositor_guard_control && '[{"arm":"OLD1","feature":"disable"},{"arm":"NEW","feature":"enable"},{"arm":"OLD2","feature":"disable"}]' || '[{"arm":"ordinary","feature":""}]') }}
+        include: ${{ fromJSON(inputs.compositor_guard_control && !inputs.history_preinput_binding && '[{"arm":"OLD1","feature":"disable"},{"arm":"NEW","feature":"enable"},{"arm":"OLD2","feature":"disable"}]' || '[{"arm":"ordinary","feature":""}]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
       run:
         working-directory: hub
     steps:
+      - name: Require the paired history preinput binding
+        if: ${{ inputs.history_preinput_binding }}
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        env:
+          CONTROL_EVENT: ${{ github.event_name }}
+          HISTORY_SCROLL: ${{ inputs.history_scroll_control }}
+          DIAGNOSTIC_REF: ${{ inputs.diagnostic_ref }}
+          EXPECTED_CLIENT: ${{ inputs.expected_client_sha256 }}
+          CONFLICTING_MODE: ${{ inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control || inputs.history_pool_control || inputs.startup_io_control || inputs.compositor_guard_control }}
+        run: |
+          if [[ "$CONTROL_EVENT" != workflow_dispatch || "$HISTORY_SCROLL" != true || ! "$DIAGNOSTIC_REF" =~ ^[a-f0-9]{40}$ || ! "$EXPECTED_CLIENT" =~ ^[a-f0-9]{64}$ || "$CONFLICTING_MODE" == true ]]; then
+            printf '%s\n' 'Choose only the paired history scroll control with pinned source and client.' >&2
+            exit 1
+          fi
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.diagnostic_ref || github.sha }}
@@ -268,7 +288,7 @@ jobs:
             npm run bench -- --ci --scope history
           fi
         env:
-          FRESH_HISTORY: ${{ inputs.history_scroll_control && '1' || '' }}
+          FRESH_HISTORY: ${{ inputs.history_scroll_control && !inputs.history_preinput_binding && '1' || '' }}
           QUOTUM_C3_CHROME: ${{ inputs.compositor_guard_control && format('{0}/quotum-c3-guard-{1}/chrome', runner.temp, matrix.arm) || '' }}
           QUOTUM_BENCH_HISTORY_SCROLL_CONTROL: ${{ (inputs.history_scroll_control || inputs.compositor_guard_control) && '1' || '' }}
           QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL: ${{ inputs.history_pool_control && '1' || '' }}
@@ -286,7 +306,7 @@ jobs:
           if-no-files-found: warn
 
   bench-dashboard:
-    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.history_pool_control && !startsWith(github.ref, 'refs/tags/') && !inputs.native_postmortem_control && !inputs.history_scroll_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
+    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.history_pool_control && !startsWith(github.ref, 'refs/tags/') && !inputs.native_postmortem_control && !inputs.history_scroll_control && (!inputs.diagnostic_ref || (github.event_name == 'workflow_dispatch' && (inputs.native_trace || inputs.native_profile || inputs.caption_control))) }}
     runs-on: ubuntu-latest
     # Ordinary updates and native panning have independent runners and deadlines.
     timeout-minutes: 20
@@ -352,7 +372,7 @@ jobs:
           if-no-files-found: warn
 
   bench-panning:
-    if: ${{ !startsWith(github.ref, 'refs/tags/') && !inputs.diagnostic_ref && !inputs.trace_only && !inputs.original_timing && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control && !inputs.history_pool_control && !inputs.startup_io_control && !inputs.compositor_guard_control }}
+    if: ${{ !inputs.history_preinput_binding && !startsWith(github.ref, 'refs/tags/') && !inputs.diagnostic_ref && !inputs.trace_only && !inputs.original_timing && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control && !inputs.history_pool_control && !inputs.startup_io_control && !inputs.compositor_guard_control }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -379,7 +399,7 @@ jobs:
           if-no-files-found: warn
 
   idle-cpu-control:
-    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.history_pool_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control }}
+    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.history_pool_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -429,7 +449,7 @@ jobs:
           if-no-files-found: warn
 
   native-postmortem-control:
-    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && inputs.native_postmortem_control }}
+    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && inputs.native_postmortem_control }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -505,7 +525,7 @@ jobs:
           if-no-files-found: warn
 
   startup-io-control:
-    if: ${{ !inputs.compositor_guard_control && github.event_name == 'workflow_dispatch' && inputs.startup_io_control }}
+    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && github.event_name == 'workflow_dispatch' && inputs.startup_io_control }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -575,7 +595,7 @@ jobs:
           if-no-files-found: warn
 
   managed-keys:
-    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
+    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
     strategy:
       fail-fast: false
       matrix:
@@ -599,7 +619,7 @@ jobs:
 
   # On every system the agent ships for: its process handling differs between them.
   agent:
-    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
+    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
     strategy:
       fail-fast: false
       matrix:
@@ -626,7 +646,7 @@ jobs:
   # The installers run on people's machines straight from a download: they must at least
   # be sound as scripts (shellcheck is on the runner; pwsh parses without running).
   installers:
-    if: ${{ !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
+    if: ${{ !inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

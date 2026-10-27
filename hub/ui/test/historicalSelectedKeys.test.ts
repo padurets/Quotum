@@ -55,7 +55,7 @@ test('a selected key beyond the preview keeps its known name across live, pendin
   const run=(body:string)=>runInNewContext('(function(){'+ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText+'})()',context);
   const mc=code('../components/MoneyCard.tsx');run(mc.slice(mc.indexOf('export function MoneyValues('),mc.indexOf('/** Subscription funds')));context.MoneyValues=context.exports.MoneyValues;
   run(mc.slice(mc.indexOf('export function MoneyCard('),mc.indexOf('type MoneySource=')));context.MoneyCard=context.exports.MoneyCard;
-  const sc=code('../components/SourceCard.tsx'),start=sc.indexOf('function CardMeasurements(');run(sc.slice(start,sc.indexOf('/** Every reader',start))+'\nexports.CardMeasurements=CardMeasurements;');
+  const sc=code('../components/SourceCard.tsx'),start=sc.indexOf('function CardMeasurements(');run(sc.slice(start,sc.indexOf('/** Historical funds',start))+'\nexports.CardMeasurements=CardMeasurements;');
   const render=()=>nodes(context.exports.CardMeasurements({source,arrange:{view:EMPTY_VIEW},boardId:h.board}));
   render();await delivered;await flush();
   for(const locale of ['en','ru'] as const){

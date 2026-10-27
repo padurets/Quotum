@@ -10,7 +10,7 @@ import {openTab, type Browser, type Cdp} from './cdp';
 import {HISTORY_COHORT_TAKES, historyCutInvalidation, historyIdentity, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
 import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from './historyProxy';
 import {observeReversal} from './reversalDiagnostic';
-import {rendererIdentity,rendererDocument,type RendererIdentity} from './rendererIdentity';
+import {rendererIdentity,rendererDocument,historyRendererIdentity,type RendererIdentity} from './rendererIdentity';
 import {historyPoolReceiptScript,claimRetirementAlignment,type RetirementAlignment,type retirementBoundary} from './historyPoolReceipt';
 import {setTimeout as delay} from 'node:timers/promises';
 import {ScriptBinding} from './scriptBinding';
@@ -237,7 +237,9 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
   const pressureJournal=pressure&&postfailureBinding&&!poolEvidence&&!strictDocument&&!process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL;
   const document=strictDocument||postfailureBinding?rendererDocument(cdp):undefined;
   if(document)browser.owner?.resource(async()=>document.dispose());
-  const lateRenderer=document?{requireBeforeInput:strictDocument,validDocument:()=>document.valid(),resolve:(signal:AbortSignal)=>binding??=rendererIdentity(cdp,browser,signal,document).then(value=>(renderer=value))}:undefined;
+  let attemptPrefix='';
+  const passive=document&&postfailureBinding&&!strictDocument?historyRendererIdentity(cdp,browser,document,new URL(proxy.url).origin,()=>attemptPrefix):undefined;
+  const lateRenderer=passive?{...passive,resolve:(...args:Parameters<typeof passive.resolve>)=>binding??=passive.resolve(...args).then(value=>(renderer=value))}:document?{requireBeforeInput:strictDocument,validDocument:()=>document.valid(),resolve:(signal:AbortSignal)=>binding??=rendererIdentity(cdp,browser,signal,document).then(value=>(renderer=value))}:undefined;
   cdp.at(`${name}/seed`);
   const capturePool = async () => {
     if(!poolEvidence||poolCaptured)return;
@@ -270,7 +272,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
   };
   // Closing this owned target discards its observers and overrides. A stalled
   // renderer cannot acknowledge a cleanup evaluation before its target closes.
-  const close = async () => {cdp.at(`${name}/cleanup`); try{if(binding)await binding;if(renderer)await renderer.dispose();}finally{try{document?.dispose();}finally{await tab.close();}}};
+  const close = async () => {cdp.at(`${name}/cleanup`); try{if(passive)await passive.dispose();if(binding)await binding;if(renderer)await renderer.dispose();}finally{try{document?.dispose();}finally{await tab.close();}}};
   try {
     const seedPhase = `${name}/seed`; bodies.phase = seedPhase; proxy.phase(seedPhase);
     await cdp.send('Network.enable'); await cdp.send('Page.enable'); await cdp.send('Performance.enable');
@@ -278,7 +280,8 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
     await cdp.send('Emulation.setDeviceMetricsOverride', {width: 1280, height: 900, deviceScaleFactor: 1, mobile: false});
     const split = cookie.indexOf('='); await cdp.send('Network.setCookie', {name: cookie.slice(0, split), value: cookie.slice(split + 1), url: proxy.url, httpOnly: true, sameSite: 'Lax'});
     if(poolEvidence)await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:historyPoolReceiptScript()});
-    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source: historyPageScript(length === DAY ? '24h' : '30d',pressureJournal)});
+    const source=historyPageScript(length === DAY ? '24h' : '30d',pressureJournal);attemptPrefix=`b${pageSerial}`;
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source});
     const navigation=await cdp.send<{frameId:string;loaderId?:string;errorText?:string}>('Page.navigate', {url: proxy.url});
     const settled = async (seed = false) => {
       const deadline = Date.now() + 20_000;
@@ -299,6 +302,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
     if(poolEvidence)poolScenario.geometry=geometry;
     assert.ok(geometry.series >= 12, `${name}: fewer than twelve actual series`);
     await prepareHistoryTarget(cdp, future ? '[data-widget="quota-history"] .chart' : '.activity .chart', geometry);
+    if(passive)await passive.before();
     const seedReads = bodies.resources.filter(read => read.phase === seedPhase && read.count?.complete);
     assert.ok(seedReads.length,`${name}: no complete seed resources: ${JSON.stringify(bodies.reads.map(read=>({phase:read.phase,resources:read.sections?.length,cell:read.cell,complete:read.count?.complete,canceled:read.canceled})))}`); const cell = seedReads[0].cell;if(poolEvidence)poolScenario.cell=cell;
     const seeds = new Map<string, {answer: NonNullable<Read['answer']>; initial: Set<number>; closedBefore: number}>();
@@ -309,12 +313,14 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
       group.closedBefore = Math.min(group.closedBefore, read.answer!.now);
       for (const [from, to] of read.chunks!) for (let at = from; at < to; at += cell) group.initial.add(at);
     }
+    passive?.setupSent();
     await cdp.evaluate(`(() => {
       const root=document.querySelector('[data-widget="quota-history"] .chart>svg'),originalPush=history.pushState;
       const p=window.__historyTraffic={tokens:[],poses:[],pushes:0,running:true,originalPush};
       history.pushState=function(...args){p.pushes++;return originalPush.apply(this,args);};
       const frame=()=>{if(!p.running)return;if(root.dataset.panEnd){const token=root.dataset.panToken;if(p.tokens.at(-1)!==token)p.tokens.push(token);const end=Number(root.dataset.panEnd),origin=Number(root.dataset.panOrigin);if(p.poses.at(-1)?.end!==end)p.poses.push({end,origin});}p.raf=requestAnimationFrame(frame);};p.raf=requestAnimationFrame(frame);
     })()`);
+    passive?.setupComplete();
     if(document){
       document.pin(navigation);
       if(strictDocument){

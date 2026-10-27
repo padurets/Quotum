@@ -356,9 +356,6 @@ body.is-resizing-bottom-right, body.is-resizing-bottom-right * { cursor: nwse-re
 .card-measurements .limit-bottom > span { min-width: 0; overflow-wrap: anywhere; }
 .measurement-details { display: flex; flex-direction: column; gap: 20px; min-width: 0; overflow-wrap: anywhere; }
 .measurement-proof { display: block; white-space: pre-line; margin-top: 8px; color: var(--text-3); }
-.measurement-details .limit-name { min-width: 0; white-space: pre-line; overflow-wrap: anywhere; }
-.measurement-details .limit-value { flex-shrink: 0; }
-.measurement-details .cap-label > span { white-space: pre-line; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 .text-button.money-status-trigger { height: 14px; min-width: 14px; padding: 0; border: 0; background: none; }
 .limit-top { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .name-detail { color: var(--text-3); }

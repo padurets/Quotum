@@ -1,14 +1,13 @@
 import {Cdp, type Browser} from './cdp.js';
 import {deadline, devtoolsJson} from './deadline.js';
 import {safeEvidence} from './evidence.js';
-import type {ProcessIdentity} from './browserProcess.js';
-import type {RendererIdentity} from './rendererIdentity.js';
+import type {RendererIdentity,RendererResolution,RendererProcessSample} from './rendererIdentity.js';
 
 type DocumentMark={atMs:number;frame?:string;loader?:string};
 export type DiagnosticOrigin={startedAt:number;navigation:()=>{requested?:DocumentMark;committed?:DocumentMark;loadAtMs:number|null}};
-type Options = {lateRenderer?:{requireBeforeInput?:boolean;validDocument():boolean;resolve(signal:AbortSignal):Promise<RendererIdentity>};renderer?:RendererIdentity; mode?: 'canonical' | 'diagnostic'; profileBeforeInput?: boolean; postmortem?:boolean; closeTarget?: () => Promise<void>;signal?:AbortSignal;origin?:DiagnosticOrigin};
+type Options = {lateRenderer?:{requireBeforeInput?:boolean;prohibitFallback?:boolean;signal?:AbortSignal;input?(scenario:string,started:number):void;validDocument():boolean;resolve(signal:AbortSignal,context?:RendererResolution):Promise<RendererIdentity>};renderer?:RendererIdentity; mode?: 'canonical' | 'diagnostic'; profileBeforeInput?: boolean; postmortem?:boolean; closeTarget?: () => Promise<void>;signal?:AbortSignal;origin?:DiagnosticOrigin};
 type Process = {type: string; id: number; cpuTime: number};
-type ProcessSample = {status: 'pending' | 'observed' | 'unavailable'; fromMs: number; toMs: number | null; processes?: ProcessIdentity[]; omitted?: number};
+type ProcessSample = RendererProcessSample;
 const PAGE_LIVENESS = '({visibility:document.visibilityState,focus:document.hasFocus(),ready:document.readyState})';
 let serial = 0;
 
@@ -24,6 +23,7 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
   let intervention = false, capture: Promise<void> | undefined, released = false;
   let nativeCapture:ReturnType<NonNullable<Browser['nativePostmortem']>>|undefined;
   let renderers:import('./nativePostmortem.js').NativeCandidate[]=[];
+  let browserPid:number|null=null;
   let cancelPassive: (() => void) | undefined;
   const report: Record<string, unknown> = {id, mode: diagnostic ? 'diagnostic' : 'canonical', ownedBrowser: Boolean(browser.owned)};
   if(diagnostic||options.postmortem&&browser.owned){
@@ -105,6 +105,8 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
         const processes = await control.send<{processInfo: Process[]}>('SystemInfo.getProcessInfo', {}, alive);
         report.processes = processes.processInfo.map(({type, id, cpuTime}) => ({type, id, cpuTime}));
         renderers=processes.processInfo.filter(value=>value.type==='renderer').map(value=>({pid:value.id,cpuTime:value.cpuTime}));
+        const roots=processes.processInfo.filter(value=>value.type==='browser');
+        browserPid=roots.length===1&&Number.isSafeInteger(roots[0].id)&&roots[0].id>0?roots[0].id:null;
         if (browser.diagnostics) report.native = await browser.diagnostics(processes.processInfo.map(value => value.id), undefined, alive);
       }, 2000, pending);
     } catch {report.livenessStatus = 'unavailable';}
@@ -137,8 +139,9 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
     }
     try {
       await bounded('failure collection', async pending => {
+        let after:ProcessSample|undefined;
         await Promise.all([
-          sampleProcesses(pending).then(sample => {if (!pending.aborted) report.failedProcesses = sample;}),
+          sampleProcesses(pending).then(sample => {if (!pending.aborted) report.failedProcesses = after = sample;}),
           liveness(pending),
           freshPageLiveness(pending),
           bounded('page liveness', async probe => {
@@ -151,12 +154,14 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
         let nativeIntervention=false,renderer=options.renderer;
         if(postmortem&&options.lateRenderer){
           report.nativeBinding=false;
+          if(options.lateRenderer.prohibitFallback&&(!(options.lateRenderer.signal instanceof AbortSignal)||options.lateRenderer.signal.aborted))return;
           // Missing optional metadata retains the old unbound path. Once mapping
           // starts, only a complete identity permits either intervention.
           if(!options.lateRenderer.validDocument()){
-            if(options.lateRenderer.requireBeforeInput!==false)return;
+            if(options.lateRenderer.prohibitFallback||options.lateRenderer.requireBeforeInput!==false)return;
           }else{
-            try{renderer=await options.lateRenderer.resolve(pending);}catch{return;}
+            const failedStart=page.snapshot().failure?.started;
+            try{renderer=await options.lateRenderer.resolve(pending,after?{after,failedStart:typeof failedStart==='number'?failedStart:null,browserPid}:undefined);}catch{return;}
             report.rendererAtCapture=renderer.evidence();
             const pid=renderer.pid,birth=renderer.birth;
             if(!options.lateRenderer.validDocument()||!renderer.valid()||pid===null||birth===null||renderers.filter(value=>value.pid===pid).length!==1)return;
@@ -171,15 +176,17 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
             if(!identity.valid()||pid===null||birth===null||selected.length!==1){report.nativeBinding=false;return;}
             candidates=[{...selected[0],birth}];
           }
-          nativeCapture=browser.nativePostmortem(candidates,pending);
+          const lifetime=options.lateRenderer?.prohibitFallback?options.lateRenderer.signal:renderer?.signal;
+          const captureSignal=lifetime?AbortSignal.any([pending,lifetime]):pending;
+          nativeCapture=browser.nativePostmortem(candidates,captureSignal);
           const native=await nativeCapture;report.nativeWait=native;nativeIntervention=native.intervened;
           if(renderer){
             const after=renderer.evidence();report.rendererAfterCapture=after;
-            report.nativeBinding=after.status==='known'&&native.pid===after.pid&&native.birth===after.birth;
+            report.nativeBinding=after.status==='known'&&!captureSignal.aborted&&native.pid===after.pid&&native.birth===after.birth;
           }
         }
         if (diagnostic||postmortem&&!nativeIntervention) {
-          if(renderer&&!renderer.valid()||options.lateRenderer&&options.lateRenderer.requireBeforeInput!==false&&!options.lateRenderer.validDocument()){report.nativeBinding=false;return;}
+          if(renderer&&!renderer.valid()||options.lateRenderer&&(options.lateRenderer.prohibitFallback||options.lateRenderer.requireBeforeInput!==false)&&!options.lateRenderer.validDocument()){report.nativeBinding=false;return;}
           if(postmortem)report.postmortem=true;
           if (!intervention) await enable(pending);
           await send('Debugger.pause', pending);
@@ -219,6 +226,7 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
         }
       }, 5000);
       try {
+        options.lateRenderer?.input?.(label,performance.now());
         const result = await run();
         if (capture) throw new Error(label + ': response arrived after diagnostic intervention');
         return result;

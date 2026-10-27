@@ -106,6 +106,12 @@ test('client identity distinguishes compiled bytes on the same source and filena
   assert.doesNotMatch(JSON.stringify(first), /quotum-client-identity-/);
 });
 
+test('Chromium source revision admits exactly forty lowercase hexadecimal characters',()=>{
+  const hash='3ff7ac5a9224be9156d7f8703a06e22890aafd34';
+  assert.deepEqual(safeEvidence({sourceRevisionHash:hash}),{sourceRevisionHash:hash});
+  for(const value of ['private-canary',hash.toUpperCase(),hash+'0','https://private-canary.invalid',hash.slice(1)])assert.deepEqual(safeEvidence({sourceRevisionHash:value}),{sourceRevisionHash:'[text omitted]'});
+});
+
 test('missing and ambiguous client bundles leave explicit unavailable identity', t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-client-identity-'));
   t.after(() => rmSync(dir, {recursive: true, force: true}));
