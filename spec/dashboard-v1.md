@@ -2207,6 +2207,12 @@ first grouping choice; Project remains the default. Client is visible by default
 owner-hideable independently of chart selection; narrow ordinary rows keep it quietly
 on the existing first line. Unknown and Not provided labels remain neutral everywhere.
 
+The owner-private `sources[].seenAt` in `GET /api/devices` is the latest accepted
+observation time for that device/source, adjusted for agent clock skew. It is separate
+from the device's receipt/contact time in `lastSeenAt`. Current associations follow
+explicit membership; without a roster, equal latest observations of different accounts
+leave the current source unknown.
+
 `GET /api/devices` adds owner-private `clients` entries (`clientId`, nullable `version`,
 `seenAt`) and current `sessions` with the safe board fields plus a held source ID or null.
 Device revocation removes inventory and current presence. Inventory changes use the
@@ -2331,3 +2337,17 @@ for values and sorting; a new source-work interval invalidates only work-derived
 accounting. Financial indexes, drawing evidence and subscriptions remain reusable
 when their native facts have not changed. The ordinary GET history route also accepts
 `work=1` with the same source permissions and history bounds.
+
+A refresh request may finish with `status: "no_new_data"`: collection completed without a new observation. `finishedAt` is the completion admission time. Existing resource values and freshness are unchanged; the ordinary refresh state/event and 60-second terminal retention apply.
+
+The owner-private `/api/devices` response may contain several `sources` for one
+device/provider. A failure optionally carries `accountKey` for its verified account;
+an absent key denotes a genuinely unknown provider-level failure. A successful
+observation clears its own account failure only when its adjusted observation time is
+at least the failure time, without removing sibling failures. Older or equal-time
+failures cannot replace that same device/account's newer success; another device's
+success is independent. Unknown failures compare only with this device's currently
+eligible provider observations. Unknown recovery uses the final eligible observations
+of the whole policy-admitted snapshot batch, not an intermediate prefix. Once a
+committed unique success closes a diagnostic, later ambiguity or membership changes
+do not resurrect it. These references are not added to shared board projections.

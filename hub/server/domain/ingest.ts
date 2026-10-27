@@ -42,6 +42,8 @@ export type AgentSnapshot = {
 
 export type AgentFailure = {provider: ClientProvider; observedAt: number; error: string; detail: string | null; attemptContext?: AttemptContext | null};
 
+export type CollectionCompletion = {provider:ClientProvider;outcome:'no_new_data';completedAt:number;attemptContext:AttemptContext};
+export type AccountRoster = {provider:ClientProvider;accounts:{account:string|null;accountName:string|null}[]};
 export type AgentBatch = {
   version: 1;
   agent: string;
@@ -49,6 +51,7 @@ export type AgentBatch = {
   sentAt: number;
   snapshots: AgentSnapshot[];
   failures: AgentFailure[];
+  completions: CollectionCompletion[];
 };
 
 export const AGENT_ERRORS = ['not_logged_in', 'unsupported', 'timeout', 'invalid_output', 'failed', 'not_installed'] as const;
@@ -246,6 +249,12 @@ export function parseBatch(body: unknown): AgentBatch {
     ...sender,
     sentAt: time(input.sentAt, 'sentAt')!,
     snapshots: list(input.snapshots, 'snapshots', LIMITS.items).filter(value => clientItem(value, 'snapshot')).map(parseSnapshot),
+    completions: list(input.completions,'completions',LIMITS.items).filter(value=>clientItem(value,'completion')).map(value=>{
+      if(!isObject(value)||value.outcome!=='no_new_data')throw new Invalid('completion');
+      const context=attemptContext(value.attemptContext);
+      if(!context)throw new Invalid('completion attemptContext');
+      return {provider:value.provider as ClientProvider,outcome:'no_new_data' as const,completedAt:time(value.completedAt,'completedAt')!,attemptContext:context};
+    }),
     failures: list(input.failures, 'failures', LIMITS.items).filter(value => clientItem(value, 'failure')).map(parseFailure),
   };
 }
@@ -263,6 +272,7 @@ export type Checkin = AgentSender & {
   attemptContext: boolean;
   policyAck: {authority: string; revision: number} | null;
   collectors: ClientProvider[] | null;
+  accountRosters:AccountRoster[];
   subscriptions: (ClientSubscription | HubSubscription)[];
 };
 
@@ -270,7 +280,7 @@ export function parseCheckin(body: unknown): Checkin {
   const sender = parseSender(body);
   const paced = (body as Obj).paced ?? false;
   if (typeof paced !== 'boolean') throw new Invalid('paced');
-  const subscriptions = list((body as Obj).subscriptions, 'subscriptions', 16).map((value): ClientSubscription | HubSubscription => {
+  const subscriptions = list((body as Obj).subscriptions, 'subscriptions', 48).map((value): ClientSubscription | HubSubscription => {
     if (!isObject(value)) throw new Invalid('subscription');
     const id = provider(value.provider);
     if (providerOf(id)!.measuredBy === 'hub') return {provider: id as HubSubscription['provider'], measuredBy: 'hub'};
@@ -291,7 +301,25 @@ export function parseCheckin(body: unknown): Checkin {
     ? {authority: input.policyAck.authority, revision: input.policyAck.revision as number} : null;
   const collectors = Array.isArray(input.collectors) && input.collectors.length <= 16 && input.collectors.every(id=>typeof id==='string'&&providerOf(id)?.measuredBy==='client')
     ? [...new Set(input.collectors as ClientProvider[])] : null;
-  return {...sender, paced, subscriptions, measurementPolicy: capabilities.measurementPolicy === 1, attemptContext: capabilities.attemptContext === 1, policyAck: ack, collectors};
+  const seenProviders=new Set<Provider>();
+  const accountRosters:AccountRoster[]=list(input.accountRosters,'accountRosters',providers.length).flatMap(group=>{
+    if(!isObject(group))throw new Invalid('accountRoster');
+    const id=provider(group.provider);
+    if(providerOf(id)!.measuredBy==='hub')return [];
+    if(seenProviders.has(id))throw new Invalid('accountRoster provider');seenProviders.add(id);
+    if(!Array.isArray(group.accounts))throw new Invalid('accountRoster accounts');
+    const seen=new Set<string>();
+    const accounts=list(group.accounts,'accountRoster accounts',16).map(value=>{
+      if(!isObject(value))throw new Invalid('accountRoster account');
+      const identity=account(value.account),name=text(value.accountName,'accountName',true);
+      if(id==='antigravity'?identity!==null||!Object.hasOwn(value,'accountName'):identity===null||name!==null)throw new Invalid('accountRoster identity');
+      const key=identity??name?.trim().toLowerCase()??'';
+      if(seen.has(key))throw new Invalid('accountRoster duplicate');seen.add(key);
+      return {account:identity,accountName:name};
+    });
+    return [{provider:id as ClientProvider,accounts}];
+  });
+  return {...sender, paced, subscriptions, accountRosters, measurementPolicy: capabilities.measurementPolicy === 1, attemptContext: capabilities.attemptContext === 1, policyAck: ack, collectors};
 }
 
 /**

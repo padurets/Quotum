@@ -18,6 +18,12 @@ use crate::model::{
     SessionReport, Snapshot, now_ms, parse_time, ts,
 };
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AccountRoster {
+    pub provider: Provider,
+    pub accounts: Vec<crate::collection::AccountRef>,
+}
+
 /// One subscription this device could measure now, as a check-in asks about it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ask<'a> {
@@ -86,6 +92,16 @@ pub trait Sink {
         self.deliver(outcome);
     }
 
+    fn account_rosters(&mut self, _rosters: &[AccountRoster]) {}
+    fn require_collections(&mut self, _required: bool) {}
+    fn supports_collections(&self) -> bool {
+        true
+    }
+    fn deliver_scoped(&mut self, outcome: &Outcome, context: Option<&AttemptContext>) {
+        self.deliver_attempt(outcome, context);
+    }
+    fn complete_collection(&mut self, _completion: &crate::collection::Completion) {}
+
     /// Sends the measurements kept for later, when the hub answers again.
     fn flush(&mut self) {}
 
@@ -144,6 +160,7 @@ enum Item {
     Failure(Failure),
     ManagedSnapshot { snapshot: Snapshot, context: Option<AttemptContext> },
     ManagedFailure { failure: Failure, context: Option<AttemptContext> },
+    Completion(crate::collection::Completion),
 }
 
 /// Keeps about two days of measurements of three providers every two minutes.
@@ -300,6 +317,10 @@ pub struct HubSink {
     commands: Vec<Option<String>>,
     accounts: Vec<Option<String>>,
     activity_known: bool,
+    rosters: Vec<AccountRoster>,
+    collections_supported: bool,
+    collections_required: bool,
+    unsupported_reported: bool,
 }
 
 impl HubSink {
@@ -336,6 +357,10 @@ impl HubSink {
             commands: Vec::new(),
             accounts: Vec::new(),
             activity_known: false,
+            rosters: Vec::new(),
+            collections_supported: false,
+            collections_required: false,
+            unsupported_reported: false,
             retry_at: None,
             failures: 0,
             refused: None,
@@ -349,8 +374,10 @@ impl HubSink {
     fn post(&self, items: &[Item]) -> Result<(), Trouble> {
         let mut snapshots = Vec::new();
         let mut failures = Vec::new();
+        let mut completions = Vec::new();
         for item in items {
             match item {
+                Item::Completion(c) => completions.push(serde_json::to_value(c).unwrap()),
                 Item::Snapshot(s) => snapshots.push(serde_json::to_value(s).unwrap()),
                 Item::Failure(f) => failures.push(serde_json::to_value(f).unwrap()),
                 Item::ManagedSnapshot { snapshot, context } => {
@@ -369,14 +396,24 @@ impl HubSink {
                 }
             }
         }
-        let batch = serde_json::json!({"version":INGEST_VERSION,"agent":AGENT,"machine":self.machine,"sentAt":ts::format(now_ms()),"snapshots":snapshots,"failures":failures});
+        let batch = serde_json::json!({"version":INGEST_VERSION,"agent":AGENT,"machine":self.machine,"sentAt":ts::format(now_ms()),"snapshots":snapshots,"failures":failures,"completions":completions});
         let response = self
             .http
             .post(&format!("{}/v1/ingest", self.base))
             .header("Authorization", &format!("Bearer {}", self.token))
             .send_json(&batch);
         match response {
-            Ok(mut response) => trouble(&mut response).map_or(Ok(()), Err),
+            Ok(mut response) => {
+                if let Some(error) = trouble(&mut response) {
+                    return Err(error);
+                }
+                if !completions.is_empty()
+                    && !response.body_mut().read_json::<Value>().is_ok_and(|v| v["completions"].as_u64().is_some())
+                {
+                    return Err(Trouble::Later("unsupported collection completion response".into()));
+                }
+                Ok(())
+            }
             Err(e) => Err(Trouble::Later(format!("the hub is unreachable: {e}"))),
         }
     }
@@ -502,6 +539,33 @@ impl Sink for HubSink {
             policy: self.policy.policy.clone(),
         }
     }
+    fn account_rosters(&mut self, rosters: &[AccountRoster]) {
+        self.rosters = rosters.to_vec();
+    }
+    fn require_collections(&mut self, required: bool) {
+        self.collections_required = required;
+    }
+    fn supports_collections(&self) -> bool {
+        self.collections_supported && self.policy.confirmed
+    }
+    fn complete_collection(&mut self, completion: &crate::collection::Completion) {
+        self.spool.push_back(Item::Completion(completion.clone()));
+        while self.spool.len() > SPOOL_LIMIT {
+            self.spool.pop_front();
+        }
+        if self.refused.is_some() || self.resting() { self.save_spool() } else { self.send(self.spool.len() > 1) }
+    }
+    fn deliver_scoped(&mut self, outcome: &Outcome, context: Option<&AttemptContext>) {
+        let item = match outcome {
+            Ok(snapshot) => Item::ManagedSnapshot { snapshot: snapshot.clone(), context: context.cloned() },
+            Err(failure) => Item::ManagedFailure { failure: failure.clone(), context: context.cloned() },
+        };
+        self.spool.push_back(item);
+        while self.spool.len() > SPOOL_LIMIT {
+            self.spool.pop_front();
+        }
+        if self.refused.is_some() || self.resting() { self.save_spool() } else { self.send(self.spool.len() > 1) }
+    }
     fn deliver_attempt(&mut self, outcome: &Outcome, context: Option<&AttemptContext>) {
         let item = match outcome {
             Ok(snapshot) => Item::ManagedSnapshot { snapshot: snapshot.clone(), context: context.cloned() },
@@ -567,7 +631,8 @@ impl Sink for HubSink {
             "paced": true,
             "machine": self.machine,
             "subscriptions": subscriptions,
-            "capabilities": {"measurementPolicy":1,"attemptContext":1},
+            "capabilities": {"measurementPolicy":1,"attemptContext":1,"accountRosters":1,"collectionCompletions":1},
+            "accountRosters": self.rosters,
         });
         if let Some(collectors) = &self.configured {
             request["collectors"] = serde_json::json!(collectors);
@@ -609,6 +674,12 @@ impl Sink for HubSink {
             self.report(Some("the hub answered a check-in with something else than JSON".into()));
             return unanswered;
         };
+        self.collections_supported =
+            body["capabilities"]["accountRosters"] == 1 && body["capabilities"]["collectionCompletions"] == 1;
+        if !self.collections_supported && self.collections_required && !self.unsupported_reported {
+            self.unsupported_reported = true;
+            (self.log)("unsupported collection protocol: upgrade the hub");
+        }
         if let Ok(policy) = serde_json::from_value::<MeasurementPolicy>(body["policy"].clone()) {
             if policy.valid() && self.policy.learn(policy).is_err() {
                 (self.log)(
@@ -986,6 +1057,49 @@ pub(crate) mod tests {
         let requests = seen.lock().unwrap();
         assert_eq!(requests.iter().filter(|(path, _)| path == "/v1/sessions").count(), 1);
         assert_eq!(requests.iter().find(|(path, _)| path == "/v1/sessions").unwrap().1["sessions"], json!([]));
+    }
+
+    #[test]
+    fn collection_capabilities_are_explicit_and_completions_stay_spooled_without_ack() {
+        for supported in [false, true] {
+            let (url, seen) = hub(move |path, _| {
+                if path == "/v1/checkin" {
+                    json(
+                        200,
+                        if supported {
+                            json!({"subscriptions":[],"capabilities":{"accountRosters":1,"collectionCompletions":1},"policy":{"version":1,"authority":"11111111-1111-4111-8111-111111111111","revision":0,"enabled":true,"collectors":{"claude":{"enabled":true,"epoch":0,"requiresEpoch":false,"changedAt":null},"codex":{"enabled":true,"epoch":0,"requiresEpoch":false,"changedAt":null},"antigravity":{"enabled":true,"epoch":0,"requiresEpoch":false,"changedAt":null}}}})
+                        } else {
+                            json!({"subscriptions":[]})
+                        },
+                    )
+                } else {
+                    json(200, json!({"accepted":0,"duplicates":1,"failures":0}))
+                }
+            });
+            let (mut sender, log) = sink(&url, &format!("collection-ack-{supported}"));
+            sender.require_collections(true);
+            sender.checkin_managed(&[], &[Provider::Codex]);
+            assert_eq!(sender.supports_collections(), supported);
+            assert_eq!(log.lock().unwrap().iter().any(|s| s.contains("unsupported collection protocol")), !supported);
+            let completion = crate::collection::Completion {
+                provider: Provider::Codex,
+                outcome: crate::collection::CompletionOutcome::NoNewData,
+                completed_at: now_ms(),
+                attempt_context: AttemptContext {
+                    version: 1,
+                    authority: "11111111-1111-4111-8111-111111111111".into(),
+                    collector_epoch: 0,
+                    target: crate::measurement_policy::AttemptTarget::Verified { account_key: "a".repeat(24) },
+                    command_id: Some("22222222-2222-4222-8222-222222222222".into()),
+                },
+            };
+            sender.complete_collection(&completion);
+            assert_eq!(sender.spool.len(), 1);
+            let requests = seen.lock().unwrap();
+            assert!(requests.iter().all(|(path, _)| path == "/v1/checkin" || path == "/v1/ingest"));
+            let batch = &requests.iter().find(|(path, _)| path == "/v1/ingest").unwrap().1;
+            assert_eq!(batch["completions"][0]["outcome"], "no_new_data");
+        }
     }
 
     #[test]

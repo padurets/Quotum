@@ -51,7 +51,8 @@ fn present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Option<u
 
 /// `text` with the patch applied, checked as the agent checks the file when it reads it.
 pub fn apply(text: &str, patch: &Patch) -> Result<String, String> {
-    let mut doc: DocumentMut = text.parse().map_err(|e: toml_edit::TomlError| e.to_string())?;
+    let mut doc: DocumentMut =
+        text.parse().map_err(|_: toml_edit::TomlError| "invalid configuration syntax".to_string())?;
     if let Some(sessions) = patch.sessions {
         doc["sessions"] = value(sessions);
     }
@@ -377,6 +378,23 @@ mod tests {
         assert_eq!(config.hub.unwrap().url, "https://q.example");
         let cleared = apply(&changed, &patch(r#"{"providers":{"antigravity":{"account":" "}}}"#)).unwrap();
         assert_eq!(Config::parse(&cleared).unwrap().account_name(Provider::Antigravity), None);
+    }
+
+    #[test]
+    fn local_hook_commands_survive_settings_changes_but_cannot_be_installed_by_ipc() {
+        let text = if cfg!(windows) {
+            "[providers.codex.hooks.collect]\npath = 'C:/Tools/collector.exe'\nargs = ['literal argument']\n[providers.codex.hooks.on_collected]\npath = 'C:/Tools/observer.exe'\n"
+        } else {
+            "[providers.codex.hooks.collect]\npath = '/bin/collector'\nargs = ['literal argument']\n[providers.codex.hooks.on_collected]\npath = '/bin/observer'\n"
+        };
+        let saved = apply(text, &patch(r#"{"providers":{"codex":{"enabled":false,"intervalS":120}}}"#)).unwrap();
+        let before = Config::parse(text).unwrap();
+        let after = Config::parse(&saved).unwrap();
+        assert_eq!(before.providers[&Provider::Codex].hooks, after.providers[&Provider::Codex].hooks);
+        assert!(
+            serde_json::from_str::<Patch>(r#"{"providers":{"codex":{"hooks":{"collect":{"path":"/bin/x"}}}}}"#)
+                .is_err()
+        );
     }
 
     #[test]

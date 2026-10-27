@@ -12,7 +12,7 @@ export type RefreshRequest = {
   notBefore: number;
   dispatchAt: number | null;
   deadline: number;
-  status: 'queued' | 'waiting' | 'updated' | 'failed' | 'unavailable' | 'no_result';
+  status: 'queued' | 'waiting' | 'updated' | 'failed' | 'unavailable' | 'no_result' | 'no_new_data';
   finishedAt: number | null;
 };
 

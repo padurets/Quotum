@@ -18,7 +18,7 @@ import {
 import {useApp} from '../lib/board';
 import {rich, t} from '../i18n';
 import {Brand, Modal} from './Kit';
-import {SwitchRow} from './Popover';
+import {SwitchRow, Popover} from './Popover';
 
 /** What the desktop app says, under a title of the page's own words: its text is English, for people who look closer. */
 function Detail({text}: {text: string}) {
@@ -152,13 +152,13 @@ function SaveError({saving, field}: {saving: Saving; field: string}) {
 /** What is known of a provider's client here: where it is and how the last measurement went. */
 function Status({provider, configPath}: {provider: ProviderSettings; configPath: string}) {
   const last = provider.last;
-  const result = !last
+  const result = provider.latestStatus==='no_new_data'?t('refresh.row.no_new_data'):!last
     ? t('measure.never')
     : last.ok
       ? t('measure.measured', {at: stamp(last.at)})
       : t('measure.failed', {error: errorText(last.error ?? 'failed'), at: stamp(last.at)});
   // Without a client, how its last try went says nothing more.
-  if (!provider.client) {
+  if (!provider.client && !provider.collector) {
     return (
       <>
         <small className="measure-status">{t('measure.notFound')}</small>
@@ -169,9 +169,17 @@ function Status({provider, configPath}: {provider: ProviderSettings; configPath:
     );
   }
   return (
-    <small className="measure-status" title={last?.detail}>
-      {rich('measure.client', {path: <code>{provider.client}</code>})} · {result}
-    </small>
+    <div className="measure-status">
+      <small title={last?.detail}>{provider.collector?t('measure.localCollector'):rich('measure.client', {path: <code>{provider.client}</code>})}</small>
+      <small>{result}</small>
+      {!!provider.accounts?.length && <Popover label={t('measure.accountOutcomes')} trigger={t('measure.accountOutcomes')}>
+        {provider.accounts.map((entry,index)=><div className="popover-row" key={index}>
+          <strong>{entry.account===null?t('measure.unknownAccount'):'account' in entry.account?entry.account.account.slice(0,8):entry.account.accountName??t('measure.defaultAccount')}</strong>
+          <div>{entry.status==='no_new_data'?t('refresh.row.no_new_data'):entry.status==='failed'?errorText(entry.error??'failed'):t('measure.measured',{at:stamp(entry.observedAt??entry.completedAt)})}</div>
+          <small>{stamp(entry.completedAt)}</small>
+        </div>)}
+      </Popover>}
+    </div>
   );
 }
 

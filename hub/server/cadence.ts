@@ -52,6 +52,7 @@ type Pace = {
   /** When the last measurement was taken, and no later than when the next one is due by its own staleness. */
   lastAt: number | null;
   promiseAt: number | null;
+  completedAt: number | null;
   /** The last time its numbers changed or it was in use. */
   busyAt: number;
   /** Whom and when (by the hub's clock) the last `measure: true` went to, and whether a measurement or a failure came back since. */
@@ -214,6 +215,21 @@ export class Cadence {
     request.view = {...request.view, status: success ? 'updated' : 'failed', finishedAt: now};
   }
 
+  awaiting(key:string,device:string):boolean {
+    const pace=this.paces.get(key);return !!pace&&pace.askedDevice===device&&pace.askedAt!==null&&!pace.answered;
+  }
+
+  completeWithoutData(key:string,device:string,at:number) {
+    const pace=this.paces.get(key);
+    if(!pace||pace.askedDevice!==device||pace.askedAt===null||at<pace.askedAt-CLOCK_TOLERANCE_MS)return;
+    this.answeredBy(pace,device,at);pace.completedAt=at;
+  }
+
+  refreshWithoutData(key:string,device:string,now:number) {
+    const request=this.requests.get(key);
+    if(request&&request.device===device&&pending(request.view)&&request.view.deadline>=now)request.view={...request.view,status:'no_new_data',finishedAt:now};
+  }
+
   /** Subscriptions known through check-ins or requests, even with no running sessions. */
   keysOf(devices: string[]): string[] {
     const keys = new Set<string>();
@@ -267,7 +283,7 @@ export class Cadence {
 
   /** The earliest a device may be told to measure: past its floor after the last measurement or command, and past the retry of a command left unanswered. */
   private notBefore(pace: Pace | undefined, minimum: number | null, fallback: number): number {
-    const times = [pace?.lastAt, pace?.askedAt].filter((at): at is number => at != null);
+    const times = [pace?.lastAt, pace?.askedAt, pace?.completedAt].filter((at): at is number => at != null);
     const at = times.length ? Math.max(fallback, Math.max(...times) + floorOf(minimum)) : fallback;
     return pace?.askedAt != null && !pace.answered ? Math.max(at, retryAt(pace, floorOf(minimum))) : at;
   }
@@ -289,6 +305,8 @@ export class Cadence {
 
   /** A waiting plan protects duty until a fixed due time, never from the time of a read or retry. */
   waitingLease(key: string, holder: string, now: number, signals: Signals): {until: number; extend: boolean} | null | undefined {
+    const completed=this.paces.get(key);
+    if(completed?.completedAt!=null&&completed.completedAt>=(completed.lastAt??-Infinity)&&completed.completedAt>=(completed.askedAt??-Infinity))return null;
     const pace = this.paces.get(key);
     const capability = this.capabilities.get(key)?.get(holder);
     if (!capability?.paced || this.pausedUntil(key, holder, now) !== null ||
@@ -384,6 +402,7 @@ export class Cadence {
     if (changedHolder) {
       // Commands and retries belong to the old holder. Fixed plans retain the shared successful baseline.
       pace.askedAt = null;
+      pace.completedAt = null;
       pace.answered = false;
       pace.unanswered = 0;
       if (signals.measureIntervalMs != null) pace.askedDevice = null;
@@ -465,7 +484,7 @@ export class Cadence {
   /** The ordinary due time, without refresh, failure pauses or unanswered-command retries. */
   private ordinary(pace: Pace, now: number, signals: Signals, floor: number): {at: number; why: Why | 'first'; interval: number} {
     let {interval, why} = this.interval(pace, now, signals, floor);
-    if (pace.lastAt === null && (pace.askedAt === null || signals.measureIntervalMs != null)) return {at: now, why: 'first', interval: signals.measureIntervalMs == null ? BASE_INTERVAL_MS : interval};
+    if (pace.completedAt===null && pace.lastAt === null && (pace.askedAt === null || signals.measureIntervalMs != null)) return {at: now, why: 'first', interval: signals.measureIntervalMs == null ? BASE_INTERVAL_MS : interval};
     let at = (pace.lastAt ?? pace.askedAt!) + interval;
     if (pace.lastAt !== null && signals.measureIntervalMs == null) {
       const reset = Math.min(...signals.windows.flatMap(w => (w.resetAt !== null && w.resetAt > pace.lastAt! ? [w.resetAt] : [])));
@@ -474,7 +493,7 @@ export class Cadence {
       if (pace.promiseAt !== null) at = Math.min(at, pace.promiseAt);
     }
     const baseline = Math.max(pace.lastAt ?? -Infinity, pace.askedAt ?? -Infinity);
-    return {at: Math.max(at, baseline + floor), why, interval};
+    return {at: Math.max(at, baseline + floor,pace.completedAt===null?-Infinity:pace.completedAt+interval), why, interval};
   }
 
   /** The interval the signals call for, never below the device's own least one. */
@@ -505,6 +524,7 @@ export class Cadence {
         changed: false,
         lastAt: null,
         promiseAt: null,
+        completedAt: null,
         busyAt: now,
         askedDevice: null,
         askedAt: null,

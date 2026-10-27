@@ -20,7 +20,7 @@ pub enum How {
 
 /// The stop of one run; clones share it.
 #[derive(Clone, Debug, Default)]
-pub struct Stop(Arc<AtomicU8>);
+pub struct Stop(Arc<AtomicU8>, Option<Arc<[Stop]>>);
 
 const RUNNING: u8 = 0;
 const EXIT: u8 = 1;
@@ -42,6 +42,15 @@ impl Stop {
 
     pub fn requested(&self) -> bool {
         self.0.load(Ordering::SeqCst) != RUNNING
+            || self.1.as_ref().is_some_and(|parents| parents.iter().any(Stop::requested))
+    }
+
+    pub fn child(&self) -> Stop {
+        Self::linked(std::slice::from_ref(self))
+    }
+
+    pub fn linked(parents: &[Stop]) -> Stop {
+        Stop(Arc::new(AtomicU8::new(RUNNING)), Some(parents.to_vec().into()))
     }
 
     pub fn how(&self) -> Option<How> {

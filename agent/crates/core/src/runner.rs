@@ -1,5 +1,11 @@
 //! Drives the adapters: once for a status check, or continuously on the schedule.
 
+use crate::collection::{AccountRef, CollectionOutcome, CollectionResult, Completion, CompletionOutcome};
+use crate::hooks::Identity;
+pub use crate::observers::Diagnostic;
+use crate::observers::Observers;
+use crate::sink::AccountRoster;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -9,8 +15,7 @@ use crate::clients::{ClientId, Inventory};
 use crate::config::{Config, Paths, home, jitter};
 use crate::measurement_policy::MeasurementPolicy;
 use crate::model::{
-    ClientSession, ClientSource, ErrorKind, Millis, Outcome, Provider, RunningSession, STALE_LIMIT_MS, SessionReport,
-    Tracking, now_ms,
+    ClientSession, ClientSource, ErrorKind, Millis, Outcome, Provider, RunningSession, SessionReport, Tracking, now_ms,
 };
 use crate::providers::{Collector, Context, adapter, find_client, last_activity};
 use crate::schedule::Schedule;
@@ -127,6 +132,7 @@ pub struct Runner {
     paths: Paths,
     home: PathBuf,
     adapters: Vec<Box<dyn Collector>>,
+    hooks: Vec<crate::hooks::Hook>,
     clients: Vec<ClientId>,
     /// Ends this run, a measurement under way included.
     stop: Stop,
@@ -140,11 +146,16 @@ impl Runner {
         let order = [Provider::Codex, Provider::Claude, Provider::Antigravity];
         let adapters = order
             .into_iter()
-            .filter(|p| config.enabled(*p) && (only.is_empty() || only.contains(&ClientId::from(*p))))
+            .filter(|p| {
+                config.enabled(*p)
+                    && config.providers.get(p).is_none_or(|settings| settings.hooks.collect.is_none())
+                    && (only.is_empty() || only.contains(&ClientId::from(*p)))
+            })
             .map(adapter)
             .collect();
         let mut runner = Runner::with_adapters(config, paths, adapters, home(), stop);
         runner.clients.retain(|c| only.is_empty() || only.contains(c));
+        runner.hooks.retain(|h| only.is_empty() || only.contains(&ClientId::from(h.provider())));
         runner
     }
 
@@ -158,6 +169,7 @@ impl Runner {
     ) -> Runner {
         let clients = ClientId::ALL.into_iter().filter(|c| config.tracks(*c)).collect();
         Runner {
+            hooks: crate::hooks::Hook::configured(&config),
             config,
             paths,
             home,
@@ -179,7 +191,7 @@ impl Runner {
     }
 
     pub fn providers(&self) -> Vec<Provider> {
-        self.adapters.iter().map(|a| a.provider()).collect()
+        self.adapters.iter().map(|a| a.provider()).chain(self.hooks.iter().map(|h| h.provider())).collect()
     }
 
     fn measure(&mut self, index: usize) -> Outcome {
@@ -215,12 +227,91 @@ impl Runner {
 
     /// Measures every provider once, one after another, reporting each as it finishes.
     pub fn measure_all(&mut self, mut each: impl FnMut(&Outcome)) {
+        self.collect_all(|result| match &result.outcome {
+            CollectionOutcome::Observed(snapshot) => each(&Ok(snapshot.clone())),
+            CollectionOutcome::Failed(failure) => each(&Err(failure.clone())),
+            CollectionOutcome::NoNewData => {}
+        });
+    }
+
+    /// All local outcomes, including successful attempts without fresh observations.
+    pub fn collect_all(&mut self, mut each: impl FnMut(&CollectionResult)) {
+        self.collect_events(|event| {
+            if let Event::Collected(result, _) = event {
+                each(result)
+            }
+        });
+    }
+
+    pub fn collect_events(&mut self, mut each: impl FnMut(Event)) {
+        let mut observers = Observers::new(&self.paths, &self.stop);
         for index in 0..self.adapters.len() {
+            if self.stop.requested() {
+                break;
+            }
             let mut outcome = self.measure(index);
             if let Ok(snapshot) = &mut outcome {
-                snapshot.stale_after_ms = self.config.interval_ms(snapshot.provider).min(STALE_LIMIT_MS);
+                snapshot.stale_after_ms = self.config.interval_ms(snapshot.provider).min(crate::model::STALE_LIMIT_MS);
             }
-            each(&outcome);
+            if self.stop.requested() {
+                break;
+            }
+            let result = local_result(self.adapters[index].provider(), None, outcome, attempt_id(), "measure");
+            if let Some(diagnostic) = observers.enqueue(&self.config, &result, &self.stop) {
+                each(Event::Diagnostic(&diagnostic));
+            }
+            each(Event::Collected(&result, 0));
+        }
+        for hook in &self.hooks {
+            if self.stop.requested() {
+                break;
+            }
+            let attempt = attempt_id();
+            match hook.discover(&self.paths, &self.stop) {
+                Ok(identities) => {
+                    let (outcomes, invalid) =
+                        hook.measure(&identities, &self.paths, &self.stop, self.config.interval_ms(hook.provider));
+                    if self.stop.requested() {
+                        break;
+                    }
+                    if invalid {
+                        let d = Diagnostic {
+                            provider: hook.provider,
+                            hook: "collect",
+                            account: None,
+                            code: "invalid_output",
+                        };
+                        each(Event::Diagnostic(&d));
+                    }
+                    for (id, outcome) in identities.into_iter().zip(outcomes) {
+                        let result = CollectionResult {
+                            version: 1,
+                            provider: hook.provider,
+                            account: Some(id.account),
+                            attempt_id: attempt.clone(),
+                            stage: "measure",
+                            completed_at: now_ms(),
+                            outcome,
+                        };
+                        if let Some(diagnostic) = observers.enqueue(&self.config, &result, &self.stop) {
+                            each(Event::Diagnostic(&diagnostic));
+                        }
+                        each(Event::Collected(&result, 0));
+                    }
+                }
+                Err(failure) if !self.stop.requested() => {
+                    let result = local_result(hook.provider, None, Err(failure), attempt, "discover");
+                    if let Some(diagnostic) = observers.enqueue(&self.config, &result, &self.stop) {
+                        each(Event::Diagnostic(&diagnostic));
+                    }
+                    each(Event::Collected(&result, 0));
+                }
+                Err(_) => {}
+            }
+        }
+        observers.finish(!self.stop.requested());
+        while let Ok(diagnostic) = observers.diagnostics.try_recv() {
+            each(Event::Diagnostic(&diagnostic));
         }
     }
 
@@ -231,9 +322,38 @@ impl Runner {
     /// provider, it is asked often and the provider measured only when told; if another
     /// device measures the same subscription, this one only waits.
     pub fn run(&mut self, sink: &mut dyn Sink, mut each: impl FnMut(Event)) -> Option<String> {
+        sink.require_collections(!self.hooks.is_empty());
         let intervals: Vec<u64> = self.adapters.iter().map(|a| self.config.interval_ms(a.provider())).collect();
         let least: Vec<Option<u64>> = self.adapters.iter().map(|a| self.config.min_interval_ms(a.provider())).collect();
         let mut schedule = Schedule::new(&intervals, now_ms(), self.config.eco());
+        let mut hook_runs: Vec<HookRun> = self
+            .hooks
+            .iter()
+            .map(|hook| HookRun {
+                provider: hook.provider,
+                admission: self.stop.child(),
+                due: 0,
+                failures: 0,
+                ready: false,
+                slots: BTreeMap::new(),
+            })
+            .collect();
+        let mut observers = Observers::new(&self.paths, &self.stop);
+        let mut native_admission: Vec<Stop> = self.adapters.iter().map(|_| self.stop.child()).collect();
+        let mut admission_policy: Option<MeasurementPolicy> = None;
+        let mut native_rosters: BTreeMap<Provider, AccountRef> = BTreeMap::new();
+        let mut active: Option<ActiveCollection> = None;
+        // A terminal sink response fences both workers before either is joined.
+        macro_rules! check_refusal {
+            () => {
+                if let Some(reason) = sink.refused().map(str::to_owned) {
+                    cancel_collection(&mut active, &mut observers);
+                    return Some(reason);
+                }
+            };
+        }
+        check_refusal!();
+
         let activity_paths: Vec<Vec<PathBuf>> = self.adapters.iter().map(|a| a.activity_paths(&self.home)).collect();
         let identity_paths: Vec<Vec<PathBuf>> = self.adapters.iter().map(|a| a.identity_paths(&self.home)).collect();
         let mut seen: Vec<Option<SystemTime>> = vec![None; self.adapters.len()];
@@ -241,12 +361,14 @@ impl Runner {
         let mut used = vec![false; self.adapters.len()];
         // The account each provider last reported, and the state of its sign-in files then.
         let mut accounts: Vec<Option<(Option<String>, Option<SystemTime>)>> = vec![None; self.adapters.len()];
-        let providers = self.providers();
+        let providers = self.adapters.iter().map(|a| a.provider()).collect::<Vec<_>>();
+        let collectors = self.providers();
         let mut policy: Option<MeasurementPolicy> = None;
         let mut commands: Vec<Option<String>> = vec![None; self.adapters.len()];
         let mut command_accounts: Vec<Option<String>> = vec![None; self.adapters.len()];
         let mut policy_contact = Instant::now();
         let target = if !self.stop.requested() && !self.activity_deferred { sink.activity_target() } else { None };
+        check_refusal!();
         let observed = target.is_some() || self.activity_deferred;
         let enabled = self.config.sessions() && !self.clients.is_empty();
         let mut activity_delivery = target.and_then(|target| {
@@ -273,12 +395,15 @@ impl Runner {
             .ok()
             .map(crate::observed::delivery::Delivery::new)
         });
+        check_refusal!();
         let mut observed_inventory = Inventory::default();
         let mut inventory_at: Option<Instant> = None;
         let mut inventory = Vec::new();
         if sink.managed() {
-            policy = sink.checkin_managed(&[], &providers).policy;
+            policy = sink.checkin_managed(&[], &collectors).policy;
+            check_refusal!();
             sink.flush();
+            check_refusal!();
             for (index, provider) in providers.iter().enumerate() {
                 schedule.block(index, !sink.allows_measurement(*provider), now_ms());
             }
@@ -296,10 +421,300 @@ impl Runner {
             watch.activity.track(&self.clients);
         }
 
+        check_refusal!();
         while !self.stop.requested() {
-            if let Some(reason) = sink.refused() {
-                return Some(reason.to_string());
+            check_refusal!();
+            sync_admission(
+                &mut schedule,
+                &policy,
+                &mut admission_policy,
+                &mut native_admission,
+                &providers,
+                &mut hook_runs,
+                &self.stop,
+            );
+            while let Ok(diagnostic) = observers.diagnostics.try_recv() {
+                each(Event::Diagnostic(&diagnostic));
             }
+            if let Some(job) = &active {
+                if !job.admitted(&policy, sink) {
+                    job.stop.request(crate::stop::How::Exit);
+                }
+            }
+            let ready = match active.as_ref().map(|job| job.receive.try_recv()) {
+                Some(Ok(result)) => Some(result),
+                Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                    return Some("collection worker stopped unexpectedly".into());
+                }
+                _ => None,
+            };
+            if let Some(result) = ready {
+                let mut job = active.take().unwrap();
+                if let Some(worker) = job.worker.take() {
+                    let _ = worker.join();
+                }
+                let admitted = job.admitted(&policy, sink) && !job.stop.requested();
+                match (job.kind.clone(), result) {
+                    (CollectionJob::Discover { hook: hi, id }, BackendResult::Discovered(result)) => {
+                        if admitted {
+                            match result {
+                                Ok(identities) => {
+                                    let run = &mut hook_runs[hi];
+                                    let mut old = std::mem::take(&mut run.slots);
+                                    for identity in identities {
+                                        let mut slot = old.remove(&identity.account).unwrap_or_else(|| AccountSlot {
+                                            identity: identity.clone(),
+                                            index: schedule.insert(self.config.interval_ms(job.provider), now_ms()),
+                                            admission: run.admission.child(),
+                                            command: None,
+                                            target: None,
+                                        });
+                                        slot.identity = identity;
+                                        run.slots.insert(slot.identity.account.clone(), slot);
+                                    }
+                                    for slot in old.values() {
+                                        slot.admission.request(crate::stop::How::Exit);
+                                        schedule.remove(slot.index);
+                                    }
+                                    run.ready = true;
+                                    run.failures = 0;
+                                    run.due = now_ms() + self.config.interval_ms(job.provider) as i64;
+                                }
+                                Err(failure) => {
+                                    let run = &mut hook_runs[hi];
+                                    run.ready = false;
+                                    run.failures += 1;
+                                    run.due = now_ms()
+                                        + (self
+                                            .config
+                                            .interval_ms(job.provider)
+                                            .saturating_mul(1 << run.failures.saturating_sub(1).min(4)))
+                                        .min(900_000) as i64;
+                                    let result = local_result(job.provider, None, Err(failure), id, "discover");
+                                    if let Some(d) = observers.enqueue(&self.config, &result, &run.admission) {
+                                        each(Event::Diagnostic(&d));
+                                    }
+                                    each(Event::Collected(&result, run.due));
+                                }
+                            }
+                            let mut rosters: Vec<_> = hook_runs
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, run)| run.ready)
+                                .map(|(i, run)| AccountRoster {
+                                    provider: self.hooks[i].provider,
+                                    accounts: run.slots.keys().cloned().collect(),
+                                })
+                                .collect();
+                            rosters.extend(native_rosters.iter().map(|(&provider, account)| AccountRoster {
+                                provider,
+                                accounts: vec![account.clone()],
+                            }));
+                            sink.account_rosters(&rosters);
+                            check_refusal!();
+                            let answer = sink.checkin_managed(&[], &collectors);
+                            check_refusal!();
+                            policy = answer.policy.or(policy);
+                            sync_admission(
+                                &mut schedule,
+                                &policy,
+                                &mut admission_policy,
+                                &mut native_admission,
+                                &providers,
+                                &mut hook_runs,
+                                &self.stop,
+                            );
+                            check_refusal!();
+                            policy_contact = Instant::now();
+                        }
+                    }
+                    (CollectionJob::Accounts { launches, id }, BackendResult::Accounts(outcomes, diagnostic)) => {
+                        let completed_at = now_ms();
+                        if admitted && diagnostic {
+                            let d = Diagnostic {
+                                provider: job.provider,
+                                hook: "collect",
+                                account: None,
+                                code: "invalid_output",
+                            };
+                            each(Event::Diagnostic(&d));
+                        }
+                        for (launch, mut outcome) in launches.into_iter().zip(outcomes) {
+                            let AccountLaunch { index, next, account, attempt, admission } = launch;
+                            schedule.busy(index, false);
+                            if !admitted || admission.requested() {
+                                continue;
+                            }
+                            let now = completed_at;
+                            let next = finish_schedule(&mut schedule, index, now, next, &mut outcome, false);
+                            let result = CollectionResult {
+                                version: 1,
+                                provider: job.provider,
+                                account: Some(account),
+                                attempt_id: id.clone(),
+                                stage: "measure",
+                                completed_at: now,
+                                outcome,
+                            };
+                            finish_collection(
+                                &self.config,
+                                &observers,
+                                sink,
+                                &mut each,
+                                Finished { result: &result, next, attempt: attempt.as_ref(), admission: &admission },
+                            );
+                            check_refusal!();
+                        }
+                    }
+                    (
+                        CollectionJob::Native { index, next, attempt, id, signed_in, admission },
+                        BackendResult::Native(adapter, outcome),
+                    ) => {
+                        self.adapters[index] = adapter;
+                        schedule.busy(index, false);
+                        if admitted && !admission.requested() {
+                            seen[index] = last_activity(&activity_paths[index]).or(Some(SystemTime::UNIX_EPOCH));
+                            let same_identity = last_activity(&identity_paths[index]) == signed_in;
+                            let failure_account = if same_identity {
+                                target_ref(job.provider, attempt.as_ref(), self.config.account_name(job.provider))
+                            } else {
+                                None
+                            };
+                            let mut result = local_result(job.provider, failure_account, outcome, id, "measure");
+                            let delivery_attempt = if matches!(&result.outcome, CollectionOutcome::Failed(_)) {
+                                failure_context(attempt.as_ref(), same_identity)
+                            } else {
+                                attempt.clone()
+                            };
+                            if let CollectionOutcome::Observed(snapshot) = &result.outcome {
+                                accounts[index] = Some((snapshot.account.clone(), signed_in));
+                                if let Some(reference) = AccountRef::of(snapshot).filter(|_| sink.managed()) {
+                                    native_rosters.insert(snapshot.provider, reference);
+                                    let mut rosters: Vec<_> = hook_runs
+                                        .iter()
+                                        .enumerate()
+                                        .filter(|(_, run)| run.ready)
+                                        .map(|(i, run)| AccountRoster {
+                                            provider: self.hooks[i].provider,
+                                            accounts: run.slots.keys().cloned().collect(),
+                                        })
+                                        .collect();
+                                    rosters.extend(native_rosters.iter().map(|(&provider, account)| AccountRoster {
+                                        provider,
+                                        accounts: vec![account.clone()],
+                                    }));
+                                    sink.account_rosters(&rosters);
+                                    check_refusal!();
+                                    let answer = sink.checkin_managed(&[], &collectors);
+                                    check_refusal!();
+                                    policy = answer.policy.or(policy);
+                                    sync_admission(
+                                        &mut schedule,
+                                        &policy,
+                                        &mut admission_policy,
+                                        &mut native_admission,
+                                        &providers,
+                                        &mut hook_runs,
+                                        &self.stop,
+                                    );
+                                    check_refusal!();
+                                    policy_contact = Instant::now();
+                                }
+                            }
+                            if stamp(&policy, job.provider) == job.policy && sink.allows_measurement(job.provider) {
+                                let next = finish_schedule(
+                                    &mut schedule,
+                                    index,
+                                    now_ms(),
+                                    next,
+                                    &mut result.outcome,
+                                    used[index],
+                                );
+                                finish_collection(
+                                    &self.config,
+                                    &observers,
+                                    sink,
+                                    &mut each,
+                                    Finished {
+                                        result: &result,
+                                        next,
+                                        attempt: delivery_attempt.as_ref(),
+                                        admission: &admission,
+                                    },
+                                );
+                                check_refusal!();
+                                let legacy = match &result.outcome {
+                                    CollectionOutcome::Observed(s) => Ok(s.clone()),
+                                    CollectionOutcome::Failed(f) => Err(f.clone()),
+                                    CollectionOutcome::NoNewData => unreachable!(),
+                                };
+                                each(Event::Measured(&legacy, next));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if active.is_none() && !schedule.has_cleared() {
+                let measurement_due = schedule.next().map(|(_, due)| due).unwrap_or(Millis::MAX);
+                if let Some(hi) = self
+                    .hooks
+                    .iter()
+                    .enumerate()
+                    .find(|(hi, hook)| {
+                        sink.allows_measurement(hook.provider)
+                            && sink.supports_collections()
+                            && now_ms() >= hook_runs[*hi].due
+                            && hook_runs[*hi].due <= measurement_due
+                    })
+                    .map(|(hi, _)| hi)
+                {
+                    let hook = self.hooks[hi].clone();
+                    let paths = self.paths.clone();
+                    check_refusal!();
+                    active = Some(ActiveCollection::spawn(
+                        hook.provider,
+                        CollectionJob::Discover { hook: hi, id: attempt_id() },
+                        &policy,
+                        &hook_runs[hi].admission,
+                        move |stop| BackendResult::Discovered(hook.discover(&paths, &stop)),
+                    ));
+                }
+            }
+            if active.is_some() && policy_contact.elapsed() >= self.policy_contact_every.min(Duration::from_secs(15)) {
+                let answer = sink.checkin_managed(&[], &collectors);
+                check_refusal!();
+                policy = answer.policy.or(policy);
+                sync_admission(
+                    &mut schedule,
+                    &policy,
+                    &mut admission_policy,
+                    &mut native_admission,
+                    &providers,
+                    &mut hook_runs,
+                    &self.stop,
+                );
+                check_refusal!();
+                policy_contact = Instant::now();
+                sink.flush();
+                check_refusal!();
+                if let Some(job) = &active {
+                    if !job.admitted(&policy, sink) {
+                        job.stop.request(crate::stop::How::Exit);
+                    }
+                }
+            }
+            for (hi, run) in hook_runs.iter().enumerate() {
+                for slot in run.slots.values() {
+                    schedule.block(
+                        slot.index,
+                        !run.ready || !sink.allows_measurement(self.hooks[hi].provider) || !sink.supports_collections(),
+                        now_ms(),
+                    );
+                }
+            }
+
+            check_refusal!();
             if let Some(delivery) = &mut activity_delivery {
                 #[cfg(all(feature = "activity-bench", target_os = "linux"))]
                 let context_cpu = crate::observed::probe::cpu();
@@ -325,6 +740,7 @@ impl Runner {
                     }
                 }
                 delivery.turn(sink, &inventory);
+                check_refusal!();
             }
             // Only while the list can go somewhere: no looking for a hub that does not take it
             // (now: an older one is asked again later, and looking starts over then).
@@ -355,17 +771,19 @@ impl Runner {
                     let back = watch.clocked_witness(&mut report, watch.activity.complete(), &mut clock, now_ms());
                     if back > 0 {
                         schedule.shift(-back);
+                        for hook in &mut hook_runs {
+                            hook.due -= back;
+                        }
                     }
                     // A list the hub did not take goes out again at the next look.
                     if watch.worth_sending(&report) {
                         let accepted = sink.report(&report);
+                        check_refusal!();
                         watch.acknowledged(report, accepted);
                     }
                 }
             }
-            if let Some(reason) = sink.refused() {
-                return Some(reason.to_string());
-            }
+            check_refusal!();
             // A clock set back (by hand, or synced after a wrong start) would leave every
             // due time far ahead: move them back with it.
             let back = clock.went_back(now_ms());
@@ -376,20 +794,23 @@ impl Runner {
             }
             if back > 0 {
                 schedule.shift(-back);
+                for hook in &mut hook_runs {
+                    hook.due -= back;
+                }
                 if let Some(watch) = &mut watch {
                     watch.continuity_fault = true;
                 }
             }
 
             // One recovery contact in the existing loop, including with sessions and every collector off.
-            if !providers.is_empty()
+            if !collectors.is_empty()
                 && sink.needs_policy_contact()
                 && policy_contact.elapsed() >= self.policy_contact_every
                 && !schedule.has_cleared()
                 && schedule.asks(now_ms()).is_empty()
             {
                 let current = self.current_accounts(&accounts, &identity_paths);
-                let indices: Vec<usize> = providers
+                let mut indices: Vec<usize> = providers
                     .iter()
                     .enumerate()
                     .filter(|(i, p)| {
@@ -400,6 +821,8 @@ impl Runner {
                     })
                     .map(|(i, _)| i)
                     .collect();
+                indices.sort_by_key(|i| (schedule.due(*i), *i));
+                indices.truncate(1);
                 let asks: Vec<Ask> = indices
                     .iter()
                     .map(|&i| Ask {
@@ -410,10 +833,22 @@ impl Runner {
                         min_interval_ms: least[i],
                     })
                     .collect();
-                let answer = sink.checkin_managed(&asks, &providers);
+                let answer = sink.checkin_managed(&asks, &collectors);
+                check_refusal!();
                 sink.flush();
+                check_refusal!();
                 policy_contact = Instant::now();
                 policy = answer.policy.or(policy);
+                sync_admission(
+                    &mut schedule,
+                    &policy,
+                    &mut admission_policy,
+                    &mut native_admission,
+                    &providers,
+                    &mut hook_runs,
+                    &self.stop,
+                );
+                check_refusal!();
                 for (index, provider) in providers.iter().enumerate() {
                     schedule.block(index, !sink.allows_measurement(*provider), now_ms());
                 }
@@ -426,63 +861,146 @@ impl Runner {
             }
 
             // What the last answer cleared is measured first, one after another.
-            if let Some((index, next_in_ms)) = schedule.take_cleared() {
-                // A run asked to stop starts no client, whatever it waited for until now.
-                if self.stop.requested() {
-                    break;
-                }
-                if !sink.allows_measurement(providers[index]) {
-                    schedule.block(index, true, now_ms());
-                    continue;
-                }
-                // As the sign-in files were before it: a sign-in during the measurement (or a token
-                // it refreshed) leaves the account unknown until the next one, never another's.
-                let signed_in = last_activity(&identity_paths[index]);
-                let target = measurement_account(
-                    self.adapters[index].local_account(&self.home),
-                    &accounts[index],
-                    signed_in,
-                    command_accounts[index].clone(),
-                );
-                let attempt =
-                    policy.as_ref().map(|policy| policy.attempt(providers[index], target, commands[index].take()));
-                let mut outcome = self.measure(index);
-                if self.stop.requested() {
-                    break;
-                }
-                // Taken after the measurement, so the client's own writes do not count as use.
-                seen[index] = last_activity(&activity_paths[index]).or(Some(SystemTime::UNIX_EPOCH));
-                if let Ok(snapshot) = &outcome {
-                    accounts[index] = Some((snapshot.account.clone(), signed_in));
-                }
-                let now = now_ms();
-                let gone = matches!(&outcome, Err(failure) if failure.error == ErrorKind::NotInstalled);
-                let next = match next_in_ms {
-                    // The hub waits out failures and promised the next measurement; the client
-                    // gone since it was asked for goes on its own rhythm, as one never there.
-                    Some(next_in_ms) if !gone => {
-                        let stale_after_ms = schedule.measured_paced(index, now, next_in_ms);
-                        if let Ok(snapshot) = &mut outcome {
-                            snapshot.stale_after_ms = stale_after_ms;
-                        }
-                        now + next_in_ms as Millis
+            if active.is_none() {
+                if let Some((index, next_in_ms)) = schedule.take_cleared() {
+                    if self.stop.requested() {
+                        break;
                     }
-                    _ => {
-                        schedule.unpace(index);
-                        let next = schedule.complete(index, now, &outcome, used[index], jitter());
-                        if let Ok(snapshot) = &mut outcome {
-                            snapshot.stale_after_ms = schedule.stale_after_ms(index, now);
+                    if index >= self.adapters.len() {
+                        let Some((hi, _key)) = hook_runs.iter().enumerate().find_map(|(hi, run)| {
+                            run.slots.iter().find(|(_, slot)| slot.index == index).map(|(key, _)| (hi, key.clone()))
+                        }) else {
+                            continue;
+                        };
+                        let hook = self.hooks[hi].clone();
+                        if !sink.allows_measurement(hook.provider) || !sink.supports_collections() {
+                            continue;
                         }
-                        next
+                        let indices = hook_runs[hi].slots.values().map(|slot| slot.index).collect::<Vec<_>>();
+                        let mut granted = vec![(index, next_in_ms)];
+                        granted.extend(schedule.take_cleared_for(&indices));
+                        let mut selected = Vec::new();
+                        let mut launches = Vec::new();
+                        for (index, next) in granted {
+                            let Some(slot) = hook_runs[hi].slots.values_mut().find(|slot| slot.index == index) else {
+                                continue;
+                            };
+                            if slot.admission.requested() {
+                                continue;
+                            }
+                            let attempt = policy
+                                .as_ref()
+                                .map(|p| p.attempt(hook.provider, slot.target.clone(), slot.command.take()));
+                            launches.push(AccountLaunch {
+                                index,
+                                next,
+                                account: slot.identity.account.clone(),
+                                attempt,
+                                admission: slot.admission.clone(),
+                            });
+                            selected.push(slot.identity.clone());
+                            schedule.busy(index, true);
+                        }
+                        if selected.is_empty() {
+                            continue;
+                        }
+                        let admission = Stop::linked(&launches.iter().map(|l| l.admission.clone()).collect::<Vec<_>>());
+                        let kind = CollectionJob::Accounts { launches, id: attempt_id() };
+                        let paths = self.paths.clone();
+                        let interval = self.config.interval_ms(hook.provider);
+                        check_refusal!();
+                        active = Some(ActiveCollection::spawn(hook.provider, kind, &policy, &admission, move |stop| {
+                            let (outcomes, diagnostic) = hook.measure(&selected, &paths, &stop, interval);
+                            BackendResult::Accounts(outcomes, diagnostic)
+                        }));
+                    } else {
+                        let provider = providers[index];
+                        if !sink.allows_measurement(provider) {
+                            schedule.block(index, true, now_ms());
+                            continue;
+                        }
+                        let signed_in = last_activity(&identity_paths[index]);
+                        let target = measurement_account(
+                            self.adapters[index].local_account(&self.home),
+                            &accounts[index],
+                            signed_in,
+                            command_accounts[index].clone(),
+                        );
+                        let attempt = policy.as_ref().map(|p| p.attempt(provider, target, commands[index].take()));
+                        let suspended = Suspended {
+                            provider,
+                            activity: activity_paths[index].clone(),
+                            identity: identity_paths[index].clone(),
+                            witness: signed_in,
+                            account: self.adapters[index].local_account(&self.home),
+                            identifies: self.adapters[index].identifies_account(),
+                        };
+                        let mut backend = std::mem::replace(&mut self.adapters[index], Box::new(suspended));
+                        let paths = self.paths.clone();
+                        let home = self.home.clone();
+                        let config = self.config.clone();
+                        let kind = CollectionJob::Native {
+                            index,
+                            next: next_in_ms,
+                            attempt,
+                            id: attempt_id(),
+                            signed_in,
+                            admission: native_admission[index].clone(),
+                        };
+                        schedule.busy(index, true);
+                        check_refusal!();
+                        active = Some(ActiveCollection::spawn(
+                            provider,
+                            kind,
+                            &policy,
+                            &native_admission[index],
+                            move |stop| {
+                                let ctx = Context {
+                                    home: &home,
+                                    work_dir: &paths.work,
+                                    state_dir: &paths.state,
+                                    program: config.program(provider),
+                                    timeout: CLIENT_TIMEOUT,
+                                    stop: &stop,
+                                };
+                                let mut outcome = backend.measure(&ctx);
+                                if let Ok(snapshot) = &mut outcome {
+                                    if snapshot.account.is_none() {
+                                        snapshot.account_name = config.account_name(provider).map(str::to_string);
+                                    }
+                                    snapshot.tidy();
+                                }
+                                BackendResult::Native(backend, outcome)
+                            },
+                        ));
                     }
-                };
-                sink.deliver_attempt(&outcome, attempt.as_ref());
-                each(Event::Measured(&outcome, next));
-                continue;
+                }
             }
 
+            if self.stop.requested() {
+                break;
+            }
+            check_refusal!();
+            // A hook's check-in may have learned a new whole-device gate.
+            for (index, provider) in providers.iter().enumerate() {
+                schedule.block(index, !sink.allows_measurement(*provider), now_ms());
+            }
+            if active.is_some() {
+                thread::sleep(Duration::from_millis(25).min(self.policy_contact_every));
+                continue;
+            }
             let now = now_ms();
-            let due = schedule.asks(now);
+            let mut due = schedule.asks(now);
+            due.sort_by_key(|i| (schedule.due(*i), *i));
+            if let Some(first) = due.first().copied() {
+                if first < self.adapters.len() {
+                    due.truncate(1);
+                } else if let Some(run) =
+                    hook_runs.iter().find(|run| run.slots.values().any(|slot| slot.index == first))
+                {
+                    due.retain(|index| run.slots.values().any(|slot| slot.index == *index));
+                }
+            }
             if due.is_empty() {
                 let due = schedule.next().map(|(_, due)| due).unwrap_or(now + TICK.as_millis() as Millis);
                 let wait = due - now_ms();
@@ -493,6 +1011,14 @@ impl Runner {
             }
             let mut asked: Vec<(usize, Option<String>)> = Vec::new();
             for index in due {
+                if index >= self.adapters.len() {
+                    if let Some(slot) =
+                        hook_runs.iter().flat_map(|run| run.slots.values()).find(|slot| slot.index == index)
+                    {
+                        asked.push((index, slot.identity.account.account().map(str::to_string)));
+                    }
+                    continue;
+                }
                 let adapter = &self.adapters[index];
                 let before = seen[index];
                 let latest = last_activity(&activity_paths[index]);
@@ -516,9 +1042,54 @@ impl Runner {
             if asked.is_empty() {
                 continue;
             }
+            let current = self.current_accounts(&accounts, &identity_paths);
+            for (index, _) in &asked {
+                if *index >= self.adapters.len() {
+                    continue;
+                }
+                let provider = providers[*index];
+                let reference = match &current[*index] {
+                    Some(Some(account)) => Some(AccountRef::Supplier { account: account.clone() }),
+                    Some(None) if provider == Provider::Antigravity => Some(AccountRef::Declared {
+                        account_name: self.config.account_name(provider).map(|name| name.trim().to_lowercase()),
+                    }),
+                    _ => None,
+                };
+                if let Some(reference) = reference {
+                    native_rosters.insert(provider, reference);
+                }
+            }
+            let mut rosters = hook_runs
+                .iter()
+                .filter(|run| run.ready)
+                .map(|run| AccountRoster { provider: run.provider, accounts: run.slots.keys().cloned().collect() })
+                .collect::<Vec<_>>();
+            rosters.extend(
+                native_rosters
+                    .iter()
+                    .map(|(&provider, reference)| AccountRoster { provider, accounts: vec![reference.clone()] }),
+            );
+            sink.account_rosters(&rosters);
+            check_refusal!();
             let asks: Vec<Ask> = asked
                 .iter()
                 .map(|(index, account)| {
+                    if *index >= self.adapters.len() {
+                        let (hi, slot) = hook_runs
+                            .iter()
+                            .enumerate()
+                            .find_map(|(hi, run)| {
+                                run.slots.values().find(|slot| slot.index == *index).map(|slot| (hi, slot))
+                            })
+                            .unwrap();
+                        return Ask {
+                            provider: self.hooks[hi].provider,
+                            account: slot.identity.account.account(),
+                            account_name: slot.identity.account.name(),
+                            active: false,
+                            min_interval_ms: self.config.min_interval_ms(self.hooks[hi].provider),
+                        };
+                    }
                     let provider = self.adapters[*index].provider();
                     Ask {
                         provider,
@@ -529,30 +1100,50 @@ impl Runner {
                     }
                 })
                 .collect();
-            let answer = sink.checkin_managed(&asks, &providers);
+            let answer = sink.checkin_managed(&asks, &collectors);
+            check_refusal!();
             policy_contact = Instant::now();
             policy = answer.policy.or(policy);
+            sync_admission(
+                &mut schedule,
+                &policy,
+                &mut admission_policy,
+                &mut native_admission,
+                &providers,
+                &mut hook_runs,
+                &self.stop,
+            );
+            check_refusal!();
             for (index, provider) in providers.iter().enumerate() {
                 schedule.block(index, !sink.allows_measurement(*provider), now_ms());
             }
             for (position, (i, _)) in asked.iter().enumerate() {
-                commands[*i] = answer.commands.get(position).cloned().flatten();
-                command_accounts[*i] = answer.accounts.get(position).cloned().flatten();
+                if *i < self.adapters.len() {
+                    commands[*i] = answer.commands.get(position).cloned().flatten();
+                    command_accounts[*i] = answer.accounts.get(position).cloned().flatten();
+                } else if let Some(slot) =
+                    hook_runs.iter_mut().flat_map(|run| run.slots.values_mut()).find(|slot| slot.index == *i)
+                {
+                    slot.command = answer.commands.get(position).cloned().flatten();
+                    slot.target = answer.accounts.get(position).cloned().flatten();
+                }
             }
             let directives = answer.directives;
             // Refused just now: measuring would only start a client for nothing.
-            if let Some(reason) = sink.refused() {
-                return Some(reason.to_string());
-            }
+            check_refusal!();
             // The hub answers again: what it did not take before goes now, or it would take the provider for silent.
             if directives.iter().any(|d| *d != Directive::Unanswered) {
                 sink.flush();
+                check_refusal!();
             }
             let answers: Vec<(usize, Directive)> = asked.iter().map(|(index, _)| *index).zip(directives).collect();
             for index in schedule.answer(&answers, now_ms()) {
-                each(Event::Waiting(self.adapters[index].provider(), schedule.due(index)));
+                if index < self.adapters.len() {
+                    each(Event::Waiting(self.adapters[index].provider(), schedule.due(index)));
+                }
             }
         }
+        cancel_collection(&mut active, &mut observers);
         None
     }
 }
@@ -825,8 +1416,308 @@ fn ask_account(
     (schedule.paced(index) || *at == signed_in).then(|| account.clone())
 }
 
+type PolicyStamp = Option<(String, u64, bool)>;
+fn stamp(policy: &Option<MeasurementPolicy>, provider: Provider) -> PolicyStamp {
+    policy.as_ref().map(|p| (p.authority.clone(), p.collectors[&provider].epoch, p.allows(provider)))
+}
+#[derive(Clone)]
+enum CollectionJob {
+    Discover {
+        hook: usize,
+        id: String,
+    },
+    Accounts {
+        launches: Vec<AccountLaunch>,
+        id: String,
+    },
+    Native {
+        index: usize,
+        next: Option<u64>,
+        attempt: Option<crate::measurement_policy::AttemptContext>,
+        id: String,
+        signed_in: Option<SystemTime>,
+        admission: Stop,
+    },
+}
+#[derive(Clone)]
+struct AccountLaunch {
+    index: usize,
+    next: Option<u64>,
+    account: AccountRef,
+    attempt: Option<crate::measurement_policy::AttemptContext>,
+    admission: Stop,
+}
+enum BackendResult {
+    Discovered(Result<Vec<Identity>, crate::model::Failure>),
+    Accounts(Vec<CollectionOutcome>, bool),
+    Native(Box<dyn Collector>, Outcome),
+}
+struct ActiveCollection {
+    provider: Provider,
+    policy: PolicyStamp,
+    kind: CollectionJob,
+    stop: Stop,
+    receive: std::sync::mpsc::Receiver<BackendResult>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+impl ActiveCollection {
+    fn spawn(
+        provider: Provider,
+        kind: CollectionJob,
+        policy: &Option<MeasurementPolicy>,
+        parent: &Stop,
+        run: impl FnOnce(Stop) -> BackendResult + Send + 'static,
+    ) -> Self {
+        let stop = parent.child();
+        let worker_stop = stop.clone();
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            let _ = send.send(run(worker_stop));
+        });
+        Self { provider, policy: stamp(policy, provider), kind, stop, receive, worker: Some(worker) }
+    }
+    fn admitted(&self, policy: &Option<MeasurementPolicy>, sink: &dyn Sink) -> bool {
+        sink.refused().is_none()
+            && sink.allows_measurement(self.provider)
+            && (matches!(self.kind, CollectionJob::Native { .. }) || sink.supports_collections())
+            && stamp(policy, self.provider) == self.policy
+    }
+}
+impl Drop for ActiveCollection {
+    fn drop(&mut self) {
+        self.stop.request(crate::stop::How::Exit);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+fn cancel_collection(active: &mut Option<ActiveCollection>, observers: &mut Observers) {
+    observers.cancel();
+    if let Some(job) = active.as_ref() {
+        job.stop.request(crate::stop::How::Exit);
+    }
+    active.take();
+    observers.finish(false);
+}
+// The idle coordinator keeps metadata-only discovery available while an adapter is owned by the worker.
+struct Suspended {
+    provider: Provider,
+    activity: Vec<PathBuf>,
+    identity: Vec<PathBuf>,
+    witness: Option<SystemTime>,
+    account: Option<String>,
+    identifies: bool,
+}
+impl Collector for Suspended {
+    fn provider(&self) -> Provider {
+        self.provider
+    }
+    fn measure(&mut self, _: &Context) -> Outcome {
+        Err(crate::model::Failure::new(self.provider, ErrorKind::Failed, "collector is busy"))
+    }
+    fn activity_paths(&self, _: &std::path::Path) -> Vec<PathBuf> {
+        self.activity.clone()
+    }
+    fn identity_paths(&self, _: &std::path::Path) -> Vec<PathBuf> {
+        self.identity.clone()
+    }
+    fn identifies_account(&self) -> bool {
+        self.identifies
+    }
+    fn local_account(&self, _: &std::path::Path) -> Option<String> {
+        if last_activity(&self.identity) == self.witness { self.account.clone() } else { None }
+    }
+}
+fn finish_schedule(
+    schedule: &mut Schedule,
+    index: usize,
+    now: Millis,
+    paced: Option<u64>,
+    outcome: &mut CollectionOutcome,
+    used: bool,
+) -> Millis {
+    let gone = matches!(outcome,CollectionOutcome::Failed(f) if f.error==ErrorKind::NotInstalled);
+    if let Some(interval) = paced.filter(|_| !gone) {
+        let stale = schedule.measured_paced(index, now, interval);
+        if let CollectionOutcome::Observed(s) = outcome {
+            s.stale_after_ms = stale;
+        }
+        return now + interval as i64;
+    }
+    schedule.unpace(index);
+    let next = match outcome {
+        CollectionOutcome::Observed(s) => schedule.complete(index, now, &Ok(s.clone()), used, jitter()),
+        CollectionOutcome::Failed(f) => schedule.complete(index, now, &Err(f.clone()), used, jitter()),
+        CollectionOutcome::NoNewData => schedule.no_new_data(index, now),
+    };
+    if let CollectionOutcome::Observed(s) = outcome {
+        s.stale_after_ms = schedule.stale_after_ms(index, now);
+    }
+    next
+}
+
+struct HookRun {
+    provider: Provider,
+    admission: Stop,
+    due: Millis,
+    failures: u32,
+    ready: bool,
+    slots: BTreeMap<AccountRef, AccountSlot>,
+}
+struct AccountSlot {
+    identity: Identity,
+    index: usize,
+    admission: Stop,
+    command: Option<String>,
+    target: Option<String>,
+}
+fn attempt_id() -> String {
+    let h = crate::config::random_hex();
+    format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..])
+}
+fn local_result(
+    provider: Provider,
+    failure_account: Option<AccountRef>,
+    outcome: Outcome,
+    attempt_id: String,
+    stage: &'static str,
+) -> CollectionResult {
+    let account = match &outcome {
+        Ok(s) => AccountRef::of(s),
+        Err(_) => failure_account,
+    };
+    CollectionResult {
+        version: 1,
+        provider,
+        account,
+        attempt_id,
+        stage,
+        completed_at: now_ms(),
+        outcome: match outcome {
+            Ok(s) => CollectionOutcome::Observed(s),
+            Err(f) => CollectionOutcome::Failed(f),
+        },
+    }
+}
+/// Derive a conservative error scope from the immutable launch, preserving its authority and epoch.
+/// A changed login proves neither the old account nor its command; the original capture stays untouched.
+fn failure_context(
+    context: Option<&crate::measurement_policy::AttemptContext>,
+    same_identity: bool,
+) -> Option<crate::measurement_policy::AttemptContext> {
+    context.cloned().map(|mut value| {
+        if !same_identity {
+            value.target = crate::measurement_policy::AttemptTarget::Unknown;
+            value.command_id = None;
+        }
+        value
+    })
+}
+fn target_ref(
+    provider: Provider,
+    attempt: Option<&crate::measurement_policy::AttemptContext>,
+    name: Option<&str>,
+) -> Option<AccountRef> {
+    if provider == Provider::Antigravity {
+        return attempt
+            .filter(|a| matches!(a.target, crate::measurement_policy::AttemptTarget::Verified { .. }))
+            .map(|_| AccountRef::Declared { account_name: name.map(|name| name.trim().to_lowercase()) });
+    }
+    attempt.and_then(|a| match &a.target {
+        crate::measurement_policy::AttemptTarget::Verified { account_key } => {
+            Some(AccountRef::Supplier { account: account_key.clone() })
+        }
+        _ => None,
+    })
+}
+struct Finished<'a> {
+    result: &'a CollectionResult,
+    next: Millis,
+    attempt: Option<&'a crate::measurement_policy::AttemptContext>,
+    admission: &'a Stop,
+}
+fn finish_collection(
+    config: &Config,
+    observers: &Observers,
+    sink: &mut dyn Sink,
+    each: &mut impl FnMut(Event),
+    finished: Finished<'_>,
+) {
+    let Finished { result, next, attempt, admission } = finished;
+    if admission.requested() || sink.refused().is_some() || !sink.allows_measurement(result.provider) {
+        return;
+    }
+    if let Some(d) = observers.enqueue(config, result, admission) {
+        each(Event::Diagnostic(&d));
+    }
+    match &result.outcome {
+        CollectionOutcome::Observed(s) => sink.deliver_scoped(&Ok(s.clone()), attempt),
+        CollectionOutcome::Failed(f) => {
+            let custom = config.providers.get(&result.provider).is_some_and(|s| s.hooks.collect.is_some());
+            if custom {
+                sink.deliver_scoped(&Err(f.clone()), attempt)
+            } else {
+                sink.deliver_attempt(&Err(f.clone()), attempt)
+            }
+        }
+        CollectionOutcome::NoNewData => {
+            if let Some(attempt) = attempt {
+                sink.complete_collection(&Completion {
+                    provider: result.provider,
+                    outcome: CompletionOutcome::NoNewData,
+                    completed_at: result.completed_at,
+                    attempt_context: attempt.clone(),
+                });
+            }
+        }
+    }
+    if sink.refused().is_some() {
+        observers.cancel();
+    }
+    each(Event::Collected(result, next));
+}
+fn sync_admission(
+    schedule: &mut Schedule,
+    policy: &Option<MeasurementPolicy>,
+    before: &mut Option<MeasurementPolicy>,
+    native: &mut [Stop],
+    providers: &[Provider],
+    runs: &mut [HookRun],
+    root: &Stop,
+) {
+    let changed = |provider| {
+        before.as_ref().map(|p| (&p.authority, p.enabled, p.collectors.get(&provider)))
+            != policy.as_ref().map(|p| (&p.authority, p.enabled, p.collectors.get(&provider)))
+    };
+    for (i, provider) in providers.iter().enumerate() {
+        if changed(*provider) {
+            schedule.block(i, true, now_ms());
+            schedule.block(i, false, now_ms());
+            native[i].request(crate::stop::How::Exit);
+            native[i] = root.child();
+        }
+    }
+    for run in runs.iter_mut() {
+        if changed(run.provider) {
+            run.admission.request(crate::stop::How::Exit);
+            run.admission = root.child();
+            for slot in run.slots.values_mut() {
+                schedule.block(slot.index, true, now_ms());
+                schedule.block(slot.index, false, now_ms());
+                slot.admission.request(crate::stop::How::Exit);
+                slot.admission = run.admission.child();
+                slot.command = None;
+                slot.target = None;
+            }
+        }
+    }
+    *before = policy.clone();
+}
+
 /// What happened to one scheduled slot.
 pub enum Event<'a> {
+    Collected(&'a CollectionResult, Millis),
+    Diagnostic(&'a Diagnostic),
     /// Measured (or failed); the next run is due at the given time.
     Measured(&'a Outcome, Millis),
     /// Another device measures this subscription; ask again at the given time.
@@ -836,6 +1727,593 @@ pub enum Event<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_observers_are_cancelled_by_provider_policy_before_any_accounts_exist() {
+        use crate::config::HookSettings;
+        use crate::measurement_policy::CollectorPolicy;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Control {
+            root: Stop,
+            failures: Arc<AtomicUsize>,
+            count: usize,
+            started: PathBuf,
+            release: PathBuf,
+            denied: Option<Instant>,
+            change: &'static str,
+        }
+        impl Sink for Control {
+            fn deliver(&mut self, _: &Outcome) {
+                panic!("discovery has no data delivery")
+            }
+            fn managed(&self) -> bool {
+                true
+            }
+            fn needs_policy_contact(&self) -> bool {
+                true
+            }
+            fn allows_measurement(&self, provider: Provider) -> bool {
+                self.change != "disable" || self.denied.is_none() || provider != Provider::Codex
+            }
+            fn checkin_managed(&mut self, asks: &[Ask], _: &[Provider]) -> crate::sink::CheckinAnswer {
+                assert!(asks.is_empty());
+                if self.failures.load(Ordering::SeqCst) == self.count && self.denied.is_none() {
+                    let until = Instant::now() + Duration::from_secs(2);
+                    while !self.started.exists() && Instant::now() < until {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    assert!(self.started.exists(), "the first callback must be executing");
+                    self.denied = Some(Instant::now());
+                    let release = self.release.clone();
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_millis(500));
+                        std::fs::write(release, "release").unwrap();
+                    });
+                }
+                if self.denied.is_some_and(|at| at.elapsed() > Duration::from_millis(750)) {
+                    self.root.request(crate::stop::How::Exit);
+                }
+                crate::sink::CheckinAnswer {
+                    directives: vec![],
+                    commands: vec![],
+                    accounts: vec![],
+                    policy: Some(MeasurementPolicy {
+                        version: 1,
+                        authority: if self.denied.is_some() && self.change == "authority" {
+                            "22222222-2222-4222-8222-222222222222"
+                        } else {
+                            "11111111-1111-4111-8111-111111111111"
+                        }
+                        .into(),
+                        revision: u64::from(self.denied.is_some()),
+                        enabled: true,
+                        collectors: Provider::ALL
+                            .into_iter()
+                            .map(|p| {
+                                (
+                                    p,
+                                    CollectorPolicy {
+                                        enabled: self.allows_measurement(p),
+                                        epoch: u64::from(
+                                            self.denied.is_some() && self.change == "epoch" && p == Provider::Codex,
+                                        ),
+                                        requires_epoch: false,
+                                        changed_at: None,
+                                    },
+                                )
+                            })
+                            .collect(),
+                    }),
+                }
+            }
+        }
+        for queued in [false, true] {
+            for change in ["disable", "epoch", "authority"] {
+                let dir = std::env::temp_dir().join(format!("quotum-discovery-{}", crate::config::random_hex()));
+                std::fs::create_dir(&dir).unwrap();
+                let started = dir.join("started");
+                let release = dir.join("release");
+                let completed = dir.join("completed");
+                let mut config = Config::parse("sessions=false").unwrap();
+                for provider in if queued { vec![Provider::Claude, Provider::Codex] } else { vec![Provider::Codex] } {
+                    let hooks = &mut config.providers.entry(provider).or_default().hooks;
+                    hooks.collect =
+                        Some(HookSettings { path: "/bin/sh".into(), args: vec!["-c".into(), "exit 1".into()] });
+                    let script = if queued && provider == Provider::Codex {
+                        "cat >/dev/null; printf done > \"$3\""
+                    } else {
+                        "cat >/dev/null; printf started > \"$1\"; while [ ! -f \"$2\" ]; do sleep 0.01; done; printf done > \"$3\""
+                    };
+                    let output = if queued && provider == Provider::Claude {
+                        dir.join("first-completed")
+                    } else {
+                        completed.clone()
+                    };
+                    hooks.on_collection_failed = Some(HookSettings {
+                        path: "/bin/sh".into(),
+                        args: vec![
+                            "-c".into(),
+                            script.into(),
+                            "fixture".into(),
+                            started.to_str().unwrap().into(),
+                            release.to_str().unwrap().into(),
+                            output.to_str().unwrap().into(),
+                        ],
+                    });
+                }
+                let root = Stop::new();
+                let failures = Arc::new(AtomicUsize::new(0));
+                let paths = Paths { config: dir.join("config"), state: dir.clone(), work: dir.clone() };
+                let mut runner = Runner::with_adapters(config, paths, vec![], dir.clone(), root.clone());
+                runner.policy_contact_every = Duration::from_millis(10);
+                let mut control = Control {
+                    root,
+                    failures: failures.clone(),
+                    count: if queued { 2 } else { 1 },
+                    started,
+                    release,
+                    denied: None,
+                    change,
+                };
+                assert!(
+                    runner
+                        .run(&mut control, |event| {
+                            if let Event::Collected(result, _) = event {
+                                assert_eq!(result.stage, "discover");
+                                assert!(result.account.is_none());
+                                failures.fetch_add(1, Ordering::SeqCst);
+                            }
+                        })
+                        .is_none()
+                );
+                assert_eq!(failures.load(Ordering::SeqCst), control.count);
+                assert!(!completed.exists(), "{change} must cancel queued={queued} discovery callbacks");
+                std::fs::remove_dir_all(dir).unwrap();
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_terminal_flush_fences_discovery_before_dispatch() {
+        use crate::config::HookSettings;
+        struct RefusingFlush {
+            terminal: bool,
+            started: PathBuf,
+        }
+        impl Sink for RefusingFlush {
+            fn managed(&self) -> bool {
+                true
+            }
+            fn deliver(&mut self, _: &Outcome) {
+                panic!("no delivery")
+            }
+            fn flush(&mut self) {
+                self.terminal = true;
+            }
+            fn refused(&self) -> Option<&str> {
+                if !self.terminal {
+                    return None;
+                }
+                // Give a wrongly dispatched worker time to enter its real process, rather
+                // than letting pre-stop cancellation hide a launch after known refusal.
+                let until = Instant::now() + Duration::from_millis(200);
+                while !self.started.exists() && Instant::now() < until {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Some("revoked")
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("quotum-flush-{}", crate::config::random_hex()));
+        std::fs::create_dir(&dir).unwrap();
+        let started = dir.join("started");
+        let mut config = Config::parse("sessions=false").unwrap();
+        config.providers.entry(Provider::Codex).or_default().hooks.collect = Some(HookSettings {
+            path: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                "printf started > \"$1\"; exit 1".into(),
+                "fixture".into(),
+                started.to_str().unwrap().into(),
+            ],
+        });
+        let paths = Paths { config: dir.join("config"), state: dir.clone(), work: dir.clone() };
+        let mut runner = Runner::with_adapters(config, paths, vec![], dir.clone(), Stop::new());
+        let mut sink = RefusingFlush { terminal: false, started: started.clone() };
+        assert_eq!(runner.run(&mut sink, |_| panic!("no events after refusal")).as_deref(), Some("revoked"));
+        assert!(!started.exists(), "terminal flush must prevent discovery dispatch");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn native_one_shot_observations_use_the_configured_interval_and_stale_limit() {
+        struct Native;
+        impl Collector for Native {
+            fn provider(&self) -> Provider {
+                Provider::Antigravity
+            }
+            fn activity_paths(&self, _: &std::path::Path) -> Vec<PathBuf> {
+                vec![]
+            }
+            fn measure(&mut self, _: &Context) -> Outcome {
+                snapshot()
+            }
+        }
+        for (seconds, expected) in [(300, 300_000), (172_800, crate::model::STALE_LIMIT_MS)] {
+            let mut config = Config::parse("sessions=false").unwrap();
+            // Embedders can supply Config directly; retain the wire clamp as well as parser bounds.
+            config.interval = Some(seconds);
+            let paths = Paths { config: "/unused".into(), state: std::env::temp_dir(), work: std::env::temp_dir() };
+            let mut runner =
+                Runner::with_adapters(config, paths, vec![Box::new(Native)], std::env::temp_dir(), Stop::new());
+            let mut measured = 0;
+            runner.collect_all(|result| {
+                let CollectionOutcome::Observed(snapshot) = &result.outcome else { panic!("expected observation") };
+                assert_eq!(snapshot.stale_after_ms, expected);
+                assert_eq!(serde_json::to_value(snapshot).unwrap()["staleAfterMs"], expected);
+                measured += 1;
+            });
+            assert_eq!(measured, 1);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collector_roster_and_due_subset_share_one_process_with_independent_commands() {
+        use crate::config::HookSettings;
+        use crate::measurement_policy::{AttemptContext, AttemptTarget, CollectorPolicy};
+        let dir = std::env::temp_dir().join(format!("quotum-collector-{}", crate::config::random_hex()));
+        std::fs::create_dir(&dir).unwrap();
+        let request_log = dir.join("requests");
+        let body = r#"IFS= read -r request
+printf '%s\n' "$request" >> "$1"
+case "$request" in
+  *'"action":"discover"'*) printf '%s' '{"version":1,"accounts":[{"identity":{"accountId":"a"}},{"identity":{"accountId":"b"}},{"identity":{"accountId":"c"}},{"identity":{"accountId":"d"}}]}' ;;
+  *) printf '%s' '{"version":1,"results":[{"identity":{"accountId":"a"},"status":"observed","observedAt":"2026-01-01T00:00:00Z","windows":[{"id":"session","kind":"session","usedPercent":5}]},{"identity":{"accountId":"b"},"status":"no_new_data"},{"identity":{"accountId":"c"},"status":"failed","error":"timeout"}]}' ;;
+esac"#;
+        let mut config = Config::parse("sessions=false").unwrap();
+        config.providers.entry(Provider::Codex).or_default().hooks.collect = Some(HookSettings {
+            path: "/bin/sh".into(),
+            args: vec!["-c".into(), body.into(), "fixture".into(), request_log.to_str().unwrap().into()],
+        });
+        #[derive(Default)]
+        struct Select {
+            roster: Vec<AccountRoster>,
+            expected: BTreeMap<String, String>,
+            delivered: Vec<(Outcome, AttemptContext)>,
+            completed: Vec<Completion>,
+        }
+        impl Sink for Select {
+            fn managed(&self) -> bool {
+                true
+            }
+            fn deliver(&mut self, _: &Outcome) {
+                panic!("batch uses captured attempts")
+            }
+            fn deliver_attempt(&mut self, outcome: &Outcome, context: Option<&AttemptContext>) {
+                self.delivered.push((outcome.clone(), context.unwrap().clone()));
+            }
+            fn complete_collection(&mut self, completion: &Completion) {
+                self.completed.push(completion.clone());
+            }
+            fn account_rosters(&mut self, roster: &[AccountRoster]) {
+                self.roster = roster.to_vec();
+            }
+            fn checkin_managed(&mut self, asks: &[Ask], _: &[Provider]) -> crate::sink::CheckinAnswer {
+                let mut commands = Vec::new();
+                let directives = asks
+                    .iter()
+                    .enumerate()
+                    .map(|(i, ask)| {
+                        if ask.account == Some(crate::model::pseudonym(Provider::Codex, "d").as_str()) {
+                            commands.push(None);
+                            Directive::Wait { ask_at: now_ms() + 120000, on_duty: false }
+                        } else {
+                            let command = format!("00000000-0000-4000-8000-{:012}", i + 1);
+                            self.expected.insert(ask.account.unwrap().into(), command.clone());
+                            commands.push(Some(command));
+                            Directive::Measure { paced: None }
+                        }
+                    })
+                    .collect();
+                crate::sink::CheckinAnswer {
+                    directives,
+                    commands,
+                    accounts: asks.iter().map(|a| a.account.map(str::to_string)).collect(),
+                    policy: Some(MeasurementPolicy {
+                        version: 1,
+                        authority: "11111111-1111-4111-8111-111111111111".into(),
+                        revision: 0,
+                        enabled: true,
+                        collectors: Provider::ALL
+                            .into_iter()
+                            .map(|p| {
+                                (
+                                    p,
+                                    CollectorPolicy {
+                                        enabled: true,
+                                        epoch: 0,
+                                        requires_epoch: false,
+                                        changed_at: None,
+                                    },
+                                )
+                            })
+                            .collect(),
+                    }),
+                }
+            }
+        }
+        let stop = Stop::new();
+        let signal = stop.clone();
+        let watchdog = stop.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_secs(3));
+            watchdog.request(crate::stop::How::Exit);
+        });
+        let paths = Paths { config: dir.join("config"), work: dir.clone(), state: dir.clone() };
+        let mut runner = Runner::with_adapters(config, paths, vec![], dir.clone(), stop);
+        let mut sink = Select::default();
+        let mut results = Vec::new();
+        runner.run(&mut sink, |event| {
+            if let Event::Collected(result, _) = event {
+                results.push(result.clone());
+                if results.len() == 3 {
+                    signal.request(crate::stop::How::Exit);
+                }
+            }
+        });
+        assert_eq!(results.len(), 3);
+        assert_eq!(sink.roster[0].accounts.len(), 4);
+        assert_eq!(sink.delivered.len(), 2);
+        assert_eq!(sink.completed.len(), 1);
+        assert_eq!(results.iter().filter(|r| matches!(r.outcome, CollectionOutcome::Observed(_))).count(), 1);
+        assert_eq!(results.iter().filter(|r| matches!(r.outcome, CollectionOutcome::NoNewData)).count(), 1);
+        assert_eq!(results.iter().filter(|r| matches!(r.outcome, CollectionOutcome::Failed(_))).count(), 1);
+        assert!(results.iter().all(|r| r.attempt_id == results[0].attempt_id));
+        for context in sink.delivered.iter().map(|(_, c)| c).chain(sink.completed.iter().map(|c| &c.attempt_context)) {
+            let AttemptTarget::Verified { account_key } = &context.target else { panic!("verified account expected") };
+            assert_eq!(context.command_id.as_ref(), sink.expected.get(account_key));
+        }
+        assert_eq!(sink.expected.values().collect::<std::collections::BTreeSet<_>>().len(), 3);
+        let text = std::fs::read_to_string(request_log).unwrap();
+        let requests =
+            text.lines().map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()).collect::<Vec<_>>();
+        assert_eq!(requests.len(), 2);
+        let selected = requests[1]["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["identity"]["accountId"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(selected, std::collections::BTreeSet::from(["a", "b", "c"]));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_changed_native_login_keeps_failure_unknown_without_rebinding_the_launch() {
+        use crate::measurement_policy::{AttemptContext, AttemptTarget};
+        let launch = AttemptContext {
+            version: 1,
+            authority: "authority".into(),
+            collector_epoch: 7,
+            target: AttemptTarget::Verified { account_key: "a".repeat(24) },
+            command_id: Some("command-a".into()),
+        };
+        let unknown = failure_context(Some(&launch), false).unwrap();
+        assert_eq!(unknown.target, AttemptTarget::Unknown);
+        assert_eq!(unknown.command_id, None);
+        assert_eq!(unknown.collector_epoch, 7);
+        assert!(matches!(launch.target, AttemptTarget::Verified { .. }));
+        assert_eq!(failure_context(Some(&launch), true), Some(launch));
+    }
+
+    #[test]
+    fn native_codex_bootstraps_past_a_persisted_roster_without_inheriting_its_account() {
+        use crate::measurement_policy::{AttemptTarget, CollectorPolicy};
+        struct Native;
+        impl Collector for Native {
+            fn provider(&self) -> Provider {
+                Provider::Codex
+            }
+            fn activity_paths(&self, _: &std::path::Path) -> Vec<PathBuf> {
+                vec![]
+            }
+            fn measure(&mut self, _: &Context) -> Outcome {
+                let mut value = snapshot().unwrap();
+                value.provider = Provider::Codex;
+                value.account = Some("b".repeat(24));
+                Ok(value)
+            }
+        }
+        struct Previous {
+            roster: Vec<AccountRoster>,
+            delivered: bool,
+        }
+        impl Sink for Previous {
+            fn managed(&self) -> bool {
+                true
+            }
+            fn account_rosters(&mut self, roster: &[AccountRoster]) {
+                self.roster = roster.to_vec();
+            }
+            fn checkin_managed(&mut self, asks: &[Ask], _: &[Provider]) -> crate::sink::CheckinAnswer {
+                assert!(asks.is_empty(), "unknown native identity is discovered without claiming a subscription");
+                crate::sink::CheckinAnswer {
+                    directives: vec![],
+                    commands: vec![],
+                    accounts: vec![],
+                    policy: Some(MeasurementPolicy {
+                        version: 1,
+                        authority: "11111111-1111-4111-8111-111111111111".into(),
+                        revision: 0,
+                        enabled: true,
+                        collectors: Provider::ALL
+                            .into_iter()
+                            .map(|p| {
+                                (
+                                    p,
+                                    CollectorPolicy {
+                                        enabled: true,
+                                        epoch: 0,
+                                        requires_epoch: false,
+                                        changed_at: None,
+                                    },
+                                )
+                            })
+                            .collect(),
+                    }),
+                }
+            }
+            fn deliver(&mut self, _: &Outcome) {
+                panic!("attempt context is required")
+            }
+            fn deliver_attempt(
+                &mut self,
+                outcome: &Outcome,
+                context: Option<&crate::measurement_policy::AttemptContext>,
+            ) {
+                assert_eq!(outcome.as_ref().unwrap().account.as_deref(), Some("bbbbbbbbbbbbbbbbbbbbbbbb"));
+                assert_eq!(context.unwrap().target, AttemptTarget::Unknown);
+                assert!(context.unwrap().command_id.is_none());
+                assert_eq!(self.roster[0].accounts, vec![AccountRef::Supplier { account: "b".repeat(24) }]);
+                self.delivered = true;
+            }
+        }
+        let config =
+            Config::parse(&format!("sessions=false\n[providers.codex]\npath={:?}", std::env::current_exe().unwrap()))
+                .unwrap();
+        let paths = Paths { config: "unused".into(), work: std::env::temp_dir(), state: std::env::temp_dir() };
+        let stop = Stop::new();
+        let signal = stop.clone();
+        let mut runner = Runner::with_adapters(config, paths, vec![Box::new(Native)], std::env::temp_dir(), stop);
+        let mut sink = Previous {
+            roster: vec![AccountRoster {
+                provider: Provider::Codex,
+                accounts: vec![AccountRef::Supplier { account: "a".repeat(24) }],
+            }],
+            delivered: false,
+        };
+        runner.run(&mut sink, |event| {
+            if let Event::Collected(result, _) = event {
+                assert_eq!(result.account, Some(AccountRef::Supplier { account: "b".repeat(24) }));
+                signal.request(crate::stop::How::Exit);
+            }
+        });
+        assert!(sink.delivered);
+    }
+
+    #[test]
+    fn delayed_collection_keeps_control_contact_and_cancels_on_known_gate_or_refusal() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        };
+        struct Delayed {
+            started: Arc<AtomicBool>,
+            finished: Arc<AtomicBool>,
+        }
+        impl Collector for Delayed {
+            fn provider(&self) -> Provider {
+                Provider::Antigravity
+            }
+            fn identifies_account(&self) -> bool {
+                false
+            }
+            fn activity_paths(&self, _: &std::path::Path) -> Vec<PathBuf> {
+                vec![]
+            }
+            fn measure(&mut self, ctx: &Context) -> Outcome {
+                self.started.store(true, Ordering::SeqCst);
+                let until = Instant::now() + Duration::from_secs(2);
+                while !ctx.stop.requested() && Instant::now() < until {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                self.finished.store(true, Ordering::SeqCst);
+                snapshot()
+            }
+        }
+        struct Control {
+            root: Stop,
+            started: Arc<AtomicBool>,
+            finished: Arc<AtomicBool>,
+            denied: bool,
+            refuse: bool,
+            asks: Arc<AtomicUsize>,
+            contacts: usize,
+        }
+        impl Sink for Control {
+            fn managed(&self) -> bool {
+                true
+            }
+            fn needs_policy_contact(&self) -> bool {
+                true
+            }
+            fn allows_measurement(&self, _: Provider) -> bool {
+                !self.denied
+            }
+            fn refused(&self) -> Option<&str> {
+                (self.denied && self.refuse).then_some("device revoked")
+            }
+            fn checkin(&mut self, asks: &[Ask]) -> Vec<Directive> {
+                if !asks.is_empty() {
+                    self.asks.fetch_add(1, Ordering::SeqCst);
+                }
+                if self.started.load(Ordering::SeqCst) {
+                    assert!(asks.is_empty(), "busy command cannot be replaced");
+                    self.contacts += 1;
+                    self.denied = true;
+                }
+                if self.finished.load(Ordering::SeqCst) {
+                    self.root.request(crate::stop::How::Exit);
+                }
+                asks.iter().map(|_| Directive::Measure { paced: None }).collect()
+            }
+            fn deliver(&mut self, _: &Outcome) {
+                panic!("cancelled result delivered")
+            }
+        }
+        for refuse in [false, true] {
+            let started = Arc::new(AtomicBool::new(false));
+            let finished = Arc::new(AtomicBool::new(false));
+            let asks = Arc::new(AtomicUsize::new(0));
+            let root = Stop::new();
+            let paths =
+                Paths { config: PathBuf::from("/unused"), state: std::env::temp_dir(), work: std::env::temp_dir() };
+            let config = Config::parse(&format!(
+                "sessions=false\n[providers.antigravity]\npath={:?}",
+                std::env::current_exe().unwrap()
+            ))
+            .unwrap();
+            let mut runner = Runner::with_adapters(
+                config,
+                paths,
+                vec![Box::new(Delayed { started: started.clone(), finished: finished.clone() })],
+                std::env::temp_dir(),
+                root.clone(),
+            );
+            runner.policy_contact_every = Duration::from_millis(10);
+            let mut sink = Control {
+                root,
+                started,
+                finished: finished.clone(),
+                denied: false,
+                refuse,
+                asks: asks.clone(),
+                contacts: 0,
+            };
+            let began = Instant::now();
+            let result = runner.run(&mut sink, |_| panic!("cancelled event"));
+            assert_eq!(result.is_some(), refuse);
+            assert!(began.elapsed() < Duration::from_secs(1));
+            assert!(finished.load(Ordering::SeqCst));
+            assert!(sink.contacts >= 1);
+            assert_eq!(asks.load(Ordering::SeqCst), 1);
+        }
+    }
 
     #[test]
     fn corrected_shared_sessions_keep_native_ids_through_the_wire() {
@@ -1568,6 +3046,7 @@ mod tests {
             match event {
                 Event::Measured(_, next) => events.push((true, next)),
                 Event::Waiting(_, next) => events.push((false, next)),
+                Event::Collected(..) | Event::Diagnostic(..) => {}
             }
             stop.request(crate::stop::How::Exit);
         });

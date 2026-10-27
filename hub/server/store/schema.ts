@@ -497,6 +497,41 @@ export const STEPS = [
     DELETE FROM board_project_colors WHERE board_id=OLD.id;
   END;
   `,
+  // 35 — independent account associations, scoped failures and explicit device membership.
+  `
+  DROP TRIGGER connections_device_source_added;
+  DROP TRIGGER connections_device_source_changed;
+  ALTER TABLE device_sources RENAME TO previous_device_sources;
+  CREATE TABLE device_sources (
+    device_id TEXT NOT NULL, provider TEXT NOT NULL, source_id TEXT NOT NULL, seen_at INTEGER NOT NULL,
+    PRIMARY KEY(device_id,provider,source_id));
+  INSERT INTO device_sources SELECT * FROM previous_device_sources;
+  DROP TABLE previous_device_sources;
+  CREATE TRIGGER connections_device_source_added AFTER INSERT ON device_sources BEGIN
+    INSERT INTO account_revisions(user_id,revision) VALUES ((SELECT user_id FROM devices WHERE id=NEW.device_id),1)
+    ON CONFLICT(user_id) DO UPDATE SET revision=revision+1;
+  END;
+  CREATE TRIGGER connections_device_source_removed AFTER DELETE ON device_sources BEGIN
+    INSERT INTO account_revisions(user_id,revision) SELECT user_id,1 FROM devices WHERE id=OLD.device_id
+    ON CONFLICT(user_id) DO UPDATE SET revision=revision+1;
+  END;
+  ALTER TABLE device_failures RENAME TO previous_device_failures;
+  CREATE TABLE device_failures (
+    device_id TEXT NOT NULL,provider TEXT NOT NULL,account_key TEXT NOT NULL,error TEXT NOT NULL,detail TEXT,at INTEGER NOT NULL,
+    PRIMARY KEY(device_id,provider,account_key));
+  INSERT INTO device_failures SELECT device_id,provider,'',error,detail,at FROM previous_device_failures;
+  DROP TABLE previous_device_failures;
+  CREATE TABLE device_account_rosters (
+    device_id TEXT NOT NULL,provider TEXT NOT NULL,accounts TEXT NOT NULL,updated_at INTEGER NOT NULL,
+    PRIMARY KEY(device_id,provider));
+  CREATE TRIGGER device_rosters_deleted AFTER DELETE ON devices BEGIN
+    DELETE FROM device_account_rosters WHERE device_id=OLD.id;
+  END;
+  CREATE TRIGGER device_rosters_revoked AFTER UPDATE OF revoked_at ON devices WHEN NEW.revoked_at IS NOT NULL BEGIN
+    DELETE FROM device_account_rosters WHERE device_id=NEW.id;
+    DELETE FROM device_failures WHERE device_id=NEW.id;
+  END;
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

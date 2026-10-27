@@ -4,6 +4,7 @@ mod hold;
 mod update;
 
 use hold::Prepared;
+use quotum_core::collection::account_label;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -368,12 +369,29 @@ fn status(config: Config, paths: Paths, only: &[ClientId], json: bool) -> ExitCo
     if let Some(activity) = activity.as_mut() {
         activity.look();
     }
-    runner.measure_all(|outcome| {
-        if !json {
-            print_outcome(outcome, &style);
-            let _ = std::io::stdout().flush();
+    let mut collections = Vec::new();
+    let mut diagnostics = Vec::new();
+    runner.collect_events(|event| match event {
+        Event::Collected(result, _) => {
+            use quotum_core::collection::CollectionOutcome;
+            if !json {
+                print_collection(result, &style);
+                let _ = std::io::stdout().flush();
+            }
+            match &result.outcome {
+                CollectionOutcome::Observed(s) => outcomes.push(Ok(s.clone())),
+                CollectionOutcome::Failed(f) => outcomes.push(Err(f.clone())),
+                CollectionOutcome::NoNewData => {}
+            }
+            collections.push(result.clone());
         }
-        outcomes.push(outcome.clone());
+        Event::Diagnostic(d) => {
+            if !json {
+                eprintln!("{d}");
+            }
+            diagnostics.push(d.clone());
+        }
+        _ => {}
     });
     if let Some(activity) = activity.as_mut() {
         print_sessions(
@@ -413,6 +431,8 @@ fn status(config: Config, paths: Paths, only: &[ClientId], json: bool) -> ExitCo
             failures: failures.into_iter().filter_map(Result::err).collect(),
         };
         let mut value = serde_json::to_value(batch).unwrap();
+        value["collections"] = serde_json::to_value(collections).unwrap();
+        value["diagnostics"] = serde_json::to_value(diagnostics).unwrap();
         value["clients"] = serde_json::to_value(&installed).unwrap();
         println!("{}", serde_json::to_string_pretty(&value).unwrap_or_default());
     }
@@ -462,32 +482,47 @@ fn run(paths: Paths, only: &[ClientId], overrides: Option<Hub>) -> ExitCode {
 /// What the agent logs of its measurements: waiting once per change, not on every
 /// check-in, and a failure that repeats itself once.
 fn logged() -> impl FnMut(Event) {
+    logged_to(log)
+}
+
+fn logged_to(mut log: impl FnMut(&str)) -> impl FnMut(Event) {
     let mut waiting: BTreeMap<Provider, bool> = BTreeMap::new();
-    let mut failing: BTreeMap<Provider, String> = BTreeMap::new();
+    let mut failing = BTreeMap::new();
     move |event| match event {
-        Event::Measured(outcome, next) => {
-            let (provider, summary, repeated) = match outcome {
-                Ok(s) => {
-                    failing.remove(&s.provider);
-                    let windows: Vec<String> = s
-                        .windows
+        Event::Measured(..) => {}
+        Event::Collected(result, next) => {
+            use quotum_core::collection::CollectionOutcome;
+            let key = (result.provider, result.account.clone());
+            let summary = match &result.outcome {
+                CollectionOutcome::Observed(s) => {
+                    failing.remove(&key);
+                    s.windows
                         .iter()
                         .map(|w| format!("{} {}%", window_name(w), fmt_percent(w.remaining())))
-                        .collect();
-                    (s.provider, windows.join(", "), false)
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 }
-                Err(f) => {
-                    let detail = f.detail.as_ref().map(|d| format!(": {d}")).unwrap_or_default();
-                    let summary = format!("{}{detail}", f.error.describe());
-                    let repeated = failing.insert(f.provider, summary.clone()).as_ref() == Some(&summary);
-                    (f.provider, summary, repeated)
+                CollectionOutcome::NoNewData => {
+                    failing.remove(&key);
+                    "no new data".into()
+                }
+                CollectionOutcome::Failed(f) => {
+                    let summary = f.error.describe().to_string();
+                    if failing.insert(key, summary.clone()).as_ref() == Some(&summary) {
+                        return;
+                    }
+                    summary
                 }
             };
-            waiting.insert(provider, false);
-            if !repeated {
-                log(&format!("{}: {summary} (next {})", provider.id(), until(next - now_ms())));
-            }
+            waiting.insert(result.provider, false);
+            log(&format!(
+                "{} {}: {summary} (next {})",
+                result.provider.id(),
+                account_label(result.account.as_ref()),
+                until(next - now_ms())
+            ));
         }
+        Event::Diagnostic(d) => log(&d.to_string()),
         Event::Waiting(provider, next) => {
             if waiting.insert(provider, true) != Some(true) {
                 log(&format!(
@@ -497,6 +532,16 @@ fn logged() -> impl FnMut(Event) {
                 ));
             }
         }
+    }
+}
+
+fn print_collection(result: &quotum_core::collection::CollectionResult, style: &Style) {
+    use quotum_core::collection::CollectionOutcome;
+    println!("{} {}", result.provider.id(), account_label(result.account.as_ref()));
+    match &result.outcome {
+        CollectionOutcome::Observed(s) => print_outcome(&Ok(s.clone()), style),
+        CollectionOutcome::Failed(f) => print_outcome(&Err(f.clone()), style),
+        CollectionOutcome::NoNewData => println!("  no new data"),
     }
 }
 
@@ -823,6 +868,47 @@ impl Style {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_data_reopens_only_its_own_failure_log_and_diagnostics_keep_safe_accounts() {
+        use quotum_core::collection::{AccountRef, CollectionOutcome, CollectionResult};
+        use quotum_core::model::{ErrorKind, Failure};
+        use quotum_core::runner::Diagnostic;
+        let mut lines = Vec::new();
+        let mut logger = logged_to(|line| lines.push(line.to_string()));
+        let mut result = CollectionResult {
+            version: 1,
+            provider: Provider::Codex,
+            account: Some(AccountRef::Supplier { account: "a".repeat(24) }),
+            attempt_id: "fixture".into(),
+            stage: "measure",
+            completed_at: 0,
+            outcome: CollectionOutcome::Failed(Failure::new(Provider::Codex, ErrorKind::Timeout, "fixture")),
+        };
+        let failed = result.outcome.clone();
+        logger(Event::Collected(&result, 0));
+        result.account = Some(AccountRef::Supplier { account: "b".repeat(24) });
+        logger(Event::Collected(&result, 0));
+        result.account = Some(AccountRef::Supplier { account: "a".repeat(24) });
+        result.outcome = CollectionOutcome::NoNewData;
+        logger(Event::Collected(&result, 0));
+        result.outcome = failed;
+        logger(Event::Collected(&result, 0));
+        result.account = Some(AccountRef::Supplier { account: "b".repeat(24) });
+        logger(Event::Collected(&result, 0));
+        logger(Event::Diagnostic(&Diagnostic {
+            provider: Provider::Codex,
+            hook: "on_collected",
+            account: result.account.clone(),
+            code: "failed",
+        }));
+        drop(logger);
+        assert_eq!(lines.len(), 5, "B remains suppressed, A logs its new failure");
+        assert!(lines[2].contains("aaaaaaaa: no new data"));
+        assert!(lines[3].contains("aaaaaaaa:") && !lines[3].contains("no new data"));
+        assert_eq!(lines[4], "codex bbbbbbbb on_collected: failed");
+        assert!(!lines[4].contains(&"b".repeat(24)));
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

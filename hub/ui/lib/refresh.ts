@@ -84,12 +84,13 @@ export type RefreshRow = {
 const REPLY_SLACK_MS = 30_000;
 
 export const refreshRowPending = (row: RefreshRow) => row.status === 'sending' || row.status === 'queued' || row.status === 'waiting';
+export const refreshRowSucceeded = (row: RefreshRow) => row.status === 'updated' || row.status === 'no_new_data';
 /**
  * Rows told what became of their request, and those whose request ended unseen (an unknown
  * row keeps the last it saw of it). A lost reply, or a request not seen yet, may still turn up.
  */
 const settledRow = (row: RefreshRow) =>
-  ['updated', 'failed', 'unavailable', 'no_result', 'refused'].includes(row.status) || (row.status === 'unknown' && row.error === null && row.state !== null);
+  ['updated', 'no_new_data', 'failed', 'unavailable', 'no_result', 'refused'].includes(row.status) || (row.status === 'unknown' && row.error === null && row.state !== null);
 
 /** A receipt starts afresh, except for subscriptions already waiting for their data. */
 export const startRefreshRows = (ids: string[], states: Record<string, Refresh>): RefreshRow[] => [...new Set(ids)].map(id => {

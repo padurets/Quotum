@@ -9,6 +9,7 @@ import {
   observeRefreshRows,
   answerRefreshRow,
   refreshRowPending,
+  refreshRowSucceeded,
   type RefreshRow,
 } from '../lib/refresh';
 import {hubNow, useClock} from '../lib/clock';
@@ -219,7 +220,7 @@ function MeasurementItem({id, row, attempt}: {id: string; row?: RefreshRow; atte
       : source.inventory?.complete === false
         ? t('money.inventoryPartial')
         : null);
-  const trouble = !!row && !refreshRowPending(row) && row.status !== 'updated';
+  const trouble = !!row && !refreshRowPending(row) && !refreshRowSucceeded(row);
   const message = problem ?? (trouble ? refreshMessage(row!) : null);
   const measured = source.successAt !== null ? t('widgets.measuredAt', {time: stamp(source.successAt)}) : t('widgets.notMeasured');
   const content = (
@@ -295,7 +296,7 @@ function refreshMessage(row: RefreshRow) {
 
 function RefreshState({row}: {row: RefreshRow}) {
   const pending = refreshRowPending(row);
-  const updated = row.status === 'updated';
+  const updated = refreshRowSucceeded(row);
   const label = t(`refresh.row.${row.status}`);
   const Icon = updated ? Check : CircleAlert;
   const icon = pending ? (

@@ -206,6 +206,21 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
+#[cfg(unix)]
+fn nonblocking(pipe: &impl std::os::fd::AsRawFd) -> Result<(), ProcError> {
+    let fd = pipe.as_raw_fd();
+    // SAFETY: fcntl changes only the flags of this owned pipe descriptor.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(ProcError::Io(std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+#[cfg(not(unix))]
+fn nonblocking<T>(_: &T) -> Result<(), ProcError> {
+    Ok(())
+}
+
 /// A running client. Its stdout is read line by line on a helper thread so every read
 /// can respect the deadline and a stop. Dropping it kills the process tree.
 pub struct Client {
@@ -219,6 +234,8 @@ pub struct Client {
     lines: Receiver<String>,
     bytes: Option<Receiver<Result<Vec<u8>, ProcError>>>,
     deadline: Instant,
+    io_stop: Stop,
+    workers: Vec<thread::JoinHandle<()>>,
 }
 
 impl Client {
@@ -242,6 +259,9 @@ impl Client {
         stop: &Stop,
         limit: Option<usize>,
     ) -> Result<Client, ProcError> {
+        if stop.requested() {
+            return Err(ProcError::Stopped);
+        }
         let mut command = Command::new(program);
         command
             .args(args)
@@ -266,26 +286,45 @@ impl Client {
         // At once, before the client starts children of its own (an npm .cmd shim starts node).
         #[cfg(windows)]
         let job = job::Job::holding(&child);
+        #[cfg(windows)]
+        if limit.is_some() && job.is_none() {
+            // Bounded hooks must not wait on pipes whose descendants cannot be reaped.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(ProcError::Closed);
+        }
+
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().ok_or(ProcError::Closed)?;
         let (sender, lines) = mpsc::channel();
+        let io_stop = Stop::new();
+        let mut workers = Vec::new();
         let bytes = if let Some(limit) = limit {
             let (sender, bytes) = mpsc::sync_channel(1);
-            thread::spawn(move || {
+            nonblocking(&stdout)?;
+            let read_stop = io_stop.clone();
+            workers.push(thread::spawn(move || {
                 let mut stdout = stdout;
                 let mut retained = Vec::with_capacity(limit);
                 let mut chunk = [0; 1024];
                 let result = loop {
+                    if read_stop.requested() {
+                        break Err(ProcError::Stopped);
+                    }
                     match stdout.read(&mut chunk) {
                         Ok(0) => break Ok(retained),
                         Ok(n) if retained.len() + n > limit => break Err(ProcError::OutputLimit),
                         Ok(n) => retained.extend_from_slice(&chunk[..n]),
                         Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(10));
+                            continue;
+                        }
                         Err(e) => break Err(ProcError::Io(e)),
                     }
                 };
                 let _ = sender.send(result);
-            });
+            }));
             Some(bytes)
         } else {
             thread::spawn(move || {
@@ -307,15 +346,64 @@ impl Client {
             lines,
             bytes,
             deadline: Instant::now() + timeout,
+            io_stop,
+            workers,
         })
     }
 
     /// Inventory reads are bounded before any line allocation or reader queue. Success
     /// requires both EOF and the terminal exit; dropping a failed probe reaps its tree.
     pub fn version_output(program: &Path, cwd: &Path, stop: &Stop) -> Result<Vec<u8>, ProcError> {
-        let mut client =
-            Self::spawn_reader(program, &["--version"], &[], cwd, Duration::from_secs(5), stop, Some(16 * 1024))?;
-        client.stdin = None;
+        Self::command_output(program, &["--version"], None, cwd, Duration::from_secs(5), stop, 16 * 1024)
+    }
+
+    /// One bounded command, with optional JSON on stdin. A command that does not read
+    /// stdin cannot block the deadline: its writer is released when the tree is killed.
+    pub fn command_output<S: AsRef<OsStr>>(
+        program: &Path,
+        args: &[S],
+        input: Option<Vec<u8>>,
+        cwd: &Path,
+        timeout: Duration,
+        stop: &Stop,
+        limit: usize,
+    ) -> Result<Vec<u8>, ProcError> {
+        if stop.requested() {
+            return Err(ProcError::Stopped);
+        }
+        if input.as_ref().is_some_and(|data| data.len() > 256 * 1024) {
+            return Err(ProcError::OutputLimit);
+        }
+        let mut client = Self::spawn_reader(program, args, &[], cwd, timeout, stop, Some(limit))?;
+        let (written_tx, written) = mpsc::sync_channel(1);
+        if let (Some(mut stdin), Some(input)) = (client.stdin.take(), input) {
+            nonblocking(&stdin)?;
+            let write_stop = client.io_stop.clone();
+            client.workers.push(thread::spawn(move || {
+                let mut remaining = input.as_slice();
+                let result = loop {
+                    if write_stop.requested() {
+                        break Err(ProcError::Stopped);
+                    }
+                    if remaining.is_empty() {
+                        break Ok(());
+                    }
+                    match stdin.write(remaining) {
+                        Ok(0) => break Err(ProcError::Closed),
+                        Ok(n) => remaining = &remaining[n..],
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(10))
+                        }
+                        Err(e) => break Err(ProcError::Io(e)),
+                    }
+                };
+                let _ = written_tx.send(result);
+            }));
+        } else {
+            let _ = written_tx.send(Ok(()));
+        }
+        let mut input_done = false;
         let bytes = client.bytes.take().ok_or(ProcError::Closed)?;
         let mut output = None;
         loop {
@@ -333,12 +421,24 @@ impl Client {
                     Err(RecvTimeoutError::Disconnected) => return Err(ProcError::Closed),
                 }
             }
+            if !input_done {
+                match written.try_recv() {
+                    Ok(result) => {
+                        result?;
+                        input_done = true;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => return Err(ProcError::Closed),
+                    Err(mpsc::TryRecvError::Empty) => {}
+                }
+            }
             if let Some(status) = client.child.try_wait().map_err(ProcError::Io)? {
                 if !status.success() {
                     return Err(ProcError::Closed);
                 }
-                if let Some(output) = output {
-                    return Ok(output);
+                if input_done {
+                    if let Some(output) = output.take() {
+                        return Ok(output);
+                    }
                 }
             } else if output.is_some() {
                 thread::sleep(left.min(Duration::from_millis(20)));
@@ -415,6 +515,10 @@ impl Drop for Client {
         self.stdin = None;
         self.kill_tree();
         let _ = self.child.wait();
+        self.io_stop.request(crate::stop::How::Exit);
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -431,16 +535,8 @@ impl Client {
     fn kill_tree(&mut self) {
         match &self.job {
             Some(job) => job.kill(),
-            // No job object (refused by the system): taskkill follows the tree by parent ids.
+            // Job attachment is best effort; never start an unbounded cleanup command.
             None => {
-                use std::os::windows::process::CommandExt;
-                let _ = Command::new("taskkill")
-                    .args(["/T", "/F", "/PID", &self.child.id().to_string()])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .status();
                 let _ = self.child.kill();
             }
         }
@@ -628,6 +724,56 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn hook_commands_bound_output_exit_stdin_and_stop_without_echoing_stderr() {
+        let run = |body: &str, input: Option<Vec<u8>>, stop: &Stop| {
+            Client::command_output(
+                Path::new("/bin/sh"),
+                &["-c", body],
+                input,
+                &env::temp_dir(),
+                Duration::from_millis(300),
+                stop,
+                1024,
+            )
+        };
+        assert_eq!(run("cat", Some(b"{\"version\":1}".to_vec()), &Stop::new()).unwrap(), b"{\"version\":1}");
+        assert!(matches!(
+            run("printf valid; echo synthetic-secret >&2; exit 7", None, &Stop::new()),
+            Err(ProcError::Closed)
+        ));
+        assert!(matches!(run("head -c 2048 /dev/zero", None, &Stop::new()), Err(ProcError::OutputLimit)));
+        for body in ["sleep 30", "exec 1>&-; sleep 30"] {
+            let started = Instant::now();
+            assert!(matches!(run(body, Some(vec![b'x'; 128 * 1024]), &Stop::new()), Err(ProcError::Timeout)));
+            assert!(started.elapsed() < Duration::from_secs(2));
+        }
+        assert!(matches!(
+            run("sleep 30 & exit 0", Some(vec![b'x'; 128 * 1024]), &Stop::new()),
+            Err(ProcError::Io(_) | ProcError::Closed)
+        ));
+        let stop = Stop::new();
+        let signal = stop.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(30));
+            signal.request(crate::stop::How::Exit);
+        });
+        assert!(matches!(run("sleep 30", None, &stop), Err(ProcError::Stopped)));
+        // Arguments are literal: no implicit shell expands a hook's arguments.
+        let output = Client::command_output(
+            Path::new("/usr/bin/printf"),
+            &["%s", "$(echo expanded); *"],
+            None,
+            &env::temp_dir(),
+            Duration::from_secs(2),
+            &Stop::new(),
+            1024,
+        )
+        .unwrap();
+        assert_eq!(output, b"$(echo expanded); *");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn reads_json_lines_and_enforces_the_deadline() {
         let sh = Path::new("/bin/sh");
         let dir = env::temp_dir();
@@ -755,6 +901,40 @@ mod tests {
         assert_eq!(paths.len(), 1);
         let dirs: Vec<PathBuf> = env::split_paths(&paths[0].1).collect();
         assert_eq!(dirs[..2], [PathBuf::from("C:\\tools"), PathBuf::from("C:\\Windows\\system32")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stopped_and_oversized_invocations_start_no_process() {
+        let marker = env::temp_dir().join(format!("quotum-unstarted-{}", crate::config::random_hex()));
+        let args = ["-c", "touch \"$1\"", "fixture", marker.to_str().unwrap()];
+        let stop = Stop::new();
+        stop.request(crate::stop::How::Exit);
+        assert!(matches!(
+            Client::command_output(
+                Path::new("/bin/sh"),
+                &args,
+                None,
+                &env::temp_dir(),
+                Duration::from_secs(1),
+                &stop,
+                1024
+            ),
+            Err(ProcError::Stopped)
+        ));
+        assert!(matches!(
+            Client::command_output(
+                Path::new("/bin/sh"),
+                &args,
+                Some(vec![0; 256 * 1024 + 1]),
+                &env::temp_dir(),
+                Duration::from_secs(1),
+                &Stop::new(),
+                1024
+            ),
+            Err(ProcError::OutputLimit)
+        ));
+        assert!(!marker.exists());
     }
 
     #[test]

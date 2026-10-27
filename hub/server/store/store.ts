@@ -53,7 +53,7 @@ export type SessionDevice = {id:string;name:string;disconnected:boolean;enabled:
 /** Settings, admission and funding use the same connected or retained device inventory. */
 const sessionDeviceWhere='(d.revoked_at IS NULL OR EXISTS(SELECT 1 FROM agent_sessions s JOIN agent_work w ON w.session_id=s.id WHERE s.device_id=d.id))';
 
-export type DeviceFailure = {device: string; provider: Provider; error: string; detail: string | null; at: number};
+export type DeviceFailure = {accountKey?: string; device: string; provider: Provider; error: string; detail: string | null; at: number};
 
 /** A reset for everyone as a community tracker reported it. */
 export type Announcement = {at: number; url: string; text: string};
@@ -424,6 +424,8 @@ export class Store {
       if(providerOf(this.state(source).provider)?.measuredBy==='hub')continue;
       this.release(source,userId);
     }
+    // Preserve revoked associations until they have identified every orphan holding.
+    this.db.prepare('DELETE FROM device_sources WHERE device_id IN (SELECT id FROM devices WHERE user_id=? AND revoked_at IS NOT NULL)').run(userId);
   }
 
   // ---------- sharing ----------
@@ -643,42 +645,100 @@ export class Store {
     tell(this.observer, o => o.touchSources([id]));
   }
 
-  /** Remembers which source a device last delivered for a provider; its failures for the provider are over. */
+  /** Every accepted observation retains provenance, independently of current membership. */
   seenDevice(device: string, provider: Provider, source: string, at: number) {
-    const changed = this.deviceSource(device, provider) !== source;
-    this.db.prepare('INSERT INTO device_sources (device_id,provider,source_id,seen_at) VALUES (?,?,?,?) ON CONFLICT(device_id,provider) DO UPDATE SET source_id=excluded.source_id,seen_at=excluded.seen_at').run(device, provider, source, at);
-    this.db.prepare('DELETE FROM device_failures WHERE device_id = ? AND provider = ?').run(device, provider);
-    if (changed) {
-      const owner = this.db.prepare('SELECT user_id FROM devices WHERE id=?').get(device) as {user_id: string} | undefined;
-      if (owner) tell(this.observer, o => o.touchUser(owner.user_id));
-    }
+    const key=this.account(source)!,roster=this.accountRoster(device,provider);
+    const added=roster!==null&&roster.has(key)&&!this.db.prepare('SELECT 1 FROM device_sources WHERE device_id=? AND provider=? AND source_id=?').get(device,provider,source);
+    const before=roster===null?this.latestDeviceSource(device,provider):null;
+    this.db.prepare('INSERT INTO device_sources (device_id,provider,source_id,seen_at) VALUES (?,?,?,?) ON CONFLICT(device_id,provider,source_id) DO UPDATE SET seen_at=MAX(device_sources.seen_at,excluded.seen_at)').run(device, provider, source, at);
+    const after=roster===null?this.latestDeviceSource(device,provider):null;
+    // Known diagnostics follow their own account evidence, independently of native current inference.
+    const cleared=(roster===null||roster.has(key))&&this.db.prepare('DELETE FROM device_failures WHERE device_id=? AND provider=? AND account_key=? AND at<=?').run(device, provider, key, at).changes>0;
+    if(added||before!==after)this.deviceAssociationsChanged(device);
+    return !!cleared;
+  }
+
+  /** Only admitted observations of the complete batch can recover an unknown diagnostic. */
+  recoverUnknownDeviceFailure(device:string,provider:Provider,observations:ReadonlyMap<string,number>) {
+    if(!this.db.prepare("SELECT 1 FROM device_failures WHERE device_id=? AND provider=? AND account_key=''").get(device,provider))return false;
+    let at=-Infinity;
+    for(const source of this.currentDeviceSources(device,null,provider))at=Math.max(at,observations.get(source.source)??-Infinity);
+    if(at===-Infinity)return false;
+    return this.db.prepare("DELETE FROM device_failures WHERE device_id=? AND provider=? AND account_key='' AND at<=?").run(device,provider,at).changes>0;
+  }
+
+  /** Equal observations of different accounts provide no unique current identity. */
+  private latestDeviceSource(device:string,provider:Provider):string|null {
+    const rows=this.db.prepare('SELECT source_id,seen_at FROM device_sources WHERE device_id=? AND provider=? ORDER BY seen_at DESC LIMIT 2').all(device,provider) as {source_id:string;seen_at:number}[];
+    return rows.length&&rows[0].seen_at!==rows[1]?.seen_at?rows[0].source_id:null;
   }
 
   deviceSource(device: string, provider: Provider): string | null {
-    const row = this.db.prepare('SELECT source_id FROM device_sources WHERE device_id = ? AND provider = ?').get(device, provider) as
-      | {source_id: string}
-      | undefined;
-    return row?.source_id ?? null;
+    return this.currentDeviceSources(device).find(row=>row.provider===provider)?.source??null;
   }
 
-  /** Which sources each device of a person delivers to. */
+  accountRoster(device:string,provider:Provider):Set<string>|null {
+    const row=this.db.prepare('SELECT accounts FROM device_account_rosters WHERE device_id=? AND provider=?').get(device,provider) as {accounts:string}|undefined;
+    return row?new Set(JSON.parse(row.accounts) as string[]):null;
+  }
+
+  rosterAllows(device:string,provider:Provider,key:string):boolean {
+    const roster=this.accountRoster(device,provider);return roster===null||roster.has(key);
+  }
+
+  replaceAccountRoster(device:string,provider:Provider,accounts:Set<string>,now:number) {
+    const prior=this.accountRoster(device,provider);
+    if(prior!==null&&prior.size===accounts.size&&[...accounts].every(account=>prior.has(account)))return;
+    const before=this.currentDeviceSources(device).map(row=>row.source).sort().join(',');
+    this.db.prepare('INSERT INTO device_account_rosters VALUES (?,?,?,?) ON CONFLICT(device_id,provider) DO UPDATE SET accounts=excluded.accounts,updated_at=excluded.updated_at').run(device,provider,JSON.stringify([...accounts].sort()),now);
+    if(before!==this.currentDeviceSources(device).map(row=>row.source).sort().join(','))this.deviceAssociationsChanged(device);
+  }
+
+  private deviceAssociationsChanged(device:string) {
+    const owner=this.db.prepare('SELECT user_id FROM devices WHERE id=?').get(device) as {user_id:string}|undefined;
+    if(!owner)return;
+    this.db.prepare('INSERT INTO account_revisions VALUES (?,1) ON CONFLICT(user_id) DO UPDATE SET revision=revision+1').run(owner.user_id);
+    tell(this.observer,o=>o.touchUser(owner.user_id));
+  }
+
+  /** Raw provenance cannot restore a withdrawn account or an earlier login. */
+  private currentDeviceSources(device:string|null=null,user:string|null=null,provider:Provider|null=null):{device:string;provider:Provider;source:string;seenAt:number}[] {
+    const scope=(device!==null?' AND ds.device_id=?':user!==null?' AND d.user_id=?':'')+(provider!==null?' AND ds.provider=?':'');
+    const rows=this.db.prepare('SELECT ds.device_id,ds.provider,ds.source_id,ds.seen_at,s.account,r.accounts FROM device_sources ds JOIN sources s ON s.id=ds.source_id JOIN devices d ON d.id=ds.device_id LEFT JOIN device_account_rosters r ON r.device_id=ds.device_id AND r.provider=ds.provider WHERE d.revoked_at IS NULL'+scope+' ORDER BY ds.seen_at DESC,ds.source_id').all(...(device!==null?[device]:user!==null?[user]:[]),...(provider!==null?[provider]:[])) as {device_id:string;provider:Provider;source_id:string;seen_at:number;account:string;accounts:string|null}[];
+    const groups=new Map<string,Set<string>|null>(),latest=new Map<string,{at:number;source:string|null}>();
+    for(const row of rows){
+      const group=`${row.device_id}/${row.provider}`;
+      if(!groups.has(group))groups.set(group,row.accounts===null?null:new Set(JSON.parse(row.accounts) as string[]));
+      if(groups.get(group)!==null)continue;
+      const before=latest.get(group);
+      if(!before)latest.set(group,{at:row.seen_at,source:row.source_id});
+      else if(before.at===row.seen_at)before.source=null;
+    }
+    return rows.filter(row=>{
+      const group=`${row.device_id}/${row.provider}`,roster=groups.get(group);
+      return roster?roster.has(row.account):latest.get(group)?.source===row.source_id;
+    }).map(row=>({device:row.device_id,provider:row.provider,source:row.source_id,seenAt:row.seen_at}));
+  }
+
+  /** Current associations, separate from all retained observation provenance. */
   deviceSources(userId: string): {device: string; provider: Provider; source: string; seenAt: number}[] {
-    const rows = this.db
-      .prepare('SELECT d.device_id, d.provider, d.source_id, d.seen_at FROM device_sources d JOIN devices ON devices.id = d.device_id WHERE devices.user_id = ?')
-      .all(userId) as {device_id: string; provider: Provider; source_id: string; seen_at: number}[];
-    return rows.map(r => ({device: r.device_id, provider: r.provider, source: r.source_id, seenAt: r.seen_at}));
+    return this.currentDeviceSources(null,userId);
   }
 
-  /** The last failure a device reported for a provider, kept until it delivers for it again. */
-  deviceFailed(device: string, provider: Provider, error: string, detail: string | null, at: number) {
-    this.db.prepare('INSERT OR REPLACE INTO device_failures VALUES (?, ?, ?, ?, ?)').run(device, provider, error, detail, at);
+  /** Private diagnostics follow this device's own accepted observations, never another device's. */
+  deviceFailed(device: string, provider: Provider, error: string, detail: string | null, at: number, accountKey = '') {
+    const success=accountKey
+      ? (this.db.prepare('SELECT ds.seen_at AS at FROM sources s JOIN device_sources ds ON ds.source_id=s.id WHERE s.provider=? AND s.account=? AND ds.device_id=? AND ds.provider=?').get(provider,accountKey,device,provider) as {at:number}|undefined)?.at??-Infinity
+      : Math.max(-Infinity,...this.currentDeviceSources(device,null,provider).map(source=>source.seenAt));
+    if(at<=success)return false;
+    return this.db.prepare('INSERT INTO device_failures VALUES (?,?,?,?,?,?) ON CONFLICT(device_id,provider,account_key) DO UPDATE SET error=excluded.error,detail=excluded.detail,at=excluded.at WHERE excluded.at>device_failures.at').run(device, provider, accountKey, error, detail, at).changes>0;
   }
 
   deviceFailures(userId: string): DeviceFailure[] {
     const rows = this.db
       .prepare('SELECT f.* FROM device_failures f JOIN devices d ON d.id = f.device_id WHERE d.user_id = ?')
-      .all(userId) as {device_id: string; provider: Provider; error: string; detail: string | null; at: number}[];
-    return rows.map(r => ({device: r.device_id, provider: r.provider, error: r.error, detail: r.detail, at: r.at}));
+      .all(userId) as {device_id: string; provider: Provider; account_key:string; error: string; detail: string | null; at: number}[];
+    return rows.map(r => ({device: r.device_id, provider: r.provider, ...(r.account_key?{accountKey:r.account_key}:{}), error: r.error, detail: r.detail, at: r.at}));
   }
 
   /** The board's known work thresholds, independent of the tiles read. */

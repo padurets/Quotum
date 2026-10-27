@@ -26,6 +26,31 @@ import type {Meter} from '../domain/meters.js';
 const M=60_000,now=1_800_000_000_000,cutoff=now-config.retention.sampleDays*86_400_000;
 const answer=(currency='USD')=>({is_available:true,balance_infos:[{currency,total_balance:'100',granted_balance:'0',topped_up_balance:'100'}]});
 const native=(id:string,amount:string,at:number):Meter=>({id,kind:'counter',unit:'USD',amount,limit:null,at,staleAfterMs:2*M,resetAt:null,minutes:null,scope:null,label:null,stale:false});
+/** Reconstruct the released account layout before exercising a historical migration. */
+function legacyAccounts(db:Store['db']) {
+  db.exec(`
+    DROP TRIGGER connections_device_source_added;
+    DROP TRIGGER connections_device_source_removed;
+    DROP TRIGGER device_rosters_deleted;
+    DROP TRIGGER device_rosters_revoked;
+    DROP TABLE device_account_rosters;
+    ALTER TABLE device_sources RENAME TO current_device_sources;
+    CREATE TABLE device_sources(device_id TEXT NOT NULL,provider TEXT NOT NULL,source_id TEXT NOT NULL,seen_at INTEGER NOT NULL,PRIMARY KEY(device_id,provider));
+    INSERT OR REPLACE INTO device_sources SELECT * FROM current_device_sources ORDER BY seen_at;
+    DROP TABLE current_device_sources;
+    ALTER TABLE device_failures RENAME TO current_device_failures;
+    CREATE TABLE device_failures(device_id TEXT NOT NULL,provider TEXT NOT NULL,error TEXT NOT NULL,detail TEXT,at INTEGER NOT NULL,PRIMARY KEY(device_id,provider));
+    INSERT OR REPLACE INTO device_failures SELECT device_id,provider,error,detail,at FROM current_device_failures ORDER BY at;
+    DROP TABLE current_device_failures;
+    CREATE TRIGGER connections_device_source_added AFTER INSERT ON device_sources BEGIN
+      INSERT INTO account_revisions(user_id,revision) VALUES ((SELECT user_id FROM devices WHERE id=NEW.device_id),1) ON CONFLICT(user_id) DO UPDATE SET revision=revision+1;
+    END;
+    CREATE TRIGGER connections_device_source_changed AFTER UPDATE OF source_id ON device_sources WHEN OLD.source_id IS NOT NEW.source_id BEGIN
+      INSERT INTO account_revisions(user_id,revision) VALUES ((SELECT user_id FROM devices WHERE id=NEW.device_id),1) ON CONFLICT(user_id) DO UPDATE SET revision=revision+1;
+    END;
+  `);
+}
+
 async function fixture(t:TestContext){
   t.mock.method(Date,'now',()=>now);
   const dir=mkdtempSync(join(tmpdir(),'quotum-retention-')),file=join(dir,'db.sqlite');
@@ -49,7 +74,7 @@ async function fixture(t:TestContext){
   };
   return {get store(){return store;},get directory(){return directory;},user,board,read,history,
     source(provider:Parameters<Store['source']>[0]='deepseek'){const id=store.source(provider,(++sequence).toString().padStart(24,'a'),cutoff-86_400_000);store.hold(id,user.id,cutoff-86_400_000);return id;},
-    async reopen(legacy=false){await app.close();if(legacy){for(const row of store.db.prepare('SELECT board_id FROM views').all())store.db.prepare('UPDATE views SET payload=? WHERE board_id=?').run(JSON.stringify(encodeFixedView({...directory.view(String(row.board_id)),version:4})),row.board_id);store.db.exec("DROP TRIGGER project_colors_board_removed; DROP TABLE board_project_colors; DROP TRIGGER filters_board_removed; DROP TABLE board_filters; DROP TRIGGER activity_device_removed; DROP TABLE device_activity_witnesses; DROP TABLE device_activity; DELETE FROM meta WHERE key='activityHubId';");store.db.exec('ALTER TABLE meter_spans DROP COLUMN observed_from; ALTER TABLE meter_contexts DROP COLUMN observed_from; DROP TABLE board_device_sessions; DROP TRIGGER meter_pairs_source_removed; DROP TRIGGER quota_anchors_source_deleted; DROP TRIGGER coverage_device_added; DROP TRIGGER coverage_device_removed; DROP TRIGGER coverage_device_status; DROP TRIGGER coverage_holding_added; DROP TRIGGER coverage_holding_removed; DROP TRIGGER coverage_holding_changed; DROP TRIGGER coverage_device_deleted; DROP TABLE client_links; DROP TABLE link_versions; DROP TABLE link_mutations; DROP TABLE device_tracking_policy; DROP INDEX devices_by_owner; DROP INDEX readings_sparse; ALTER TABLE readings DROP COLUMN pair_anchor; DROP TABLE meter_pair_starts; DROP TABLE quota_anchors; DROP TABLE work_coverage; DROP TABLE device_tracking; DROP TABLE owner_coverage_versions; DROP TABLE device_measurement_policies; DROP TABLE source_measurement_preferences; DROP TABLE device_measurement_control; DROP TABLE measurement_mutations; DROP TABLE resource_origins; ALTER TABLE device_clients DROP COLUMN observed_at; PRAGMA user_version=23;');}store.close();store=new Store(file,now);directory=new Directory(store.db);app=await build();},
+    async reopen(legacy=false){await app.close();if(legacy){legacyAccounts(store.db);for(const row of store.db.prepare('SELECT board_id FROM views').all())store.db.prepare('UPDATE views SET payload=? WHERE board_id=?').run(JSON.stringify(encodeFixedView({...directory.view(String(row.board_id)),version:4})),row.board_id);store.db.exec("DROP TRIGGER project_colors_board_removed; DROP TABLE board_project_colors; DROP TRIGGER filters_board_removed; DROP TABLE board_filters; DROP TRIGGER activity_device_removed; DROP TABLE device_activity_witnesses; DROP TABLE device_activity; DELETE FROM meta WHERE key='activityHubId';");store.db.exec('ALTER TABLE meter_spans DROP COLUMN observed_from; ALTER TABLE meter_contexts DROP COLUMN observed_from; DROP TABLE board_device_sessions; DROP TRIGGER meter_pairs_source_removed; DROP TRIGGER quota_anchors_source_deleted; DROP TRIGGER coverage_device_added; DROP TRIGGER coverage_device_removed; DROP TRIGGER coverage_device_status; DROP TRIGGER coverage_holding_added; DROP TRIGGER coverage_holding_removed; DROP TRIGGER coverage_holding_changed; DROP TRIGGER coverage_device_deleted; DROP TABLE client_links; DROP TABLE link_versions; DROP TABLE link_mutations; DROP TABLE device_tracking_policy; DROP INDEX devices_by_owner; DROP INDEX readings_sparse; ALTER TABLE readings DROP COLUMN pair_anchor; DROP TABLE meter_pair_starts; DROP TABLE quota_anchors; DROP TABLE work_coverage; DROP TABLE device_tracking; DROP TABLE owner_coverage_versions; DROP TABLE device_measurement_policies; DROP TABLE source_measurement_preferences; DROP TABLE device_measurement_control; DROP TABLE measurement_mutations; DROP TABLE resource_origins; ALTER TABLE device_clients DROP COLUMN observed_at; PRAGMA user_version=23;');}store.close();store=new Store(file,now);directory=new Directory(store.db);app=await build();},
   };
 }
 
