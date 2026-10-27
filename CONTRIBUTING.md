@@ -314,6 +314,15 @@ The optional native trace retains fixed raster, tile preparation and activation 
 from its existing `cc` category, with numeric preparation IDs and task counts. These
 IDs are local to a tile manager; completed CPU tasks do not prove GPU readiness or
 identify the owner of a blocked commit.
+Commit flows include the fixed `LayerTreeHostImpl::ActivateSyncTree` name. Numeric
+flow IDs identify exported edges, including zero; a finish with `bp=e` uses the
+outgoing slice's name and does not independently prove activation completed.
+Native capture counts every rejection by its seven fixed reasons while retaining at
+most eight examples. Its `ignoredIdleMetadata` count recognizes only inert
+`thread_name/M/__metadata` rows with numeric PID, TID and timestamp zero and the
+fixed idle name `swapper`. These rows never enter timed events or owner binding;
+the count does not identify an operating-system thread. Other recognized malformed
+rows still invalidate capture, and missing, lost or omitted evidence remains insufficient.
 The observer credits input after its coalesced position reaches the actual data layers
 in the production RAF. Stationary input-free gaps are excluded; delayed pending input
 remains measurable. A last input committed on release waits for the final geometry and
