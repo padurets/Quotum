@@ -13,11 +13,16 @@ import {RunOwner} from '../runOwner.js';
 
 const source=ts.createSourceFile('historyTrafficBrowser.ts',readFileSync(new URL('../historyTrafficBrowser.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
 type Call=(...args:unknown[])=>Promise<any>;
+const callerCode=new Map<string,string>();
 // Execute complete production callers; only browser/HTTP boundaries are stand-ins.
 function caller(name:string,bindings:Record<string,unknown>):Call {
-  const names=name==='historyPage'?[name]:['passiveHistoryBinding',name];
-  const declarations=names.map(name=>{const node=source.statements.find((node):node is ts.FunctionDeclaration=>ts.isFunctionDeclaration(node)&&node.name?.text===name);assert.ok(node);return node.getText(source).replace(/^export /,'');});
-  return runInNewContext(ts.transpileModule(declarations.join('\n')+'\n'+name+';',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,bindings);
+  let code=callerCode.get(name);
+  if(code===undefined){
+    const names=name==='historyPage'?[name]:['passiveHistoryBinding',name];
+    const declarations=names.map(name=>{const node=source.statements.find((node):node is ts.FunctionDeclaration=>ts.isFunctionDeclaration(node)&&node.name?.text===name);assert.ok(node);return node.getText(source).replace(/^export /,'');});
+    code=ts.transpileModule(declarations.join('\n')+'\n'+name+';',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;callerCode.set(name,code);
+  }
+  return runInNewContext(code,bindings);
 }
 
 test('both actual history callers retain passive binding for ordinary and pool-observed owned Chrome',async()=>{

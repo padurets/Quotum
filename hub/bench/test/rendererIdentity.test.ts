@@ -126,16 +126,18 @@ const networkProfiles=[
   {version:'Chrome/155.0.8059.12',sourceRevisionHash:'384c82079f60e0b79cdca6e49efd5cfceefa5b74'},
   {version:'Chrome/156.0.8078.47',sourceRevisionHash:'1d17a2e2ee147bb7d6ae2ab6abdb3a2510c17775'},
 ];
+const networkSource=ts.createSourceFile('rendererIdentity.ts',readFileSync(new URL('../rendererIdentity.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
+const networkDeclaration=networkSource.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='historyRendererIdentity')!;
+const networkCode=ts.transpileModule(networkDeclaration.getText(networkSource).replace(/^export /,'')+'\nhistoryRendererIdentity;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 // Execute the production producer with controlled OS reads and a monotonic host clock.
 function networkFixture(mode='ok',profile=networkProfiles[0]){
-  const m=mock(),proof=documentProof(m),source=ts.createSourceFile('rendererIdentity.ts',readFileSync(new URL('../rendererIdentity.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
-  const declaration=source.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='historyRendererIdentity')!;
+  const m=mock(),proof=documentProof(m);
   let now=10,scans=0,links=0,finishScan!:(rows:ProcessIdentity[])=>void;const linkPaths:string[]=[];
   const rows:ProcessIdentity[]=[{pid:100,parent:1,group:100,session:100,birth:'1000',state:'S',minorFaults:null,majorFaults:null,userTicks:null,systemTicks:null,blockIoTicks:null},
     {pid:101,parent:100,group:100,session:100,birth:'1001',state:'S',minorFaults:null,majorFaults:null,userTicks:null,systemTicks:null,blockIoTicks:null}];
   m.browser.launchReport=()=>({pid:100,...profile,version:mode==='wrong-version'?profile.version+'0':profile.version,sourceRevisionHash:mode==='wrong-revision'?'f'.repeat(40):profile.sourceRevisionHash});
   m.browser.observeProcesses=async()=>{scans++;if(mode==='scan-failure')throw Error('private-canary');if(mode==='scan-pending')return new Promise(resolve=>{finishScan=resolve;});return rows.map(row=>({...row}));};
-  const create=runInNewContext(ts.transpileModule(declaration.getText(source).replace(/^export /,'')+'\nhistoryRendererIdentity;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,
+  const create=runInNewContext(networkCode,
     {AbortController,AbortSignal,URL,performance:{now:()=>++now},deadline,networkRendererProfile,accountingPath,HISTORY_ATTEMPT_HEADER,
       readlink:async(file:string)=>{links++;linkPaths.push(file);if(mode==='namespace-missing')throw Error('private-canary');return mode==='namespace-mismatch'&&links===2?'pid:[2]':'pid:[1]';}}) as typeof historyRendererIdentity;
   const provider=create(m.cdp,m.browser,proof,'https://fixture.invalid',()=> 'b1');
