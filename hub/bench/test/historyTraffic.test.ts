@@ -528,6 +528,24 @@ test('composite bodies count once while both resource selections and standalone 
   emit('Network.responseReceived',{requestId:'funds',response:{status:200,headers:{}}});
   emit('Network.loadingFinished',{requestId:'funds'});await Promise.all([...observer.pending]);
   assert.equal(hasSeededHistory(observer.reads,'seed'),true);assert.equal(hasSeededHistory(observer.reads,'different phase'),false);
+  // Funds use the budget GET transport, but their period-body family remains distinct.
+  assert.deepEqual(observer.resources.map(read=>read.scope),['quota','budget','funds']);
+  assert.deepEqual(observer.resources.map(read=>new URLSearchParams(read.selection).get('scope')),['quota','budget','budget']);
+  const file=ts.createSourceFile('historyTrafficBrowser.ts',readFileSync(new URL('../historyTrafficBrowser.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
+  let construction:ts.Statement|undefined;
+  const visit=(node:ts.Node)=>{if(ts.isExpressionStatement(node)&&node.getText(file).startsWith('families.push('))construction=node;ts.forEachChild(node,visit);};visit(file);
+  assert.ok(construction);
+  const actual=ts.transpileModule(`globalThis.construct=()=>{${construction.getText(file)}}`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  const families:{name:string;attempts:number;decoded:number}[]=[];
+  for(const read of observer.resources){
+    const context={families,name:'browser/1d/history/0ms/0.5/take1',scope:new URLSearchParams(read.selection).get('scope'),reads:[read],maxAttempts:7,
+      totals:{decoded:read.count!.decoded},referenceDecoded:read.count!.decoded,referenceEncoded:0,fraction:.5,optional:[]};
+    runInNewContext(actual,context);
+    (context as typeof context&{construct():void}).construct();
+  }
+  assert.deepEqual(families.map(report=>report.name),['quota','budget','funds'].map(family=>'browser/1d/history/0ms/0.5/take1/'+family));
+  assert.equal(new Set(families.map(report=>report.name)).size,3);
+  assert.ok(families.every(report=>report.attempts===1&&report.decoded===Buffer.byteLength(JSON.stringify(raw))),'identity labeling preserves the original physical body accounting');
 });
 
 test('composite resource classification waits for an omitted POST body even after the response arrives',async()=>{
