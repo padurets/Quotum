@@ -12,11 +12,14 @@ test('a remembered renderer birth cannot authorize capture of a reused PID',asyn
   const code=ts.transpileModule(declaration.getText(source).replace('import.meta.url',JSON.stringify('file:///fixture/native.js'))+'\nglobalThis.capture=nativePostmortem;',{
     compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022},
   }).outputText;
-  for(const birth of ['199','200',undefined]){
+  for(const mode of ['reused-birth','matching-birth','unbound','wrong-uid','traced','exited','foreign-group','foreign-session']){
+    const birth=mode==='unbound'?undefined:mode==='reused-birth'?'199':'200';
     let scriptReads=0;
     const renderer={pid:101,parent:100,group:100,session:100,birth:'200',state:'S',uid:1000,tracer:0,
       minorFaults:null,majorFaults:null,userTicks:null,systemTicks:null,blockIoTicks:null};
     const root={...renderer,pid:100,birth:'100'};
+    if(mode==='wrong-uid')renderer.uid=1001;if(mode==='traced')renderer.tracer=9;if(mode==='exited')renderer.state='Z';
+    if(mode==='foreign-group')renderer.group=99;if(mode==='foreign-session')renderer.session=99;
     const context={exports:{},performance,URL,process:{platform:'linux',getuid:()=>1000},
       nativeProgress:()=>({}),nativeDebugger:async()=>'/usr/bin/gdb',current:async()=>renderer,
       readFile:async()=>{scriptReads++;throw Error('stop before helper creation');}};
@@ -24,7 +27,7 @@ test('a remembered renderer birth cannot authorize capture of a reused PID',asyn
     const capture=(context as unknown as {capture:typeof nativePostmortem}).capture;
     const report=await capture({root:100,live:()=>true,observe:async()=>[root,renderer],resource:()=>async()=>{}},
       [{pid:101,cpuTime:1,...(birth===undefined?{}:{birth})}],new AbortController().signal);
-    assert.equal(scriptReads,birth==='199'?0:1);
+    assert.equal(scriptReads,['matching-birth','unbound'].includes(mode)?1:0,mode);
     assert.equal(report.intervened,false);
   }
 });

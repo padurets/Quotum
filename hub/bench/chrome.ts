@@ -78,7 +78,7 @@ export class StartupSpans {
 
 export type LaunchReport = {
   executable: string; platform: string; pid?: number; ownedGroup: boolean; stage: string;
-  elapsedMs: number; readyMs?: number; version?: string; failure?: Failure;
+  elapsedMs: number; readyMs?: number; version?: string; sourceRevisionHash?: string; failure?: Failure;
   exit?: {code: number | null; signal: NodeJS.Signals | null}; spawnCode?: string;
   stdout: ReturnType<ReturnType<typeof safeStream>['read']>; stderr: ReturnType<ReturnType<typeof safeStream>['read']>;
   cleanup?: ProcessCleanup;
@@ -247,7 +247,7 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
           const probeStarted=performance.now(), span = spans.probe();
           const probe=state.probes={attempts:(state.probes?.attempts??0)+1,stage:'headers',elapsedMs:0,failures:state.probes?.failures??{}} as NonNullable<LaunchReport['probes']>;
           try {
-            let reply: {Browser?: unknown; webSocketDebuggerUrl?: unknown};
+            let reply: {Browser?: unknown; 'WebKit-Version'?: unknown; webSocketDebuggerUrl?: unknown};
             try {
               // Headers and the entire body share the remaining startup deadline.
               reply = await devtoolsJson(candidate + '/json/version', pending, 'GET',(stage,status)=>{
@@ -264,6 +264,8 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
             if (performance.now() - started >= 20_000) startup.abort(new Error('deadline exceeded'));
             pending.throwIfAborted();
             state.version = typeof reply.Browser === 'string' && /^[a-zA-Z][a-zA-Z0-9 -]{0,40}\/[a-zA-Z0-9.-]{1,64}$/.test(reply.Browser) ? reply.Browser : 'unavailable';
+            const revision=typeof reply['WebKit-Version']==='string'?/^537\.36 \(@([a-f0-9]{40})\)$/.exec(reply['WebKit-Version']):null;
+            if(revision)state.sourceRevisionHash=revision[1];
             delete probe.reason;
             state.stage = 'ready'; state.readyMs = Math.round(performance.now() - started); delete state.failure;
             progress?.(snapshot());

@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
-import {rendererDocument} from '../rendererIdentity.js';
+import {rendererDocument,historyRendererIdentity} from '../rendererIdentity.js';
+import {prepareHistoryTarget} from '../historyTrafficBrowser.js';
+import type {ProcessIdentity} from '../browserProcess.js';
+import {observeReversal} from '../reversalDiagnostic.js';
+import {Cdp} from '../cdp.js';
+import {nativePostmortem} from '../nativePostmortem.js';
 import {RunOwner} from '../runOwner.js';
 
 const source=ts.createSourceFile('historyTrafficBrowser.ts',readFileSync(new URL('../historyTrafficBrowser.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
@@ -32,25 +37,30 @@ test('both actual history callers retain passive binding for ordinary and pool-o
   }
 });
 
-async function pageFixture(passive:boolean,observed=true,strict=false,seedFailure?:Error,poolMode=false,pressure=true){
-  const order:string[]=[],commands:string[]=[],saved:string[]=[],pressureScripts:boolean[]=[],listeners=new Map<string,(value:any)=>void>(),owner=new RunOwner({save(){}}),navigation={frameId:'main',loaderId:'loader'};
+async function pageFixture(passive:boolean,observed=true,strict=false,seedFailure?:Error,poolMode=false,pressure=true,actual=false,setupFailure?:Error){
+  const order:string[]=[],commands:string[]=[],evaluations:string[]=[],saved:string[]=[],pressureScripts:boolean[]=[],listeners=new Map<string,(value:any)=>void>(),owner=new RunOwner({save(){}}),navigation={frameId:'main',loaderId:'loader'};
   let targetCloses=0,resolves=0,rendererDisposes=0,removed=0,pinned:unknown;
-  const tabClose=owner.resource(async()=>{targetCloses++;});
+  const tabClose=owner.resource(async()=>{targetCloses++;listeners.clear();});
   const renderer={pid:7,birth:'8',valid:()=>true,evidence:()=>({status:'known'}),dispose:async()=>{}};
   const cdp={at(){},on(name:string,read:(value:any)=>void){order.push('on:'+name);listeners.set(name,read);},off(name:string){if(listeners.delete(name))removed++;},
+    snapshot:()=>({pending:[],socketState:1}),close(){},
     async send(method:string){commands.push(method);order.push(method);if(seedFailure&&method==='Network.enable')throw seedFailure;if(method==='Page.navigate'){if(observed){listeners.get('Page.frameStartedNavigating')?.({frameId:'main',loaderId:'loader',navigationType:'differentDocument'});listeners.get('Page.frameNavigated')?.({frame:{id:'main',loaderId:'loader'}});}return navigation;}},
-    async evaluate(expression:string){if(expression.includes('return {x:r.left'))return{x:1,y:1,width:100,series:12};if(expression.includes('const root=document.querySelector'))order.push('seed-probe');return true;}};
+    async evaluate(expression:string){evaluations.push(expression);if(expression.includes('return {x:r.left'))return{x:1,y:1,width:100,series:12};if(expression.includes('const chart=document.querySelector'))order.push('reachable-ack');if(expression.includes('const root=document.querySelector')){order.push('seed-probe');if(setupFailure)throw setupFailure;}return true;}};
   class Bodies {
     phase='';errors:unknown[]=[];reads:unknown[]=[];activeCount=0;pending=new Set();diagnostic(){return{};}
     get resources(){return[{phase:this.phase,count:{complete:true},cell:300000,selection:'quota',answer:{now:0},chunks:[[0,300000]]}];}
   }
-  const run=caller('historyPage',{assert,DAY:86400000,process:{env:{...(strict?{QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:'1'}:{}),...(poolMode?{QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'1'}:{})}},openTab:async()=>({cdp,close:tabClose}),HistoryBodies:Bodies,
-    historyPageScript:(_period:string,pressure:boolean)=>{pressureScripts.push(pressure);return'';},hasSeededHistory:()=>true,prepareHistoryTarget:async()=>{},
+  const run=caller('historyPage',{assert,URL,pageSerial:1,DAY:86400000,process:{env:{...(strict?{QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:'1'}:{}),...(poolMode?{QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'1'}:{})}},openTab:async()=>({cdp,close:tabClose}),HistoryBodies:Bodies,
+    historyPageScript:(_period:string,pressure:boolean)=>{pressureScripts.push(pressure);return'';},hasSeededHistory:()=>true,prepareHistoryTarget:actual?prepareHistoryTarget:async()=>{},
     saveHistoryPressure:async()=>{order.push('pressure-export');},
     rendererDocument:(page:Parameters<typeof rendererDocument>[0])=>{order.push('document');const document=rendererDocument(page),pin=document.pin;document.pin=reply=>{order.push('pin');pinned=reply;pin(reply);};return document;},
+    historyRendererIdentity:actual?historyRendererIdentity:()=>({requireBeforeInput:false,prohibitFallback:true,validDocument:()=>observed,before:async()=>{order.push('before');},setupSent:()=>order.push('setup-send'),setupComplete:()=>order.push('setup-reply'),dispose:async()=>{},resolve:async()=>{resolves++;renderer.dispose=owner.resource(async()=>{rendererDisposes++;});return renderer;}}),
     rendererIdentity:async()=>{resolves++;renderer.dispose=owner.resource(async()=>{rendererDisposes++;});return renderer;}});
-  const args=[{owned:true,owner},{url:'http://fixture.invalid',phase(){}},'cookie=fixture','fixture',86400000,0,undefined,{save:(name:string)=>saved.push(name)},undefined,undefined,passive,pressure];
-  return{run:()=>run(...args),owner,order,commands,saved,pressureScripts,listeners,navigation,pinned:()=>pinned,resolves:()=>resolves,targetCloses:()=>targetCloses,rendererDisposes:()=>rendererDisposes,removed:()=>removed};
+  const rows:ProcessIdentity[]=[process.pid,process.pid+1].map(pid=>({pid,parent:process.pid,group:process.pid,session:process.pid,birth:String(pid),state:'S',minorFaults:null,majorFaults:null,userTicks:null,systemTicks:null,blockIoTicks:null}));
+  const hooks=actual?{launchReport:()=>({pid:process.pid,version:'Chrome/155.0.8059.39',sourceRevisionHash:'3ff7ac5a9224be9156d7f8703a06e22890aafd34'}),observeProcesses:async()=>{order.push('before-scan');return rows;}}:{};
+  const browser={owned:true,owner,endpoint:'http://fixture.invalid',close:async()=>{},...hooks};
+  const args=[browser,{url:'http://fixture.invalid',phase(){}},'cookie=fixture','fixture',86400000,0,undefined,{save:(name:string)=>saved.push(name)},undefined,undefined,passive,pressure];
+  return{run:()=>run(...args),browser,owner,order,commands,evaluations,saved,pressureScripts,listeners,navigation,rows,pinned:()=>pinned,resolves:()=>resolves,targetCloses:()=>targetCloses,rendererDisposes:()=>rendererDisposes,removed:()=>removed};
 }
 
 test('passive document binding precedes Page.enable, pins the existing seed navigation and adds no preflight command',async()=>{
@@ -60,7 +70,7 @@ test('passive document binding precedes Page.enable, pins the existing seed navi
     if(!originalCommands)originalCommands=f.commands;else assert.deepEqual(f.commands,originalCommands);
     assert.equal(f.resolves(),0);assert.deepEqual(f.saved,[]);
     assert.deepEqual(f.pressureScripts,[passive]);assert.ok(!f.order.includes('pressure-export'));
-    if(passive){assert.ok(f.order.indexOf('document')<f.order.indexOf('Page.enable'));assert.ok(f.order.indexOf('on:Page.frameNavigated')<f.order.indexOf('Page.navigate'));assert.ok(f.order.indexOf('seed-probe')<f.order.indexOf('pin'));assert.equal(f.pinned(),f.navigation);assert.equal(page.lateRenderer.requireBeforeInput,false);assert.equal(page.lateRenderer.validDocument(),observed);}
+    if(passive){assert.ok(f.order.indexOf('document')<f.order.indexOf('Page.enable'));assert.ok(f.order.indexOf('on:Page.frameNavigated')<f.order.indexOf('Page.navigate'));assert.ok(f.order.indexOf('before')<f.order.indexOf('setup-send'));assert.ok(f.order.indexOf('setup-send')<f.order.indexOf('seed-probe'));assert.ok(f.order.indexOf('seed-probe')<f.order.indexOf('setup-reply'));assert.ok(f.order.indexOf('setup-reply')<f.order.indexOf('pin'));assert.equal(f.pinned(),f.navigation);assert.equal(page.lateRenderer.requireBeforeInput,false);assert.equal(page.lateRenderer.prohibitFallback,true);assert.equal(page.lateRenderer.validDocument(),observed);}
     else assert.equal(page.lateRenderer,undefined);
     await page.close();await f.owner.close();assert.equal(f.targetCloses(),1);assert.equal(f.listeners.size,0);assert.equal(f.removed(),passive?5:0);assert.equal(f.resolves(),0);assert.equal(f.rendererDisposes(),0);
   }
@@ -93,4 +103,47 @@ test('strict suffix document checks and their original artifact remain required 
 
 test('a seed exception retains its original error while disposing passive listeners and the owned target',async()=>{
   const original=new Error('original Network.enable failure'),f=await pageFixture(true,true,false,original);await assert.rejects(f.run(),error=>error===original);await f.owner.close();assert.deepEqual(f.saved,['traffic-seed-failure-fixture']);assert.equal(f.targetCloses(),1);assert.equal(f.listeners.size,0);assert.equal(f.removed(),5);assert.equal(f.resolves(),0);
+});
+
+test('the actual historyPage sandwich produces a document-lived exact PID without a late trace',async()=>{
+  for(const setupFailure of [undefined,new Error('original setup evaluation failed')]){
+    const f=await pageFixture(true,true,false,undefined,false,true,true,setupFailure);
+    if(setupFailure){await assert.rejects(f.run(),value=>value===setupFailure);await f.owner.close();assert.equal(f.listeners.size,0);assert.equal(f.targetCloses(),1);continue;}
+    const page=await f.run();assert.ok(f.order.indexOf('reachable-ack')<f.order.indexOf('before-scan'));assert.ok(f.order.indexOf('before-scan')<f.order.indexOf('seed-probe'));
+    const ordinary=await pageFixture(false,true,false,undefined,false,true,true),baseline=await ordinary.run();assert.deepEqual(f.commands,ordinary.commands);assert.deepEqual(f.evaluations,ordinary.evaluations);await baseline.close();await ordinary.owner.close();
+    page.lateRenderer.input('cold scroll',performance.now());
+    f.listeners.get('Network.requestWillBeSent')!({type:'Fetch',frameId:'main',loaderId:'loader',requestId:(process.pid+1)+'.1',request:{url:'http://fixture.invalid/api/boards/private-canary/period',method:'POST',headers:{'x-quotum-bench-attempt':'b1:1'}}});
+    page.lateRenderer.input('warm cached return',performance.now());const failedStart=performance.now(),fromMs=performance.now();
+    const h=await page.lateRenderer.resolve(new AbortController().signal,{browserPid:process.pid,failedStart,after:{status:'observed',fromMs,toMs:performance.now(),omitted:0,processes:f.rows}});
+    assert.equal(h.valid(),true);assert.equal(h.pid,process.pid+1);assert.equal(h.birth,String(process.pid+1));assert.ok(!f.commands.some(value=>/Tracing|Inspector|Page.getFrameTree/.test(value)));
+    await page.close();await f.owner.close();assert.equal(h.signal.aborted,true);assert.equal(h.pid,null);assert.equal(f.targetCloses(),1);assert.equal(f.listeners.size,0);
+  }
+});
+
+for(const mode of ['bound','navigation','reused-birth','browser-root-mismatch','malformed-signal','disposal'] as const)test('actual historyPage and observer retain the cold witness through successful input and zero-HTTP warm timeout: '+mode,async t=>{
+  const f=await pageFixture(true,true,false,undefined,false,true,true),page=await f.run(),logs:string[]=[];
+  const native=await nativePostmortem({root:100,live:()=>false,observe:async()=>[]},[],new AbortController().signal);
+  t.mock.timers.enable({apis:['setTimeout']});t.mock.method(console,'error',(line:string)=>logs.push(line));
+  t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({webSocketDebuggerUrl:'ws://fixture.invalid/browser'})));
+  t.mock.method(Cdp,'connect',async()=>({send:async()=>({processInfo:[{type:'browser',id:mode==='browser-root-mismatch'?99:process.pid,cpuTime:1},{type:'renderer',id:process.pid+1,cpuTime:1},{type:'renderer',id:process.pid+2,cpuTime:999}]}),close(){}} as unknown as Cdp));
+  let calls=0,requests=0;const lateRenderer=mode==='malformed-signal'?{...page.lateRenderer,signal:{aborted:false}}:page.lateRenderer;
+  const observer=await observeReversal(page.cdp,{...f.browser,nativePostmortem:async(candidates,signal)=>{
+    calls++;assert.equal(signal.aborted,false);assert.deepEqual(candidates,[{pid:process.pid+1,birth:String(process.pid+1),cpuTime:1}]);
+    return{...native,pid:process.pid+1,birth:String(process.pid+1),status:'observed',intervened:true,released:true,reaped:true,pipesClosed:true};
+  }},{postmortem:true,lateRenderer});
+  await observer.watch('cold scroll',async()=>{
+    requests++;f.listeners.get('Network.requestWillBeSent')!({type:'Fetch',frameId:'main',loaderId:'loader',requestId:(process.pid+1)+'.1',request:{url:'http://fixture.invalid/api/boards/private-canary/period',method:'POST',headers:{'x-quotum-bench-attempt':'b1:1'}}});
+  });
+  assert.equal(calls,0);const commandStart=performance.now();
+  if(mode==='navigation')f.listeners.get('Page.frameStartedNavigating')!({frameId:'main',loaderId:'replacement',navigationType:'reload'});
+  if(mode==='reused-birth')f.rows[1]={...f.rows[1],birth:'999'};
+  if(mode==='disposal')await page.lateRenderer.dispose();
+  page.cdp.snapshot=()=>({failure:{id:196,method:'Input.synthesizeScrollGesture',started:commandStart},pending:[],socketState:1});
+  page.cdp.evaluate=async(_expression:string,signal:AbortSignal)=>new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));
+  const original=new Error('original30s warm command failure'),failed=assert.rejects(observer.watch('warm/cached return',async()=>{throw original;}),error=>error===original);
+  await new Promise<void>(resolve=>setImmediate(resolve));t.mock.timers.tick(2000);await failed;await observer.close();
+  assert.equal(requests,1);assert.equal(calls,mode==='bound'?1:0);assert.ok(!f.commands.some(command=>/Tracing|Inspector|Debugger|Profiler/.test(command)));
+  const report=JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));assert.equal(report.nativeBinding,mode==='bound');assert.equal(report.command.failure.started,commandStart);
+  if(mode==='bound'){assert.equal(report.rendererAtCapture.witness.input.scenario,'cold scroll');assert.ok(report.rendererAtCapture.witness.received<=commandStart);assert.equal(report.rendererAtCapture.failedCommand.started,commandStart);assert.equal(report.rendererAtCapture.after.status,'observed');}
+  assert.doesNotMatch(logs.join(''),/private-canary/);await page.close();await f.owner.close();assert.equal(f.listeners.size,0);assert.equal(f.targetCloses(),1);
 });

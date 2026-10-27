@@ -144,12 +144,25 @@ collection and two-second release windows. An unconfirmed detach, helper exit or
 pipe closure fails cleanup. Missing GDB falls back to the existing page debugger;
 attached browsers and successful commands receive no native intervention.
 On Linux, ordinary owned history pages retain their original navigation identity passively,
-without extra commands before failure. Missing identity does not gate successful input.
-After an original failure and an unresponsive page probe, the existing two-second
-resolver may bind capture to that document's renderer. Missing optional metadata keeps
-the explicitly unbound capture above; an attempted but incomplete mapping permits no
-native or debugger intervention. Resolution shares the original five-second collection
-window, so insufficient remaining time can still leave capture incomplete.
+without extra page commands before failure. A single owned-process scan, bounded to one
+second, sits between the existing reachable-target evaluation and the acknowledged
+traffic-probe setup evaluation. It also checks that the observer and browser root share
+a PID namespace. Missing identity never gates successful input.
+Only Chrome 155.0.8059.39 at source revision
+`3ff7ac5a9224be9156d7f8703a06e22890aafd34` and 155.0.8059.12 at
+`384c82079f60e0b79cdca6e49efd5cfceefa5b74` qualify the internal request-ID PID
+contract. The revision comes from the existing version reply. A subsequent controlled
+accounting POST Fetch must name the pinned main frame and loader. Its cold-input witness
+survives successful cold input and HTTP-free cached return/repeat on that document.
+After the original failure, the existing process scan and browser liveness reply must
+confirm the same owned birth, renderer role and launcher root. Missing, unsupported or
+conflicting evidence permits no native or debugger fallback on this route. Navigation,
+crash, detach and disposal abort capture through the helper's existing stdin gate;
+invalidation after that gate still requires bounded release and leaves attribution
+unknown. Delivery of lifecycle events is not atomic with native intervention.
+Resolution and capture share the original five-second collection window, so insufficient
+remaining time can still leave capture incomplete. Separate diagnostic routes retain
+their pre-input metadata-trace identity.
 The manual CI `native_postmortem_control` qualifies this collector on the requested
 source and built-client hash using a separate runtime UID and matching unwind tables.
 Before the forced command, a completed metadata trace binds the page's primary frame

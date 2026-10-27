@@ -30,7 +30,7 @@ function fixture(t: TestContext, mode = 'ready', holdPort = false) {
       if (mode === 'oversize') {res.end('x'.repeat(17000));return;}
       if (mode === 'redirect') {res.writeHead(302, {location:'http://127.0.0.1:1/private'});res.end();return;}
       const port = server.address().port;
-      const reply = () => res.end(JSON.stringify({Browser:'Chrome/fixture',webSocketDebuggerUrl:'ws://127.0.0.1:'+port+'/devtools/browser/'+(mode === 'mismatch'?'foreign':'fixture')}));
+      const reply = () => res.end(JSON.stringify({Browser:'Chrome/fixture','WebKit-Version':mode==='revision'?'537.36 (@3ff7ac5a9224be9156d7f8703a06e22890aafd34)':mode==='bad-revision'?'537.36 (@private-canary)':'537.36',webSocketDebuggerUrl:'ws://127.0.0.1:'+port+'/devtools/browser/'+(mode === 'mismatch'?'foreign':'fixture')}));
       if (mode === 'body-delay') {res.writeHead(200);res.flushHeaders();}
       if (mode === 'headers-delay' || mode === 'body-delay') setTimeout(reply, 1200); else reply();
     }).listen(0, '127.0.0.1', () => {
@@ -63,6 +63,14 @@ function fixture(t: TestContext, mode = 'ready', holdPort = false) {
     return browser;
   }};
 }
+
+test('the existing readiness reply retains only its strict Chromium source revision',async t=>{
+  for(const mode of ['revision','bad-revision','ready']){
+    const f=fixture(t,mode),browser=await f.launch(),report=browser.launchReport!() as LaunchReport;
+    assert.equal(report.sourceRevisionHash,mode==='revision'?'3ff7ac5a9224be9156d7f8703a06e22890aafd34':undefined);
+    assert.equal(report.probes?.attempts,1);assert.doesNotMatch(JSON.stringify(report),/private-canary/);await browser.close();
+  }
+});
 
 test('silent real DevTools readiness and idempotent cleanup close the endpoint and profile', async t => {
   const {profile, launch} = fixture(t);

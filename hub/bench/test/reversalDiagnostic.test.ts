@@ -3,9 +3,14 @@ import assert from 'node:assert/strict';
 import {bounded, observeReversal} from '../reversalDiagnostic.js';
 import {Cdp, attachedChrome} from '../cdp.js';
 import type {ProcessIdentity} from '../browserProcess.js';
-import {nativePostmortem} from '../nativePostmortem.js';
+import {nativePostmortem,nativeProgress,nativeFrames,nativeMainLocations} from '../nativePostmortem.js';
 import {RunOwner} from '../runOwner.js';
-import type {RendererIdentity} from '../rendererIdentity.js';
+import {rendererDocument,type RendererIdentity} from '../rendererIdentity.js';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import {EventEmitter} from 'node:events';
+import ts from 'typescript';
+import {deadline} from '../deadline.js';
 
 const flush = async () => {await new Promise<void>(resolve => setImmediate(resolve));};
 function pageFixture(send: (method: string, signal?: AbortSignal) => Promise<unknown> = async () => ({})) {
@@ -450,4 +455,50 @@ for(const mode of ['strict deadline','optional deadline','optional abort'] as co
   if(mode==='optional abort')controller.abort(new Error('parent cancelled'));
   else{t.mock.timers.tick(2999);await flush();assert.equal(settled,false);t.mock.timers.tick(1);}
   await failure;assert.equal(resolutionSignal.aborted,true);assert.equal(calls,0);assert.deepEqual(commands,[]);await observer.close();
+});
+
+// The entire production helper runs here; only process creation and OS reads are stand-ins.
+function nativeGateFixture(afterGate:boolean,onBoundary:()=>void){
+  const source=ts.createSourceFile('nativePostmortem.ts',readFileSync(new URL('../nativePostmortem.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
+  const declaration=source.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='nativePostmortem')!;
+  const root={...processRow(100,1),birth:'100'},renderer={...processRow(101,1),uid:0,tracer:0};
+  let reads=0,opens=0,kills=0,resume!:()=>void,reach!:()=>void;
+  const reached=new Promise<void>(resolve=>{reach=resolve;});
+  const child=Object.assign(new EventEmitter(),{pid:200,exitCode:null as number|null,signalCode:null as string|null,
+    stdin:Object.assign(new EventEmitter(),{end(value:string){assert.equal(value,'capture\n');opens++;reach();if(afterGate)onBoundary();},destroy(){}}),
+    stdout:Object.assign(new EventEmitter(),{destroy(){}}),stderr:Object.assign(new EventEmitter(),{destroy(){}}),
+    unref(){},kill(){kills++;if(child.exitCode===null){child.exitCode=0;child.emit('exit',0);child.emit('close');}return true;}});
+  const helper={...root,pid:200,group:200,session:200};
+  const context={exports:{},performance,URL,Buffer,MAX_OUTPUT:65536,deadline,nativeProgress,nativeFrames,nativeMainLocations,
+    process:{platform:'linux',getuid:()=>0,env:{}},nativeDebugger:async()=>'/usr/bin/gdb',readFile:async()=> 'EXPECTED_PID = 0',
+    current:async()=>{reads++;if(reads===2&&!afterGate){reach();await new Promise<void>(resolve=>{resume=resolve;});}return renderer;},
+    browserProcess:()=>({observe:async()=>child.exitCode===null?[helper]:[]}),spawn:()=>child,
+    wait:(_ms:number,_value:unknown,{signal}:{signal:AbortSignal})=>new Promise((_,reject)=>{signal.addEventListener('abort',()=>reject(signal.reason),{once:true});if(signal.aborted)reject(signal.reason);})};
+  runInNewContext(ts.transpileModule(declaration.getText(source).replace('import.meta.url',JSON.stringify('file:///fixture/native.js'))+'\nglobalThis.capture=nativePostmortem;',
+    {compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);
+  const capture=(context as unknown as {capture:typeof nativePostmortem}).capture;
+  return{reached,resume:()=>resume(),opens:()=>opens,kills:()=>kills,capture:(candidates:Parameters<typeof capture>[1],signal:AbortSignal)=>capture({root:100,live:()=>true,observe:async()=>[root,renderer],resource:close=>close},candidates,signal)};
+}
+
+for(const afterGate of [false,true])test('document invalidation reaches the actual helper stdin gate through collection: '+(afterGate?'after open':'suspended before open'),async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const logs:string[]=[];t.mock.method(console,'error',(value:string)=>logs.push(value));
+  t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({webSocketDebuggerUrl:'ws://fixture.invalid/browser'})));
+  t.mock.method(Cdp,'connect',async()=>({send:async()=>({processInfo:[{type:'browser',id:100,cpuTime:1},{type:'renderer',id:101,cpuTime:1}]}),close(){}} as unknown as Cdp));
+  const {page,commands}=pageFixture(async(_method,signal)=>new Promise((_,reject)=>{signal!.addEventListener('abort',()=>reject(signal!.reason),{once:true});}));
+  const listeners=new Map<string,Set<(value:any)=>void>>();page.on=(name,read)=>{if(!listeners.has(name))listeners.set(name,new Set());listeners.get(name)!.add(read);};page.off=(name,read)=>{listeners.get(name)?.delete(read);};
+  const emit=(name:string,value:unknown)=>{for(const read of listeners.get(name)??[])read(value);};
+  const document=rendererDocument(page);emit('Page.frameStartedNavigating',{frameId:'main',loaderId:'loader',navigationType:'differentDocument'});emit('Page.frameNavigated',{frame:{id:'main',loaderId:'loader'}});document.pin({frameId:'main',loaderId:'loader'});
+  const renderer={get pid(){return document.valid()?101:null;},get birth(){return document.valid()?'42':null;},signal:document.signal,valid:()=>document.valid(),dispose:async()=>{},evidence:()=>({status:document.valid()?'known':'unknown',pid:document.valid()?101:null,birth:document.valid()?'42':null,frame:1})} as RendererIdentity;
+  const fixture=nativeGateFixture(afterGate,()=>emit('Inspector.targetCrashed',{}));let captureSignal:AbortSignal|undefined;
+  const observer=await observeReversal(page,{owned:true,endpoint:'fixture',close:async()=>{},observeProcesses:async()=>[processRow(100,1),processRow(101,1)],nativePostmortem:(candidates,signal)=>{captureSignal=signal;return fixture.capture(candidates,signal);}},
+    {postmortem:true,lateRenderer:{requireBeforeInput:false,prohibitFallback:true,signal:document.signal,validDocument:document.valid,resolve:async()=>renderer}});
+  page.snapshot=()=>({failure:{id:196,method:'Input.synthesizeScrollGesture',started:1}}) as ReturnType<Cdp['snapshot']>;
+  const original=new Error('original30s input timeout'),failed=assert.rejects(observer.watch('warm/cached return',async()=>{throw original;}),value=>value===original);
+  await flush();t.mock.timers.tick(2000);await fixture.reached;
+  if(!afterGate){emit('Inspector.detached',{});assert.equal(captureSignal?.aborted,true);fixture.resume();}
+  await failed;await observer.close();
+  assert.equal(fixture.opens(),afterGate?1:0);assert.ok(fixture.kills()>=1);assert.deepEqual(commands,[]);
+  const report=JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));assert.equal(report.nativeBinding,false);assert.equal(report.rendererAfterCapture.status,'unknown');
+  assert.equal(report.nativeWait.intervened,true);assert.equal(report.nativeWait.released,true);assert.equal(report.nativeWait.reaped,true);assert.equal(report.nativeWait.pipesClosed,true);
+  document.dispose();
 });
