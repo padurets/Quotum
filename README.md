@@ -167,6 +167,8 @@ notifications also stay live, independently of the board's historical range.
   tooltips. It zooms and moves through time as the chart does.
   Its totals and bar values always describe the data selected by the board's filters.
   Point to a legend entry or focus it with the keyboard to temporarily inspect its metrics.
+  In **Manage projects**, the board owner can pin project colours for this board;
+  those colours also follow the project through the activity heatmap and session tables.
 - **Activity heatmap:** recorded agent-hours over the board's selected period, as a
   day-by-hour matrix or compact calendar. It follows project, device and client filters;
   open a cell to inspect that interval. No recorded work and unavailable history stay
@@ -269,7 +271,7 @@ day, not a script thrown together over a weekend. In practice that meant:
   consumption. The agent says when its next measurement is due, so a sparse series isn't
   mistaken for a gap.
 - **Few moving parts.** The agent has nine direct dependencies. The hub is Fastify and
-  the SQLite built into Node, and the UI is plain React with about 343 KB of gzipped
+  the SQLite built into Node, and the UI is plain React with about 364 KB of gzipped
   JavaScript. There is no telemetry. The hub reads the two reset trackers (or the
   mirror you name) every ten minutes; `QUOTUM_RESETS=off` turns that off. When you
   connect OpenRouter, DeepSeek or z.ai, it also reads their balances or quotas through
@@ -545,6 +547,15 @@ Readers can change their current filters, and the owner can save opening default
 for the board. The database moves from layout 32 to 33. Reload open dashboard tabs
 after the upgrade. Existing 0.8 agents remain compatible.
 
+Upgrading from 0.9 preserves measurements, agent-work history, boards, settings and
+encrypted connections. The database moves from layout 33 to 35, retaining existing
+device-to-account associations. Project colours are optional board settings; chart
+legend choices emphasize series without changing totals or filters. Reload open
+dashboard tabs after the upgrade. Existing 0.9 agents remain compatible.
+Update the hub before enabling [local provider hooks](docs/hook-collectors.md) on an
+agent: custom collectors require the new hub's account-membership and completion
+support. Native collection needs no new configuration.
+
 On each machine, run `quotum update`, then restart the background agent with
 `quotum stop` and `quotum start` (or restart its service). With npm, use the latest
 `quotum` package. Update the hub first: older agents still deliver measurements to the
@@ -815,11 +826,11 @@ Add the hashes of any new database layout steps to `RELEASED` in
 Refresh the README screenshots in both languages from the demo board, check the upgrade
 instructions and prepare the release notes outside the repository.
 
-For example, to prepare 0.9.0 on that branch:
+For example, to prepare 0.10.0 on that branch:
 
 ```sh
-(cd hub && npm version 0.9.0 --no-git-tag-version)
-# agent/Cargo.toml and desktop/Cargo.toml: version = "0.9.0"
+(cd hub && npm version 0.10.0 --no-git-tag-version)
+# agent/Cargo.toml and desktop/Cargo.toml: version = "0.10.0"
 (cd agent && cargo metadata --format-version 1 >/dev/null)
 (cd desktop && cargo metadata --format-version 1 >/dev/null)
 ```
@@ -833,8 +844,8 @@ commit to tag. Only after the maintainer approves that specific release:
 git fetch origin
 git switch main
 git pull --ff-only origin main
-git tag -a v0.9.0 -F /path/to/release-notes.md --cleanup=verbatim
-git push origin v0.9.0
+git tag -a v0.10.0 -F /path/to/release-notes.md --cleanup=verbatim
+git push origin v0.10.0
 ```
 
 [release.yml](.github/workflows/release.yml) refuses a tag that is not annotated or
