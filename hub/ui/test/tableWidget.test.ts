@@ -10,6 +10,7 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import * as tables from '../lib/table';
 import type {TableWidget} from '../components/TableWidget';
+import {WidgetSizing} from '../lib/widgetSizing';
 
 test('default session disclosure columns fit the shared wide dialog and stay compact on a narrow screen',()=>{
   const css=readFileSync(new URL('../style.css',import.meta.url),'utf8'),maximum=Number(css.match(/\.dialog-frame\.is-wide\s*\{\s*max-width:\s*(\d+)px/)![1]);
@@ -25,8 +26,9 @@ test('default session disclosure columns fit the shared wide dialog and stay com
 function widgetFixture(border=0,manual=true,columns=[120,120,180,180],structure=columns){
   let cursor=0,changed=false,key='period-a',updates=0,rowReads=0,layoutReads=0,shell=140,keys=Array.from({length:57},(_,i)=>'row-'+i),displayed=true,givenWidth=1200,measuring=false;
   const slots:any[]=[],effects:(()=>void)[]=[],reports:{min:number;natural:number;shown:number}[]=[];
+  const geometry=new WidgetSizing((a,b)=>a===b||a!==undefined&&b!==undefined&&Math.abs(a-b)<1);
   const observers:{callback:(entries:{target:unknown}[])=>void;targets:Set<unknown>;initial:Set<unknown>}[]=[],rowHeights=new Map<string,number>();
-  const sizing={manual,allocated:560,width:'wide',report:(value:any)=>{if(value)reports.push(value);}};
+  const sizing={manual,allocated:560,width:'wide',report:(value:any)=>{if(value)reports.push(value);geometry.report('table',value);}};
   const root={get clientWidth(){return displayed?givenWidth:0;},set clientWidth(value:number){givenWidth=value;},height:0,fill:0,closest:()=>root,getBoundingClientRect:()=>{layoutReads++;return {width:root.clientWidth,height:displayed?root.height:0};}};
   const panel={current:root as unknown as HTMLElement};
   const sameDeps=(a:unknown[]|undefined,b:unknown[]|undefined)=>!!a&&!!b&&a.length===b.length&&a.every((x,i)=>Object.is(x,b[i]));
@@ -80,7 +82,7 @@ function widgetFixture(border=0,manual=true,columns=[120,120,180,180],structure=
     throw new Error('the shared table did not settle before paint');
   };
   const original=keys;
-  return {render,reports,keys:()=>keys,shown:(widget:TableWidget)=>keys.slice(widget.from,widget.to),resize:(height:number)=>{sizing.allocated=height;},narrow:()=>{root.clientWidth=350;sizing.width='narrow';},reset:(next='period-b')=>{key=next;},clear:()=>{keys=[];},limit:(n:number)=>{keys=original.slice(0,n);},height:()=>root.height,rowReads:()=>rowReads,layoutReads:()=>layoutReads,updates:()=>updates,measuring:()=>measuring,
+  return {render,reports,size:()=>geometry.sizes.table,keys:()=>keys,shown:(widget:TableWidget)=>keys.slice(widget.from,widget.to),resize:(height:number)=>{sizing.allocated=height;},narrow:()=>{root.clientWidth=350;sizing.width='narrow';},reset:(next='period-b')=>{key=next;},clear:()=>{keys=[];},limit:(n:number)=>{keys=original.slice(0,n);},height:()=>root.height,rowReads:()=>rowReads,layoutReads:()=>layoutReads,updates:()=>updates,measuring:()=>measuring,
     hide:(notify=true)=>{displayed=false;if(notify)for(const observer of observers)if(observer.targets.has(root))observer.callback([{target:root,borderBoxSize:[{inlineSize:0,blockSize:0}]}] as any);},
     show:(width=1200)=>{displayed=true;givenWidth=width;sizing.width=width<800?'narrow':'wide';for(const observer of observers)if(observer.targets.has(root))observer.callback([{target:root,borderBoxSize:[{inlineSize:width,blockSize:root.height}]}] as any);},
     display:(show:boolean,boxes=true,deliver=true)=>{displayed=show;if(!deliver)return;for(const observer of observers)if(observer.targets.has(root))observer.callback([{target:root,...(boxes?{borderBoxSize:[{inlineSize:root.clientWidth,blockSize:show?root.height:0}]}:{})}] as any);},
@@ -194,6 +196,7 @@ test('individual row size changes invalidate measurements even when their combin
     f.rowHeights({'row-0':58,'row-1':30});f.render();f.notifyRows(['row-0','row-1']);f.render();
     assert.ok(f.rowReads()>reads,'individual row changes invalidate cached strides');
     assert.equal(f.reports.at(-1)!.min,manual?min:min+14,'the automatic minimum fits the largest measured row');assert.equal(f.height(),shown,'equal combined row height keeps the reading surface stable');
+    assert.equal(f.size().min,f.reports.at(-1)!.min,'the grid retains the new minimum even when natural height is unchanged');
   }
 });
 

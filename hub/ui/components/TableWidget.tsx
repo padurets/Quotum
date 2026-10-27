@@ -130,7 +130,7 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     const content=shownHeights.length?shownHeights.reduce((sum,height)=>sum+height,0):rowBudget;
     const min=shell+(sizing?.manual?rowBudget:shownHeights.length?Math.max(...shownHeights):rowBudget)+multiFooter;
     const natural=shell+(sizing?.manual?Math.max(1,Math.min(TABLE_PAGE_ROWS,keys.length))*rowBudget:content)+multiFooter;
-    sizing?.report({min:pixels(min),natural:pixels(Math.max(min,natural)),shown:outer,layout:sizing?.manual?scope:JSON.stringify([scope,from,to,pixels(content)])});
+    sizing?.report({min:pixels(min),natural:pixels(Math.max(min,natural)),shown:outer,layout:sizing?.manual?scope:JSON.stringify([scope,from,to,pixels(min),pixels(Math.max(min,natural))])});
     if(!sizes||!same(sizes.shell,shell)||!same(sizes.footer,multiFooter)||!same(sizes.singleFooter,singleFooter)||!same(sizes.border,border)||!same(sizes.fallback,base)||nextHeights.size!==sizes.heights.size||[...nextHeights].some(([key,height])=>!same(sizes.heights.get(key),height)))
       setMeasurement({scope,heights:nextHeights,fallback:base,head,shell,footer:multiFooter,singleFooter,border});
   };
