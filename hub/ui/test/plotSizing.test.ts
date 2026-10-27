@@ -18,8 +18,8 @@ function fixture() {
     return element;
   };
   let legend = makeLegend(130.5);
-  const chart = {querySelector: () => ({}), getBoundingClientRect: () => ({height: 300})};
-  const root = {querySelector: (selector: string) => selector === ':scope > .legend' ? legend : selector === ':scope > .chart' ? chart : folding ? {} : null, getBoundingClientRect: () => ({height: 500})};
+  const chart = {querySelector: () => ({}), getBoundingClientRect: () => {reads++;return {height:300};}};
+  const root = {querySelector: (selector: string) => selector === ':scope > .legend' ? legend : selector === ':scope > .chart' ? chart : folding ? {} : null, getBoundingClientRect: () => {reads++;return {height:500+legend.height-130.5};}};
   const observers: {targets: Set<object>; deliver(target: object, height: number, border?: boolean): void}[] = [];
   const effect = (run: () => void | (() => void)) => {const cleanup = run(); if (cleanup) cleanups.push(cleanup);};
   const context = {pan, devicePixelRatio: 1, useSizing: () => ({manual: false, allocated: 0, width: 'full', report: (report: unknown) => reports.push(report)}), useLocale: () => 'en',
@@ -50,75 +50,32 @@ function fixture() {
     paint: () => frames.splice(0).forEach(run => run()), flush: () => microtasks.splice(0).forEach(run => run()), flushOne: () => microtasks.shift()?.(), cleanup: () => cleanups.reverse().forEach(run => run())};
 }
 
-test('the structural legend shell keeps plot allocation through a gesture without reading layout', () => {
-  const f = fixture(); f.resize(130.5); const reports = f.reports.length, geometry = f.reports.at(-1);
-  const token = f.start();
-  assert.equal(f.reads, 0, 'starting a gesture never measures legend content');
-  assert.equal(f.legend.style.height, '', 'data cannot own the structural legend height');
-  f.resize(60); f.mutate();
-  assert.equal(f.reports.length, reports, 'changed entries cannot reallocate the plot');
-  f.pan.move(token, -12); f.paint(); f.fold(true); f.pan.finish(token); f.flush(); f.fold(false); f.flush();
-  assert.deepEqual(f.reports.at(-1), geometry, 'the selected range keeps the same plot allocation');
-  assert.equal(f.reports.length, reports); assert.equal(f.reads, 0); f.cleanup();
-  assert.equal(f.legend.style.height, ''); assert.equal(f.legend.style.overflow, ''); assert.equal(f.legend.style.alignContent, '');
-  assert.ok(f.observers.every(observer => observer.targets.size === 0));
+test('natural legends grow and shrink the automatic panel without a fixed viewport',()=>{
+  const f=fixture();assert.equal((f.reports.at(-1) as any).natural,500);
+  f.resize(60);assert.equal((f.reports.at(-1) as any).natural,429.5);
+  f.resize(200);assert.equal((f.reports.at(-1) as any).natural,569.5);
+  assert.equal(f.legend.style.height,'');assert.equal(f.legend.style.overflow,'');
+  const before=f.reads;f.mutate();assert.equal(f.reads,before,'ordinary data mutations do not measure layout');f.cleanup();
 });
 
-test('Shift and cancellation preserve the structural shell without content measurements', () => {
-  const f = fixture(); f.resize(130.5); f.resize(171.25); const before=f.reports.length,geometry=f.reports.at(-1);
-  f.pan.setShift(true);
-  assert.equal(f.legend.style.height, ''); assert.equal(f.reads, 0);
-  f.pan.setShift(false); f.flush();
-  f.resize(99.5); const token = f.start(); f.pan.cancel(token); f.flush();
-  assert.deepEqual(f.reports.at(-1),geometry);assert.equal(f.reports.length,before);assert.equal(f.reads,0);
-  f.cleanup(); f.start(); assert.equal(f.legend.style.height, '', 'the unmounted hook cannot change a later legend');
+test('actual legend growth updates the slot during a gesture without measuring on input',()=>{
+  const f=fixture(),before=f.reads,reports=f.reports.length,token=f.start();
+  assert.equal(f.reads,before,'starting input performs no geometry read');
+  f.pan.move(token,-20);f.paint();assert.equal(f.reads,before);assert.equal(f.reports.length,reports);
+  f.resize(260);assert.equal((f.reports.at(-1) as any).natural,629.5,'the slot includes every new legend row before gesture completion');
+  const resized=f.reads;f.mutate();f.pan.move(token,-20);f.paint();assert.equal(f.reads,resized,'subsequent input does not measure unchanged content');
+  f.pan.cancel(token);f.flush();assert.equal(f.reads,resized);f.cleanup();
 });
 
-test('a replacement legend inherits the CSS shell without a synchronous content read', () => {
-  const f=fixture();f.resize(130.5);const old=f.legend,before=f.reports.length,geometry=f.reports.at(-1);
-  f.replace(70.25);
+test('replaced legends are observed and old legends release their subscription',()=>{
+  const f=fixture(),old=f.legend;f.replace(70.25);
   assert.ok(f.observers.every(observer=>!observer.targets.has(old)));
-  const token=f.start();f.pan.cancel(token);f.flush();f.resize(70.25);f.start();
-  assert.equal(f.legend.style.height,'');assert.equal(f.reads,0);
-  assert.equal(f.reports.length,before);assert.deepEqual(f.reports.at(-1),geometry);f.cleanup();
+  assert.equal((f.reports.at(-1) as any).natural,439.75);
+  f.resize(90);assert.equal((f.reports.at(-1) as any).natural,459.5);f.cleanup();
+  assert.ok(f.observers.every(observer=>observer.targets.size===0));
 });
 
-test('zero and partial legend observations cannot replace useful widget geometry', () => {
-  for(const height of [0,44.5]){
-    const f=fixture(),before=f.reports.length,geometry=f.reports.at(-1);f.resize(height,false);f.start();
-    assert.equal(f.legend.style.height,'');assert.equal(f.reads,0);
-    assert.equal(f.reports.length,before);assert.deepEqual(f.reports.at(-1),geometry);f.cleanup();
-  }
-});
-
-test('repeated completion deliveries never remeasure a structural legend shell', () => {
-  const f=fixture();f.resize(130.5);const before=f.reports.length,geometry=f.reports.at(-1);
-  const token=f.start();f.pan.cancel(token);f.mutate();f.flush();
-  assert.equal(f.reports.length,before,'completion carries no widget-sizing work');
-  assert.deepEqual(f.reports.at(-1),geometry);assert.equal(f.reads,0);f.cleanup();
-});
-
-test('a completion cannot reallocate a shell used by a newer gesture', () => {
-  const f=fixture();f.resize(130.5);const first=f.start();f.pan.cancel(first);
-  const second=f.start(),before=f.reports.length,geometry=f.reports.at(-1);f.flush();
-  assert.equal(f.legend.style.height,'');assert.equal(f.reports.length,before);
-  f.pan.cancel(second);f.flush();
-  assert.equal(f.reports.length,before);assert.deepEqual(f.reports.at(-1),geometry);f.cleanup();
-});
-
-test('a completion before unmount performs no later measurement', () => {
-  const f=fixture();f.resize(130.5);const token=f.start();f.pan.cancel(token);f.mutate();
-  f.cleanup();const before=f.reports.length;f.flush();
-  assert.equal(f.reports.length,before);assert.equal(f.legend.style.height,'');assert.equal(f.reads,0);
-});
-
-test('navigation and later completion preserve the CSS shell and plot allocation', () => {
-  const f=fixture();f.resize(130.5);const first=f.start();f.pan.cancel(first);
-  f.select({from:90*3_600_000,to:91*3_600_000});
-  const second=f.start();f.pan.cancel(second);const before=f.reports.length,geometry=f.reports.at(-1);
-  f.flushOne();f.flush();
-  assert.equal(f.legend.style.height,'');assert.equal(f.reports.length,before);assert.deepEqual(f.reports.at(-1),geometry);
-  const css=readFileSync(new URL('../style.css',import.meta.url),'utf8');
-  assert.match(css,/\.panel > \.legend\s*\{[^}]*height:\s*96px/,'the structural legend shell exists before any gesture');
-  f.cleanup();
+test('gesture completion cannot measure an unmounted panel',()=>{
+  const f=fixture(),token=f.start();f.pan.cancel(token);f.cleanup();const before=f.reads;
+  f.flush();assert.equal(f.reads,before);assert.equal(f.reports.at(-1),null);
 });

@@ -10,6 +10,7 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import * as tables from '../lib/table';
 import type {TableWidget} from '../components/TableWidget';
+import {WidgetSizing} from '../lib/widgetSizing';
 
 test('default session disclosure columns fit the shared wide dialog and stay compact on a narrow screen',()=>{
   const css=readFileSync(new URL('../style.css',import.meta.url),'utf8'),maximum=Number(css.match(/\.dialog-frame\.is-wide\s*\{\s*max-width:\s*(\d+)px/)![1]);
@@ -22,11 +23,12 @@ test('default session disclosure columns fit the shared wide dialog and stay com
 });
 
 /** Commit the real hook against measured rows, without a browser or a second React runtime. */
-function widgetFixture(border=0,manual=true){
+function widgetFixture(border=0,manual=true,columns=[120,120,180,180],structure=columns){
   let cursor=0,changed=false,key='period-a',updates=0,rowReads=0,layoutReads=0,shell=140,keys=Array.from({length:57},(_,i)=>'row-'+i),displayed=true,givenWidth=1200,measuring=false;
   const slots:any[]=[],effects:(()=>void)[]=[],reports:{min:number;natural:number;shown:number}[]=[];
+  const geometry=new WidgetSizing((a,b)=>a===b||a!==undefined&&b!==undefined&&Math.abs(a-b)<1);
   const observers:{callback:(entries:{target:unknown}[])=>void;targets:Set<unknown>;initial:Set<unknown>}[]=[],rowHeights=new Map<string,number>();
-  const sizing={manual,allocated:560,width:'wide',report:(value:any)=>{if(value)reports.push(value);}};
+  const sizing={manual,allocated:560,width:'wide',report:(value:any)=>{if(value)reports.push(value);geometry.report('table',value);}};
   const root={get clientWidth(){return displayed?givenWidth:0;},set clientWidth(value:number){givenWidth=value;},height:0,fill:0,closest:()=>root,getBoundingClientRect:()=>{layoutReads++;return {width:root.clientWidth,height:displayed?root.height:0};}};
   const panel={current:root as unknown as HTMLElement};
   const sameDeps=(a:unknown[]|undefined,b:unknown[]|undefined)=>!!a&&!!b&&a.length===b.length&&a.every((x,i)=>Object.is(x,b[i]));
@@ -57,7 +59,7 @@ function widgetFixture(border=0,manual=true){
     let widget:TableWidget;
     for(let i=0;i<20;i++){
       changed=false;cursor=0;effects.length=0;
-      widget=context.exports.useTableWidget(panel,[120,120,180,180],180,keys,key);
+      widget=context.exports.useTableWidget(panel,columns,180,keys,key,undefined,structure);
       measuring=context.exports.TableMeasure({table:widget,children:null})!==null;
       measuredBody=measuring?measuredBody??body():null;
       const current=keys.slice(widget.from,widget.to),footer=80;
@@ -80,7 +82,7 @@ function widgetFixture(border=0,manual=true){
     throw new Error('the shared table did not settle before paint');
   };
   const original=keys;
-  return {render,reports,keys:()=>keys,shown:(widget:TableWidget)=>keys.slice(widget.from,widget.to),resize:(height:number)=>{sizing.allocated=height;},narrow:()=>{root.clientWidth=350;sizing.width='narrow';},reset:(next='period-b')=>{key=next;},clear:()=>{keys=[];},limit:(n:number)=>{keys=original.slice(0,n);},height:()=>root.height,rowReads:()=>rowReads,layoutReads:()=>layoutReads,updates:()=>updates,measuring:()=>measuring,
+  return {render,reports,size:()=>geometry.sizes.table,keys:()=>keys,shown:(widget:TableWidget)=>keys.slice(widget.from,widget.to),resize:(height:number)=>{sizing.allocated=height;},narrow:()=>{root.clientWidth=350;sizing.width='narrow';},reset:(next='period-b')=>{key=next;},clear:()=>{keys=[];},limit:(n:number)=>{keys=original.slice(0,n);},height:()=>root.height,rowReads:()=>rowReads,layoutReads:()=>layoutReads,updates:()=>updates,measuring:()=>measuring,
     hide:(notify=true)=>{displayed=false;if(notify)for(const observer of observers)if(observer.targets.has(root))observer.callback([{target:root,borderBoxSize:[{inlineSize:0,blockSize:0}]}] as any);},
     show:(width=1200)=>{displayed=true;givenWidth=width;sizing.width=width<800?'narrow':'wide';for(const observer of observers)if(observer.targets.has(root))observer.callback([{target:root,borderBoxSize:[{inlineSize:width,blockSize:root.height}]}] as any);},
     display:(show:boolean,boxes=true,deliver=true)=>{displayed=show;if(!deliver)return;for(const observer of observers)if(observer.targets.has(root))observer.callback([{target:root,...(boxes?{borderBoxSize:[{inlineSize:root.clientWidth,blockSize:show?root.height:0}]}:{})}] as any);},
@@ -191,8 +193,10 @@ test('a changed border invalidates cached measurement strides',()=>{
 test('individual row size changes invalidate measurements even when their combined height stays fixed',()=>{
   for(const manual of [true,false]){
     const f=widgetFixture(0,manual);f.render();const min=f.reports.at(-1)!.min,shown=f.height(),reads=f.rowReads();
-    f.rowHeights({'row-0':74,'row-1':14});f.render();f.notifyRows(['row-0','row-1']);f.render();
-    assert.ok(f.rowReads()>reads,'individual row changes invalidate cached strides');assert.equal(f.reports.at(-1)!.min,min,'row growth cannot change the structural shell');assert.equal(f.height(),shown);
+    f.rowHeights({'row-0':58,'row-1':30});f.render();f.notifyRows(['row-0','row-1']);f.render();
+    assert.ok(f.rowReads()>reads,'individual row changes invalidate cached strides');
+    assert.equal(f.reports.at(-1)!.min,manual?min:min+14,'the automatic minimum fits the largest measured row');assert.equal(f.height(),shown,'equal combined row height keeps the reading surface stable');
+    assert.equal(f.size().min,f.reports.at(-1)!.min,'the grid retains the new minimum even when natural height is unchanged');
   }
 });
 
@@ -306,4 +310,28 @@ test('identity heights survive reordering and exclusive last-row borders',()=>{
   assert.deepEqual(tablePages(['short','other','tall'],heights,44,50),[0,2]);
   assert.deepEqual(tablePages(['tall','short','other'],heights,44,50),[0,1]);
   assert.deepEqual(tablePages(['short','other'],heights,44,49,1),[0]);
+});
+
+
+test('automatic sparse tables fit their actual row count instead of reserving ten rows',()=>{
+  const f=widgetFixture(0,false);f.limit(1);const one=f.render(),natural=f.reports.at(-1)!.natural;
+  f.limit(10);const many=f.render();assert.equal(many.surfaceHeight-one.surfaceHeight,9*44);
+  assert.equal(f.reports.at(-1)!.natural-natural,9*44,'short measured rows do not reserve their maximum preview budget');
+  f.clear();const empty=f.render();assert.equal(empty.surfaceHeight,116,'an empty state keeps one useful row');
+  assert.ok(f.reports.at(-1)!.natural<natural+9*44);
+});
+
+test('an automatic last page follows the one measured row it actually shows',()=>{
+  const f=widgetFixture(0,false);f.limit(11);let table=f.render();const full=table.surfaceHeight,natural=f.reports.at(-1)!.natural;
+  table.onPage(1);table=f.render();assert.deepEqual([table.from,table.to],[10,11]);
+  assert.equal(full-table.surfaceHeight,9*44);assert.equal(natural-f.reports.at(-1)!.natural,9*44);
+});
+
+for(const [label,columns,structure,width] of [
+  ['grouped agents',[190,120,210],[190,120,210,116,132],750],
+  ['historical quota',[82,74,142,122,145,166,146],[82,74,142,145,166,220,146],1120],
+] as const)test(`${label} chooses its table layout from the columns actually displayed`,()=>{
+  const f=widgetFixture(0,false,[...columns],[...structure]);f.show(width);
+  assert.equal(f.render().layout,'table','inactive modes cannot force a narrow list');
+  f.show(350);assert.equal(f.render().layout,'list');
 });

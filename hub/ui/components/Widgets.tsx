@@ -162,7 +162,7 @@ export function Widgets({
   const activePreview = movable && gesture.current?.signature === signature ? preview : null;
   const intended = (id: string) => (activePreview?.id === id && activePreview.intent !== undefined ? activePreview.intent : saved(id));
   const positions=()=>{
-    const items = (activePreview?.items ?? base).map(item => ({...item, h: rowsFor(sizeOf(item.id), intended(item.id))}));
+    const items = (activePreview?.items ?? base).map(item => ({...item, h: rowsFor(sizeOf(item.id), intended(item.id), geometry.heights[item.id])}));
     return columns === 6 ? settle(items, layout.columns) : narrowed(items, columns as 1 | 2, layout.columns);
   };
   const spots=positions();
@@ -194,7 +194,9 @@ export function Widgets({
         else {grid.current.insertBefore(node,next);focused?.focus({preventScroll:true});}
       }
       previous=node;
-      allocations.set(spot.id,intended(spot.id)!==undefined?allocated:0);
+      // Actual plot geometry can temporarily need more rows than its target.
+      // Keep neighbours clear, but give the plot its target so that it can shrink.
+      allocations.set(spot.id,intended(spot.id)!==undefined?rowsFor(sizeOf(spot.id),intended(spot.id))*(ROW-geometry.short)-GAP:0);
     }
     geometry.allocate(allocations);
   };

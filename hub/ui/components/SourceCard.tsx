@@ -34,7 +34,7 @@ import {RefreshAction} from './RefreshAction';
 import {refreshChangesAt, refreshPending, refreshText} from '../lib/refresh';
 import {ErrorLine, Segmented} from './Kit';
 import {useBubble} from './Tooltip';
-import {quotaPeriods,primaryQuotaPeriods} from '../lib/subscription';
+import {quotaPeriods} from '../lib/subscription';
 import {navigate, measurementDevicesHref} from '../lib/router';
 import {app, inApp} from '../lib/app';
 
@@ -515,13 +515,13 @@ function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;
   const windows=historical?value?.windows??[]:source.windows;
   const periods=quotaPeriods(source,historical?windows:undefined),shownPeriods=periods.filter(w=>!isWindowHidden(arrange.view,source.id,w.id));
   const visible=windows.filter(w=>!isWindowHidden(arrange.view,source.id,w.id)),weekly=planOf(arrange.view,source.id),caps=hasSubscriptionCaps(source.provider);
-  const primary=primaryQuotaPeriods(shownPeriods),allHidden=!shownPeriods.length&&(!!periods.length||filters?.windows.mode==='include'&&!filters.windows.values.some(([id])=>id===source.id));
+  const allHidden=!shownPeriods.length&&(!!periods.length||filters?.windows.mode==='include'&&!filters.windows.values.some(([id])=>id===source.id));
   const wallet=providerOf(source.provider)?.funding==='wallet';
   const noEvidence=historical&&!!value&&!reading.loading&&!reading.error&&!windows.length&&!value.meters.length&&value.creditBalance?.status!=='unlimited'&&!allowances.length;
   return <MeasurementClock.Provider value={historical?reading.basis?.range.to??selected.to:null}>
-    <div className={`limits card-primary${wallet?' is-wallet':''}`}>
+    <div className="limits card-measurements">
       {!caps&&wallet&&budgetVisible(source)&&<MoneyCard source={source} board={boardId} view={arrange.view} measurement={historical?value:undefined}/>}
-      {!wallet&&(allHidden?<AllHidden/>:noEvidence?<div className="card-empty">{t('period.noEvidence')}</div>:primary.map(period=>{const w=visible.find(w=>w.id===period.id),measurement=historical?value:source;return w?<Limit key={w.id} w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={weekly}/>:caps&&measurement?<QuotaCard key={period.id} source={measurement} ids={[period.id]}/>:<PercentLimit key={period.id} name={windowName(period)} remaining={null} status={<small className="key-status" role="img" title={t('quota.unavailable')} aria-label={t('quota.unavailable')}/>} reset={<span>—</span>} valueTitle={t('quota.unavailable')}/>;}))}
+      {!wallet&&(allHidden?<AllHidden/>:noEvidence?<div className="card-empty">{t('period.noEvidence')}</div>:shownPeriods.map(period=>{const w=visible.find(w=>w.id===period.id),measurement=historical?value:source;return w?<Limit key={w.id} w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={weekly}/>:caps&&measurement?<QuotaCard key={period.id} source={measurement} ids={[period.id]}/>:<PercentLimit key={period.id} name={windowName(period)} remaining={null} status={<small className="key-status" role="img" title={t('quota.unavailable')} aria-label={t('quota.unavailable')}/>} reset={<span>—</span>} valueTitle={t('quota.unavailable')}/>;}))}
       {!historical&&!caps&&!source.windows.length&&!budgetVisible(source)&&!source.meters&&<div className="card-empty">{errorText(source.error??'waiting')}</div>}
     </div>
   </MeasurementClock.Provider>;

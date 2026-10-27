@@ -103,7 +103,7 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
     // Hidden panels retain their last positive size without preparing invisible cells.
     if(!nextWidth)return;setWidth(nextWidth);
     if(sizing){const shown=pixels(node.getBoundingClientRect().height-fillOf(node)),chrome=shown-plot.getBoundingClientRect().height,min=pixels(chrome+HEATMAP_MIN);
-      sizing.report({min,natural:pixels(chrome+HEATMAP_NATURAL),shown,layout:JSON.stringify([width,locale,view])});const next=sizing.manual?pixels(Math.max(HEATMAP_MIN,sizing.allocated-chrome)):0;setHeight(was=>same(was,next)?was:next);
+      sizing.report({min,natural:pixels(chrome+HEATMAP_NATURAL),shown,layout:JSON.stringify([width,locale,view,pixels(chrome)])});const next=sizing.manual?pixels(Math.max(HEATMAP_MIN,sizing.allocated-chrome)):0;setHeight(was=>same(was,next)?was:next);
     }
   };
   useLayoutEffect(()=>measure.current(),[sizing?.manual,sizing?.allocated,sizing?.width,sizing?.report,loading,error,locale,layout.naturalHeight]);
@@ -149,6 +149,6 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
       {layout.labels.map((label,i)=><span key={i} aria-hidden="true" className="heatmap-axis" style={{left:label.x,top:label.y,transform:label.align==='end'?'translate(-100%,-100%)':label.align==='middle'?'translate(-50%,-100%)':'translateY(-100%)'}}>{label.text}</span>)}
       {[...new Set(layout.cells.map(c=>c.row))].sort((a,b)=>a-b).map(row=><div role="row" className="heatmap-row" key={row}>{layout.cells.filter(c=>c.row===row).sort((a,b)=>a.column-b.column||a.from-b.from).map(item=><TimedBucket key={item.key} item={item} span={layout.span} zone={window.zone} selected={selection?.from===item.from&&selection?.to===item.to} tab={item.key===tab?.key} focus={setFocused} openRange={openRange} panel={root} onKey={key} preview={preview}/>)}</div>)}
     </div>
-    <div className="legend calendar-legend" style={{height:width<260?80:width<560?48:24}}><span className="heatmap-unit">{t(unit===60_000?'calendar.scaleMinutes':'calendar.scaleHours')}</span>{thresholds.map((value,level)=><span className="heatmap-key" key={level}><svg width="10" height="8" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="4" fill={level?CATEGORY_COLORS[0]:'var(--hair)'} fillOpacity={level?CALENDAR_OPACITY[level]:1}/></svg>{level===1?'>0':level===5?'≥ '+num(value/unit,2):num(value/unit,2)}</span>)}</div>
+    <div className="legend calendar-legend"><span className="heatmap-unit">{t(unit===60_000?'calendar.scaleMinutes':'calendar.scaleHours')}</span>{thresholds.map((value,level)=><span className="heatmap-key" key={level}><svg width="10" height="8" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="4" fill={level?CATEGORY_COLORS[0]:'var(--hair)'} fillOpacity={level?CALENDAR_OPACITY[level]:1}/></svg>{level===1?'>0':level===5?'≥ '+num(value/unit,2):num(value/unit,2)}</span>)}</div>
   </section>;
 });

@@ -8,7 +8,7 @@ import {providerOf} from '../../server/domain/providers';
 import {budgetVisible,subscriptionFundsVisible} from '../lib/money';
 import type {Card,LiveSession} from '../lib/types';
 import {budgetAccess} from '../../server/domain/resources';
-import {quotaPeriods,primaryQuotaPeriods} from '../lib/subscription';
+import {quotaPeriods} from '../lib/subscription';
 import {hasSubscriptionCaps} from '../lib/providers';
 import {selectedAllowanceIds} from '../lib/moneySelection';
 import {EMPTY_VIEW} from '../../server/domain/view';
@@ -71,7 +71,7 @@ test('subscription balances live only in the dashboard and compact footers, with
     memo:(fn:unknown)=>fn,useLocale:()=>{},useCard:()=>source,useTitle:()=>'Fixture',useMine:()=>true,
     usePeriodValues:()=>({value:null}),useTimeRange:()=>null,useCurrencyContext:()=>({}),MeasurementClock:{Provider:'clock'},useSourcePeriodSessions:()=>({rows:[],basis:null,loading:false,error:null}),
     useSessions:()=>[],useResetsFor:()=>undefined,useSourceAccess:()=>null,useBoardId:()=>'board',useServerView:()=>EMPTY_VIEW,
-    providerOf,budgetVisible,subscriptionFundsVisible,quotaPeriods,primaryQuotaPeriods,windowName,hasSubscriptionCaps,isWindowHidden:()=>false,planOf:()=>null,colorOf:()=>'',
+    providerOf,budgetVisible,subscriptionFundsVisible,quotaPeriods,windowName,hasSubscriptionCaps,isWindowHidden:()=>false,planOf:()=>null,colorOf:()=>'',
     SourceSettings:'settings',CardMark:'mark',BalanceMark:'balance-status',AccessMark:'access',QuotaMark:'quota-status',
     MoneyCard:'money',QuotaCard:'quota',Limit:'limit',PercentLimit:'limit',ResetLine:'reset',FreeResets:'free-resets',AllHidden:'hidden',
     UsageWorkMark:'work-evidence',Tray:({current,news}:{current:unknown;news:unknown})=>jsx('footer',{children:[news,current]}),

@@ -187,10 +187,12 @@ export function CapMetrics({
 function BudgetKeyMetrics({
   limit,
   context,
+  name,
   compact = false,
 }: {
   limit: BudgetLimit;
   context: CurrencyContext;
+  name?: ReactNode;
   compact?: boolean;
 }) {
   const {part, meter: cap} = limit;
@@ -208,7 +210,7 @@ function BudgetKeyMetrics({
         <div className="compact-window-name">
           <span title={detail}>
             <span>
-              {keyName(part)}
+              {name??keyName(part)}
               <KeyStatus part={part} cap={cap} />
             </span>
           </span>
@@ -230,7 +232,7 @@ function BudgetKeyMetrics({
     <div className={`limit money-limit${stale ? ' is-stale' : ''}`}>
       <div className="limit-top">
         <span className="limit-name" title={detail}>
-          {keyName(part)}
+          {name??keyName(part)}
           <KeyStatus part={part} cap={cap} />
         </span>
         <span
@@ -356,7 +358,7 @@ export function MoneyValues({source,keys,names=keys,meters,allowances=keys.filte
     groups = remaining.values;
   const selectedCount=allowances.length,selected=selectedCount>0;
   const logical=names.filter(key=>allowances.includes(key.id)).sort(compareKeys);
-  const first=logical.length===selectedCount?logical[0]:undefined,primary=first&&limits.find(limit=>limit.scope.id===first.id);
+  const selectedKeys=[...logical,...allowances.filter(id=>!logical.some(key=>key.id===id)).map(id=>({id,name:keys.find(key=>key.id===id)?.name??null}))];
   const unavailable=allowances.filter(id=>!limits.some(limit=>limit.scope.id===id));
   const disclosureLabel=[t('money.breakdown'),selectedCount?t('money.selectedAllowances',{count:selectedCount}):null].filter(Boolean).join('\n');
   const credit=source.provider==='codex';
@@ -430,7 +432,7 @@ export function MoneyValues({source,keys,names=keys,meters,allowances=keys.filte
           {approximate && conversion && <p className="popover-note">{conversion}</p>}
         </section>
       ))}
-      {limits.length>0&&<section className="measurement-details">{limits.map(limit=><div key={limit.scope.id}><BudgetKeyMetrics limit={limit} context={context}/><small className="measurement-proof">{[money(capLeft(limit.native),limit.native.unit,true,context),t('money.of',{amount:money(limit.native.limit,limit.native.unit,true,context)}),t('source.measured',{at:stamp(limit.native.at)}),limit.native.resetAt!==null?stamp(limit.native.resetAt):null].filter(Boolean).join('\n')}</small></div>)}</section>}
+      {limits.length>0&&<section className="measurement-details">{limits.map(limit=><div key={limit.scope.id}><span>{keyName(limit.part)}</span><small className="measurement-proof">{[money(capLeft(limit.native),limit.native.unit,true,context),t('money.of',{amount:money(limit.native.limit,limit.native.unit,true,context)}),t('source.measured',{at:stamp(limit.native.at)}),limit.native.resetAt!==null?stamp(limit.native.resetAt):null].filter(Boolean).join('\n')}</small></div>)}</section>}
       {unavailable.length>0&&<section className="measurement-details">{unavailable.map(id=><div key={id}><span>{keyName(keys.find(key=>key.id===id)??names.find(key=>key.id===id)??{id,name:null})}</span><small className="measurement-proof">{t('quota.unavailable')}</small></div>)}</section>}
       <ErrorLine error={error}/>
       {loading&&<p>{t('period.loading')}</p>}
@@ -499,7 +501,15 @@ ${approximate ? '≈ ' : ''}${formatted}`}
           </CreditBalanceValue>
         </div>
       </div>}
-      {!showBalance&&(selected||error?<Popover label={disclosureLabel} trigger={primary?<BudgetKeyMetrics limit={{...primary,part:{...primary.part,name:first!.name}}} context={context} compact={compact}/>:<CapMetrics cap={undefined} name={first?keyName(first):disclosureLabel} compact={compact}/>} triggerClass="money-primary-trigger">{breakdown}</Popover>:<div className="card-empty"><span>{t('filters.emptyMetrics')}</span><button type="button" className="text-button" onClick={openDataFilters}>{t('header.filters')}</button></div>)}
+      <div className="limits money-limits">
+        {selectedKeys.map(key=>{
+          const limit=limits.find(limit=>limit.scope.id===key.id);
+          return limit?<BudgetKeyMetrics key={key.id} limit={{...limit,part:{...limit.part,name:key.name}}} context={context} compact={compact}
+            name={showBalance?undefined:<Popover label={disclosureLabel} trigger={keyName(key)} triggerClass="money-cap-trigger">{breakdown}</Popover>}/>:<CapMetrics key={key.id} cap={undefined} name={keyName(key)} compact={compact}
+            status={showBalance?undefined:<Popover label={disclosureLabel} trigger={<small className="key-status" role="img" aria-label={t('quota.unavailable')}/>} triggerClass="money-status-trigger">{breakdown}</Popover>}/>;
+        })}
+      </div>
+      {!showBalance&&!selected&&<div className="card-empty"><span>{t('filters.emptyMetrics')}</span><button type="button" className="text-button" onClick={openDataFilters}>{t('header.filters')}</button></div>}
     </div>
   );
 }

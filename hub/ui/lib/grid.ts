@@ -80,9 +80,11 @@ export const placesOf = (spots: Spot[]): Record<string, Place> => Object.fromEnt
  * The rows a widget takes: as many as its content needs, or as many as its owner chose
  * (`requested`), never fewer than the least it can show (`min`, in pixels). Before its
  * content is first measured, a chosen height is taken as it is.
+ * Placement can include the currently shown height while a manual plot adjusts;
+ * its target allocation leaves that argument out so temporary rows do not persist.
  */
-export const rowsFor = (size: {min: number; natural: number} | undefined, requested: number | undefined) =>
-  requested === undefined ? rowsOf(size?.natural ?? 224) : Math.max(requested, size ? rowsOf(size.min) : 1);
+export const rowsFor = (size: {min: number; natural: number} | undefined, requested: number | undefined, shown?:number) =>
+  requested === undefined ? rowsOf(size?.natural ?? 224) : Math.max(requested, size ? rowsOf(size.min) : 1, shown===undefined?1:rowsOf(shown));
 
 /**
  * The height a widget's owner chose by a gesture or a key, in rows, or undefined when

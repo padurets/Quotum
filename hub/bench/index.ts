@@ -1035,7 +1035,12 @@ async function observedBaseline(stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp,i
     if(stable<3){
       if(Date.now()>=readyBy){
         const state=await cdp.evaluate(`window.__quotumWalletState?.(${JSON.stringify(source)},${JSON.stringify(authority)})`);
-        console.error('bench: captured work setup '+JSON.stringify({state,pending:initial.historyPending,history:initial.history}));
+        const settlement=await cdp.evaluate(`(()=>({
+          blockers:Array.from(document.querySelectorAll('.agents-panel.is-loading,.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-draw-ready="false"]')).map(node=>({id:node.closest('[data-widget]')?.dataset.widget,tag:node.tagName,className:node.getAttribute('class'),drawReady:node.getAttribute('data-draw-ready')})),
+          animations:document.getAnimations().filter(animation=>animation.playState==='running'&&animation.effect?.target?.matches('.widget,.widget-body')).map(animation=>({id:animation.effect.target.closest('[data-widget]')?.dataset.widget,currentTime:animation.currentTime,playState:animation.playState})),
+          layout:Array.from(document.querySelectorAll('.widgets>.widget')).map(node=>{const box=node.getBoundingClientRect();return{id:node.dataset.widget,box:[box.x,box.y,box.width,box.height]};})
+        }))()`);
+        console.error('bench: captured work setup '+JSON.stringify({state,pending:initial.historyPending,history:initial.history,settlement,previousLayout:previous}));
         throw new Stop('captured work configuration history did not settle');
       }
       await sleep(20);

@@ -15,7 +15,7 @@ import {observationDeadline} from '../../server/domain/resources';
 import {providerOf,QUOTA_IDS} from '../../server/domain/providers';
 import {EMPTY_VIEW} from '../../server/domain/view';
 import * as money from '../lib/money';
-import {quotaPeriods,primaryQuotaPeriods} from '../lib/subscription';
+import {quotaPeriods} from '../lib/subscription';
 import {hasSubscriptionCaps} from '../lib/providers';
 import {t,setLocale} from '../i18n';
 import type {Card} from '../lib/types';
@@ -44,7 +44,7 @@ test('a historical subscription distinguishes missing observations from hidden l
     let hidden=false;
     const reading={value:read(at),basis:{range:{from:now-3_600_000,to:at}},loading:false,error:null as string|null};
     const context={selectedAllowanceIds,usePref:()=>({unit:'USD'}),useDataFilters:()=>({current:null}),exports:{} as {draw:(props:unknown)=>Node},require:()=>runtime,t,
-      usePeriodValues:()=>reading,useTimeRange:()=>reading.basis.range,quotaPeriods,primaryQuotaPeriods,windowName,PercentLimit:'unavailable',hasSubscriptionCaps,providerOf,budgetVisible:money.budgetVisible,
+      usePeriodValues:()=>reading,useTimeRange:()=>reading.basis.range,quotaPeriods,windowName,PercentLimit:'unavailable',hasSubscriptionCaps,providerOf,budgetVisible:money.budgetVisible,
       isWindowHidden:()=>hidden,planOf:()=>null,MeasurementClock:{Provider:'clock'},QuotaCard:'quota',Limit:'limit',AllHidden:'hidden'};
     const card=code('../components/SourceCard.tsx'),start=card.indexOf('function CardMeasurements(');
     runInNewContext(ts.transpileModule(card.slice(start,card.indexOf('/** Every reader',start))+'\nexports.draw=CardMeasurements;',{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
@@ -78,7 +78,7 @@ test('retained unlimited credits and confirmed zero are measurements in the card
     const source={...value,budget:{enabled:true}};
     const context={useRemovalFocus:()=>()=>{},selectedAllowanceIds,usePref:()=>({unit:'USD'}),matchesSelection:()=>true,fundsRule:()=>({mode:'exclude',values:[]}),matchesWallet:()=>true,walletRule:()=>({mode:'auto',include:[],exclude:[]}),useDataFilters:()=>({current:null}),exports:{} as Record<string,(props:unknown)=>Node>,components:{} as Record<string,(props:unknown)=>Node>,require:()=>runtime,...money,t,observationDeadline,
       useMeasurementClock:()=>edge,stamp:String,day:String,rateText:String,currencySymbol,StatusMark:'status',Popover:'popover',MoneyCard:'money-card',ErrorLine:'error',CapMetrics:'unavailable-cap',BudgetKeyMetrics:'keys',
-      usePeriodValues:()=>reading,useTimeRange:()=>reading.basis.range,useCurrencyContext:()=>defaultCurrencyContext,quotaPeriods,primaryQuotaPeriods,windowName,PercentLimit:'unavailable',hasSubscriptionCaps,providerOf,
+      usePeriodValues:()=>reading,useTimeRange:()=>reading.basis.range,useCurrencyContext:()=>defaultCurrencyContext,quotaPeriods,windowName,PercentLimit:'unavailable',hasSubscriptionCaps,providerOf,
       isWindowHidden:()=>false,planOf:()=>null,keyShown:()=>true,MeasurementClock:{Provider:'clock'},PeriodStatus:'period-status',QuotaCard:'quota',Limit:'limit',AllHidden:'hidden',
       MoneyValues:undefined as unknown,CardTray:({funds}:{funds:unknown})=>({type:'footer',props:{children:funds}}),
     };
@@ -130,7 +130,7 @@ test('historical wallet disclosures keep the current selected scope before, betw
     const filters=filterModel.defaultFilters();filters.wallet={mode:'only',values:[{source:id,kind:'balance'},{source:id,kind:'keyCap',key:'aaaaaaaaaaaa'},{source:id,kind:'keyCap',key:'bbbbbbbbbbbb'}]};
     let selected={from:at-H,to:at+M},reading={value:read(selected.to),basis:{range:selected},loading:false,error:null};
     const context={useRemovalFocus:()=>()=>{},...money,...filterModel,selectedAllowanceIds,usePref:()=>({unit:'USD'}),useDataFilters:()=>({current:filters}),exports:{} as Record<string,(props:unknown)=>Node>,require:()=>runtime,t,currencySymbol,
-      usePeriodValues:()=>reading,useTimeRange:()=>selected,useCurrencyContext:()=>defaultCurrencyContext,quotaPeriods,primaryQuotaPeriods,windowName,PercentLimit:'unavailable',hasSubscriptionCaps,providerOf,
+      usePeriodValues:()=>reading,useTimeRange:()=>selected,useCurrencyContext:()=>defaultCurrencyContext,quotaPeriods,windowName,PercentLimit:'unavailable',hasSubscriptionCaps,providerOf,
       isWindowHidden:()=>false,planOf:()=>null,MeasurementClock:{Provider:'clock'},QuotaCard:'quota',Limit:'limit',AllHidden:'hidden',
       MoneyValues:undefined as unknown,MoneyCard:undefined as unknown,useShownKeys:()=>({keys:source.keys,meters:source.meters,allowances:selectedAllowanceIds(source,EMPTY_VIEW,'USD',filters)}),Popover:'popover',CreditBalanceValue:({children}:{children:unknown})=>children,ErrorLine:'error',CapMetrics:'unavailable-cap',BudgetKeyMetrics:'key',stamp:String,day:String,ApiError,
     };

@@ -35,6 +35,17 @@ const board = settle([item('P'), item('Q', 3), item('R'), item('S', 3)], 6);
 const coords = (spots: Spot[]) => Object.fromEntries(spots.map(({id, x, y}) => [id, [x, y]]));
 const at = (spots: Spot[], id: string) => spots.find(s => s.id === id)!;
 
+test('a manual plot keeps room for its current drawing without enlarging its requested allocation',()=>{
+  const size={min:400,natural:500},requested=12;
+  assert.equal(rowsFor(size,requested),12);
+  const placed=rowsFor(size,requested,770.875);
+  const boxes=settle([item('plot',0,6,placed),item('next',0,6,4)],6);
+  assert.equal(at(boxes,'next').y,17,'the neighbour clears the current plot and its new legend');
+  assert.equal(rowsFor(size,requested),12,'the plot still receives the original target while preparing its smaller drawing');
+  assert.equal(rowsFor(size,requested,560),12,'completed drawing releases the temporary rows');
+  assert.equal(rowsFor(size,undefined,770.875),rowsFor(size,undefined),'automatic templates keep their natural allocation');
+});
+
 test('Home on an already top-right card is a no-op regardless of the result order', () => {
   const next = stepped(board, 'Q', 'Home', 6);
   assert.notDeepEqual(next.map(item => item.id), board.map(item => item.id));

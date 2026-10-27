@@ -4,6 +4,20 @@ import {activityAxisFixture} from './activityAxisFixture';
 
 const M=60000,H=3600000;
 
+for(const lifetime of ['authority','by','valueContext'] as const)test(`Activity retains its legend during geometry preparation and retires it with ${lifetime}`,()=>{
+  const f=activityAxisFixture(true,{warmup:false}),seen:{frame:unknown;retained:boolean}[]=[];
+  const frame={history:null,since:null,identities:[{key:'s',name:'Source',color:'red'}]};
+  f.props.detailFrame=frame;
+  f.props.renderDetails=(value:unknown,retained:boolean)=>{seen.push({frame:value,retained});return{summary:null,legend:null};};
+  f.parentUpdate();f.settle();assert.equal(seen.at(-1)?.frame,frame);
+  f.props.plot=400;f.parentUpdate();f.flush();
+  assert.equal(seen.at(-1)?.retained,true);
+  assert.equal(seen.at(-1)?.frame,frame,'a geometry-only preparation cannot remove the legend and change its natural height');
+  f.settle();assert.equal(seen.at(-1)?.frame,frame);
+  f.props[lifetime]=lifetime==='authority'?f.props.authority+1:lifetime==='by'?'project':'another-board';f.parentUpdate();f.flush();
+  assert.equal(seen.at(-1)?.frame,null,'revoked evidence cannot survive the semantic lifetime');
+});
+
 for(const periodMs of [2*M,3*M,6*M])test(`Activity retains its value projection while a six-minute range returns to a pending ${periodMs/M}-minute live period`,()=>{
   const to=12*M+17017;
   const f=activityAxisFixture(false,{range:{from:to-6*M,to},periodMs,now:to+1000,cells:[[10*M,H],[11*M,H]],warmup:false});
