@@ -560,6 +560,72 @@ test('the existing history control selects fresh prefixes while required history
   assert.ok(!workflow.includes('QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:'));
 });
 
+test('paired history preinput binding selects only one direct diagnostic history job',()=>{
+  const workflow=readFileSync(new URL('../../../.github/workflows/ci.yml',import.meta.url),'utf8');
+  const job=(name:string)=>workflow.split('  '+name+':\n')[1].split(/\n  [\w-]+:/)[0];
+  const evaluate=(expression:string,inputs:object={},event='workflow_dispatch',ref='refs/heads/task')=>runInNewContext(expression,{
+    inputs,github:{event_name:event,ref},always:()=>true,startsWith:(value:string,prefix:string)=>value.startsWith(prefix),fromJSON:JSON.parse,
+  });
+  const selected=(name:string,inputs:object={},event='workflow_dispatch',ref='refs/heads/task')=>Boolean(evaluate(job(name).match(/if: \$\{\{ (.+) \}\}/)![1],inputs,event,ref));
+  const history=job('bench-history'),fresh=history.match(/FRESH_HISTORY: \$\{\{ (.+) \}\}/)![1];
+  const paired={history_preinput_binding:true,history_scroll_control:true,diagnostic_ref:'1'.repeat(40),expected_client_sha256:'2'.repeat(64)};
+  assert.equal(evaluate(fresh,paired),'');
+  for(const history_scroll_control of [false,true])for(const history_preinput_binding of [false,true]){
+    assert.equal(evaluate(fresh,{history_scroll_control,history_preinput_binding}),history_scroll_control&&!history_preinput_binding?'1':'');
+  }
+  const others=['dev-tooling','hub','bench','bench-dashboard','idle-cpu-control','native-postmortem-control','startup-io-control','managed-keys','agent','installers'];
+  const modes=['trace_only','original_timing','native_trace','native_profile','caption_control','native_postmortem_control','history_pool_control','startup_io_control','compositor_guard_control'];
+  const matrix=history.match(/include: \$\{\{ (.+) \}\}/)![1];
+  for(const inputs of [paired,{history_preinput_binding:true},{history_preinput_binding:true,diagnostic_ref:'1'.repeat(40)},...modes.map(mode=>({...paired,[mode]:true}))]){
+    assert.equal(selected('bench-history',inputs),true,'invalid pairs must reach the early guard');
+    for(const name of others)assert.equal(selected(name,inputs),false,name);
+    assert.equal(evaluate(matrix,inputs).length,1,'invalid modes must not fan out compositor arms');
+  }
+  assert.equal(evaluate(matrix,{compositor_guard_control:true}).length,3);
+  assert.equal(evaluate(fresh,{history_scroll_control:true}),'1');
+  for(const event of ['push','pull_request','workflow_call','workflow_dispatch']){
+    for(const name of ['bench-history','bench-dashboard','bench','hub','dev-tooling'])assert.equal(selected(name,{},event),true,name);
+    for(const name of ['bench-history','bench-dashboard','bench'])assert.equal(selected(name,{},event,'refs/tags/v1.0.0'),false,name);
+  }
+  if(process.platform!=='win32'){
+    const script=history.split('      - run: |\n')[1].split('        env:\n')[0].split('\n').map(line=>line.slice(10)).join('\n');
+    const standins=`node(){ printf 'node'; printf ' %s' "$@"; printf '\\n'; }; npm(){ printf 'npm'; printf ' %s' "$@"; printf '\\n'; };\n`;
+    for(const [inputs,expected] of [[paired,'npm run bench -- --ci --scope history'],[{history_scroll_control:true},'node --import tsx bench/historyFreshControl.mjs'],[{},'npm run bench -- --ci --scope history']] as const){
+      const result=spawnSync('/bin/bash',['--noprofile','--norc','-eu','-c',standins+script],{env:{PATH:'/no-browser-or-node',FRESH_HISTORY:evaluate(fresh,inputs),QUOTUM_C3_CHROME:'/owned/chrome'},encoding:'utf8'});
+      assert.ifError(result.error);assert.equal(result.status,0,result.stderr);assert.equal(result.stdout.trim(),expected);
+    }
+  }
+  assert.ok(history.includes('npm run bench -- --ci --scope history'));
+  assert.equal(history.match(/timeout-minutes: (\d+)/)![1],'20');
+});
+
+test('history preinput guard executes before checkout without Node or a workspace',{skip:process.platform==='win32'},()=>{
+  const workflow=readFileSync(new URL('../../../.github/workflows/ci.yml',import.meta.url),'utf8');
+  const history=workflow.split('  bench-history:\n')[1].split(/\n  [\w-]+:/)[0];
+  const step=history.split('      - name: Require the paired history preinput binding\n')[1]?.split('      - uses: actions/checkout@')[0];
+  assert.ok(step,'a malformed dispatch must fail before checkout or preparation');
+  assert.ok(history.split('    steps:\n')[1].startsWith('      - name: Require the paired history preinput binding\n'));
+  assert.match(step,/if: \$\{\{ inputs.history_preinput_binding \}\}/);
+  assert.ok(step.includes('working-directory: ${{ runner.temp }}'));
+  assert.ok(step.includes('shell: bash'));
+  const script=step.split('        run: |\n')[1].split('\n').map(line=>line.slice(10)).join('\n');
+  const runGuard=(inputs:Record<string,unknown>,event='workflow_dispatch')=>{
+    const env:Record<string,string>={PATH:'/no-node-or-checkout'};
+    for(const [,key,expression] of step.matchAll(/^          (\w+): \$\{\{ (.+) \}\}$/gm))env[key]=String(runInNewContext(expression,{inputs,github:{event_name:event}}));
+    const result=spawnSync('/bin/bash',['--noprofile','--norc','-eu','-c',script],{cwd:'/tmp',env,encoding:'utf8'});
+    assert.ifError(result.error);return result;
+  };
+  const good={history_preinput_binding:true,history_scroll_control:true,diagnostic_ref:'1'.repeat(40),expected_client_sha256:'2'.repeat(64)};
+  assert.equal(runGuard(good).status,0);
+  for(const inputs of [{history_preinput_binding:true},{history_preinput_binding:true,diagnostic_ref:good.diagnostic_ref},
+    {...good,history_scroll_control:false},{...good,diagnostic_ref:''},{...good,diagnostic_ref:'bad'},{...good,diagnostic_ref:'1'.repeat(39)},
+    {...good,expected_client_sha256:''},{...good,expected_client_sha256:'2'.repeat(63)},{...good,expected_client_sha256:'$(exit 0)'},
+    ...['trace_only','original_timing','native_trace','native_profile','caption_control','native_postmortem_control','history_pool_control','startup_io_control','compositor_guard_control'].map(mode=>({...good,[mode]:true}))]){
+    const result=runGuard(inputs);assert.notEqual(result.status,0);assert.match(result.stderr,/paired history scroll control/);
+  }
+  for(const event of ['push','pull_request','workflow_call'])assert.notEqual(runGuard(good,event).status,0,event);
+});
+
 test('first native prefixes are pinned partial diagnostics and never alter ordinary history routing',async()=>{
   const env={QUOTUM_BENCH_HISTORY_FIRST_NATIVE:'1',QUOTUM_BENCH_SOURCE_SHA:'1'.repeat(40),QUOTUM_BENCH_EXPECTED_CLIENT_SHA256:'2'.repeat(64),QUOTUM_BENCH_DIAGNOSTICS_DIR:'/owned/diagnostics'};
   const ok=await run(['--scope','history'],undefined,env);

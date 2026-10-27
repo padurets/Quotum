@@ -100,6 +100,9 @@ cohorts, then the complete first native history cohort, including its cached ret
 and repeat. It keeps ordinary passive renderer binding and stops at the first failure
 or unconfirmed cleanup. These partial diagnostic results never satisfy `bench`.
 The job still has twenty minutes; fresh processes do not imply a cold OS page cache.
+Pairing it with `history_preinput_binding` instead runs the complete history matrix once,
+binding each owned renderer before input. It keeps the same twenty-minute job and
+thirty-second command deadlines; its results remain diagnostic, never a `bench` pass.
 Chrome readiness has one twenty-second window starting immediately before the launcher
 is spawned, including its work and endpoint validation.
 After a failed owned Linux launch, the existing isolated kernel probe brackets its
@@ -774,21 +777,21 @@ Reports retain attempted/completed/failed/aborted counts and uncertain body boun
 Proxy sockets and traffic tabs
 close before the benchmark stops its own demo.
 
-The manual CI input `history_scroll_control` requires `diagnostic_ref` and
-`expected_client_sha256`, and selects only the existing 20-minute history job.
-It runs one owned benchmark process with the original controlled traffic prefix, all
+The paired manual CI inputs `history_scroll_control` and `history_preinput_binding`
+require `diagnostic_ref` and `expected_client_sha256`, and select only the existing
+20-minute history job. Invalid pairs, other diagnostic modes and malformed pins fail
+before checkout or preparation. The pinned benchmark source can differ from the workflow
+revision; retained source and client identities describe the checked-out benchmark.
+This route runs one owned benchmark process with the original controlled traffic prefix, all
 24 native history cohorts and the six native cancellation cohorts, with every original
 assertion, reference-cut rule and deadline. The diagnostic prefix must complete without
 invalidations or budget failures. GDB is prepared before the run and first used only
-after an original failed command. In the direct history scroll control, passive original
-navigation evidence must establish the document before input; this does not bind a PID.
-Only after an original failure does the same page connection resolve its owned renderer
-and birth through a completed metadata trace, within the existing collection limit.
-Unknown or lost document or renderer identity permits neither native attach nor a page
-debugger fallback. Reports retain actual binding bookends only when it is resolved.
-The first failure stops without a diagnostic replay. Startup, compositor and legacy
-controls retain their pre-input metadata binding and existing reversal replay.
-The effects of diagnostic preparation are not qualified.
+after an original failed command. The existing metadata trace resolves the owned renderer
+PID and birth on each healthy history page before its first input; unavailable identity
+stops before that input. The existing diagnostic reversal replay remains unchanged.
+Neither input enables the separate history suffix. Without `history_preinput_binding`,
+`history_scroll_control` retains its six fresh partial prefixes and passive document
+binding. The effects of diagnostic preparation and observation are not qualified.
 This control also downloads the official debug archive
 for the installed Chrome version and installs only its unwind tables under the matching
 system build ID. Build IDs and the retained table bytes must agree; full symbol and
@@ -796,7 +799,8 @@ source tables are discarded before Chrome starts. GDB still has its two-second l
 and saved frame positions are symbolized offline. Preparation does not execute Chrome
 or GDB; its effects on the OS file cache are not qualified. A completed diagnostic is
 an observation, never a canonical benchmark pass or proof that a hang was repaired.
-After retaining the successful original result, this direct control runs twelve fixed
+The separate local `QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX=1` control, which neither manual
+route enables, retains the successful original result and then runs twelve fixed
 pairs of the original 1d/history/0ms/0.5/take1 and 30d/activity/100ms/0.5/take1 cohorts
 in fresh tabs of the same Chrome, with separate evidence and the original gestures and
 guards. The first failure, including a reference-cut change, stops without retry. The
