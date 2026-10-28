@@ -95,7 +95,24 @@ fn retire_panel(shell: &Arc<Shell>, paint: Arc<PanelPaint>) {
         if current_paint(&queued, &paint)
             && let Some(panel) = queued.host.app.get_webview_window("compact")
         {
-            let _ = panel.close();
+            let probe = probe_hwnd(&queued, &panel);
+            if let Some(hwnd) = probe {
+                observe_lifecycle(&queued, Role::Compact, paint.request, hwnd, crate::windows_request::CLOSE_CALL);
+            }
+            let result = panel.close();
+            if let Some(hwnd) = probe {
+                observe_lifecycle(
+                    &queued,
+                    Role::Compact,
+                    paint.request,
+                    hwnd,
+                    if result.is_ok() {
+                        crate::windows_request::CLOSE_QUEUED
+                    } else {
+                        crate::windows_request::CLOSE_FAILED
+                    },
+                );
+            }
         }
     });
 }
@@ -580,6 +597,7 @@ fn build(
                 return;
             }
         }
+        observe_browser(&shell, &ready, role, request);
         if shell.exiting() {
             return;
         }
@@ -636,7 +654,71 @@ fn discard_created(shell: &Shell, window: &tauri::WebviewWindow, role: Role, pai
     closing.store(true, Ordering::SeqCst);
     // An opening worker must wait for this label to go, even though its hidden
     // HWND is still alive until the queued destruction runs.
-    let _ = window.destroy();
+    let probe = probe_hwnd(shell, window);
+    if let Some(hwnd) = probe {
+        observe_lifecycle(shell, role, paint.request, hwnd, crate::windows_request::DESTROY_CALL);
+    }
+    let result = window.destroy();
+    if let Some(hwnd) = probe {
+        observe_lifecycle(
+            shell,
+            role,
+            paint.request,
+            hwnd,
+            if result.is_ok() {
+                crate::windows_request::DESTROY_QUEUED
+            } else {
+                crate::windows_request::DESTROY_FAILED
+            },
+        );
+    }
+}
+
+// These getters are opt-in and run only inside the existing placement/retirement UI closures.
+fn probe_hwnd(shell: &Shell, window: &tauri::WebviewWindow) -> Option<u64> {
+    shell.host.window_probe.enabled.then(|| window.hwnd().ok().map(|h| h.0 as u64)).flatten()
+}
+fn observe_lifecycle(shell: &Shell, role: Role, request: u64, hwnd: u64, flags: u64) {
+    let records = &shell.host.window_probe;
+    if records.enabled {
+        records.lifecycle(role == Role::Compact, request, crate::windows_loading::request_thread(records), hwnd, flags);
+    }
+}
+fn observe_browser(shell: &Shell, window: &tauri::WebviewWindow, role: Role, request: u64) {
+    let Some(hwnd) = probe_hwnd(shell, window) else { return };
+    let records = shell.host.window_probe.clone();
+    let compact = role == Role::Compact;
+    let thread = crate::windows_loading::request_thread(&records);
+    if !records.lifecycle_begin(compact, request, thread, hwnd) {
+        return;
+    }
+    let binding = records.clone();
+    // with_webview dispatches inline here on the existing UI thread. COM stays local.
+    let result = window.with_webview(move |view| {
+        let pid = unsafe {
+            let controller = view.controller();
+            controller.CoreWebView2().and_then(|core| {
+                let mut pid = 0;
+                core.BrowserProcessId(&mut pid).map(|()| pid)
+            })
+        };
+        match pid {
+            Ok(pid) if pid != 0 => binding.browser_binding(compact, request, thread, hwnd, pid),
+            _ => binding.lifecycle(compact, request, thread, hwnd, crate::windows_request::BROWSER_UNKNOWN),
+        }
+    });
+    if result.is_err() {
+        records.lifecycle(compact, request, thread, hwnd, crate::windows_request::BROWSER_UNKNOWN);
+    }
+    window.on_window_event(move |event| {
+        let flags = match event {
+            tauri::WindowEvent::CloseRequested { .. } => crate::windows_request::CLOSE_EVENT,
+            // This callback precedes Wry drop/controller.Close; it is not Close completion.
+            tauri::WindowEvent::Destroyed => crate::windows_request::DESTROYED_EVENT,
+            _ => return,
+        };
+        records.lifecycle(compact, request, crate::windows_loading::request_thread(&records), hwnd, flags);
+    });
 }
 
 fn initial_panel_height(shell: &Shell, height: f64) -> f64 {
