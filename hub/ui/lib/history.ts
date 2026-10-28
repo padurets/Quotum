@@ -7,7 +7,7 @@ import {workChange} from './workChanges';
 import type {HistoryScope} from '../../server/domain/history';
 import {widgetVisible, QUOTA_WIDGETS, BUDGET_WIDGETS, SUBSCRIPTION_FUNDS, ACTIVITY} from '../../server/domain/widgets';
 import {useMemo,useRef,useSyncExternalStore} from 'react';
-import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, historyReadTo, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart,planEventsAt,planEventsDeadline, type Chunk, type HistoryAnswer, type HistoryBasis, type Target} from '../../server/domain/history';
+import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, historyReadTo, composeDecodedPrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart,planEventsAt,planEventsDeadline, type Chunk,type DecodedChunk, type HistoryAnswer, type HistoryBasis, type Target} from '../../server/domain/history';
 import {page, type PageEvent, type PageState} from './board';
 import {clock,hubNow,useClock,type PageClock} from './clock';
 import {HistoryTile} from './historyTiles';
@@ -732,9 +732,9 @@ export class HistoryStore {
     this.composeCurrent = next => next.key === target.key && next.cell === target.cell && next.k0 === target.k0 && next.k1 === target.k1 && valid();
     const owner=this;
     const work = function* (): Preparation<History> {
-      const chunks: Chunk[] = [];
-      for (const {tile} of pins) {chunks.push(yield* tile.chunkPrepared(meta.known,false,target.now,native?'native':'all')); yield;}
-      const history={...yield*composePrepared(chunks,meta,target,windows),board},previous=owner.shown?.meterSeries;
+      const chunks: DecodedChunk[] = [];
+      for (const {tile} of pins) {chunks.push(yield* tile.composeChunkPrepared(target.now,native?'native':'all',windows)); yield;}
+      const history={...yield*composeDecodedPrepared(chunks,meta,target,windows),board},previous=owner.shown?.meterSeries;
       if(owner.meters?.work&&history.meterSeries&&previous){
         const stable=new Map(previous.map(series=>[JSON.stringify([series.sourceId,series.meterId,series.kind,series.unit]),series]));
         for(let i=0;i<history.meterSeries.length;i++){const next=history.meterSeries[i],old=stable.get(JSON.stringify([next.sourceId,next.meterId,next.kind,next.unit]));if(old&&JSON.stringify(old)===JSON.stringify(next))history.meterSeries[i]=old;yield;}

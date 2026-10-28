@@ -1,4 +1,4 @@
-import {decodeCellsPrepared, encodeCellsPrepared, TILE_CELLS,planRowAt,planRowBytes,planRowDeadline, type PlanRow,type Chunk, type DecodedCell, type HistoryMeta} from '../../server/domain/history';
+import {decodeCellsPrepared, encodeCellsPrepared,canonicalCellsPrepared, TILE_CELLS,planRowAt,planRowBytes,planRowDeadline, type PlanRow,type Chunk,type DecodedChunk,type DecodedSeriesReader, type DecodedCell, type HistoryMeta} from '../../server/domain/history';
 
 import {drain, type Preparation} from './prepare';
 import {MeterTile} from './meterTiles';
@@ -259,9 +259,54 @@ export class HistoryTile {
   chunk(known: HistoryMeta['known'], plot = false,now=Date.now()): Chunk {return drain(this.chunkPrepared(known, plot,now));}
 
   *chunkPrepared(known: HistoryMeta['known'], plot = false,now=Date.now(),plane:Plane='all'): Preparation<Chunk> {
+    const tile=this;
+    return yield* this.readChunkPrepared(plot,now,plane,function*(s,readFrom,readTo):Preparation<Chunk['series'][number]|null>{
+      if(plot){
+        const first=(readFrom-tile.from)/tile.cell,cells:Chunk['series'][number]['cells']=[];
+        for(let i=first;tile.from+i*tile.cell<readTo;i++){
+          yield;
+          const at=i*FIELDS;
+          if(Number.isNaN(s.values[at]))continue;
+          const end=s.ends?.[i];
+          cells.push([i-first,s.values[at],0,0,{g:s.values[at+4]?1:undefined,h:s.values[at+5],...(end!==undefined&&!Number.isNaN(end)?{u:end}:{})}]);
+        }
+        return cells.length?{source:s.source,window:s.window,hold:0,open:null,cells}:null;
+      }
+      const cells=yield*tile.seriesCellsPrepared(s,readFrom,readTo);
+      return cells.length?yield*encodeCellsPrepared(s.source,s.window,readFrom,tile.cell,Math.max(known.work,known.sourceWork?.[s.source]??(known.sourceWork?Infinity:known.sources[s.source]??Infinity)),cells):null;
+    });
+  }
+
+  /** Local composition reads one selected series at a time, without a wire roundtrip. */
+  *composeChunkPrepared(now:number,plane:Plane,windows:ReadonlySet<string>):Preparation<DecodedChunk>{
+    const tile=this,cell=this.cell;
+    return yield*this.readChunkPrepared(false,now,plane,function*(s,readFrom,readTo):Preparation<DecodedSeriesReader|null>{
+      yield;
+      if(!windows.has(`${s.source} ${s.window}`))return null;
+      const packed={...s};
+      return {source:s.source,window:s.window,*readCells(since){
+        const cells=yield*tile.seriesCellsPrepared(packed,readFrom,readTo);
+        return yield*canonicalCellsPrepared(readFrom,cell,since,cells);
+      }};
+    });
+  }
+
+  private *seriesCellsPrepared(s:PackedSeries,readFrom:number,readTo:number):Preparation<DecodedCell[]>{
+    const cells:DecodedCell[]=[];
+    for(let i=(readFrom-this.from)/this.cell;this.from+i*this.cell<readTo;i++){
+      yield;
+      const at=i*FIELDS;
+      if(Number.isNaN(s.values[at]))continue;
+      const v=s.values.subarray(at,at+FIELDS),end=s.ends?.[i];
+      cells.push({at:this.from+i*this.cell,low:v[0],first:v[1],last:v[2],open:Number.isNaN(v[3])?null:v[3],gap:!!v[4],hold:v[5],spent:v[6],covered:v[7],work:[v[8],v[9],v[10]],...(end!==undefined&&!Number.isNaN(end)?{validUntil:end}:{})});
+    }
+    return cells;
+  }
+
+  private *readChunkPrepared<S>(plot:boolean,now:number,plane:Plane,readSeries:(s:PackedSeries,from:number,to:number)=>Preparation<S|null>):Preparation<Omit<Chunk,'series'>&{series:S[]}>{
     const readFrom=plane==='native'?this.nativeFrom:this.readFrom,readTo=plane==='native'?this.nativeTo:this.readTo;
     const first = (readFrom - this.from) / this.cell;
-    const chunk: Chunk = {from: readFrom, to: readTo, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []};
+    const chunk: Omit<Chunk,'series'>&{series:S[]} = {from: readFrom, to: readTo, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []};
     if(plane!=='activity')for(const [source,index,active,agent] of this.sourceWork){if(index>=first&&this.from+index*this.cell<readTo)(chunk.activity.sourceWork??=[]).push([source,index-first,active,agent]);yield;}
     if(plane!=='native')for (const session of this.sessions) {chunk.activity.sessions.push([...session]); yield;}
     if(plane!=='native')for (const key in this.devices) {chunk.activity.devices[key] = this.devices[key]; yield;}
@@ -272,28 +317,8 @@ export class HistoryTile {
       if(this.hasMeters)chunk.meterSeries=yield* this.meters.chunkPrepared(readFrom,readTo);
       if(this.hasMoneyWork&&!plot)chunk.moneyWork=[...this.moneyWork.values()].map(group=>({...group,cells:group.cells.filter(row=>this.from+row[0]*this.cell>=readFrom&&this.from+row[0]*this.cell<readTo).map(row=>[row[0]-(readFrom-this.from)/this.cell,...row.slice(1)] as typeof row),edges:group.edges.filter(edge=>edge[1]>=readFrom&&edge[1]<readTo)}));
       for (const s of this.series.values()) {
-        if (plot) {
-          const cells: Chunk['series'][number]['cells'] = [];
-          for (let i = first; this.from + i * this.cell < readTo; i++) {
-            yield;
-            const at = i * FIELDS;
-            if (Number.isNaN(s.values[at])) continue;
-            const end = s.ends?.[i];
-            cells.push([i - first, s.values[at], 0, 0, {g: s.values[at + 4] ? 1 : undefined, h: s.values[at + 5], ...(end !== undefined && !Number.isNaN(end) ? {u:end} : {})}]);
-          }
-          if (cells.length) chunk.series.push({source: s.source, window: s.window, hold: 0, open: null, cells});
-          continue;
-        }
-        const cells: DecodedCell[] = [];
-        for (let i = first; this.from + i * this.cell < readTo; i++) {
-            yield;
-          const at = i * FIELDS;
-          if (Number.isNaN(s.values[at])) continue;
-          const v = s.values.subarray(at, at + FIELDS);
-          const end = s.ends?.[i];
-          cells.push({at: this.from + i * this.cell, low: v[0], first: v[1], last: v[2], open: Number.isNaN(v[3]) ? null : v[3], gap: !!v[4], hold: v[5], spent: v[6], covered: v[7], work: [v[8], v[9], v[10]], ...(end !== undefined && !Number.isNaN(end) ? {validUntil:end} : {})});
-        }
-        if (cells.length) chunk.series.push(yield* encodeCellsPrepared(s.source, s.window, readFrom, this.cell, Math.max(known.work, known.sourceWork?.[s.source]??(known.sourceWork?Infinity:known.sources[s.source]??Infinity)), cells));
+        const series=yield*readSeries(s,readFrom,readTo);
+        if(series)chunk.series.push(series);
       }
     }
     if(plane==='native')return chunk;

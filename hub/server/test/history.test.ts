@@ -1,9 +1,10 @@
 import {activity} from './activityReference.js';
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {cellOf, compose, decodeCells, encodeCells, expandHistory, targetOf, tileOf, type Chunk, type DecodedCell} from '../domain/history.js';
+import {cellOf, compose, canonicalCellsPrepared, decodeCells, encodeCells, expandHistory, targetOf, tileOf, type Chunk, type DecodedCell} from '../domain/history.js';
 import {cellsOf, workFrom, type CellSamples} from '../domain/cells.js';
 import {edge} from '../domain/quota.js';
+import {drain} from '../domain/prepare.js';
 import {barOf, overlap, union, type Stretch} from '../domain/work.js';
 
 const M = 60_000;
@@ -198,4 +199,28 @@ test('random measurements and parallel work compose as the direct definitions, a
       result.activity.by[dim].forEach((g, i) => {assert.equal(g.key, direct.by[dim][i].key); assert.equal(g.agents, direct.by[dim][i].agents); close(g.activeMs, direct.by[dim][i].activeMs); close(g.agentMs, direct.by[dim][i].agentMs);});
     }
   }
+});
+
+function canonicalCases(){
+ const CELL=5*M;
+ const cases:{name:string;from:number;step:number;since:number;rows:DecodedCell[]}[]=[];
+ const add=(name:string,from:number,step:number,since:number,rows:DecodedCell[])=>cases.push({name,from,step,since,rows});
+ // Existing server/history.test.ts precision/cadence/gap cases are extended with
+ // explicit property-presence and signed-zero controls, rather than randomized input.
+ add('precision-open-and-gap',0,CELL,CELL,[value(0,83.123456,{open:null,first:84.000049,last:82.987654,spent:.123456,work:[.123456,123,.987654],gap:true,validUntil:CELL-1}),value(CELL,81.234567,{open:82.987654,hold:2*CELL,validUntil:2*CELL}),value(2*CELL,79.999999,{open:null,first:80.000001,hold:CELL})]);
+ add('implicit-previous',0,CELL,0,[value(0,2,{open:3,last:1.999999}),value(CELL,1,{open:2,last:.999999}),value(2*CELL,0,{open:1,last:0})]);
+ add('first-is-low-for-nonnull-open',0,CELL,0,[value(0,10,{open:11,first:12,last:9}),value(CELL,8,{open:null,first:10,last:7})]);
+ for(const since of [0,CELL,CELL+1,Infinity])add('knowledge-'+since,0,CELL,since,[value(0,3,{work:[1,0,0]}),value(CELL,2,{work:[1,0,0]}),value(2*CELL,1,{work:[0,0,0]})]);
+ for(const holds of [[-0,0,1],[1,-0,0],[1,1,-0],[-0,-0,1]])add('hold-zero-'+cases.length,0,CELL,0,holds.map((hold,i)=>value(i*CELL,0,{hold,open:i?0:-0,first:-0,last:-0,spent:-0,covered:-0,work:[-0,-0,-0]})));
+ add('nullable-open-and-undefined-bound',0,CELL,0,[value(0,-0,{open:null,validUntil:undefined}),value(CELL,0,{open:-0,validUntil:0}),value(2*CELL,0,{open:0,validUntil:2*CELL})]);
+ add('exclusive-bound-and-missing-bound',1800000000000,CELL,1800000300000,[value(1800000000000,50,{validUntil:1800000300000}),value(1800000300000,49),value(1800000600000,48,{validUntil:1800000600001})]);
+ add('fractional-grid-reconstruction',1000.1,.3,1000.4,[value(1000.1,.1,{open:null}),value(1000.4,.2,{open:.1}),value(1000.7,.3,{open:.2})]);
+ add('nonfinite-internal-sentinel',0,CELL,Infinity,[value(0,NaN,{open:NaN,first:NaN,last:NaN,spent:NaN,work:[NaN,0,NaN]}),value(CELL,Infinity,{open:null,first:Infinity,last:Infinity,hold:Infinity})]);
+ assert.equal(cases.length,15);return cases;
+}
+for(const sample of canonicalCases())test('internal canonical cells match the unchanged wire codec: '+sample.name,()=>{
+ const encoded=encodeCells('s','w',sample.from,sample.step,sample.since,sample.rows);
+ const expected=decodeCells(encoded,sample.from,sample.step,sample.since);
+ assert.deepStrictEqual(drain(canonicalCellsPrepared(sample.from,sample.step,sample.since,sample.rows)),expected);
+ if(sample.name==='first-is-low-for-nonnull-open')assert.notDeepStrictEqual(sample.rows,expected,'raw tile values are not canonical decoded cells');
 });

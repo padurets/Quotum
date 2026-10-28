@@ -1150,6 +1150,43 @@ for (const scope of ['quota', 'budget'] as const) {
     } finally {h.store.close();}
   });
 }
+test('cancelling a decoded composition inside cell extraction cannot publish its retired range',async()=>{
+  const h=cooperativeHarness(undefined,'quota');
+  const prototype=HistoryTile.prototype as unknown as {seriesCellsPrepared(...args:unknown[]):Generator<void,unknown,unknown>};
+  const original=prototype.seriesCellsPrepared;
+  let started=0,cancelled=0;
+  try{
+    await h.start();
+    const read=h.reads[0],chunks:Chunk[]=[];
+    for(let from=read.from;from<read.to;){
+      const to=Math.min(read.to,tileEnd(tileOf(from,read.cell),read.cell));
+      chunks.push({...empty(from,to),series:[{source:'s',window:'w',hold:H,open:null,
+        cells:Array.from({length:(to-from)/read.cell},(_,i)=>[i,80,0,read.cell])}]});from=to;
+    }
+    await read.answer({chunks});await h.finish();
+    const previous=h.store.get().history,reads=h.reads.length,published:string[]=[];
+    const stop=h.store.subscribe(()=>{const history=h.store.get().history;if(history)published.push(history.range);});
+    prototype.seriesCellsPrepared=function*(...args){
+      let complete=false;started++;
+      try{const value=yield*original.apply(this,args);complete=true;return value;}
+      finally{if(!complete)cancelled++;}
+    };
+    try{
+      const retired={from:NOW-23*H,to:NOW-H};
+      h.store.choose('24h',retired);await flush();
+      for(let i=0;!started&&h.tasks.length&&i<10_000;i++)h.tick();
+      assert.ok(started>0,'the actual lazy cell extractor has started');
+      assert.ok(h.tasks.length,'cell extraction yielded before publishing the selected frame');
+      h.store.choose('24h',null);await flush();await h.finish();
+      assert.equal(cancelled,1,'cancellation closes the delegated extractor');
+      assert.deepEqual(h.store.get().history,previous,'only the replacement live frame can publish');
+      assert.ok(!published.includes(`${retired.from}-${retired.to}`));
+      assert.equal(h.reads.length,reads,'returning to cached live data adds no read');
+      assert.equal(h.preparations.size,0);
+    }finally{stop();}
+  }finally{prototype.seriesCellsPrepared=original;h.store.close();}
+});
+
 test('changing selected work between a native commit and composition cannot credit the previous financial frame',async()=>{
   const h=cooperativeHarness(undefined,'quota');
   const answer=async(remaining:number)=>{
