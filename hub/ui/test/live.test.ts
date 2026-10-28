@@ -170,6 +170,7 @@ function harness(options: {visible?: boolean; skew?: number; script?: string | n
   };
   return {
     live,
+    env,
     timers,
     asked,
     events,
@@ -1139,4 +1140,33 @@ test('snapshot adoption requires the current hello, board and stream attempt',as
   const next=h.last().stream();await next.write(frame('hello',{epoch:'e2',now:h.timers.t,client:null,heartbeatMs:HEARTBEAT})+frame('snapshot',{...SNAPSHOT,board:{...SNAPSHOT.board,id:'b2'}}));
   await old.write(frame('snapshot',SNAPSHOT)).catch(()=>{});
   assert.deepEqual(h.events.flatMap(e=>e.type==='hub'&&e.event.type==='snapshot'?[e.event.data.board.id]:[]),['b1','b2']);assert.equal(h.connection()?.status,'live');h.live.close();
+});
+
+test('work freshness reaches its owner after snapshot and history, before the ping clock wake',async()=>{
+  const h=harness(),order:string[]=[],dispatch=h.env.dispatch,heard=h.env.heard;
+  h.env.dispatch=event=>{dispatch(event);if(event.type==='hub')order.push(event.event.type);};
+  h.env.heard=now=>{order.push('clock');heard(now);};
+  h.env.workFreshness=stamp=>order.push(stamp?`stamp:${stamp.seq}`:'reset');
+  h.live.open('b1');const stream=h.last().stream(),stamp={watch:'watch',seq:1,authority:'authority',at:h.timers.t};
+  await stream.write(frame('hello',{epoch:'e1',now:h.timers.t,client:null,heartbeatMs:HEARTBEAT})+frame('snapshot',{...SNAPSHOT,workStamp:stamp}));
+  assert.ok(order.indexOf('snapshot')<order.indexOf('stamp:1'));order.length=0;
+  await stream.write(frame('history',{sources:[],since:0,workSince:0,workStamp:{...stamp,seq:2}})+frame('ping',{now:h.timers.t+1,workStamp:{...stamp,seq:2,at:h.timers.t+1}}));
+  assert.deepEqual(order,['history','stamp:2','clock']);h.live.close();
+});
+
+test('work freshness in a poll follows queued invalidations and precedes the answer clock wake',async()=>{
+  const h=harness();await h.gopoll();const order:string[]=[],dispatch=h.env.dispatch,heard=h.env.heard;
+  h.env.dispatch=event=>{dispatch(event);if(event.type==='hub')order.push(event.event.type);};
+  h.env.heard=now=>{order.push('clock');heard(now);};
+  h.env.workFreshness=stamp=>order.push(stamp?`stamp:${stamp.seq}`:'reset');
+  const stamp={watch:'watch',seq:2,authority:'authority',at:h.timers.t};
+  await h.last().json(200,{lease:'L',now:h.timers.t,workStamp:{...stamp,seq:3},events:[{type:'history',data:{sources:[],since:0,workSince:0,workStamp:stamp}}]});
+  assert.deepEqual(order,['history','stamp:3','clock']);h.live.close();
+});
+
+test('work freshness from an old stream cannot restore a retired board lifetime',async()=>{
+  const h=harness(),seen:number[]=[];h.env.workFreshness=stamp=>seen.push(stamp?.seq??-1);
+  const stream=await h.golive();seen.length=0;h.live.open('b2');await flush();const afterReset=[...seen];
+  await stream.write(frame('ping',{now:h.timers.t,workStamp:{watch:'old',seq:9,authority:'old',at:h.timers.t}})).catch(()=>{});
+  assert.deepEqual(seen,afterReset);assert.ok(seen.includes(-1));h.live.close();
 });

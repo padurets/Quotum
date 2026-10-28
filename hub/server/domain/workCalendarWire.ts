@@ -1,12 +1,12 @@
 import type {PeriodBasis} from './period.js';
-import type {CalendarBasis,CalendarCell,CalendarSection,CalendarProof} from './workCalendar.js';
+import type {CalendarBasis,CalendarCell,CalendarSection,CalendarProof,WorkStamp} from './workCalendar.js';
 import {calendarProjection,calendarCurve} from './calendarWork.js';
 
 type Cell=null|0|[number|null,number|null]|[number|null,number|null,number,number];
 type Basis=CalendarBasis|[string,string,string];
-type Common={availableFrom:number|null;retainedFrom:number;cursor:string};
+type Common={availableFrom:number|null;retainedFrom:number;cursor:string;workStamp?:WorkStamp};
 type Packed={state:'complete';basis:Basis;value:Common&{zone:string;grid:[number,number,number];cells?:Cell[];proof?:CalendarProof}}|
-  {state:'delta';basis:Basis;value:Common&{relative?:true;patch:[number,number|null,number,number,number|null][]}};
+  {state:'delta';basis:Basis;value:Common&{relative?:true;patch:[number,number|null,number,number,number|null][];proof?:CalendarProof}};
 
 const integer=(value:unknown):value is number=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0;
 const nullable=(value:unknown):value is number|null=>value===null||integer(value);
@@ -18,11 +18,11 @@ const unknownAt=(edge:number,step:number,basis:PeriodBasis)=>Math.max(edge,Math.
 export function packCalendar(part:CalendarSection|undefined,basis:PeriodBasis,reserve:(bytes:number)=>void,relativeTimes=false):Packed|undefined {
   if(!part||part.state==='error')return;
   const packedBasis:Basis=sameBasis(part.basis,basis)?[part.basis.calendarKey,part.basis.workAuthority,part.basis.filterKey]:part.basis;
-  const {availableFrom,retainedFrom,cursor}=part.value,common={availableFrom,retainedFrom,cursor};
+  const {availableFrom,retainedFrom,cursor,workStamp}=part.value,common={availableFrom,retainedFrom,cursor,...(workStamp?{workStamp}:{})};
   if(part.state==='delta'){
     reserve(256+part.value.updates.length*112);
     const base=part.basis.range.from,relative=relativeTimes&&Number.isSafeInteger(base)&&part.value.updates.every(([,c])=>exactOffset(c.from,base)&&exactOffset(c.to,base)&&(c.validUntil===null||exactOffset(c.validUntil,base)));
-    return {state:'delta',basis:packedBasis,value:{...common,...(relative?{relative:true as const}:{}),patch:part.value.updates.map(([i,c])=>[i,c.agentMs,relative?c.from-base:c.from,relative?c.to-base:c.to,c.validUntil===null?null:relative?c.validUntil-base:c.validUntil])}};
+    return {state:'delta',basis:packedBasis,value:{...common,...(part.value.proof?{proof:part.value.proof}:{}),...(relative?{relative:true as const}:{}),patch:part.value.updates.map(([i,c])=>[i,c.agentMs,relative?c.from-base:c.from,relative?c.to-base:c.to,c.validUntil===null?null:relative?c.validUntil-base:c.validUntil])}};
   }
   const {edges,cells,zone}=part.value,start=edges[0],step=edges[1]-start;
   if(!integer(start)||![60_000,900_000].includes(step)||cells.length>3072||edges.length!==cells.length+1||edges.some((edge,i)=>edge!==start+i*step))throw new Error('invalid_calendar_grid');
@@ -52,7 +52,7 @@ export function expandCalendar(part:unknown,common:PeriodBasis,reserve:(bytes:nu
     return {agentMs,from,to,validUntil};
   };
   if(packed.state==='complete'&&'grid' in packed.value){
-    const {grid,cells,zone,availableFrom,retainedFrom,cursor,proof}=packed.value;
+    const {grid,cells,zone,availableFrom,retainedFrom,cursor,proof,workStamp}=packed.value;
     if(!Array.isArray(grid)||grid.length!==3||!integer(grid[0])||![60_000,900_000].includes(grid[1])||!integer(grid[2])||grid[2]<1||grid[2]>3072||!integer(grid[0]+grid[1]*grid[2])||!proof&&(!Array.isArray(cells)||cells.length!==grid[2]))throw new Error('invalid_calendar_grid');
     reserve(256+grid[2]*112+(grid[2]+1)*16);
     const [start,step,count]=grid,edges=Array.from({length:count+1},(_,i)=>start+i*step);
@@ -61,9 +61,9 @@ export function expandCalendar(part:unknown,common:PeriodBasis,reserve:(bytes:nu
       const add=(bytes:number)=>{reserve(bytes);staging+=bytes;};
       const drop=release?((bytes:number)=>{release(bytes);staging-=bytes;}):undefined;
       try{
-        const {curve}=calendarCurve(proof,basis.range,basis.evidenceCut,availableFrom,add,drop);
+        const {curve}=calendarCurve(proof,basis.range,basis.evidenceCut,availableFrom,add,drop,!!workStamp);
         const restored=calendarProjection(edges,basis.range,basis.evidenceCut,availableFrom,retainedFrom,proof.retentionMs,proof.periodMs,[{from:proof.from,to:proof.cut,curve}]);
-        return {state:'complete',basis,value:{zone,availableFrom,retainedFrom,cursor,edges,cells:restored,proof}};
+        return {state:'complete',basis,value:{zone,availableFrom,retainedFrom,cursor,edges,cells:restored,proof,...(workStamp?{workStamp}:{})}};
       }finally{
         // Only numeric cells and the original proof survive this projection.
         if(release&&staging)release(staging);
@@ -76,10 +76,10 @@ export function expandCalendar(part:unknown,common:PeriodBasis,reserve:(bytes:nu
       if(!Array.isArray(c)||c.length!==2&&c.length!==4)throw new Error('invalid_calendar_cell');
       return cell(c[0],c.length===4?c[2]:from,c.length===4?c[3]:to,c[1]);
     });
-    return {state:'complete',basis,value:{zone,availableFrom,retainedFrom,cursor,edges,cells:restored}};
+    return {state:'complete',basis,value:{zone,availableFrom,retainedFrom,cursor,edges,cells:restored,...(workStamp?{workStamp}:{})}};
   }
   if(packed.state==='delta'&&'patch' in packed.value){
-    const {patch,availableFrom,retainedFrom,cursor,relative}=packed.value;
+    const {patch,availableFrom,retainedFrom,cursor,relative,proof,workStamp}=packed.value;
     if(!Array.isArray(patch)||patch.length>3072||relative!==undefined&&relative!==true||relative&&!Number.isSafeInteger(basis.range.from))throw new Error('invalid_calendar_patch');
     reserve(256+patch.length*160);let previous=-1;
     const absolute=(value:unknown)=>{
@@ -93,7 +93,7 @@ export function expandCalendar(part:unknown,common:PeriodBasis,reserve:(bytes:nu
       if(!Array.isArray(row)||row.length!==5||!integer(row[0])||row[0]<=previous||row[0]>=3072)throw new Error('invalid_calendar_patch');
       previous=row[0];return [row[0],cell(row[1],absolute(row[2]),absolute(row[3]),row[4]===null?null:absolute(row[4]))];
     });
-    return {state:'delta',basis,value:{availableFrom,retainedFrom,cursor,updates}};
+    return {state:'delta',basis,value:{availableFrom,retainedFrom,cursor,updates,...(proof?{proof}:{}),...(workStamp?{workStamp}:{})}};
   }
   return {...part,basis} as CalendarSection;
 }

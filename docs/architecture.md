@@ -1664,7 +1664,16 @@ Anonymous aggregate hour patterns share the history budget and preserve exact
 within-cell changes, so cached return and nearby endpoints reuse accepted work
 without rereading it or dividing already aggregated amounts. Work or authority
 changes invalidate these patterns; eviction falls back to the common transport.
-Wire decoding releases its temporary anonymous sweep after projecting numeric cells,
+Live calendar reads negotiate complete anonymous curves and exact interval
+replacement deltas. A watched board's work stamp advances synchronously with
+relevant work, before event smoothing, independently of financial changes. The
+snapshot, heartbeat and poll carry that version; history notices bind it to their
+captured invalidation boundary. A newer confirmation cannot certify an older
+curve. Same-version confirmations advance its quiet suffix without another read.
+The curve also includes already registered future stretches, using the retained
+ledger's admitted upper endpoint so restart and backward clock corrections do not
+lose them. Future work remains hidden until the visible clock reaches it.
+Complete wire decoding releases its temporary anonymous sweep after projecting numeric cells,
 before expanding other reply sections. Restored cells and the original packed proof
 keep their own charge in the shared history budget.
 Cache projections borrow only the anonymous curves used by their selected segments,
@@ -1674,11 +1683,24 @@ A removed cache entry stays charged while a synchronous read still
 owns it; authority changes retire that read's answer immediately. Curve construction
 releases temporary arrays as it proceeds, and an accepted numeric reading takes
 over its projection reservation before notifying subscribers.
+The same ownership applies to live curves held by resident readings and prepared
+displays. Cache returns can join proven prefixes without decoding another copy;
+unknown work versions suspend reuse until the corresponding invalidation reconciles
+them. Data, its curve and its stamp adopt together after memory handoff and final
+generation checks. A later heartbeat of the same version does not reject a response
+captured just before it.
+Confirmation already used by a retained reading survives a lost connection; only
+new extension stops until the watch recovers. A new curve stays borrowed through
+numeric projection and adoption, so cache eviction cannot release its charge early.
 Named local dates, repeated hours and partial bounds preserve actual elapsed time.
 Shared filter choices cover the common selected work range; closed controls request
-nothing. Shared-clock expiry retires stale contributions in individual buckets
-without rebuilding geometry or polling. Null history, registered zero and
-observation completeness remain distinct.
+nothing. The data-owning heatmap section prepares its immutable basis outside the
+clock path. A separate shared-clock projection follows the current live period,
+integrating the two moving edges exactly and adapting civil geometry, scale and
+labels to the current dates. It does not reread history, decode work or regroup the
+fine work payload. Data replacements remain observable on the untimed section;
+only the time projection and its readouts carry time ownership. Null history,
+registered zero and observation completeness remain distinct.
 An explicit interval/day action changes the common selection and focuses its ready
 grid after the requested evidence and geometry commit. Temporary unknown cells
 cannot consume that focus handoff. Later deliberate input or focus revokes permission

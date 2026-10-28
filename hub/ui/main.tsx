@@ -17,6 +17,7 @@ import {withSparseArrangement} from './lib/grid';
 import {page, useMainNavigation, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles, useViewRevision} from './lib/board';
 import {heardHub, hubNow, wakeDue} from './lib/clock';
 import {startLive} from './lib/live';
+import {boardPeriod} from './lib/period';
 import {historyReaders as history} from './lib/history';
 import {UNAUTHORIZED} from './lib/http';
 import {t, useLocale} from './i18n';
@@ -56,6 +57,7 @@ const live = startLive({
   epochChanged: rereadSession,
   script: entryScript(),
   hubNow,
+  workFreshness: stamp=>boardPeriod.acceptWorkFreshness(stamp),
   heard: (now, at) => {
     heardHub(now, at);
     // The hub answering may follow a sleep: whatever came due meanwhile shows at once.

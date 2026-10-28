@@ -196,7 +196,8 @@ test('a valid 327620-byte native baseline keeps its last sixty bytes free with a
   assert.ok(!JSON.stringify(first.frames).includes('projectColors'));
   const projected=ordinary.frames.find(frame=>frame.type==='projectColors')!;
   assert.equal(JSON.parse(projected.data).pins.length,89);assert.ok(Buffer.byteLength(sse([projected]))<68*1024);
-  const {projectColorsRevision:_revision,projectColorsAuthority:_authority,...legacy}=JSON.parse(snapshot(ordinary.frames)[0].data);
+  const {projectColorsRevision:_revision,projectColorsAuthority:_authority,workStamp,...legacy}=JSON.parse(snapshot(ordinary.frames)[0].data);
+  assert.deepEqual(Object.keys(workStamp).sort(),['at','authority','seq','watch']);assert.match(workStamp.watch,/^[-_A-Za-z0-9]{22}$/);assert.equal(workStamp.seq,0);assert.equal(workStamp.at,at);assert.equal(workStamp.authority,legacy.workAuthority);
   assert.deepEqual(JSON.parse(snapshot(first.frames)[0].data),legacy,'reader projection leaves the common browser baseline intact');
   f.store.nameProjects(f.owner.id,[sessions[0].project],'Renamed');events.flush();
   assert.ok(native.some(frame=>frame.type==='snapshot'));assert.ok(!JSON.stringify(native).includes('projectColors'));
@@ -486,4 +487,24 @@ test('the paged catalogue loads only selected own details from five thousand cor
   assert.ok(details.every(read=>read.selected!==undefined&&read.selected.length<=50&&read.count<=50),JSON.stringify(details));
   assert.equal(unboundedAliases,0,'live admission and page details never load every own correction');
   const plain=await f.app.inject({url:'/api/projects',headers:{cookie:'quotum_session='+f.sessionSecret}});assert.equal(plain.json().projects.length,5000,'the legacy personal catalogue remains complete');
+});
+
+test('native snapshots, work news and heartbeats omit browser freshness metadata',async t=>{
+  let now=at+M;t.mock.method(Date,'now',()=>now);const f=await fixture();t.after(async()=>{await f.app.close();f.store.close();});f.credit(['A']);
+  const timers:{ms:number;active:boolean;run():void}[]=[],browser:Frame[]=[],native:Frame[]=[];
+  const events=new Events(f.hub,undefined,{now:()=>now,after(ms,run){const timer={ms,active:true,run(){if(!timer.active)return;timer.active=false;run();}};timers.push(timer);return ()=>{timer.active=false;};}},null);
+  events.onClientHistory=()=>{};events.onHistory=()=>{};events.attach();t.after(()=>events.close());
+  const base={user:f.owner.id,secret:f.sessionSecret,board:f.board},end=()=>{};
+  const ordinary=events.open({...base,kind:'stream',send:packets=>browser.push(...packets),end}),background=events.open({...base,desktop:true,kind:'stream',send:packets=>native.push(...packets),end});
+  assert.ok(ordinary&&ordinary!=='limit');assert.ok(background&&background!=='limit');
+  const absent=(frames:Frame[])=>{for(const packet of frames)assert.equal(Object.hasOwn(JSON.parse(packet.data),'workStamp'),false,packet.type);};
+  const snapshot=JSON.parse(ordinary.frames.find(packet=>packet.type==='snapshot')!.data),stamp=snapshot.workStamp;
+  assert.deepEqual(Object.keys(stamp).sort(),['at','authority','seq','watch']);assert.match(stamp.watch,/^[-_A-Za-z0-9]{22}$/);assert.equal(stamp.seq,0);assert.equal(stamp.at,now);assert.equal(stamp.authority,snapshot.workAuthority);absent(background.frames);
+  f.store.creditWork(f.device.id,now,now+1000,[{source:null,client:'codex',origin:'terminal',startedAt:at,project:'A',folder:'',identity:{kind:'legacy',ordinal:0}}]);events.flush();
+  const history=JSON.parse(browser.find(packet=>packet.type==='history')!.data);assert.equal(history.workStamp.seq,1);assert.equal(history.workStamp.watch,stamp.watch);assert.equal(history.workStamp.at,now);assert.equal(history.workStamp.authority,history.workAuthority);
+  assert.ok(native.some(packet=>packet.type==='history'));absent(native);
+  browser.length=0;native.length=0;const heartbeat=JSON.parse(ordinary.frames[0].data).heartbeatMs as number;now+=heartbeat;
+  for(const timer of timers.filter(timer=>timer.active&&timer.ms===heartbeat))timer.run();
+  const ping=JSON.parse(browser.find(packet=>packet.type==='ping')!.data);assert.equal(ping.workStamp.seq,1);assert.equal(ping.workStamp.at,now);assert.equal(ping.workStamp.authority,f.store.workKey(f.board));assert.ok(native.some(packet=>packet.type==='ping'));absent(native);
+
 });

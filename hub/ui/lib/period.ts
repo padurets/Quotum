@@ -1,4 +1,5 @@
 import {WorkCalendar} from './workCalendar';
+import type {WorkStamp} from '../../server/domain/workCalendar';
 import {workChange} from './workChanges';
 import {AGENT_HOURS_HEATMAP} from '../../server/domain/widgets';
 import {effectiveFilters,filtersReady,onDataFilters} from './filterSelection';
@@ -529,6 +530,11 @@ class BoardPeriod {
     });
   }
   activate(active:boolean){if(this.active===active)return;this.transaction(()=>{this.active=active;if(!active){this.identity='';this.generation++;this.clear();}else this.changed();});}
+  acceptWorkFreshness(stamp:WorkStamp|null){
+    if(stamp===null){this.calendar.disconnectFreshness();if(this.calendar.needed)this.transport.change();return;}
+    const board=page.get().board;
+    if(this.active&&board?.workAuthority===stamp.authority)this.calendar.acceptFreshness(stamp);
+  }
   changed(event?:PageEvent,state:PageState=page.get()) {
     this.transaction(()=>this.change(event,state));
   }
@@ -571,8 +577,12 @@ class BoardPeriod {
     if(calendarChanged){this.resetFacets();this.revision++;if(this.identity)this.transport.change();}
     const history=event?.type==='hub'&&event.event.type==='history'?event.event.data:null;
     const calendarEvent=event?.type==='hub'&&['hello','snapshot','mine','lineup'].includes(event.event.type);
+    const snapshotStamp=event?.type==='hub'&&event.event.type==='snapshot'?event.event.data.workStamp:undefined;
+    const compatibleCalendar=!!this.calendar.state.integral&&!changedRun&&!changedWork&&!selectedChanged&&(!snapshot||this.calendar.matchesFreshness(snapshotStamp));
+    const calendarRefresh=calendarEvent&&!compatibleCalendar;
     const workSince=history?workChange(history,sources).since:Infinity;
-    if((calendarEvent||history&&workSince!==Infinity)&&this.calendar.dirty(calendarEvent?-Infinity:workSince)){this.revision++;this.invalidateFacets();this.transport.change();}
+    const calendarSince=workSince!==Infinity?workSince:history?.workStamp&&!this.calendar.knowsFreshness(history.workStamp)?history.since:Infinity;
+    if((calendarRefresh||history&&calendarSince!==Infinity)&&this.calendar.dirty(calendarRefresh?-Infinity:calendarSince,history?.workStamp)){this.revision++;this.invalidateFacets();this.transport.change();}
     if(calendarEvent)this.retained.clear();
     if(history){
       for(const [key,entry] of this.retained)if(!entry.invalidate(history))this.retained.delete(key);

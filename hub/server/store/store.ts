@@ -746,6 +746,14 @@ export class Store {
     return {work:this.agentWorkSince(),sources:Object.fromEntries([...shown].map(([id,value])=>[id,value.since])),...(access?{sessions:sessionsKnownFrom(access),sourceWork:sourceWorkFrom(access)}:{})};
   }
 
+  /** The last indexed stretch ends latest within each non-overlapping context. */
+  workUpper(access:WorkAccess):number {
+    const latest=this.db.prepare('SELECT max((SELECT to_at FROM agent_work WHERE session_id=s.id ORDER BY from_at DESC LIMIT 1)) AS at FROM agent_sessions s JOIN devices d ON d.id=s.device_id WHERE s.device_id=? AND d.user_id=?');
+    let upper=0;
+    for(const [device,scope] of access.devices){const at=Number(latest.get(device,scope.owner)?.at??0);if(at>scope.from)upper=Math.max(upper,at);}
+    return upper;
+  }
+
   admittedWork(access:WorkAccess,from:number,to:number,reserve?:(bytes:number)=>void,ranges?:readonly {from:number;to:number}[]):Stretch[] {
     if(!access.devices.size)return [];
     const rows=this.agentWork(from,to,undefined,null,reserve,[...access.devices.keys()],access.attribution,ranges);let kept=0;

@@ -1,6 +1,11 @@
 import type {Cdp} from './cdp.js';
 import {reload} from './reload.js';
 
+/** Cell identities are opaque; compare elapsed bounds at one fixed recent cut. */
+export function recentCalendarTotalScript(from:number) {
+  return `Array.from(document.querySelectorAll('.agent-hours-heatmap [data-agent-ms]')).filter(node=>Number(node.getAttribute('data-heatmap-from'))>=${from}).reduce((sum,node)=>sum+Number(node.getAttribute('data-agent-ms')),0)`;
+}
+
 /** A saved radio remains focused, so the next native arrow can save another choice. */
 export async function frequencyKeys(cdp: Cdp) {
   const source=await cdp.evaluate<string>(`(() => {

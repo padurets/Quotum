@@ -66,12 +66,19 @@ function replacement(frames: Frame[]): Snapshot {
   return JSON.parse(frames[0].data) as Snapshot;
 }
 
+function legacySnapshot(value:Snapshot) {
+  const {workStamp,...legacy}=value;assert.ok(workStamp);assert.deepEqual(Object.keys(workStamp).sort(),['at','authority','seq','watch']);
+  assert.match(workStamp.watch,/^[-_A-Za-z0-9]{22}$/);assert.ok(Number.isSafeInteger(workStamp.seq)&&workStamp.seq>=0);
+  assert.equal(workStamp.at,Date.now());assert.equal(workStamp.authority,value.workAuthority);
+  return legacy;
+}
+
 for (const flush of [false, true]) test(`a financial revoke replaces an undelivered poll batch ${flush ? 'after' : 'before'} the producer flush`, async t => {
   const h = fixture(t), lease = (await h.poll()).lease;
   h.balance('9911.23'); h.events.flush();
   h.grant(false); if (flush) h.events.flush();
   const answer = await h.poll(lease), snapshot = replacement(answer.frames);
-  assert.deepEqual(snapshot, h.snapshot());
+  assert.deepEqual(legacySnapshot(snapshot), h.snapshot());
   assert.equal(snapshot.sources[0].meters, undefined);
   assert.equal(snapshot.sources[0].creditBalance, undefined);
   assert.equal(snapshot.currencies.sources[h.source], undefined);
@@ -88,7 +95,7 @@ test('disable and re-enable replace the old lease generation and its private bin
   const currentAt = h.balance('7777'); h.events.flush();
   const enabled = h.grant(true);
   const answer = await h.poll(lease), snapshot = replacement(answer.frames);
-  assert.deepEqual(snapshot, h.snapshot());
+  assert.deepEqual(legacySnapshot(snapshot), h.snapshot());
   assert.equal(snapshot.sources[0].budget!.revision, enabled.revision);
   assert.equal(snapshot.sources[0].budget!.anchor, null);
   assert.equal(snapshot.sources[0].meters![0].amount, '7777', 'current last-known funds remain authorized');
@@ -103,7 +110,7 @@ test('a waiting poll rechecks financial authority immediately before sending', a
   h.grant(false); h.events.flush();
   const answer = await waiting;
   const snapshot = replacement(answer.frames);
-  assert.deepEqual(snapshot, h.snapshot());
+  assert.deepEqual(legacySnapshot(snapshot), h.snapshot());
   assert.equal(snapshot.sources[0].meters, undefined);
   assert.equal(snapshot.currencies.sources[h.source], undefined);
 });
@@ -111,7 +118,7 @@ test('a waiting poll rechecks financial authority immediately before sending', a
 test('an empty lease rebases a poll received after revoke without waiting for flush', async t => {
   const h = fixture(t), lease = (await h.poll()).lease;
   h.grant(false);
-  assert.deepEqual(replacement((await h.poll(lease)).frames), h.snapshot());
+  assert.deepEqual(legacySnapshot(replacement((await h.poll(lease)).frames)), h.snapshot());
 });
 
 for (const transport of ['stream', 'poll'] as const) test(`${transport} history excludes financial anchors on a quota-only placement`, async t => {
@@ -146,7 +153,7 @@ test('SSE rechecks authority between preparing a batch and sending it to each re
   const later = h.stream();
   h.balance('9911.23'); revoke=true; h.events.flush();
   const snapshot = replacement(later);
-  assert.deepEqual(snapshot, h.snapshot());
+  assert.deepEqual(legacySnapshot(snapshot), h.snapshot());
   assert.equal(snapshot.sources[0].meters, undefined);
   assert.equal(snapshot.currencies.sources[h.source], undefined);
   assert.equal(sse(later).includes('991123'), false);

@@ -28,7 +28,7 @@ export function selectedWork(sourceWide:WorkRead,filter:WorkFilter):WorkRead {
 }
 
 /** A composite read extracts work once for charts and the temporal index. */
-export function sharedWork(hub:Pick<Hub,'store'>,_shown:Shown,range:PeriodRange|null|(()=>PeriodRange|PeriodRange[]|null),reserve:(bytes:number)=>void,release:(bytes:number)=>void,_owner:string|null=null,now=Date.now(),board:string,onLimit?:(from:number,to:number)=>boolean,reserveValidation?:(bytes:number)=>void):WorkRead {
+export function sharedWork(hub:Pick<Hub,'store'>,_shown:Shown,range:PeriodRange|null|(()=>PeriodRange|PeriodRange[]|null),reserve:(bytes:number)=>void,release:(bytes:number)=>void,_owner:string|null=null,now=Date.now(),board:string,onLimit?:(from:number,to:number)=>boolean,reserveValidation?:(bytes:number)=>void,upper:()=>number=()=>now):WorkRead {
   let kept:{ranges:PeriodRange[];rows:Stretch[]}|null=null,bytes=0;
   let access:import('./domain/workAccess.js').WorkAccess|undefined,authority:string|undefined,accessError:unknown,captured=0,peak=0;
   const capture=(size:number)=>{reserve(size);captured+=size;peak=Math.max(peak,captured);};
@@ -40,10 +40,10 @@ export function sharedWork(hub:Pick<Hub,'store'>,_shown:Shown,range:PeriodRange|
   }catch(error){access=undefined;authority=undefined;release(captured);accessError=error;}
   const ensureAccess=()=>{if(accessError)throw accessError;return access!;};
   const read:WorkRead=(from,to)=>{
-    from=Math.max(from,now-config.retention.sampleDays*86_400_000);to=Math.min(to,now);if(to<=from)return [];
+    from=Math.max(from,now-config.retention.sampleDays*86_400_000);to=Math.min(to,upper());if(to<=from)return [];
     if(!kept||!kept.ranges.some(r=>from>=r.from&&to<=r.to)){
       const requested=typeof range==='function'?range():range;
-      const ranges=normalizeRanges([{from,to},...(Array.isArray(requested)?requested:requested?[requested]:[]),...(kept?.ranges??[])].map(r=>({from:Math.max(r.from,now-config.retention.sampleDays*86_400_000),to:Math.min(r.to,now)})));
+      const ranges=normalizeRanges([{from,to},...(Array.isArray(requested)?requested:requested?[requested]:[]),...(kept?.ranges??[])].map(r=>({from:Math.max(r.from,now-config.retention.sampleDays*86_400_000),to:Math.min(r.to,upper())})));
       const start=ranges[0]?.from??from,end=ranges.at(-1)?.to??to;
       kept=null;release(bytes);bytes=0;
       try{kept={ranges,rows:hub.store.admittedWork(ensureAccess(),start,end,size=>{reserve(size);bytes+=size;},ranges)};}

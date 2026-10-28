@@ -9,6 +9,7 @@ import {attachedChrome, Cdp, openTab,nativeProcesses, threadWait,threadCall} fro
 import {Requests} from '../index.js';
 import {safeEvidence} from '../evidence.js';
 import {HISTORY_BYTES_PER_MEASUREMENT,renderProblems} from '../budget.js';
+import {recentCalendarTotalScript} from '../controls.js';
 
 /** Stands in for what the benchmark hears of the browser: events by name, emitted by the test. */
 function browser() {
@@ -420,7 +421,7 @@ test('the actual work phase freezes all three original verdicts before body diag
     const demo={work:()=>{},nextReport:async()=>{order.push('report'+(++reports));if(reports>1){const requestId=String(reports),bytes=overBudget&&reports===2?4712:3842;
       events.emit('Network.requestWillBeSent',{requestId,type:'Fetch',request:{url:'http://localhost/api/boards/b/period',postData:'{"selection":{"mode":"live","periodMs":86400000}}'}});
       events.emit('Network.loadingFinished',{requestId,encodedDataLength:bytes});}return reports*1000;}};
-    const work=runInNewContext(code,{ordinaryProducer,Requests,Date,MEASURED:'measured',HISTORY_BYTES_PER_MEASUREMENT,renderProblems,sleep:async()=>{},drain:async(requests:Requests)=>assert.equal(requests.historyPending,0)});
+    const work=runInNewContext(code,{ordinaryProducer,recentCalendarTotalScript,Requests,Date,MEASURED:'measured',HISTORY_BYTES_PER_MEASUREMENT,renderProblems,sleep:async()=>{},drain:async(requests:Requests)=>assert.equal(requests.historyPending,0)});
     const result=await work(demo,{sources:new Map([['measured','source']])},cdp,{save:(_name:string,value:unknown)=>{order.push('save');saved.push(JSON.parse(JSON.stringify(value)));}});
     assert.equal(result.reports.length,3);assert.equal(saved.length,1);
     assert.deepEqual(Array.from(result.reports,(row:{bytes:number})=>row.bytes),overBudget?[4712,3842,3842]:[3842,3842,3842]);
