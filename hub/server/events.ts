@@ -1,3 +1,5 @@
+import type {WorkStamp} from './domain/workCalendar.js';
+import {HistoryLimit} from './history.js';
 import {HISTORY_SCOPES, type HistoryScope, type HistoryChange} from './domain/history.js';
 import type {AttentionEvents, Candidate, Invalidation} from './domain/attention.js';
 import {randomBytes} from 'node:crypto';
@@ -36,14 +38,14 @@ export type ByeReason = 'unauthorized' | 'gone' | 'restart' | 'limit';
 
 /** An event as it goes out: its type, and its data already as JSON. */
 export type Frame = {type: string; data: string};
-export type PollAnswer = {lease:string;now:number;frames:Frame[]};
+export type PollAnswer = {lease:string;now:number;frames:Frame[];workStamp?:WorkStamp};
 
 /** Events as a text/event-stream carries them. */
 export const sse = (frames: Frame[]) => frames.map(f => `event: ${f.type}\ndata: ${f.data}\n\n`).join('');
 
 /** Events as a long poll answers them: `{type, data}` each. */
 export const polled = (frames: Frame[]) => `[${frames.map(f => `{"type":${JSON.stringify(f.type)},"data":${f.data}}`).join(',')}]`;
-export const pollBody=(answer:PollAnswer)=>`{"lease":${JSON.stringify(answer.lease)},"now":${answer.now},"events":${polled(answer.frames)}}`;
+export const pollBody=(answer:PollAnswer)=>`{"lease":${JSON.stringify(answer.lease)},"now":${answer.now},"events":${polled(answer.frames)}${answer.workStamp?`,"workStamp":${JSON.stringify(answer.workStamp)}`:''}}`;
 
 const frame = (type: string, data: unknown): Frame => ({type, data: JSON.stringify(data)});
 const bye = (reason: ByeReason) => frame('bye', {reason});
@@ -90,6 +92,8 @@ type Subscriber = Reader & {id: number; fresh: boolean; stopPing: () => void; se
 /** A board someone looks at: what its readers last got of each part, and when those parts change by themselves. */
 type Watched = {
   id: string;
+  workWatch:string;
+  workSeq:number;
   subscribers: Set<Subscriber>;
   /** The last part sent, as JSON, with its value (a snapshot is made of them): `board`, `view`, `lineup`, `card:<id>`, `sessions:<id>`, `cadence:<id>`, `refresh:<id>`, `forecast:<id>`. */
   base: Map<string, {json: string; value: unknown}>;
@@ -124,7 +128,8 @@ type Lease = {
 };
 type DeliveryContext = {financialKey:string;workKey:string;colors:ProjectColorEnvelope;changesAt:number|null};
 type PollContext = DeliveryContext&{reader:Pick<Reader,'user'|'secret'|'board'>;initial:boolean};
-type HistoryNotice = {sources:string[];since:number;changes?:HistoryChange[];workSince?:number;workAuthority?:string};
+type HistoryNotice = {sources:string[];since:number;changes?:HistoryChange[];workSince?:number;workAuthority?:string;workStamp?:WorkStamp};
+type WorkHistory=Pick<WorkStamp,'watch'|'seq'>&{since?:number};
 
 /** The path of the page's entry script in the built client, as `index.html` loads it; null without a build. */
 export function clientScript(root = config.clientRoot): string | null {
@@ -161,7 +166,7 @@ export class Events implements Touches {
   private readonly contacts = new Map<string, Map<string, number>>();
   private dirtyHub = false;
   private readonly dirtyClientUsers = new Set<string>();
-  private readonly workHistories = new Map<string, number>();
+  private readonly workHistories = new Map<string, WorkHistory>();
   private readonly deviceSessions = new Map<string, {json: string; measurements:string; measurementsAt:number|null; changesAt: number | null; sessionsAt:number|null}>();
   private ownDeadline: {at: number; cancel: () => void} | null = null;
   private readonly histories = new Map<string, Map<string, HistoryChange>>();
@@ -305,21 +310,54 @@ export class Events implements Touches {
     this.schedule();
   }
 
+  private advanceWork(watched:Watched,revoke=false) {
+    if(watched.workSeq>=Number.MAX_SAFE_INTEGER-1){
+      for(const sub of [...watched.subscribers])this.end(sub,'restart');
+      return false;
+    }
+    if(revoke)watched.workWatch=randomBytes(16).toString('base64url');
+    watched.workSeq++;return true;
+  }
+
+  private failWork(watched:Watched,error:unknown) {
+    this.advanceWork(watched,true);trouble(error);
+    // Without access there is no safe admitted invalidation frontier to deliver.
+    for(const sub of [...watched.subscribers])this.end(sub,'restart');
+  }
+
+  /** Only an active board watch can certify that no work notification was missed. */
+  workStamp(board:string,at=this.clock.now(),capturedAuthority?:string,reserve?:(bytes:number)=>void,release?:(bytes:number)=>void):WorkStamp|undefined {
+    const watched=this.watched.get(board);if(!watched?.subscribers.size)return;
+    let used=0;
+    const add=(bytes:number)=>{reserve?.(bytes);used+=bytes;},drop=(bytes:number)=>{release?.(bytes);used-=bytes;};
+    try{
+      const authority=capturedAuthority??this.parts.store.workKey(board,undefined,this.parts.store.workAccess(board,at,add),add,drop);
+      return {watch:watched.workWatch,seq:watched.workSeq,authority,at};
+    }catch(error){if(error instanceof HistoryLimit)throw error;this.failWork(watched,error);return;}
+    finally{if(used)release?.(used);}
+  }
+
   clientHistory(user:string,since:number,device?:string,sources:readonly string[]=[]) {
-    try{this.onClientHistory?.(user,since,device);}catch(error){trouble(error);}
-    const budget=new Set(sources.filter(source=>sourceCounterOf(String(this.parts.store.db.prepare('SELECT provider FROM sources WHERE id=?').get(source)?.provider??''))!==null));
+    let notified=false;
+    try{if(this.onClientHistory){this.onClientHistory(user,since,device);notified=true;}}catch(error){trouble(error);}
+    let budget:Set<string>;
+    try{budget=new Set(sources.filter(source=>sourceCounterOf(String(this.parts.store.db.prepare('SELECT provider FROM sources WHERE id=?').get(source)?.provider??''))!==null));}
+    catch(error){for(const watched of this.watched.values())this.failWork(watched,error);return;}
     for(const watched of this.watched.values()){
+      try{
       const access=this.parts.store.workAccess(watched.id,this.clock.now());
       if(!(device?access.devices.get(device)?.owner===user:[...access.devices.values()].some(d=>d.owner===user)))continue;
+      if(!this.advanceWork(watched,!notified))continue;
       const from=device?access.devices.get(device)!.from:Math.min(...[...access.devices.values()].filter(d=>d.owner===user).map(d=>d.from));
       const admittedSince=since===0&&!device?0:Math.max(since,from);
-      this.workHistories.set(watched.id,Math.min(this.workHistories.get(watched.id)??admittedSince,admittedSince));
+      this.workHistories.set(watched.id,{since:Math.min(this.workHistories.get(watched.id)?.since??admittedSince,admittedSince),watch:watched.workWatch,seq:watched.workSeq});
       for(const source of sources)if(access.sources.get(source)?.holders.has(user)){
         let pending=this.histories.get(watched.id);if(!pending)this.histories.set(watched.id,pending=new Map());
         const sourceSince=admittedSince===0?0:Math.max(admittedSince,access.sources.get(source)!.since);
         const scopes:readonly HistoryScope[]=budget.has(source)?['quota','budget']:['quota'];
         for(const scope of scopes){const key=JSON.stringify([source,scope,true]);pending.set(key,{source,scope,since:Math.min(pending.get(key)?.since??sourceSince,sourceSince),workSince:Math.min(pending.get(key)?.workSince??sourceSince,sourceSince),workOnly:true});}
       }
+      }catch(error){this.failWork(watched,error);}
     }
     this.schedule();
   }
@@ -330,12 +368,19 @@ export class Events implements Touches {
   }
 
   history(source: string, since: number, scopes: readonly HistoryScope[] = HISTORY_SCOPES, work=false) {
+    let notified=false;
     try {
-      this.onHistory?.(source, since, scopes, work);
+      if(this.onHistory){this.onHistory(source, since, scopes, work);notified=true;}
     } catch (error) {
       trouble(error);
     }
     for (const watched of this.watched.values()) {
+      if(work)try{
+        if(this.parts.store.workAccess(watched.id,this.clock.now()).sources.has(source)){
+          if(!this.advanceWork(watched,!notified))continue;
+          this.workHistories.set(watched.id,{...this.workHistories.get(watched.id),watch:watched.workWatch,seq:watched.workSeq});
+        }
+      }catch(error){this.failWork(watched,error);}
       if (!watched.lineup.includes(source)) continue;
       let pending = this.histories.get(watched.id);
       if (!pending) this.histories.set(watched.id, (pending = new Map()));
@@ -509,7 +554,7 @@ export class Events implements Touches {
           }
         }
         let historyFrames = tails.get(watched.id) ?? [];
-        const workSince = workHistories.get(watched.id);
+        const workSince = workHistories.get(watched.id)?.since;
         if (workSince !== undefined) {
           const ordinary = historyFrames.find(frame => frame.type === 'history');
           const value = ordinary ? JSON.parse(ordinary.data) as {sources: string[]; since: number; changes?: HistoryChange[]} : {sources: [], since: workSince};
@@ -529,6 +574,13 @@ export class Events implements Touches {
           const replacement=this.financialSnapshot(sub,financialKey,sub.workKey);
           if(replacement){frames=this.replacementFrames(replacement,frames,sub.board,sub.workKey,sub.desktop);context=replacement.context;}
           sub.workKey=this.projection.workKey(sub.board,undefined,this.clock.now());
+          const covered=workHistories.get(sub.board),stamp=!sub.desktop&&covered?this.workStamp(sub.board,this.clock.now(),sub.workKey):undefined;
+          // The copied frontier owns its version even if projection triggers another touch.
+          if(stamp&&stamp.watch===covered!.watch&&stamp.seq===covered!.seq)frames=frames.map(packet=>{
+            if(packet.type!=='history')return packet;
+            const notice=JSON.parse(packet.data) as HistoryNotice;
+            return notice.workAuthority===stamp.authority&&(notice.workSince!==undefined||notice.changes?.some(change=>change.workSince!==undefined))?frame('history',{...notice,workStamp:stamp}):packet;
+          });
         }catch(error){trouble(error);this.end(sub,'restart');continue;}
         frames=this.colorDelivery(frames,!!sub.desktop,sub.board);
         if (sub.desktop && (sources.has(watched.id) || whole.has(watched.id) || frames.length || sub.pending.length || sub.invalidations.size || sub.rebaseline)) {
@@ -569,7 +621,7 @@ export class Events implements Touches {
     now: number,
     lineups: Map<string, BoardSource[]>,
     histories: Map<string, Map<string, HistoryChange>>,
-    workHistories: Map<string, number>,
+    workHistories: Map<string, WorkHistory>,
   ): Frame[] | null {
     const {projection} = this;
     const lineup = projection.lineup(watched.id);
@@ -609,7 +661,7 @@ export class Events implements Touches {
     if (watched.work !== null && watched.work !== work) {
       let pending=histories.get(watched.id);if(!pending)histories.set(watched.id,(pending=new Map()));
       for(const {id:source} of lineup)pending.set(JSON.stringify([source,'quota',true]),{source,scope:'quota',since:0,workSince:0,workOnly:true});
-      workHistories.set(watched.id,0);
+      workHistories.set(watched.id,{since:0,watch:watched.workWatch,seq:watched.workSeq});
     }
     watched.work = work;
     if (computed.length) {
@@ -814,6 +866,7 @@ export class Events implements Touches {
       const id = reader.board;
       watched = {
         id,
+        workWatch:randomBytes(16).toString('base64url'),workSeq:0,
         subscribers: new Set(),
         base: new Map(),
         lineup: [],
@@ -906,7 +959,7 @@ export class Events implements Touches {
   private ping(sub: Subscriber) {
     const reason = this.gone(sub);
     if (reason) return this.end(sub, reason);
-    sub.send([frame('ping', {now: this.clock.now()})]);
+    sub.send([frame('ping', {now: this.clock.now(),...(sub.desktop?{}:{workStamp:this.workStamp(sub.board)})})]);
     if ((sub.backlog?.() ?? 0) > this.options.bufferBytes) this.end(sub, 'limit');
   }
 
@@ -1036,9 +1089,11 @@ export class Events implements Touches {
   /** The initial browser baseline has its established exception; every later answer uses the wire budget. */
   private finishPoll(answer:PollAnswer,frames:Frame[],initial=false,board?:string):PollAnswer {
     frames=this.colorDelivery(frames,false,board);
-    const result=frames===answer.frames?answer:{...answer,now:this.clock.now(),frames};
+    const workStamp=board&&!frames.some(packet=>packet.type==='bye')?this.workStamp(board):undefined;
+    const previous=answer.workStamp,sameStamp=previous===workStamp||previous!==undefined&&workStamp!==undefined&&previous.watch===workStamp.watch&&previous.seq===workStamp.seq&&previous.authority===workStamp.authority;
+    const result=frames===answer.frames&&sameStamp?answer:{...answer,now:this.clock.now(),frames,workStamp};
     if(!initial&&Math.max(Buffer.byteLength(sse(frames)),Buffer.byteLength(pollBody(result)))>this.options.bufferBytes){
-      const lease=this.leases.get(answer.lease);if(lease)this.expire(lease);return {...answer,now:this.clock.now(),frames:[bye('limit')]};
+      const lease=this.leases.get(answer.lease);if(lease)this.expire(lease);return {...answer,now:this.clock.now(),frames:[bye('limit')],workStamp:undefined};
     }
     if(result===answer)return answer;
     const context=this.pollContexts.get(answer);
@@ -1108,7 +1163,7 @@ export class Events implements Touches {
     const now=this.clock.now(),roster=this.projection.roster(board,now);
     const filters=this.projection.filtersPart(board,roster);
     const colors=this.projectColors.context(board,roster,now).envelope;
-    return this.colorDelivery([frame('snapshot',{...snapshot,filtersRevision:filters.revision,filtersAuthority:filters.authority,projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority}),frame('filters',filters),frame('projectColors',colors)],desktop);
+    return this.colorDelivery([frame('snapshot',{...snapshot,...(desktop?{}:{workStamp:this.workStamp(board)}),filtersRevision:filters.revision,filtersAuthority:filters.authority,projectColorsRevision:colors.revision,projectColorsAuthority:colors.authority}),frame('filters',filters),frame('projectColors',colors)],desktop);
   }
 
   /** The native background reader's byte-bounded baseline contains no UI colour metadata. */
@@ -1131,7 +1186,7 @@ export class Events implements Touches {
     return frames.flatMap(packet=>{
       if(packet.type==='projectColors')return [];
       if(packet.type!=='snapshot'&&packet.type!=='board')return [packet];
-      const {projectColorsRevision:_revision,projectColorsAuthority:_authority,...data}=JSON.parse(packet.data);
+      const {projectColorsRevision:_revision,projectColorsAuthority:_authority,workStamp:_workStamp,...data}=JSON.parse(packet.data);
       return Object.keys(data).length?[frame(packet.type,data)]:[];
     });
   }
@@ -1143,12 +1198,20 @@ export class Events implements Touches {
 
   private historyDelivery(board:string,frames:Frame[],workKey:string,previousWork:string):Frame[] {
     const resources=new Map(this.projection.lineup(board).map(source=>[source.id,source])),changes=new Map<string,HistoryChange>();
-    let workSince=Infinity;
+    let workSince=Infinity,stamp:WorkStamp|undefined,conflicting=false;
     for(const packet of frames){
       if(packet.type!=='history')continue;
       const notice=JSON.parse(packet.data) as HistoryNotice,sameWork=notice.workAuthority===workKey&&previousWork===workKey;
       if(sameWork&&notice.workSince!==undefined)workSince=Math.min(workSince,notice.workSince);
       const scoped:HistoryChange[]=notice.changes??notice.sources.map(source=>({source,scope:'quota',since:notice.since}));
+      if(sameWork&&(notice.workSince!==undefined||scoped.some(change=>change.workSince!==undefined))){
+        const next=notice.workStamp;
+        if(!next||next.authority!==workKey)conflicting=true;
+        else {
+          if(stamp&&(stamp.watch!==next.watch||stamp.seq!==next.seq||stamp.authority!==next.authority))conflicting=true;
+          if(!stamp||next.seq>stamp.seq)stamp=next;
+        }
+      }
       for(const original of scoped){
         const source=resources.get(original.source);if(!source)continue;
         const workOnly=original.workSince!==undefined&&original.since>=original.workSince;
@@ -1167,7 +1230,7 @@ export class Events implements Touches {
     }
     if(!changes.size&&!Number.isFinite(workSince))return [];
     const values=[...changes.values()],since=values.reduce((earliest,change)=>Math.min(earliest,change.since),workSince);
-    return [frame('history',{sources:[...new Set(values.map(change=>change.source))],since,changes:values,...(Number.isFinite(workSince)?{workSince}:{}),workAuthority:workKey})];
+    return [frame('history',{sources:[...new Set(values.map(change=>change.source))],since,changes:values,...(Number.isFinite(workSince)?{workSince}:{}),workAuthority:workKey,...(stamp&&(!conflicting||workSince===0)?{workStamp:stamp}:{})})];
   }
 
   /** Prepared frames are not yet disclosed: replace their dataset and private bindings together. */

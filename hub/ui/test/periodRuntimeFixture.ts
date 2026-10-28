@@ -97,12 +97,13 @@ export async function fixture({heatmap=false,activityOnly=false,personal=false,o
   };attach();
   const page=createStore(reduce,INITIAL),frames:Frame[]=[],requests:PeriodRequest[]=[],pool=new HistoryPool();
   let stream:ReadableStreamDefaultController<Uint8Array>|null=null;
-  const connection=transportLive?new Live({fetch:async()=>new Response(new ReadableStream<Uint8Array>({start:controller=>{stream=controller;}}),{headers:{'content-type':'text/event-stream'}}),now:()=>now,setTimeout:(run,ms)=>{const token={};timers.set(token,{at:now+ms,run});return token;},clearTimeout:token=>{timers.delete(token as object);},random:()=>0.5,visible:()=>true,hubNow:()=>now,heard:()=>{},dispatch:event=>page.dispatch(event),unauthorized:()=>{},gone:()=>{},epochChanged:()=>{},script:null,reload:()=>{},storage:()=>({getItem:()=>null,setItem:()=>{}})}):null;
+  let period:any;
+  const connection=transportLive?new Live({fetch:async()=>new Response(new ReadableStream<Uint8Array>({start:controller=>{stream=controller;}}),{headers:{'content-type':'text/event-stream'}}),now:()=>now,setTimeout:(run,ms)=>{const token={};timers.set(token,{at:now+ms,run});return token;},clearTimeout:token=>{timers.delete(token as object);},random:()=>0.5,visible:()=>true,hubNow:()=>now,heard:()=>{},workFreshness:stamp=>period?.acceptWorkFreshness(stamp),dispatch:event=>page.dispatch(event),unauthorized:()=>{},gone:()=>{},epochChanged:()=>{},script:null,reload:()=>{},storage:()=>({getItem:()=>null,setItem:()=>{}})}):null;
   connection?.open(board);
   const feed=(batch:Frame[])=>{
     frames.push(...batch);
     if(connection){stream!.enqueue(new TextEncoder().encode(batch.map(frame=>`event: ${frame.type}\ndata: ${frame.data}\n\n`).join('')));return;}
-    for(const frame of batch){if(frame.type==='ping'||frame.type==='bye')continue;if(frame.type==='snapshot')page.dispatch({type:'connection',status:'live',lostAt:null});page.dispatch({type:'hub',event:{type:frame.type,data:JSON.parse(frame.data)} as HubEvent});}
+    for(const frame of batch){const data=JSON.parse(frame.data);if(frame.type==='ping'){if(data.workStamp)period?.acceptWorkFreshness(data.workStamp);continue;}if(frame.type==='bye'){period?.acceptWorkFreshness(null);continue;}if(frame.type==='snapshot')page.dispatch({type:'connection',status:'live',lostAt:null});page.dispatch({type:'hub',event:{type:frame.type,data} as HubEvent});if(frame.type==='snapshot'&&data.workStamp)period?.acceptWorkFreshness(data.workStamp);}
   };
   const secret='fixture-session';directory.createSession(secret,alice.id,NOW-3*H,sessionMs);
   const initial=events.open({user:alice.id,secret,board,kind:'stream',send:feed,end:()=>{}});
@@ -125,7 +126,7 @@ export async function fixture({heatmap=false,activityOnly=false,personal=false,o
     WorkCalendar,AGENT_HOURS_HEATMAP,timeRange:()=>selectedRange,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
   runInNewContext(ts.transpileModule(code.slice(code.indexOf('class BoardPeriod'),code.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,{workChange},periodValueClockBindings,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   if(initialFilters)filterRuntimeBindings.publishDataFilters(initialFilters);
-  const period=new context.exports.BoardPeriod();pan.onPhase(()=>period.refreshWorkClock());page.listen((event,state)=>period.changed(event,state));period.activate(true);await flush();
+  period=new context.exports.BoardPeriod();pan.onPhase(()=>period.refreshWorkClock());page.listen((event,state)=>period.changed(event,state));period.activate(true);await flush();
   const limited=!!initialFilters&&!filterModelBindings.executableWorkFilters(initialFilters);
   assert.equal(period.get().error,limited?'filters_limit':initialFailure?'unavailable':null);assert.equal(period.get().rows.length,limited||initialFailure?0:1);const initialRequests=requests.slice();requests.length=0;frames.length=0;
   const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=Math.max(now,next[1].at);timers.delete(next[0]);next[1].run();events.flush();}now=Math.max(now,at);if(!clocked)period.tick();};
@@ -136,7 +137,7 @@ export async function fixture({heatmap=false,activityOnly=false,personal=false,o
     endIdle:()=>{hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(NOW).toISOString(),sessions:[]},NOW);events.flush();},
     event:(event:HubEvent)=>page.dispatch({type:'hub',event}),
     hold:()=>{let release!:()=>void,reject!:(error:Error)=>void;const held:{promise:Promise<void>;signal?:AbortSignal;reply?:PeriodReply}={promise:new Promise<void>((yes,no)=>{release=yes;reject=no;})};wait=held;return {release,reject,get signal(){return held.signal;},get reply(){return held.reply;}};},
-    disconnect:()=>{opened.close();page.dispatch({type:'connection',status:'retrying',lostAt:now});}, reconnect:()=>{page.dispatch({type:'connection',status:'connecting',lostAt:now});opened=events.open({user:alice.id,secret,board,kind:'stream',send:feed,end:()=>{}}) as any;feed(opened.frames);}, remove:()=>{directory.removeMember(board,bob.id);store.unshareOrphans(board);events.flush();},
+    disconnect:()=>{opened.close();period.acceptWorkFreshness(null);page.dispatch({type:'connection',status:'retrying',lostAt:now});}, reconnect:()=>{page.dispatch({type:'connection',status:'connecting',lostAt:now});opened=events.open({user:alice.id,secret,board,kind:'stream',send:feed,end:()=>{}}) as any;feed(opened.frames);}, remove:()=>{directory.removeMember(board,bob.id);store.unshareOrphans(board);events.flush();},
     restart:()=>{
       opened.close();events.close();now++;
       events=new Events(hub,undefined,eventClock,null);reader=new PeriodReader(hub,tiles,events);attach();

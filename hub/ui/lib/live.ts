@@ -1,5 +1,6 @@
 import type {ConnectionStatus, HubEvent, PageEvent, Snapshot} from './board';
 import {PROJECT_COLOR_FRAME_BYTES} from '../../server/domain/projectColors';
+import type {WorkStamp} from '../../server/domain/workCalendar';
 
 /**
  * The page's connection to the hub's events (spec/dashboard-v1.md): one board at a time, a
@@ -47,6 +48,7 @@ export type LiveEnv = {
   /** The hub's clock as the page reckons it (lib/clock.ts), and what it heard of it. */
   hubNow(at?: number): number;
   heard(now: number, at?: number): void;
+  workFreshness?(stamp:WorkStamp|null):void;
   dispatch(event: PageEvent): void;
   /** The session ended: the page asks who is signed in. */
   unauthorized(): void;
@@ -249,6 +251,7 @@ export class Live {
 
   /** Stops whatever is under way: the request, and every timer but the hidden tab's. */
   private drop() {
+    this.env.workFreshness?.(null);
     this.attempt++;
     this.abort?.abort();
     this.abort = null;
@@ -444,8 +447,10 @@ export class Live {
           this.watch();
           this.after('firstPing', this.heartbeatMs + FIRST_PING_SLACK, () => this.noPing());
         }
+        if((data as Snapshot).workStamp)this.env.workFreshness?.((data as Snapshot).workStamp!);
         return;
       case 'ping':
+        if((data as {workStamp?:WorkStamp}).workStamp)this.env.workFreshness?.((data as {workStamp:WorkStamp}).workStamp);
         this.env.heard((data as {now: number}).now);
         if (!this.pinged) {
           this.pinged = true;
@@ -500,7 +505,7 @@ export class Live {
       controller.abort();
       this.retry();
     });
-    let answer: {lease: string; now: number; events: {type: string; data: unknown}[]};
+    let answer: {lease: string; now: number; workStamp?:WorkStamp; events: {type: string; data: unknown}[]};
     try {
       const lease = this.lease ? `&lease=${encodeURIComponent(this.lease)}` : '';
       const response = await this.env.fetch(`/api/events?board=${encodeURIComponent(this.board!)}&mode=poll${lease}`, {
@@ -523,7 +528,6 @@ export class Live {
     }
     this.clear('attempt');
     this.lastByteAt = this.env.now();
-    this.env.heard(answer.now);
     this.lease = answer.lease;
     for (const {type, data} of answer.events) {
       if (type === 'bye') return this.bye((data as {reason: string}).reason);
@@ -539,6 +543,8 @@ export class Live {
     }
     // A first answer without the board is not the hub's.
     if (this.status === 'connecting') return this.retry();
+    if(answer.workStamp)this.env.workFreshness?.(answer.workStamp);
+    this.env.heard(answer.now);
     // Row 17: at once again, or a stream again when the time for polls is over.
     if (this.env.now() >= this.pollUntil) {
       this.mode = 'stream';
@@ -558,7 +564,7 @@ async function boardNotFound(response: Response): Promise<boolean> {
 const inBrowser = typeof window !== 'undefined';
 
 /** The page's one connection, once the page knows its script and how to ask for a session. */
-export function startLive(env: Pick<LiveEnv, 'dispatch' | 'unauthorized' | 'gone' | 'epochChanged' | 'script' | 'hubNow' | 'heard'>): Live {
+export function startLive(env: Pick<LiveEnv, 'dispatch' | 'unauthorized' | 'gone' | 'epochChanged' | 'script' | 'hubNow' | 'heard' | 'workFreshness'>): Live {
   const live = new Live({
     ...env,
     fetch: (url, init) => fetch(url, init),

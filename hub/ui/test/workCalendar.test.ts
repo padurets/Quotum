@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {calendarWindow,calendarLevel,exactAgentHours,WorkCalendar} from '../lib/workCalendar.js';
+import {calendarWindow,calendarLevel,exactAgentHours,calendarRangeAt,calendarCellAt,WorkCalendar} from '../lib/workCalendar.js';
 import {heatmapLayout,heatCellAt,heatCellChangesAt} from '../lib/heatmap.js';
 import {calendarCells,calendarPartition,parseCalendar,type CalendarCell} from '../../server/domain/workCalendar.js';
 import {drain} from '../../server/domain/prepare.js';
@@ -111,15 +111,20 @@ test('a backwards hub clock replaces invalid calendar evidence once without poll
   h.period.wakeCalendar();await flush();assert.equal(h.requests.filter(r=>r.calendar).length,1);
 });
 
-test('a delayed calendar reply crossing midnight cannot complete the replacement generation',async t=>{
-  let now=NOW;t.mock.method(Date,'now',()=>now);const h=await fixture({heatmap:true,clocked:true});t.after(()=>h.close());
-  const midnight=h.period.calendar.nextAt(now);now=midnight-1000;h.jump(now);await flush();h.requests.length=0;
+test('a delayed work reply crosses midnight without a second read or retiring its accepted work',async t=>{
+  let now=NOW;t.mock.method(Date,'now',()=>now);const h=await fixture({heatmap:true,clocked:true,periodName:'24h'});t.after(()=>h.close());
+  const midnight=(Math.floor(now/DAY)+1)*DAY;now=midnight-1000;h.jump(now);await flush();h.requests.length=0;
   const held=h.hold();h.credit(now-M,now);h.events.flush();await flush();assert.equal(h.requests.filter(r=>r.calendar).length,1);
+  const generation=h.period.calendar.generation,acceptedAt=now;
   now=midnight+1000;h.jump(now);await flush();held.release();await flush();
-  assert.ok(h.period.calendar.state.basis,'the retired flight must not strand the pending replacement');
-  assert.equal(h.period.calendar.state.basis.evaluatedAt,now);assert.equal(h.period.calendar.needed,false);assert.equal(h.period.calendar.state.error,null);
-  assert.equal(h.requests.filter(r=>r.calendar).length,2);
-  h.period.wakeCalendar();await flush();assert.equal(h.requests.filter(r=>r.calendar).length,2);
+  const reading=h.period.calendar.state,range=calendarRangeAt(reading,now),stamp=h.events.workStamp(h.board);
+  assert.ok(reading.integral,'the actual credited work has an exact integral');assert.ok(stamp);assert.equal(h.period.calendar.acceptFreshness(stamp),true);
+  assert.equal(h.period.calendar.generation,generation);assert.equal(reading.basis.evaluatedAt,acceptedAt);
+  assert.deepEqual(range,{from:now-DAY,to:now});assert.equal(h.period.calendar.needed,false);assert.equal(reading.error,null);
+  const fresh=expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,{version:1,selection:{mode:'live',periodMs:DAY},evaluatedAt:now,calendar:{zone:reading.window.zone,freshness:true}})));
+  if(fresh.calendar?.state!=='complete')throw new Error('oracle');
+  assert.equal(calendarCellAt(reading,range.from,range.to,now).agentMs,fresh.calendar.value.cells.reduce((sum:number,cell:CalendarCell)=>sum+(cell.agentMs??0),0));
+  h.period.wakeCalendar();await flush();assert.equal(h.requests.filter(r=>r.calendar).length,1);
 });
 test('a selection replacement retires the old generation and hiding removes demand',()=>{
   const calendar=new WorkCalendar();calendar.configure(true,'a',NOW,false,{mode:'live',periodMs:H});const generation=calendar.generation;calendar.configure(true,'a',NOW,false,{mode:'range',from:NOW-3*H,to:NOW-2*H});assert.ok(calendar.generation>generation);assert.equal(calendar.state.value,null);assert.deepEqual(calendar.demand(),{zone:calendar.state.window.zone,relative:true});calendar.configure(false,'a',NOW);assert.equal(calendar.demand(),undefined);

@@ -1,4 +1,5 @@
 import {matchesSource,matchesSelection,type DataFilters,type FilterEnvelope} from '../../server/domain/dataFilters';
+import type {WorkStamp} from '../../server/domain/workCalendar';
 import {budgetVisible} from './money';
 import {defaultCurrencyContext,DEFAULT_CURRENCY,type CurrencyContext} from '../../server/domain/currency';
 import {useMemo} from 'react';
@@ -29,6 +30,7 @@ export type HubResets = {resets: Resets; trackers: TrackerHealth[]; past: PastRe
 
 /** The board as the hub gives it to its reader (spec: `snapshot`). */
 export type Snapshot = {
+  workStamp?:WorkStamp;
   deviceContacts?: Record<string,number|null>;
   currencies?:CurrencyContext;
   sourceAccess?:Record<string,SourceAccess>;
@@ -73,7 +75,7 @@ export type HubEvent =
   | {type:'sourceAccess';data:Record<string,SourceAccess>}
   | {type:'currencies';data:CurrencyContext}
   | {type: 'boards'; data: {boards: Board[]}}
-  | {type: 'history'; data: {sources: string[]; since: number; workSince?: number; workAuthority?: string; changes?: import('../../server/domain/history').HistoryChange[]}}
+  | {type: 'history'; data: {sources: string[]; since: number; workSince?: number; workAuthority?: string; workStamp?:WorkStamp; changes?: import('../../server/domain/history').HistoryChange[]}}
   | {type: 'resets'; data: HubResets};
 
 export type ConnectionStatus = 'connecting' | 'live' | 'polling' | 'retrying' | 'paused';
