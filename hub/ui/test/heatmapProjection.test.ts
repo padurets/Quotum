@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {calendarWindow,type CalendarReading} from '../lib/workCalendar';
+import {calendarWindow,calendarLevel,type CalendarReading} from '../lib/workCalendar';
 import {heatmapBasisPrepared,heatmapCivilPrepared,heatmapCivilCovers,heatmapProjection,heatmapProjectionChangesAt,heatProjectionCellAt,heatProjectionPaintAt,heatmapLayout,type HeatmapBasis,type HeatmapView} from '../lib/heatmap';
 import {calendarCells,type CalendarProof} from '../../server/domain/workCalendar';
 import {sourceWorkCurves} from '../../server/domain/periodCurves';
@@ -134,6 +134,40 @@ test('closed paint has no clock while a moving fractional contribution changes a
   assert.equal(heatProjectionCellAt(basis,first,at+122).cell.agentMs,1);
   assert.equal(heatProjectionCellAt(basis,first,at+123).cell.agentMs,0);
   assert.ok(heatmapProjectionChangesAt(basis,at)-at>=M,'detail clock does not wake the whole plot');
+});
+
+test('closed boundary paint ignores slope changes that leave its appearance unchanged',()=>{
+  const at=Date.UTC(2034,8,10,12,38,5),rows=[row(at-D+7*M,at-D+7*M+10_000),row(at-5*M,at-5*M+10_000),...[25_000,85_000].flatMap(offset=>[row(at-D+offset,at-D+offset+1000),row(at+offset,at+offset+1000)])];
+  const f=fixture(at,D,rows);f.setThrough(at+3*M);const basis=drain(heatmapBasisPrepared(f.reading,'matrix',1000));
+  for(const offset of [0,55_000]){
+    const layout=heatmapProjection(basis,at+offset,1000,'matrix','en-GB');
+    for(const item of [layout.cells[0],layout.cells.at(-1)!]){
+      assert.equal(heatProjectionPaintAt(basis,item,layout.span,at+offset),null,'the plot already owns its next minute');
+      for(const elapsed of [0,25_000,26_000,55_000]){
+        const projected=heatProjectionCellAt(basis,item,at+offset+elapsed);
+        assert.equal(projected.cell.agentMs===null?-1:calendarLevel(projected.cell.agentMs,layout.span),1);
+        assert.equal(projected.partial,false);
+      }
+    }
+  }
+});
+
+for(const period of [D,30*D])test(`boundary paint preserves exact expiry and future work before the ${period/D}d plot deadline`,()=>{
+  const at=Date.UTC(2034,8,10,12,38,5),left=at-period;
+  const expired=fixture(at,period,[row(left-101,left+123)]);expired.setThrough(at+3*M);
+  const oldBasis=drain(heatmapBasisPrepared(expired.reading,'matrix',538)),oldLayout=heatmapProjection(oldBasis,at,538,'matrix','en-GB'),first=oldLayout.cells[0];
+  assert.equal(heatProjectionPaintAt(oldBasis,first,oldLayout.span,at),at+123);
+  assert.equal(heatProjectionCellAt(oldBasis,first,at+122).cell.agentMs,1);assert.equal(heatProjectionCellAt(oldBasis,first,at+123).cell.agentMs,0);
+  const future=fixture(at,period,[row(at+60_001,at+61_001)]);future.setThrough(at+3*M);
+  const basis=drain(heatmapBasisPrepared(future.reading,'matrix',538));let now=at,paint:number|null=null;
+  for(let count=0;count<3&&paint===null;count++){
+    const layout=heatmapProjection(basis,now,538,'matrix','en-GB'),item=layout.cells.at(-1)!;
+    const due=heatProjectionPaintAt(basis,item,layout.span,now),parent=heatmapProjectionChangesAt(basis,now);
+    if(due!==null){assert.ok(due<parent);paint=due;}else now=parent;
+  }
+  assert.equal(paint,at+60_002,'the first positive millisecond gets its own wake');
+  const layout=heatmapProjection(basis,at,538,'matrix','en-GB'),last=layout.cells.at(-1)!;
+  assert.equal(heatProjectionCellAt(basis,last,at+60_001).cell.agentMs,0);assert.equal(heatProjectionCellAt(basis,last,at+60_002).cell.agentMs,1);
 });
 
 test('long/short civil cache transitions match independent fresh Kathmandu selections in both directions',()=>{

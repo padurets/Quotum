@@ -144,11 +144,13 @@ export function heatProjectionPaintAt(basis:HeatmapBasis,item:HeatCell,span:numb
   const left=Math.max(range.from,now-integral.proof.retentionMs),through=integral.through();
   if(nominal.from>left&&nominal.to<=Math.min(range.to,through))return null;
   const signature=(at:number)=>{const c=heatProjectionCellAt(basis,item,at);return [c.cell.agentMs===null?-1:calendarLevel(c.cell.agentMs,span),c.partial,c.to>c.from].join(':');};
-  const current=signature(now),period=range.to-range.from;
-  let end=Math.floor(now/MIN)*MIN+MIN;
-  for(const at of [integral.curve.next(left)+Math.min(period,integral.proof.retentionMs),integral.curve.next(Math.min(range.to,through))])if(at>now)end=Math.min(end,at);
-  if(signature(end)!==current){let lo=now+1,hi=end;while(lo<hi){const mid=Math.floor((lo+hi)/2);if(signature(mid)===current)lo=mid+1;else hi=mid;}return lo;}
-  return end;
+  const current=signature(now),parent=heatmapProjectionChangesAt(basis,now);
+  // Only one edge crosses a bucket before the plot updates its geometry, so its
+  // work amount and coverage move in one direction. Slope knots alone need no paint.
+  if(signature(parent)===current)return null;
+  let lo=now+1,hi=parent;
+  while(lo<hi){const mid=Math.floor((lo+hi)/2);if(signature(mid)===current)lo=mid+1;else hi=mid;}
+  return lo<parent?lo:null;
 }
 
 /** Geometry groups exact fine intervals; resizing never divides coarse Activity bars. */
