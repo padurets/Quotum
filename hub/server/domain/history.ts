@@ -190,30 +190,26 @@ export function* decodeCellsPrepared(series: SeriesCells, from: number, cell: nu
 }
 
 /** Local packed cells keep the wire reader's precision and implicit defaults. */
-export function* canonicalCellsPrepared(from:number,cell:number,since:number,cells:DecodedCell[]):Preparation<DecodedCell[]> {
-  if(!cells.length)return [];
+export function canonicalCell(value:DecodedCell,from:number,cell:number,since:number,previous:number|null|undefined,hold=value.hold):DecodedCell {
+  const low=Math.round(value.low*100)/100,spent=round4(value.spent),start=roundOpen(value.open);
+  const open=previous===undefined||start!==previous?start:previous;
+  const first=round4(value.first),last=round4(value.last);
+  const at=from+((value.at-from)/cell)*cell;
+  const work:DecodedCell['work']=[round4(value.work[0]),value.work[1],round4(value.work[2])];
+  const base=value.at>=since?spent:0;
+  return {at,low,spent,covered:value.covered,open,first:start===null&&first!==low?first:low,last:last!==low?last:low,gap:!!value.gap,
+    hold,...(value.validUntil===undefined?{}:{validUntil:value.validUntil}),
+    work:work[0]!==base||work[1]!==0||work[2]!==0?work:[at>=since?spent:0,0,0]};
+}
+
+export function* modalHoldPrepared(values:Iterable<number>):Preparation<number>{
   const holds=new Map<number,number>();
-  for(const value of cells){holds.set(value.hold,(holds.get(value.hold)??0)+1);yield;}
-  const hold=(yield*ordered(holds,(a,b)=>b[1]-a[1]))[0][0];
-  let previous=roundOpen(cells[0].open);
-  const result:DecodedCell[]=[];
-  for(const value of cells){
-    const low=Math.round(value.low*100)/100,spent=round4(value.spent),start=roundOpen(value.open);
-    const open=start!==previous?start:previous;
-    const first=round4(value.first),last=round4(value.last);
-    const at=from+((value.at-from)/cell)*cell;
-    const work:DecodedCell['work']=[round4(value.work[0]),value.work[1],round4(value.work[2])];
-    const base=value.at>=since?spent:0;
-    result.push({at,low,spent,covered:value.covered,open,first:start===null&&first!==low?first:low,last:last!==low?last:low,gap:!!value.gap,
-      hold:value.hold!==hold?value.hold:hold,...(value.validUntil===undefined?{}:{validUntil:value.validUntil}),
-      work:work[0]!==base||work[1]!==0||work[2]!==0?work:[at>=since?spent:0,0,0]});
-    previous=last!==low?last:low;yield;
-  }
-  return result;
+  for(const hold of values){holds.set(hold,(holds.get(hold)??0)+1);yield;}
+  return (yield*ordered(holds,(a,b)=>b[1]-a[1]))[0][0];
 }
 
 /** Renderer-only readers borrow pinned buffers for the lifetime of one preparation. */
-export type DecodedSeriesReader={source:string;window:string;readCells(since:number):Preparation<DecodedCell[]>};
+export type DecodedSeriesReader={source:string;window:string;consumeCells(since:number,consume:(cell:DecodedCell)=>void):Preparation<void>};
 export type DecodedChunk=Omit<Chunk,'series'>&{series:DecodedSeriesReader[]};
 
 const DIMENSIONS: Dimension[] = ['source', 'project', 'device'];
@@ -326,9 +322,8 @@ function* composeChunksPrepared(chunks:readonly (Chunk|DecodedChunk)[],meta:Hist
     const key = `${values.source} ${values.window}`;
     if (!windows.has(key)) continue;
     let row = series.get(key);
-    for (const v of yield* ('readCells' in values?values.readCells(S(values.source)):decodeCellsPrepared(values, chunk.from, cell, S(values.source)))) {
-      yield;
-      if (!inFrame(v.at)) continue;
+    const consume=(v:DecodedCell)=>{
+      if (!inFrame(v.at)) return;
       if (!row) {
         const from = Math.max(since, S(values.source));
         const available=meta.known.sourceWork?values.source in meta.known.sourceWork:values.source in meta.known.sources;
@@ -349,7 +344,9 @@ function* composeChunksPrepared(chunks:readonly (Chunk|DecodedChunk)[],meta:Hist
         line.work.coveredMs += v.work[1];
         line.work.duringWork += v.work[2];
       }
-    }
+    };
+    if('consumeCells' in values)yield*values.consumeCells(S(values.source),consume);
+    else for(const value of yield*decodeCellsPrepared(values,chunk.from,cell,S(values.source))){yield;consume(value);}
   }
   const resets = yield* resetEventsPrepared(chunksInOrder, windows, since, (k1 + 1) * cell);
   const grants: SourceEvent[] = [];

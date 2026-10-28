@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import type {Chunk} from '../../server/domain/history';
-import {compose, composeDecodedPrepared, targetOf, type HistoryMeta} from '../../server/domain/history';
+import {compose, composeDecodedPrepared,decodeCells, targetOf, type DecodedCell,type HistoryMeta} from '../../server/domain/history';
 import {HistoryTile} from '../lib/historyTiles';
 import {plotOf} from '../lib/historyPlot';
 import {drain, type Preparation} from '../lib/prepare';
@@ -232,11 +232,26 @@ for(const plane of ['native','all'] as const)for(const selection of ['live','fix
  const decoded=tiles.map(tile=>drain(tile.composeChunkPrepared(target.now,plane,windows)));
  assert.ok(decoded.every(value=>value.series.every(series=>windows.has(series.source+' '+series.window))));
  // The semantic composer independently guards selection before invoking a reader.
- let excludedReads=0;decoded[0].series.push({source:'s',window:'excluded',*readCells(){excludedReads++;throw new Error('excluded reader invoked');}});
+ let excludedReads=0;decoded[0].series.push({source:'s',window:'excluded',*consumeCells(){excludedReads++;throw new Error('excluded reader invoked');}});
  const actual=drain(composeDecodedPrepared(decoded,supplied,target,windows));
  assert.deepStrictEqual(actual,expected);assert.equal(excludedReads,0);
  assert.ok(expected.series.length>0);assert.ok(expected.meterSeries?.length);assert.ok(expected.moneyWork?.length);
  assert.ok(expected.events.length>0);if(plane==='all')assert.ok(expected.activity.agentMs>0);
+});
+
+for(const holds of [[-0,1],[1,-0],[-0,1,1],[0,-0]])test(`streamed cells preserve modal hold and sparse read cuts: ${holds.map(v=>Object.is(v,-0)?'-0':v).join(',')}`,()=>{
+ const input:Chunk={...chunk(0,'A'),to:(holds.length+1)*M,
+  series:[{source:'s',window:'wA',hold:holds[0],open:null,cells:holds.map((hold,i)=>[i?i+1:0,80-i,0,0,{h:hold}])}]};
+ const tile=new HistoryTile(0,M);tile.merge(input,known);
+ const windows=new Set(['s wA']);
+ for(const first of [0,1]){
+  tile.nativeFrom=first*M;tile.nativeTo=input.to;
+  const wire=drain(tile.chunkPrepared(known,false,input.to,'native'));
+  const expected=wire.series.flatMap(series=>decodeCells(series,wire.from,M,0));
+  const decoded=drain(tile.composeChunkPrepared(input.to,'native',windows)),actual:DecodedCell[]=[];
+  for(const series of decoded.series)drain(series.consumeCells(0,value=>actual.push(value)));
+  assert.deepStrictEqual(actual,expected);
+ }
 });
 
 for(const plane of ['native','all'] as const)test(`decoded ${plane} readers keep captured buffers and bounds after COW replacement`,()=>{

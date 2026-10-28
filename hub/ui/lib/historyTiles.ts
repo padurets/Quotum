@@ -1,4 +1,4 @@
-import {decodeCellsPrepared, encodeCellsPrepared,canonicalCellsPrepared, TILE_CELLS,planRowAt,planRowBytes,planRowDeadline, type PlanRow,type Chunk,type DecodedChunk,type DecodedSeriesReader, type DecodedCell, type HistoryMeta} from '../../server/domain/history';
+import {decodeCellsPrepared, encodeCellsPrepared,canonicalCell,modalHoldPrepared, TILE_CELLS,planRowAt,planRowBytes,planRowDeadline, type PlanRow,type Chunk,type DecodedChunk,type DecodedSeriesReader, type DecodedCell, type HistoryMeta} from '../../server/domain/history';
 
 import {drain, type Preparation} from './prepare';
 import {MeterTile} from './meterTiles';
@@ -279,15 +279,12 @@ export class HistoryTile {
 
   /** Local composition reads one selected series at a time, without a wire roundtrip. */
   *composeChunkPrepared(now:number,plane:Plane,windows:ReadonlySet<string>):Preparation<DecodedChunk>{
-    const tile=this,cell=this.cell;
+    const tile=this;
     return yield*this.readChunkPrepared(false,now,plane,function*(s,readFrom,readTo):Preparation<DecodedSeriesReader|null>{
       yield;
       if(!windows.has(`${s.source} ${s.window}`))return null;
       const packed={...s};
-      return {source:s.source,window:s.window,*readCells(since){
-        const cells=yield*tile.seriesCellsPrepared(packed,readFrom,readTo);
-        return yield*canonicalCellsPrepared(readFrom,cell,since,cells);
-      }};
+      return {source:s.source,window:s.window,*consumeCells(since,consume){yield*tile.consumeSeriesPrepared(packed,readFrom,readTo,since,consume);}};
     });
   }
 
@@ -297,10 +294,30 @@ export class HistoryTile {
       yield;
       const at=i*FIELDS;
       if(Number.isNaN(s.values[at]))continue;
-      const v=s.values.subarray(at,at+FIELDS),end=s.ends?.[i];
-      cells.push({at:this.from+i*this.cell,low:v[0],first:v[1],last:v[2],open:Number.isNaN(v[3])?null:v[3],gap:!!v[4],hold:v[5],spent:v[6],covered:v[7],work:[v[8],v[9],v[10]],...(end!==undefined&&!Number.isNaN(end)?{validUntil:end}:{})});
+      cells.push(this.seriesCell(s,i));
     }
     return cells;
+  }
+
+  private seriesCell(s:PackedSeries,i:number):DecodedCell{
+    const at=i*FIELDS,v=s.values,end=s.ends?.[i];
+    return {at:this.from+i*this.cell,low:v[at],first:v[at+1],last:v[at+2],open:Number.isNaN(v[at+3])?null:v[at+3],gap:!!v[at+4],hold:v[at+5],spent:v[at+6],covered:v[at+7],work:[v[at+8],v[at+9],v[at+10]],...(end!==undefined&&!Number.isNaN(end)?{validUntil:end}:{})};
+  }
+
+  private *consumeSeriesPrepared(s:PackedSeries,readFrom:number,readTo:number,since:number,consume:(cell:DecodedCell)=>void):Preparation<void>{
+    const tile=this;
+    let previous:number|null|undefined,zeroMode:boolean|undefined;
+    for(let i=(readFrom-this.from)/this.cell;this.from+i*this.cell<readTo;i++){
+      yield;
+      if(Number.isNaN(s.values[i*FIELDS]))continue;
+      const value=this.seriesCell(s,i);
+      // Only an implicit negative-zero hold changes under the wire mode's Map key.
+      if(Object.is(value.hold,-0)&&zeroMode===undefined)zeroMode=(yield*modalHoldPrepared((function*(){
+        for(let j=(readFrom-tile.from)/tile.cell;tile.from+j*tile.cell<readTo;j++)if(!Number.isNaN(s.values[j*FIELDS]))yield s.values[j*FIELDS+5];
+      })()))===0;
+      const row=canonicalCell(value,readFrom,this.cell,since,previous,Object.is(value.hold,-0)&&zeroMode?0:value.hold);
+      previous=row.last;consume(row);
+    }
   }
 
   private *readChunkPrepared<S>(plot:boolean,now:number,plane:Plane,readSeries:(s:PackedSeries,from:number,to:number)=>Preparation<S|null>):Preparation<Omit<Chunk,'series'>&{series:S[]}>{

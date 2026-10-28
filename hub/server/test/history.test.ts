@@ -1,10 +1,9 @@
 import {activity} from './activityReference.js';
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {cellOf, compose, canonicalCellsPrepared, decodeCells, encodeCells, expandHistory, targetOf, tileOf, type Chunk, type DecodedCell} from '../domain/history.js';
+import {cellOf, compose, canonicalCell, decodeCells, encodeCells, expandHistory, targetOf, tileOf, type Chunk, type DecodedCell} from '../domain/history.js';
 import {cellsOf, workFrom, type CellSamples} from '../domain/cells.js';
 import {edge} from '../domain/quota.js';
-import {drain} from '../domain/prepare.js';
 import {barOf, overlap, union, type Stretch} from '../domain/work.js';
 
 const M = 60_000;
@@ -216,11 +215,17 @@ function canonicalCases(){
  add('exclusive-bound-and-missing-bound',1800000000000,CELL,1800000300000,[value(1800000000000,50,{validUntil:1800000300000}),value(1800000300000,49),value(1800000600000,48,{validUntil:1800000600001})]);
  add('fractional-grid-reconstruction',1000.1,.3,1000.4,[value(1000.1,.1,{open:null}),value(1000.4,.2,{open:.1}),value(1000.7,.3,{open:.2})]);
  add('nonfinite-internal-sentinel',0,CELL,Infinity,[value(0,NaN,{open:NaN,first:NaN,last:NaN,spent:NaN,work:[NaN,0,NaN]}),value(CELL,Infinity,{open:null,first:Infinity,last:Infinity,hold:Infinity})]);
- assert.equal(cases.length,15);return cases;
+ for(const holds of [[-0,1],[1,-0],[-0,1,1],[0,-0]])add('hold-tie-'+cases.length,0,CELL,0,holds.map((hold,i)=>value(i*CELL,80-i,{hold})));
+ assert.equal(cases.length,19);return cases;
 }
 for(const sample of canonicalCases())test('internal canonical cells match the unchanged wire codec: '+sample.name,()=>{
  const encoded=encodeCells('s','w',sample.from,sample.step,sample.since,sample.rows);
  const expected=decodeCells(encoded,sample.from,sample.step,sample.since);
- assert.deepStrictEqual(drain(canonicalCellsPrepared(sample.from,sample.step,sample.since,sample.rows)),expected);
+ let previous:number|null|undefined;
+ const actual=sample.rows.map(value=>{
+  const row=canonicalCell(value,sample.from,sample.step,sample.since,previous,Object.is(value.hold,-0)&&encoded.hold===0?0:value.hold);
+  previous=row.last;return row;
+ });
+ assert.deepStrictEqual(actual,expected);
  if(sample.name==='first-is-low-for-nonnull-open')assert.notDeepStrictEqual(sample.rows,expected,'raw tile values are not canonical decoded cells');
 });
