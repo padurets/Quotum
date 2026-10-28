@@ -34,7 +34,8 @@ for(const mode of ['live','disposed','save-failed','no-evidence'])test('fixed Ac
     assert.equal(receipts[0].name,'fixed-activity-command');
     const saved=receipts[0].value as ReturnType<typeof cdp.snapshot>&{days:number;capturedAtMs:number;wallAt:number};
     assert.equal(saved.days,30);assert.equal(saved.context,state.context);assert.equal(saved.pending[0].id,8);assert.equal(saved.lastReply.id,7);
-    assert.equal(saved.pending[0].deadline-saved.pending[0].started,30_000);
+    assert.equal(saved.pending[0].started,started);
+    assert.equal(saved.pending[0].deadline,started+30_000);
     assert.ok(saved.capturedAtMs>=started&&saved.wallAt>0);
     process.emit('SIGTERM');assert.equal(receipts.length,1);assert.equal(snapshots,1);
   }else assert.equal(receipts.length,0);
