@@ -22,7 +22,7 @@ import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
 import {fixtureTiming, idlePhaseProblems, idlePhaseScript, idleWindow, overviewCards, quietAfter, stillProblems, stillSnapshot, warmUntil, type IdlePhase} from './still.js';
 import {hear, type Heard} from './stream.js';
-import {frequencyKeys, frequencySource, normalizeUpdates, moneyView, selectMoney} from './controls.js';
+import {frequencyKeys, frequencySource, normalizeUpdates, moneyView, selectMoney, recentCalendarTotalScript} from './controls.js';
 import {panning} from './panning.js';
 import {panningProblems,type NativePanTarget} from './panningBudget.js';
 import {seedPanningBudgets,panningSet} from './fixture.js';
@@ -993,7 +993,7 @@ async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cd
       // The opposite end of a live period may retire older work during this report.
       // Check the recent buckets receiving this credit, with one fixed comparison cut.
       const calendarFrom=Date.now()-2*3_600_000;
-      calendarTotal=`Array.from(document.querySelectorAll('.agent-hours-heatmap [data-agent-ms]')).filter(node=>Number(node.getAttribute('data-heatmap-cell'))>=${calendarFrom}).reduce((sum,node)=>sum+Number(node.getAttribute('data-agent-ms')),0)`;
+      calendarTotal=recentCalendarTotalScript(calendarFrom);
       calendarBefore=await cdp.evaluate<number>(calendarTotal);
       requests = new Requests(cdp,true); requests.counting = true;traffic.push(requests);
       from = Date.now();
