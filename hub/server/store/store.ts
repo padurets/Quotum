@@ -59,6 +59,33 @@ export type DeviceFailure = {accountKey?: string; device: string; provider: Prov
 export type Announcement = {at: number; url: string; text: string};
 type WorkCreditChanges={changed:boolean;since:number;evidence:boolean;sources:Set<string>};
 
+function creditWorkStatements(db:DatabaseSync){
+  const add = db.prepare(
+    'INSERT INTO agent_sessions (device_id, client, source_id, origin, started_at, project, folder, ordinal, producer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
+  );
+  const legacy = db.prepare(
+    "SELECT id FROM agent_sessions WHERE device_id = ? AND client = ? AND COALESCE(source_id,'') = COALESCE(?,'') AND source_id IS ? AND started_at = ? AND origin = ? AND project = ? AND folder = ? AND ordinal = ? AND producer_id IS NULL",
+  );
+  const stable = db.prepare(
+    "SELECT id FROM agent_sessions WHERE device_id = ? AND client = ? AND producer_id = ? AND COALESCE(source_id,'') = COALESCE(?,'') AND source_id IS ? AND origin = ? AND project = ? AND folder = ?",
+  );
+  // Each contextual row has non-overlapping stretches, so its last start ends latest.
+  const latest = db.prepare('SELECT to_at AS at FROM agent_work WHERE session_id = ? ORDER BY from_at DESC LIMIT 1');
+  const highWater = db.prepare(
+    'SELECT max((SELECT to_at FROM agent_work WHERE session_id = s.id ORDER BY from_at DESC LIMIT 1)) AS at FROM agent_sessions s WHERE device_id = ? AND client = ? AND producer_id = ?',
+  );
+  const floors = db.prepare(
+    'SELECT producer_id IS NULL AS legacy, max((SELECT to_at FROM agent_work WHERE session_id = s.id ORDER BY from_at DESC LIMIT 1)) AS at FROM agent_sessions s WHERE device_id = ? GROUP BY producer_id IS NULL',
+  );
+  const extend = db.prepare('UPDATE agent_work SET to_at = ? WHERE session_id = ? AND to_at = ?');
+  const begin = db.prepare('INSERT INTO agent_work VALUES (?, ?, ?) ON CONFLICT (session_id, from_at) DO UPDATE SET to_at = max(to_at, excluded.to_at)');
+  const owner=db.prepare('SELECT user_id AS user FROM devices WHERE id=?');
+  const evidence=db.prepare('SELECT account_by AS accountBy,route_class AS class,route_by AS by,route_host AS host,route_provider AS provider FROM agent_sessions WHERE id=?');
+  const saveEvidence=db.prepare('UPDATE agent_sessions SET account_by=?,route_class=?,route_by=?,route_host=?,route_provider=? WHERE id=?');
+  const workEvidence=db.prepare("INSERT INTO meta VALUES (?,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1");
+  return {add,legacy,stable,latest,highWater,floors,extend,begin,owner,evidence,saveEvidence,workEvidence};
+}
+
 /** A source as a board shows it: with the people who measure it and whether they shared it here. */
 export type BoardSource = Source & {holders: string[]; sharedBy: string | null; budget?: BudgetAccess};
 
@@ -76,6 +103,7 @@ export class Store {
   readonly links: LinkStore;
   readonly coverage: CoverageStore;
   readonly usageWork: UsageWithoutWork;
+  private creditStatements?:ReturnType<typeof creditWorkStatements>;
   private workGeneration=0;
   workRevision():number {return this.workGeneration;}
 
@@ -989,32 +1017,12 @@ export class Store {
   /** Captured attribution requires unchanged links, holdings and device policies. */
   creditWork(device: string, from: number, until: number, keys: WorkKey[],changes?:WorkCreditChanges,captured?:ReturnType<LinkStore['batch']>) {
     if (until <= from || !keys.length) return;
-    const add = this.db.prepare(
-      'INSERT INTO agent_sessions (device_id, client, source_id, origin, started_at, project, folder, ordinal, producer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
-    );
-    const legacy = this.db.prepare(
-      "SELECT id FROM agent_sessions WHERE device_id = ? AND client = ? AND COALESCE(source_id,'') = COALESCE(?,'') AND source_id IS ? AND started_at = ? AND origin = ? AND project = ? AND folder = ? AND ordinal = ? AND producer_id IS NULL",
-    );
-    const stable = this.db.prepare(
-      "SELECT id FROM agent_sessions WHERE device_id = ? AND client = ? AND producer_id = ? AND COALESCE(source_id,'') = COALESCE(?,'') AND source_id IS ? AND origin = ? AND project = ? AND folder = ?",
-    );
-    // Each contextual row has non-overlapping stretches, so its last start ends latest.
-    const latest = this.db.prepare('SELECT to_at AS at FROM agent_work WHERE session_id = ? ORDER BY from_at DESC LIMIT 1');
-    const highWater = this.db.prepare(
-      'SELECT max((SELECT to_at FROM agent_work WHERE session_id = s.id ORDER BY from_at DESC LIMIT 1)) AS at FROM agent_sessions s WHERE device_id = ? AND client = ? AND producer_id = ?',
-    );
-    const floors = this.db.prepare(
-      'SELECT producer_id IS NULL AS legacy, max((SELECT to_at FROM agent_work WHERE session_id = s.id ORDER BY from_at DESC LIMIT 1)) AS at FROM agent_sessions s WHERE device_id = ? GROUP BY producer_id IS NULL',
-    );
-    const extend = this.db.prepare('UPDATE agent_work SET to_at = ? WHERE session_id = ? AND to_at = ?');
-    const begin = this.db.prepare('INSERT INTO agent_work VALUES (?, ?, ?) ON CONFLICT (session_id, from_at) DO UPDATE SET to_at = max(to_at, excluded.to_at)');
+    const {add,legacy,stable,latest,highWater,floors,extend,begin,owner:readOwner,evidence,saveEvidence,workEvidence}=this.creditStatements??=creditWorkStatements(this.db);
     const credited = new Map<string, number>();
     let changedFrom=Infinity;
-    const owner = (this.db.prepare('SELECT user_id AS user FROM devices WHERE id=?').get(device) as {user: string} | undefined)?.user;
+    const owner = (readOwner.get(device) as {user: string} | undefined)?.user;
     const contexts = captured??this.links.batch(owner ? [owner] : []);
     let changedEvidence = false;
-    const evidence = this.db.prepare('SELECT account_by AS accountBy,route_class AS class,route_by AS by,route_host AS host,route_provider AS provider FROM agent_sessions WHERE id=?');
-    const saveEvidence = this.db.prepare('UPDATE agent_sessions SET account_by=?,route_class=?,route_by=?,route_host=?,route_provider=? WHERE id=?');
     this.db.exec('SAVEPOINT credit');
     try {
       // Snapshot before writes: mixed packets must not clip one namespace against the
@@ -1041,7 +1049,7 @@ export class Store {
         }
         changedFrom=Math.min(changedFrom,start);
       }
-      if (changedEvidence && owner) this.db.prepare("INSERT INTO meta VALUES (?,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1").run('workEvidence:' + owner);
+      if (changedEvidence && owner) workEvidence.run('workEvidence:' + owner);
       this.db.exec('RELEASE credit');
     } catch (error) {
       this.db.exec('ROLLBACK TO credit');

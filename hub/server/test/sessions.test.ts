@@ -6,7 +6,7 @@ import type {Origin} from '../domain/ingest.js';
 import {agentTime, workTime, type Stretch} from '../domain/work.js';
 import {CREDIT_MS, KEEP_MS, Sessions, type LiveSession} from '../sessions.js';
 import {Directory} from '../store/directory.js';
-import {Store} from '../store/store.js';
+import {Store,type WorkKey} from '../store/store.js';
 import type {Touches} from '../touches.js';
 
 const start = 1_800_000_000_000;
@@ -488,5 +488,43 @@ test('cutover clips only opposite retained credit, and mixed namespaces use a sn
     assert.equal(rows.filter(s => s.session === 1).reduce((sum, s) => sum + s.to - s.from, 0), 2 * minute, 'downgrade is clipped against stable high water');
     assert.equal(rows.filter(s => s.session === 3).reduce((sum, s) => sum + s.to - s.from, 0), 2 * minute, 'stable parallel credit is independent of loop order');
     store.close();
+  }
+});
+
+
+test('credit statements belong to one store and reread devices, bounds and namespaces after rollback', t => {
+  let previousSql:string[]|undefined,previousStatement:unknown;
+  for(let fresh=0;fresh<2;fresh++){
+    const {store,ann,bob,laptop,server}=setup(),captured=store.links.batch([ann,bob]);
+    const work=store.db.prepare('SELECT session_id,from_at,to_at FROM agent_work ORDER BY session_id,from_at');
+    const changes={changed:false,since:Infinity,evidence:false,sources:new Set<string>()};
+    const prepare=t.mock.method(store.db,'prepare');
+    const context={client:'codex',source:'codex:1',origin:'terminal' as const,startedAt:start,project:'prepared',folder:''};
+    const legacy:WorkKey={...context,identity:{kind:'legacy',ordinal:0}};
+    const stable:WorkKey={...context,identity:{kind:'stable',sessionId:'a'.repeat(32)}};
+    try{
+      store.creditWork(laptop,start,start,[],changes,captured);
+      assert.equal(prepare.mock.callCount(),0,'empty credit never prepares a family');
+      store.creditWork(laptop,start,start+100,[legacy],changes,captured);
+      const sql=prepare.mock.calls.map(call=>call.arguments[0]),compiled=prepare.mock.callCount();
+      assert.ok(compiled>0);assert.equal(new Set(sql).size,compiled,'each fixed query is prepared once');
+      if(previousSql){assert.deepEqual(sql,previousSql);assert.notEqual(prepare.mock.calls[0].result,previousStatement,'a fresh database owns fresh statements');}
+      previousSql=sql;previousStatement=prepare.mock.calls[0].result;
+      store.creditWork(laptop,start+50,start+200,[stable,legacy],changes,captured);
+      store.creditWork(server,start-100,start+300,[{...stable,source:null}],changes,captured);
+      const before=work.all();
+      assert.throws(()=>store.creditWork(laptop,start+300,start+400,[{...stable,project:'rolled-back'},{...legacy,origin:null} as unknown as WorkKey],changes,captured),{code:'ERR_SQLITE_ERROR'});
+      assert.deepEqual(work.all(),before,'a failed native write rolls back earlier keys in its savepoint');
+      store.creditWork(server,start+300,start+400,[stable],changes,captured);
+      let entered=false;
+      const reentrant=Object.assign((owner:string,device:string,client:string)=>{
+        if(!entered){entered=true;store.creditWork(server,start+600,start+700,[stable],changes,captured);}
+        return captured(owner,device,client);
+      },{revision:captured.revision});
+      store.creditWork(laptop,start+500,start+600,[stable],changes,reentrant);
+      assert.ok(entered,'attribution can reenter after native statements return');
+      assert.ok(work.all().some(row=>row.from_at===start+600&&row.to_at===start+700));
+      assert.equal(prepare.mock.callCount(),compiled,'changed arguments, rollback and reentry reuse the same fixed family');
+    }finally{prepare.mock.restore();store.close();}
   }
 });
