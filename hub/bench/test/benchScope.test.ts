@@ -366,15 +366,15 @@ for(const mode of ['native-trace','native-profile'])for(const scope of ['all','d
   assert.ok(result.calls.indexOf('native-trace-created')>result.calls.indexOf('frequency'));
   assert.equal(result.calls.filter(call=>call==='native-trace-close').length,1);
 });
-for(const fault of ['panning','panning-throw','cancel'] as const)test('native-trace preserves original '+fault,async()=>{
-  const result=await run(['--scope','dashboard'],fault,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'native-trace'});
+for(const target of [undefined,'budget/30d'])for(const fault of ['panning','panning-throw','cancel'] as const)test('native-trace '+(target??'default')+' preserves original '+fault,async()=>{
+  const result=await run(['--scope','dashboard'],fault,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'native-trace',...(target?{QUOTUM_BENCH_NATIVE_TARGET:target}:{})});
   assert.equal(result.error,undefined);assert.deepEqual(result.exits,[1]);assert.deepEqual(result.statuses,[fault==='cancel'?'cancelled':'failed']);
   assert.equal(result.calls.filter(call=>call==='native-trace-close').length,1);
   if(fault==='panning')assert.ok((result.saved.get('result') as {problems:string[]}).problems.includes('panning-red'));
   if(fault==='panning-throw')assert.ok(result.logs.some(line=>line.includes('panning-original')));
 });
-for(const mode of ['native-trace','native-profile'])test('history still rejects '+mode+' before preparation',async()=>{
-  const result=await run(['--scope','history'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode});assert.match(String(result.error),/scope/i);assert.deepEqual(result.calls,[]);
+for(const target of [undefined,'budget/30d'])for(const scope of ['history','updates','panning'])for(const mode of ['native-trace','native-profile'])test(scope+' still rejects '+mode+' '+(target??'default')+' before preparation',async()=>{
+  const result=await run(['--scope',scope],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,...(target?{QUOTUM_BENCH_NATIVE_TARGET:target}:{})});assert.match(String(result.error),/scope/i);assert.deepEqual(result.calls,[]);
 });
 for(const mode of ['native-trace','native-profile','trace','profile'])test(mode+' refuses attached, non-CI and conflicting diagnostic runs before preparation',async()=>{
   const cases:[string[],Record<string,string>,boolean][]=[
@@ -695,20 +695,26 @@ for(const direct of [false,true])test('actual main preserves reversal failure an
   for(const name of ['stream-close','browser-close','demo-stop'])assert.equal(out.calls.filter(call=>call===name).length,1);
 });
 
-for(const mode of ['native-trace','native-profile'])test('native target routes session30d through actual main with every original phase and owned cleanup '+mode,async()=>{
-  const result=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,QUOTUM_BENCH_NATIVE_TARGET:'session/30d'});
+for(const target of ['session/30d','budget/30d'])for(const mode of ['native-trace','native-profile'])test('native target routes '+target+' through actual main with every original phase and owned cleanup '+mode,async()=>{
+  const result=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,QUOTUM_BENCH_NATIVE_TARGET:target});
   assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);assert.deepEqual(result.statuses,['diagnostic']);
-  assert.equal(result.calls.filter(call=>call==='native-target:session/30d').length,1);assert.equal(result.calls.filter(call=>call==='native-trace-created').length,1);
+  assert.equal(result.calls.filter(call=>call==='native-target:'+target).length,1);assert.equal(result.calls.filter(call=>call==='native-trace-created').length,1);
+  assert.equal(result.calls.includes('idle-trace-created'),false);
+  const bootstrap=result.bootstraps.find(source=>source.includes('__quotumPanPreparations'));assert.ok(bootstrap,'the selected target receives the actual scheduler hook');
+  const inspections:unknown[]=[],page={__quotumInspectPreparations:(value:unknown)=>inspections.push(value)};
+  runInNewContext(bootstrap,{window:page,localStorage:{getItem:()=>null,setItem:()=>{}}});
+  const scheduler={fixture:'scheduler'};page.__quotumInspectPreparations(scheduler);
+  assert.deepEqual(inspections,[scheduler]);assert.equal((page as typeof page&{__quotumPanPreparations:unknown}).__quotumPanPreparations,scheduler);
   for(const phase of tail)assert.equal(result.calls.filter(call=>call===phase).length,1);
   const panned=result.saved.get('panning') as {reports:unknown[]};assert.equal(panned.reports.length,10);
   for(const action of ['stream-close','native-trace-close','browser-close','demo-stop'])assert.equal(result.calls.filter(call=>call===action).length,1);
-  const failed=await run(['--scope','dashboard'],'panning',{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,QUOTUM_BENCH_NATIVE_TARGET:'session/30d'});
+  const failed=await run(['--scope','dashboard'],'panning',{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,QUOTUM_BENCH_NATIVE_TARGET:target});
   assert.deepEqual(failed.exits,[1]);assert.deepEqual(failed.statuses,['failed']);assert.ok((failed.saved.get('result') as {problems:string[]}).problems.includes('panning-red'));
   for(const action of ['native-trace-close','browser-close','demo-stop'])assert.equal(failed.calls.filter(call=>call===action).length,1);
 });
 
 test('native target refuses unknown or non-native selection before preparation and preserves the default',async()=>{
-  for(const [mode,target] of [['native-trace','session/24h'],['native-profile','activity/30d'],['trace','session/30d'],['','session/30d']]){
+  for(const [mode,target] of [['native-trace','session/24h'],['native-profile','activity/30d'],['native-trace','budget/24h'],['native-profile','funds/30d'],['trace','session/30d'],['','session/30d'],['trace','budget/30d'],['','budget/30d']]){
     const result=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,QUOTUM_BENCH_NATIVE_TARGET:target});
     assert.match(String(result.error),/native trace target/i);assert.ok(!result.calls.includes('prepare'));assert.ok(!result.calls.includes('launch'));
   }

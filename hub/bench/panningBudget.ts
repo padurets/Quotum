@@ -1,7 +1,7 @@
 import {percentile} from './budget.js';
 import type {PanTransactions} from './panEvidence.js';
 
-export type NativePanTarget='activity/24h'|'session/30d'|'quota/24h';
+export type NativePanTarget='activity/24h'|'session/30d'|'quota/24h'|'budget/30d';
 export type PanningSample={index:number;sampleId:number;rafId:number;token:number|null;at:number;stamp:number;ms:number;segment:string;inputSegment:string;pending:number;requests:number};
 export type PanSettlements={status:'complete'|'insufficient-evidence';rows:{segment:'wheel'|'drag'|'return';begin:number|null;ready:number|null;end:number|null;densityBegin:number|null;densityEnd:number|null;polls:number;
   blockers:{loading:number;panEnd:number;drawReady:number;isPanning:number;forecastRange:number;budgetTableRange:number;agentsRange:number}}[]};

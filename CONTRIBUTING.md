@@ -310,9 +310,10 @@ An explicit diagnostic replay may also intervene. Neither can provide a passing
 canonical result.
 `native-trace` and `native-profile` observe `activity/24h` by default. With either
 mode, `QUOTUM_BENCH_NATIVE_TARGET=session/30d` selects the five-hour limits chart at
-30d; the manual CI input `native_target` chooses the same cell. All dashboard
-scenarios keep their workloads, budgets and deadlines. The `session/30d` selection
-also writes `native-panning-receipt.json` after its measured report freezes. Movement
+30d, and `budget/30d` selects the balance chart at 30d; the manual CI input
+`native_target` chooses the same cell. All dashboard scenarios keep their workloads,
+budgets and deadlines. Both selections also write `native-panning-receipt.json`
+after the measured report freezes. Movement
 intervals, consumed inputs, wrapped RAF callbacks and preparation slices share a
 4096-entry journal and a 4 MiB artifact bound. Missing coverage or overflow is
 insufficient evidence; trace overlap does not establish causal ownership, and

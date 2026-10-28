@@ -107,8 +107,13 @@ test('the pinned quota24 trace alone selects standalone panning in the existing 
   const dashboard=job('bench-dashboard');assert.equal(evaluate(expression(dashboard,'BENCH_SCOPE'),inputs),'panning');
   assert.equal(evaluate(expression(dashboard,'QUOTUM_BENCH_EXPECTED_CLIENT_SHA256'),inputs),inputs.expected_client_sha256);
   assert.equal(evaluate(expression(dashboard,'QUOTUM_BENCH_SOURCE_SHA'),inputs),inputs.diagnostic_ref);
-  for(const target of ['activity/24h','session/30d'])for(const mode of ['native_trace','native_profile'])assert.equal(evaluate(expression(dashboard,'BENCH_SCOPE'),{diagnostic_ref:inputs.diagnostic_ref,[mode]:true,native_target:target}),'dashboard');
-  assert.ok(ci.includes('options: [activity/24h, session/30d, quota/24h]'));assert.ok(dashboard.includes('timeout-minutes: 20'));
+  for(const target of ['activity/24h','session/30d','budget/30d'])for(const mode of ['native_trace','native_profile']){
+    const selectedInputs={diagnostic_ref:inputs.diagnostic_ref,[mode]:true,native_target:target};
+    assert.equal(evaluate(expression(dashboard,'BENCH_SCOPE'),selectedInputs),'dashboard');
+    assert.equal(selected('bench-dashboard',selectedInputs),true);
+    for(const name of ['bench','bench-history','bench-panning','idle-cpu-control','native-postmortem-control','startup-io-control'])assert.equal(selected(name,selectedInputs),false,name);
+  }
+  assert.ok(ci.includes('options: [activity/24h, session/30d, quota/24h, budget/30d]'));assert.ok(dashboard.includes('timeout-minutes: 20'));
 });
 
 

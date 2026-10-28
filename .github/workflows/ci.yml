@@ -51,7 +51,7 @@ on:
         required: false
         type: choice
         default: activity/24h
-        options: [activity/24h, session/30d, quota/24h]
+        options: [activity/24h, session/30d, quota/24h, budget/30d]
       caption_control:
         description: Compare the previous and current live captions with an A1/B/A2 control
         required: false
