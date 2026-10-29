@@ -1,9 +1,14 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {runInNewContext} from 'node:vm';
+import {readFileSync} from 'node:fs';
+import ts from 'typescript';
 import {HistoryPool} from '../../ui/lib/historyPool';
+import {PeriodTransport,type PeriodIntent} from '../../ui/lib/periodTransport';
+import {expandPeriod} from '../../server/domain/periodWire';
+import {ApiError} from '../../ui/lib/http';
 import {historyPressureScript,saveHistoryPressure} from '../historyPressure';
-import {historyPageScript} from '../historyTrafficBrowser';
+import {historyPageScript,historyIdentityScript} from '../historyTrafficBrowser';
 import {safeEvidence} from '../evidence';
 
 test('the complete generated history bootstrap applies preferences, tags fetches and installs its pressure hook',async()=>{
@@ -25,12 +30,13 @@ test('the complete generated history bootstrap applies preferences, tags fetches
   }
 });
 
-function fixture(enabled=true,order=['quota','budget','funds']){
-  const pool=new HistoryPool(100);let getters=0,json=0,clocks=0,wraps=0;
-  const context:any={Map,Set,WeakMap,Date:{now:()=>{clocks++;return 1000;}},performance:{now:()=>{clocks++;return 1;}},JSON:{parse:JSON.parse,stringify:(v:unknown)=>{json++;return JSON.stringify(v);}}};
+function fixture(enabled=true,order=['quota','budget','funds'],makeTransport?:(pool:HistoryPool,context:any)=>any,budget=100){
+  const pool=new HistoryPool(budget);let getters=0,json=0,clocks=0,wraps=0,frames=0,scripts=0;
+  let caller='Error\n    at caller (http://fixture.invalid/assets/index-fixture.js:11:22)\n    at ignored (http://other.invalid/private-canary.js:7:8)';
+  const context:any={Map,Set,WeakMap,URL,Headers,Request,location:{href:'http://fixture.invalid/'},Error:function(){frames++;return{stack:caller};},document:{get scripts(){scripts++;return context.modules;}},modules:[{type:'module',src:'http://fixture.invalid/assets/index-fixture.js'}],Date:{now:()=>{clocks++;return 1000;}},performance:{now:()=>{clocks++;return 1;}},JSON:{parse:JSON.parse,stringify:(v:unknown)=>{json++;return JSON.stringify(v);}}};
   context.window=context;if(enabled)runInNewContext(historyPressureScript(),context);
   if(enabled)context.__quotumInspectHistoryPool(pool);
-  const transport={queue:[] as any[],flights:new Set(),read(scope:string,query:unknown,signal:unknown){this.queue.push({scope,query,signal});return Promise.resolve('unchanged');}};
+  const transport=makeTransport?.(pool,context)??{queue:[] as any[],flights:new Set(),onSend:undefined as undefined|((...args:any[])=>unknown),send(...args:any[]){return this.onSend?.(...args)??Promise.resolve('unchanged');},read(scope:string,query:unknown,signal:unknown){this.queue.push({scope,query,signal});return Promise.resolve('unchanged');}};
   const period={transport,retained:new Map(),valueCache:new Map(),bytes:0,get estimatedBytes(){getters++;return 0;},evictionCandidates:()=>[]};
   const charts=order.map(scope=>{
     const grids=new Map<number,Map<number,any>>();
@@ -38,12 +44,12 @@ function fixture(enabled=true,order=['quota','budget','funds']){
       get estimatedBytes(){getters++;return [...grids.values()].reduce((sum,m)=>sum+[...m.values()].reduce((n,t)=>n+t.bytes,0),0);},
       evictionCandidates(){return [...grids.values()].flatMap(m=>[...m].map(([key,tile])=>{let drop=()=>{m.delete(key);member.nested?.();};return Object.defineProperty({bytes:tile.bytes,shownAt:0},'drop',{get:()=>drop,set:value=>{wraps++;drop=value;}}) as {bytes:number;shownAt:number;drop():void};}));},
       nested:undefined as (()=>void)|undefined,
-      env:{read(_board:string,cell:number,from:number,to:number){return transport.read(scope,{cell,from,to},{});}}};
+      env:{read(_board:string,cell:number,from:number,to:number){return transport.read(scope,{cell,from,to},new AbortController().signal);}}};
     return member;
   });
-  pool.register(period);for(const chart of charts){pool.register(chart);chart.env.read('synthetic',60,0,60);}
+  const pending:Promise<unknown>[]=[];pool.register(period);for(const chart of charts){pool.register(chart);const read=chart.env.read('synthetic',60,0,60);pending.push(read);void read.catch(()=>{});}
   const seed=(chart=charts[0],key=0)=>{if(!chart.grids.has(60))chart.grids.set(60,new Map());chart.grids.get(60)!.set(key,{from:key*60,to:(key+1)*60,readFrom:key*60,readTo:(key+1)*60,nativeFrom:key*60,nativeTo:(key+1)*60,validTo:(key+1)*60,nativeValidTo:(key+1)*60-15,writeSeq:key+5,nativeSeq:key+3,bytes:80});};
-  return{pool,period,charts,context,seed,read:()=>context.__quotumHistoryPressure.read(),counters:()=>({getters,json,clocks,wraps})};
+  return{pool,period,charts,context,seed,pending,setCaller:(value:string)=>{caller=value;},read:()=>context.__quotumHistoryPressure.read(),counters:()=>({getters,json,clocks,wraps,frames,scripts})};
 }
 
 test('ordinary reservations add no byte getter, serialization or clock reads before pressure',()=>{
@@ -119,4 +125,90 @@ test('postfailure export preserves the primary rejection through reader, writer 
     if(fault!=='writer'){assert.equal(saved[0].name,'pressure-fixture');assert.ok(!JSON.stringify(saved).includes('private-canary'));assert.equal(saved[0].value.status,fault==='none'?'complete':'insufficient-evidence');}
     assert.ok(reads<=1);
   }
+});
+
+
+test('critical callers use only the unique own module coordinates, once per reservation',()=>{
+  const h=fixture();h.seed();
+  const flight={role:'visible',historyMember:h.period,operation:'restore',preparing:false} as any;
+  assert.equal(h.pool.reserve(flight,40),true);
+  const receipt=h.read(),critical=receipt.rows.find((row:any)=>row.kind==='reserve-critical');
+  assert.equal(receipt.status,'complete');assert.equal(critical.preparing,false);
+  assert.equal(critical.attemptId,null);assert.equal(critical.sourceCount,1);assert.equal(critical.frameCount,1);
+  assert.deepEqual(JSON.parse(JSON.stringify(critical.frames)),[[1,11,22]]);
+  assert.equal(h.counters().frames,1);assert.equal(h.counters().scripts,1);
+  assert.equal(Object.hasOwn(h.context.Error,'stackTraceLimit'),false,'critical observation restores an absent stack setting');
+  assert.ok(critical.observerMs>=0);assert.equal(JSON.stringify(safeEvidence(receipt)),JSON.stringify(receipt));
+  assert.ok(!JSON.stringify(receipt).includes('private-canary'));
+  assert.ok(!JSON.stringify(receipt).includes('http://'));
+});
+
+test('a failed stack observation restores its setting and preserves actual admission',()=>{
+  const h=fixture();h.seed();
+  const Constructor=Object.assign(function(){throw new Error('private-canary');},{stackTraceLimit:7});h.context.Error=Constructor;
+  assert.equal(h.pool.reserve({role:'visible'},40),true);
+  assert.equal(Constructor.stackTraceLimit,7);
+  const receipt=h.read();assert.equal(receipt.status,'insufficient-evidence');assert.ok(receipt.errors>0);
+  assert.equal(h.charts[0].grids.get(60)!.size,0);assert.ok(!JSON.stringify(receipt).includes('private-canary'));
+});
+
+test('missing, ambiguous and overflowing caller coordinates remain insufficient without changing admission',()=>{
+  for(const fault of ['missing','ambiguous','overflow'] as const){
+    const h=fixture();h.seed();
+    if(fault==='missing')h.context.modules=[];
+    if(fault==='ambiguous')h.context.modules.push({type:'module',src:'http://fixture.invalid/assets/index-other.js'});
+    if(fault==='overflow')h.setCaller('Error\n'+Array.from({length:17},()=> '    at caller (http://fixture.invalid/assets/index-fixture.js:11:22)').join('\n'));
+    assert.equal(h.pool.reserve({role:'visible'},40),true);
+    const receipt=h.read(),critical=receipt.rows.find((row:any)=>row.kind==='reserve-critical');
+    assert.equal(receipt.status,'insufficient-evidence');assert.ok(receipt.callerMissing>0);assert.ok(critical.frames.length<=16);
+    assert.equal(h.charts[0].grids.get(60)!.size,0);
+  }
+});
+
+test('send binding preserves synchronous return and throws while rejecting duplicate attempt identities',()=>{
+  const h=fixture(),controller=new AbortController(),flight={role:'visible',controller,demands:[],preparing:true} as any;
+  h.period.transport.flights.add(flight);let calls=0;const returned=Promise.resolve('unchanged');
+  h.period.transport.onSend=()=>{calls++;h.context.__quotumHistoryPressure.request('b1:1','{}');h.context.__quotumHistoryPressure.request('b1:2','{}');return returned;};
+  assert.equal(h.period.transport.send('synthetic',{},controller.signal,()=>true),returned);assert.equal(calls,1);
+  assert.equal(h.pool.reserve(flight,101),false);
+  const receipt=h.read(),critical=receipt.rows.find((row:any)=>row.kind==='reserve-critical');
+  assert.equal(receipt.status,'insufficient-evidence');assert.ok(receipt.bindingErrors>0);assert.equal(critical.attemptId,null);assert.equal(critical.preparing,true);
+  const original=new Error('original-send');h.period.transport.onSend=()=>{calls++;throw original;};
+  assert.throws(()=>h.period.transport.send('synthetic',{},controller.signal,()=>true),error=>error===original);assert.equal(calls,2);
+});
+
+test('actual transport and native decoder bind the original send signal through expansion refusal',async()=>{
+  const wire={basis:{run:'synthetic',revision:'1',evaluatedAt:60_000,evidenceCut:60_000,range:{from:0,to:60_000}},calendar:{state:'complete',basis:['c','w','f'],value:{zone:'UTC',availableFrom:0,retainedFrom:0,cursor:'synthetic',grid:[0,60_000,1],cells:[0]}}};
+  const raw=JSON.stringify(wire),budget=Buffer.byteLength(raw)*3+128,stackLimit=Error.stackTraceLimit;
+  let fetchedSignal:AbortSignal|undefined,sendSignal:AbortSignal|undefined,receives=0,fetches=0;
+  const intent:PeriodIntent={board:'synthetic',generation:1,revision:1,request:{version:1,selection:{mode:'range',from:0,to:60_000},evaluatedAt:60_000}};
+  // Put the unchanged production decoder in the module named by DOM metadata.
+  const source=readFileSync(new URL('../../ui/lib/periodTransport.ts',import.meta.url),'utf8');
+  const emitted=ts.transpileModule(source.slice(source.indexOf('export async function fetchPeriod(')),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+  const lines=emitted.split('\n');
+  assert.equal(lines.filter(line=>line.includes('reserve(bytes * 3 + next)')).length,2);
+  const h=fixture(true,['quota','budget','funds'],(pool,context)=>{
+    Object.assign(context,{exports:{},AbortSignal,ApiError,expandPeriod,aborted:()=>new DOMException('Aborted','AbortError')});
+    runInNewContext(emitted,context,{filename:'http://fixture.invalid/assets/index-fixture.js'});
+    return new PeriodTransport(pool,()=>intent,()=>{receives++;},(...args)=>{sendSignal=args[2];return context.exports.fetchPeriod(...args);});
+  },budget);
+  // Use the real stack here; only the earlier scalar controls provide synthetic coordinates.
+  h.context.Error=Error;
+  h.context.fetch=async(_resource:unknown,init:RequestInit)=>{fetches++;fetchedSignal=init.signal as AbortSignal;return new Response(raw,{headers:{'content-type':'application/json'}});};
+  runInNewContext(historyIdentityScript(true),h.context);
+  try{
+    const results=await Promise.allSettled(h.pending);
+    await new Promise<void>(resolve=>setImmediate(resolve));
+    assert.equal(fetches,1);assert.equal(receives,0);assert.notEqual(fetchedSignal,sendSignal,'fetchPeriod composes its timeout signal');
+    assert.ok(results.every(result=>result.status==='rejected'&&result.reason.status===413&&result.reason.code==='history_limit'));
+    const receipt=h.read(),critical=receipt.rows.find((row:any)=>row.kind==='reserve-critical');
+    assert.equal(receipt.status,'complete',JSON.stringify(safeEvidence(receipt)));assert.equal(critical.owner.kind,'transport');assert.equal(critical.accepted,false);assert.equal(critical.complete,true);
+    assert.equal(critical.preparing,null);assert.match(critical.attemptId,/^b[0-9]+:1$/);assert.ok(critical.frames.length>0);
+    assert.ok(critical.frames.some((frame:number[])=>lines[frame[1]-1]?.includes('if (!reserve(bytes * 3 + next))')),'the bounded stack reaches the real expansion branch, beyond generic pool callbacks');
+    assert.equal(critical.bytes,Buffer.byteLength(raw)*3+256,'the actual packed-calendar expansion is the first refused reserve');
+    assert.equal(Object.keys(h.context.__quotumHistoryAttempts)[0],critical.attemptId);
+    assert.equal(Error.stackTraceLimit,stackLimit,'the original decoder leaves the stack setting unchanged');
+    assert.equal(h.pool.activeFlights,0);assert.equal(h.pool.estimatedBytes,0);assert.ok(!receipt.rows.some((row:any)=>row.kind==='drop-before'));
+    assert.equal(JSON.stringify(safeEvidence(receipt)),JSON.stringify(receipt));
+  }finally{h.period.transport.reset();}
 });
