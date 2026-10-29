@@ -31,6 +31,7 @@ const RETRY_MS = 15_000;
 const STORED_BYTES = 15 * 1024 * 1024;
 
 export type HistoryEnv = {
+  visibleFrom?():number;
   clock?:PageClock;
   read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection, meta?: HistoryBasis, owner?: HistoryReadOwner, activityOnly?:boolean): Promise<HistoryAnswer>;
   /** The shared transport owns HTTP admission until this reader settles its answer. */
@@ -87,6 +88,8 @@ export class HistoryStore {
   private meters: MeterSelection | undefined;
   private period = '24h';
   private selected: TimeRange | null = null;
+  // This cache hint never participates in the live time axis or its projections.
+  private seenFrom=Infinity;
   private shown: History | null = null;
   private presentation=0;
   private meta: HistoryBasis | null = null;
@@ -202,7 +205,7 @@ export class HistoryStore {
     this.metaAt = null;
     this.metaSeq = 0;
     this.cutTo = null;
-    this.grids.clear();
+    this.grids.clear();this.seenFrom=Infinity;
     this.abortFlights();
     this.interest = null;
     this.panReads = false;
@@ -353,6 +356,7 @@ export class HistoryStore {
     this.period = period;
     this.historyLimit=false;this.readError=false;this.activityError=null;this.clear('activityRetry');
     this.selected = selected;
+    this.seenFrom=Math.min(this.seenFrom,selected?.from??this.env.now()-periodOf(period).ms);
     if (!this.interest) this.panReads = false;
     this.needsCompose = true;
     this.reconsiderResponses();
@@ -380,6 +384,7 @@ export class HistoryStore {
 
   /** Geometry changes do not choose a committed target or compose its totals. */
   pan(interest: PlotInterest) {
+    this.seenFrom=Math.min(this.seenFrom,interest.from);
     this.flushNews();
     const previous = this.interest;
     if (!previous) {
@@ -597,8 +602,9 @@ export class HistoryStore {
     this.startWaiting();
     this.startResponses();
     if (!this.board || !this.ready || !this.run || this.historyLimit) return;
-    if(this.meters||this.pool){this.evict();if(this.historyLimit)return;}
     const target = this.target();
+    this.seenFrom=Math.min(this.seenFrom,this.interest?.from??this.selected?.from??target.now-target.length);
+    if(this.meters||this.pool){this.evict();if(this.historyLimit)return;}
     if(this.scope==='quota'&&!this.wantsActivity&&this.shown?.range===target.key&&this.composedNativeVersion===this.nativeVersion)this.needsCompose=false;
     if(this.scope==='budget'&&this.meters?.ids.length===0){
       this.meta??={run:this.run,now:this.env.now(),historyStart:this.historyStart,known:{work:0,sources:{}}};
@@ -1110,10 +1116,21 @@ export class HistoryStore {
 
   evictionCandidates() {
     const target=this.interest?this.plotTarget():this.target();
-    const candidates:{bytes:number;shownAt:number;drop:()=>void}[]=[];
+    const candidates:{bytes:number;shownAt:number;priority?:0;drop:()=>void}[]=[];
     for(const [cell,tiles] of this.grids)for(const [n,tile] of tiles){
       if(this.reservations.has(`${cell}:${n}`))continue;
-      if(this.active&&cell===target.cell&&tile.to>target.k0*cell&&tile.from<=(target.k1)*cell)continue;
+      if(this.active&&cell===target.cell&&tile.to>target.k0*cell&&tile.from<=target.k1*cell){
+        const before=Math.min(cellStart(this.seenFrom,cell),target.k0*cell,cellStart(this.env.visibleFrom?.()??Infinity,cell)),bytes=this.scope==='budget'?tile.prefixBytes(before):0;
+        if(bytes)candidates.push({bytes,shownAt:0,priority:0,drop:()=>{
+          const current=this.interest?this.plotTarget():this.target();
+          if(tiles.get(n)!==tile||this.reservations.has(`${cell}:${n}`)||cell!==current.cell||before>Math.min(cellStart(this.seenFrom,cell),current.k0*cell,cellStart(this.env.visibleFrom?.()??Infinity,cell)))return;
+          // Numeric frames are decoded copies. Retire every job/cache still borrowing packed input.
+          this.cancelProjection();this.plotVersion=-1;this.plotChunks.delete(`${cell}:${tile.from}`);this.plotChunks.delete(`native:${cell}:${tile.from}`);
+          const freed=tile.discardPrefix(before);this.schedule();if(!freed)return;
+          this.nativeProof=null;this.version++;this.aheadStopped=true;
+        }});
+        continue;
+      }
       // The complete displayed frame owns its geometry. Its former input tiles
       // can leave the cache while a different target is prepared.
       candidates.push({bytes:tile.bytes,shownAt:tile.shownAt,drop:()=>{
@@ -1166,7 +1183,7 @@ const keyOf = (lineup: string[]) => JSON.stringify([...lineup].sort());
 export {historyPool} from './historyPool';
 function reader(scope: HistoryScope, family: MoneyFamily = 'budget') {
   const value=new HistoryStore({
-    sharedTransport:true,workInPresentation:scope!=='budget',
+    visibleFrom:()=>pan.get()?.from??timeRange()?.from??hubNow()-periodOf(prefs().range).ms,sharedTransport:true,workInPresentation:scope!=='budget',
     read: (_board, cell, from, to, signal, meters, meta,owner,activityOnly) => boardPeriod.transport.read(family==='funds'?'funds':scope,{cell:String(cell),from:String(from),to:String(to),...(pan.get()?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{...(meters.sources?{sources:JSON.stringify(meters.sources)}:{}),unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})},signal,owner,activityOnly).then(reply=>expandHistory(reply,meta)),
     now: hubNow,
     setTimeout: (run, ms) => setTimeout(run, ms),

@@ -37,6 +37,7 @@ export class HistoryTile {
   private sourceWork:NonNullable<Chunk['activity']['sourceWork']>=[];
   private meters: MeterTile;
   private hasMeters=false;
+  private readers=0;
   private hasMoneyWork=false;
   private moneyWork=new Map<string,MoneyWorkCells>();
   private moneyBytes=0;
@@ -53,8 +54,19 @@ export class HistoryTile {
     return this.activity.byteLength + this.meters.bytes + this.moneyBytes + this.seriesBytes + this.sessions.length * 320 + this.groups.length * 192 + (this.resets.length + this.grants.length) * 192 + this.planBytes + this.sourceWork.length*192 + 1024;
   }
   get planDeadline(){return this.plansUntil;}
+  prefixBytes(before:number){
+    return !this.series.size&&Number.isSafeInteger(before)&&before>this.from&&before<this.readTo&&before<this.nativeTo&&(before-this.from)%this.cell===0?this.meters.prefixBytes(before):0;
+  }
+  discardPrefix(before:number){
+    if(this.readers||!this.prefixBytes(before))return 0;
+    const bytes=this.meters.discardPrefix(before);if(!bytes)return 0;
+    this.readFrom=Math.max(this.readFrom,before);this.validTo=Math.max(this.readFrom,this.validTo);
+    this.nativeFrom=Math.max(this.nativeFrom,before);this.nativeValidTo=Math.max(this.nativeFrom,this.nativeValidTo);
+    return bytes;
+  }
   /** A new work predicate cannot borrow any selected cells from the old one. */
   retireActivity():HistoryTile {
+    this.meters.share();
     return Object.assign(Object.create(HistoryTile.prototype),this,{
       readFrom:this.from,readTo:this.from,validTo:this.from,
       sessions:[],groups:[],devices:{},activity:new ArrayBuffer(HEAD),
@@ -63,6 +75,7 @@ export class HistoryTile {
   /** Expiry changes only this tile's new facts, preserving published generations. */
   retirePlans(now:number):HistoryTile|null {
     if(now<this.planDeadline)return null;
+    this.meters.share();
     const plans=this.plans.flatMap(row=>{const value=planRowAt(row,now);return value?[value]:[];});
     return Object.assign(Object.create(HistoryTile.prototype),this,{plans,planBytes:plans.reduce((n,row)=>n+planRowBytes(row),0),plansUntil:plans.reduce((n,row)=>Math.min(n,planRowDeadline(row)),Infinity),writeSeq:this.writeSeq+1}) as HistoryTile;
   }
@@ -71,6 +84,7 @@ export class HistoryTile {
   staged(chunk: Chunk, known: HistoryMeta['known']): Preparation<HistoryTile>;
   staged(chunk: Chunk, known: HistoryMeta['known'], admit: (bytes: number) => boolean,now?:number,plane?:Plane): Preparation<HistoryTile | null>;
   *staged(chunk: Chunk, known: HistoryMeta['known'], admit?: (bytes: number) => boolean,now=0,plane:Plane='all'): Preparation<HistoryTile | null> {
+    this.readers++;try{
     const native=plane!=='activity';
     const copy = new HistoryTile(this.from, this.cell);
     copy.readFrom = this.readFrom; copy.readTo = this.readTo; copy.validTo = this.validTo;
@@ -80,7 +94,7 @@ export class HistoryTile {
     for (const session of this.sessions) {copy.sessions.push(session); yield;}
     for (const group of this.groups) {copy.groups.push(group); yield;}
     for (const key in this.devices) {copy.devices[key] = this.devices[key]; yield;}
-    copy.hasMeters = this.hasMeters; copy.meters = native ? yield* this.meters.clonePrepared() : this.meters;
+    copy.hasMeters = this.hasMeters; copy.meters = native ? yield* this.meters.clonePrepared() : this.meters.share();
     copy.hasMoneyWork=this.hasMoneyWork;copy.moneyBytes=this.moneyBytes;
     for(const [key,group] of this.moneyWork){copy.moneyWork.set(key,group);yield;}
     copy.activity = this.activity; copy.resets = this.resets; copy.grants = this.grants;copy.plans=this.plans;copy.planBytes=this.planBytes;copy.plansUntil=this.plansUntil;copy.sourceWork=this.sourceWork;
@@ -99,6 +113,7 @@ export class HistoryTile {
     }
     if (!fits()) return null;
     return copy;
+    }finally{this.readers--;}
   }
 
   merge(chunk: Chunk, known: HistoryMeta['known']) {drain(this.mergePrepared(chunk, known));}
@@ -321,6 +336,7 @@ export class HistoryTile {
   }
 
   private *readChunkPrepared<S>(plot:boolean,now:number,plane:Plane,readSeries:(s:PackedSeries,from:number,to:number)=>Preparation<S|null>):Preparation<Omit<Chunk,'series'>&{series:S[]}>{
+    this.readers++;try{
     const readFrom=plane==='native'?this.nativeFrom:this.readFrom,readTo=plane==='native'?this.nativeTo:this.readTo;
     const first = (readFrom - this.from) / this.cell;
     const chunk: Omit<Chunk,'series'>&{series:S[]} = {from: readFrom, to: readTo, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []};
@@ -353,5 +369,6 @@ export class HistoryTile {
       chunk.activity.cells.push([i - first, active, members, groups]);
     }
     return chunk;
+    }finally{this.readers--;}
   }
 }
