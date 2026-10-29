@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import type {Chunk} from '../../server/domain/history';
-import {compose, targetOf} from '../../server/domain/history';
+import {compose, composeDecodedPrepared,decodeCells, targetOf, type DecodedCell,type HistoryMeta} from '../../server/domain/history';
 import {HistoryTile} from '../lib/historyTiles';
 import {plotOf} from '../lib/historyPlot';
 import {drain, type Preparation} from '../lib/prepare';
@@ -189,4 +189,81 @@ test('sparse quota attribution and neutral funding survive partial replacement a
  const tile=new HistoryTile(0,M);tile.merge(chunk,metadata);tile.readTo=tile.validTo=M;const size=tile.bytes;assert.deepEqual(tile.chunk(metadata).activity,chunk.activity);
  tile.merge({...chunk,activity:{...chunk.activity,sourceWork:[['s',0,0,0]]}},metadata);assert.deepEqual(tile.chunk(metadata).activity.sourceWork,[['s',0,0,0]]);assert.equal(tile.bytes,size,'replacement does not accumulate old sparse buffers');
  const activity=compose([tile.chunk(metadata)],{now:M,historyStart:0,known:metadata},targetOf(M,M,''),new Set()).activity;assert.deepEqual(activity.by.source.map(g=>g.key).sort(),['notProvided','s']);assert.equal(activity.agentMs,2*M);
+});
+
+
+function composeFixture(){
+ const inputs=[chunk(0,'A'),chunk(60*M,'B')];
+ for(const [number,input] of inputs.entries()){
+  const count=number?3:60;input.to=input.from+count*M;
+  input.series[0].cells=[[0,80,.1234,M,{o:null,f:81.0001,l:79.9999,g:1,w:[.1234,12345,.1],u:input.from+M-1}],
+   [1,79,.1,M,{o:79.9999,h:2*M}],[count-1,70,.2,M,{g:1,u:input.to}]];
+  input.series.push({source:'s',window:'excluded',hold:M,open:null,cells:[[0,10,0,0]]});
+  input.activity.cells.push([count-1,M,[[0,40000],[1,40000]],[['s','s',M]]]);
+  input.activity.sourceWork=[['s',0,30000,40000]];
+  input.resets=[['s',input.series[0].window,input.from+M]];
+  input.grants=[['s',input.from+M,2]];
+  input.plans=[['s',input.from+M,'Plan',null,100*M]];
+  input.meterSeries=[{source:'s',meter:'balance',kind:'balance',unit:'USD',semantics:null,
+   cells:[[0,'9007199254740993','0','0',0,{validUntil:input.from+M}],
+    [1,'9007199254740992','1','0',M,{validUntil:input.from+2*M}]]}];
+  input.moneyWork=[{source:'s',unit:'USD',knownFrom:0,partial:true,
+   cells:[[0,30000,40000,'123',30000,40000,M,'123']],
+   edges:[[input.from,input.from+M,'1',30000,40000,M,'1','gap']]}];
+ }
+ const metadata:HistoryMeta={now:63*M,historyStart:0,known:{work:0,sources:{s:0},sessions:0,sourceWork:{s:0}}};
+ const tiles=inputs.map(input=>{const tile=new HistoryTile(input.from,M);tile.merge(input,metadata.known);
+  tile.readFrom=tile.nativeFrom=input.from;tile.readTo=tile.nativeTo=input.to;tile.validTo=tile.nativeValidTo=input.to;return tile;});
+ return {tiles,metadata,windows:new Set(['s wA','s wB'])};
+}
+
+for(const plane of ['native','all'] as const)for(const selection of ['live','fixed','knowledge-edge'] as const)
+ test(`decoded tile composition preserves the complete ${plane} ${selection} History`,()=>{
+ const {tiles,metadata,windows}=composeFixture();
+ const supplied=selection==='knowledge-edge'?{...metadata,known:{...metadata.known,work:M,sourceWork:{s:2*M}}}:metadata;
+ const target=targetOf(63*M,supplied.now,selection,selection==='fixed'?{from:M,to:62*M}:null);
+ const expected=compose(tiles.map(tile=>drain(tile.chunkPrepared(supplied.known,false,target.now,plane))),supplied,target,windows);
+ // An unselected series must not be decoded early by the internal adapter.
+ for(const tile of tiles){
+  const storage=tile as unknown as {series:Map<string,{values:Float64Array}>};
+  const excluded=storage.series.get('s excluded');assert.ok(excluded);
+  Object.defineProperty(excluded,'values',{get(){throw new Error('unselected series was decoded');}});
+ }
+ const decoded=tiles.map(tile=>drain(tile.composeChunkPrepared(target.now,plane,windows)));
+ assert.ok(decoded.every(value=>value.series.every(series=>windows.has(series.source+' '+series.window))));
+ // The semantic composer independently guards selection before invoking a reader.
+ let excludedReads=0;decoded[0].series.push({source:'s',window:'excluded',*consumeCells(){excludedReads++;throw new Error('excluded reader invoked');}});
+ const actual=drain(composeDecodedPrepared(decoded,supplied,target,windows));
+ assert.deepStrictEqual(actual,expected);assert.equal(excludedReads,0);
+ assert.ok(expected.series.length>0);assert.ok(expected.meterSeries?.length);assert.ok(expected.moneyWork?.length);
+ assert.ok(expected.events.length>0);if(plane==='all')assert.ok(expected.activity.agentMs>0);
+});
+
+for(const holds of [[-0,1],[1,-0],[-0,1,1],[0,-0]])test(`streamed cells preserve modal hold and sparse read cuts: ${holds.map(v=>Object.is(v,-0)?'-0':v).join(',')}`,()=>{
+ const input:Chunk={...chunk(0,'A'),to:(holds.length+1)*M,
+  series:[{source:'s',window:'wA',hold:holds[0],open:null,cells:holds.map((hold,i)=>[i?i+1:0,80-i,0,0,{h:hold}])}]};
+ const tile=new HistoryTile(0,M);tile.merge(input,known);
+ const windows=new Set(['s wA']);
+ for(const first of [0,1]){
+  tile.nativeFrom=first*M;tile.nativeTo=input.to;
+  const wire=drain(tile.chunkPrepared(known,false,input.to,'native'));
+  const expected=wire.series.flatMap(series=>decodeCells(series,wire.from,M,0));
+  const decoded=drain(tile.composeChunkPrepared(input.to,'native',windows)),actual:DecodedCell[]=[];
+  for(const series of decoded.series)drain(series.consumeCells(0,value=>actual.push(value)));
+  assert.deepStrictEqual(actual,expected);
+ }
+});
+
+for(const plane of ['native','all'] as const)test(`decoded ${plane} readers keep captured buffers and bounds after COW replacement`,()=>{
+ const {tiles,metadata,windows}=composeFixture(),target=targetOf(63*M,metadata.now,'captured');
+ const expected=compose(tiles.map(tile=>drain(tile.chunkPrepared(metadata.known,false,target.now,plane))),metadata,target,windows);
+ const decoded=tiles.map(tile=>drain(tile.composeChunkPrepared(target.now,plane,windows)));
+ const replacement=chunk(0,'A');replacement.series[0].cells=[[0,1,0,0]];
+ const updated=drain(tiles[0].staged(replacement,metadata.known));
+ const changed=compose([drain(updated.chunkPrepared(metadata.known,false,target.now,plane)),
+  drain(tiles[1].chunkPrepared(metadata.known,false,target.now,plane))],metadata,target,windows);
+ assert.notDeepStrictEqual(changed,expected,'the replacement must contain different actual evidence');
+ tiles[0].readFrom=tiles[0].nativeFrom=10*M;tiles[0].readTo=tiles[0].nativeTo=11*M;
+ assert.deepStrictEqual(drain(composeDecodedPrepared(decoded,metadata,target,windows)),expected,
+  'lazy readers borrow the captured immutable series and numerical bounds');
 });

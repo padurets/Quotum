@@ -1,6 +1,6 @@
 // Interactive admission can differ from the member that owns retained bytes.
 type Flight = {role: 'visible' | 'ahead';admission?:object;evict?:boolean};
-type Candidate = {bytes: number; shownAt: number; drop(): void};
+type Candidate = {bytes: number; shownAt: number; priority?: 0; drop(): void};
 export type HistoryMember = {readonly estimatedBytes: number; evictionCandidates(): Candidate[]};
 type Waiting = {owner: HistoryMember; flight: Flight; start(): void; cancel(): void};
 
@@ -83,7 +83,7 @@ export class HistoryPool {
   trim() {
     let bytes = this.estimatedBytes;
     if (bytes <= this.budget) return true;
-    const candidates = [...this.members].flatMap(member => member.evictionCandidates()).sort((a,b) => a.shownAt - b.shownAt);
+    const candidates = [...this.members].flatMap(member => member.evictionCandidates()).sort((a,b) => (a.priority??1)-(b.priority??1)||a.shownAt-b.shownAt);
     for (const candidate of candidates) {
       candidate.drop();
       // A dropped cache entry can share storage with a frame that still owns it.

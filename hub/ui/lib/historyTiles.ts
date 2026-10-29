@@ -1,4 +1,4 @@
-import {decodeCellsPrepared, encodeCellsPrepared, TILE_CELLS,planRowAt,planRowBytes,planRowDeadline, type PlanRow,type Chunk, type DecodedCell, type HistoryMeta} from '../../server/domain/history';
+import {decodeCellsPrepared, encodeCellsPrepared,canonicalCell,modalHoldPrepared, TILE_CELLS,planRowAt,planRowBytes,planRowDeadline, type PlanRow,type Chunk,type DecodedChunk,type DecodedSeriesReader, type DecodedCell, type HistoryMeta} from '../../server/domain/history';
 
 import {drain, type Preparation} from './prepare';
 import {MeterTile} from './meterTiles';
@@ -37,6 +37,7 @@ export class HistoryTile {
   private sourceWork:NonNullable<Chunk['activity']['sourceWork']>=[];
   private meters: MeterTile;
   private hasMeters=false;
+  private readers=0;
   private hasMoneyWork=false;
   private moneyWork=new Map<string,MoneyWorkCells>();
   private moneyBytes=0;
@@ -53,8 +54,19 @@ export class HistoryTile {
     return this.activity.byteLength + this.meters.bytes + this.moneyBytes + this.seriesBytes + this.sessions.length * 320 + this.groups.length * 192 + (this.resets.length + this.grants.length) * 192 + this.planBytes + this.sourceWork.length*192 + 1024;
   }
   get planDeadline(){return this.plansUntil;}
+  prefixBytes(before:number){
+    return !this.series.size&&Number.isSafeInteger(before)&&before>this.from&&before<this.readTo&&before<this.nativeTo&&(before-this.from)%this.cell===0?this.meters.prefixBytes(before):0;
+  }
+  discardPrefix(before:number){
+    if(this.readers||!this.prefixBytes(before))return 0;
+    const bytes=this.meters.discardPrefix(before);if(!bytes)return 0;
+    this.readFrom=Math.max(this.readFrom,before);this.validTo=Math.max(this.readFrom,this.validTo);
+    this.nativeFrom=Math.max(this.nativeFrom,before);this.nativeValidTo=Math.max(this.nativeFrom,this.nativeValidTo);
+    return bytes;
+  }
   /** A new work predicate cannot borrow any selected cells from the old one. */
   retireActivity():HistoryTile {
+    this.meters.share();
     return Object.assign(Object.create(HistoryTile.prototype),this,{
       readFrom:this.from,readTo:this.from,validTo:this.from,
       sessions:[],groups:[],devices:{},activity:new ArrayBuffer(HEAD),
@@ -63,6 +75,7 @@ export class HistoryTile {
   /** Expiry changes only this tile's new facts, preserving published generations. */
   retirePlans(now:number):HistoryTile|null {
     if(now<this.planDeadline)return null;
+    this.meters.share();
     const plans=this.plans.flatMap(row=>{const value=planRowAt(row,now);return value?[value]:[];});
     return Object.assign(Object.create(HistoryTile.prototype),this,{plans,planBytes:plans.reduce((n,row)=>n+planRowBytes(row),0),plansUntil:plans.reduce((n,row)=>Math.min(n,planRowDeadline(row)),Infinity),writeSeq:this.writeSeq+1}) as HistoryTile;
   }
@@ -71,6 +84,7 @@ export class HistoryTile {
   staged(chunk: Chunk, known: HistoryMeta['known']): Preparation<HistoryTile>;
   staged(chunk: Chunk, known: HistoryMeta['known'], admit: (bytes: number) => boolean,now?:number,plane?:Plane): Preparation<HistoryTile | null>;
   *staged(chunk: Chunk, known: HistoryMeta['known'], admit?: (bytes: number) => boolean,now=0,plane:Plane='all'): Preparation<HistoryTile | null> {
+    this.readers++;try{
     const native=plane!=='activity';
     const copy = new HistoryTile(this.from, this.cell);
     copy.readFrom = this.readFrom; copy.readTo = this.readTo; copy.validTo = this.validTo;
@@ -80,7 +94,7 @@ export class HistoryTile {
     for (const session of this.sessions) {copy.sessions.push(session); yield;}
     for (const group of this.groups) {copy.groups.push(group); yield;}
     for (const key in this.devices) {copy.devices[key] = this.devices[key]; yield;}
-    copy.hasMeters = this.hasMeters; copy.meters = native ? yield* this.meters.clonePrepared() : this.meters;
+    copy.hasMeters = this.hasMeters; copy.meters = native ? yield* this.meters.clonePrepared() : this.meters.share();
     copy.hasMoneyWork=this.hasMoneyWork;copy.moneyBytes=this.moneyBytes;
     for(const [key,group] of this.moneyWork){copy.moneyWork.set(key,group);yield;}
     copy.activity = this.activity; copy.resets = this.resets; copy.grants = this.grants;copy.plans=this.plans;copy.planBytes=this.planBytes;copy.plansUntil=this.plansUntil;copy.sourceWork=this.sourceWork;
@@ -99,6 +113,7 @@ export class HistoryTile {
     }
     if (!fits()) return null;
     return copy;
+    }finally{this.readers--;}
   }
 
   merge(chunk: Chunk, known: HistoryMeta['known']) {drain(this.mergePrepared(chunk, known));}
@@ -259,9 +274,72 @@ export class HistoryTile {
   chunk(known: HistoryMeta['known'], plot = false,now=Date.now()): Chunk {return drain(this.chunkPrepared(known, plot,now));}
 
   *chunkPrepared(known: HistoryMeta['known'], plot = false,now=Date.now(),plane:Plane='all'): Preparation<Chunk> {
+    const tile=this;
+    return yield* this.readChunkPrepared(plot,now,plane,function*(s,readFrom,readTo):Preparation<Chunk['series'][number]|null>{
+      if(plot){
+        const first=(readFrom-tile.from)/tile.cell,cells:Chunk['series'][number]['cells']=[];
+        for(let i=first;tile.from+i*tile.cell<readTo;i++){
+          yield;
+          const at=i*FIELDS;
+          if(Number.isNaN(s.values[at]))continue;
+          const end=s.ends?.[i];
+          cells.push([i-first,s.values[at],0,0,{g:s.values[at+4]?1:undefined,h:s.values[at+5],...(end!==undefined&&!Number.isNaN(end)?{u:end}:{})}]);
+        }
+        return cells.length?{source:s.source,window:s.window,hold:0,open:null,cells}:null;
+      }
+      const cells=yield*tile.seriesCellsPrepared(s,readFrom,readTo);
+      return cells.length?yield*encodeCellsPrepared(s.source,s.window,readFrom,tile.cell,Math.max(known.work,known.sourceWork?.[s.source]??(known.sourceWork?Infinity:known.sources[s.source]??Infinity)),cells):null;
+    });
+  }
+
+  /** Local composition reads one selected series at a time, without a wire roundtrip. */
+  *composeChunkPrepared(now:number,plane:Plane,windows:ReadonlySet<string>):Preparation<DecodedChunk>{
+    const tile=this;
+    return yield*this.readChunkPrepared(false,now,plane,function*(s,readFrom,readTo):Preparation<DecodedSeriesReader|null>{
+      yield;
+      if(!windows.has(`${s.source} ${s.window}`))return null;
+      const packed={...s};
+      return {source:s.source,window:s.window,*consumeCells(since,consume){yield*tile.consumeSeriesPrepared(packed,readFrom,readTo,since,consume);}};
+    });
+  }
+
+  private *seriesCellsPrepared(s:PackedSeries,readFrom:number,readTo:number):Preparation<DecodedCell[]>{
+    const cells:DecodedCell[]=[];
+    for(let i=(readFrom-this.from)/this.cell;this.from+i*this.cell<readTo;i++){
+      yield;
+      const at=i*FIELDS;
+      if(Number.isNaN(s.values[at]))continue;
+      cells.push(this.seriesCell(s,i));
+    }
+    return cells;
+  }
+
+  private seriesCell(s:PackedSeries,i:number):DecodedCell{
+    const at=i*FIELDS,v=s.values,end=s.ends?.[i];
+    return {at:this.from+i*this.cell,low:v[at],first:v[at+1],last:v[at+2],open:Number.isNaN(v[at+3])?null:v[at+3],gap:!!v[at+4],hold:v[at+5],spent:v[at+6],covered:v[at+7],work:[v[at+8],v[at+9],v[at+10]],...(end!==undefined&&!Number.isNaN(end)?{validUntil:end}:{})};
+  }
+
+  private *consumeSeriesPrepared(s:PackedSeries,readFrom:number,readTo:number,since:number,consume:(cell:DecodedCell)=>void):Preparation<void>{
+    const tile=this;
+    let previous:number|null|undefined,zeroMode:boolean|undefined;
+    for(let i=(readFrom-this.from)/this.cell;this.from+i*this.cell<readTo;i++){
+      yield;
+      if(Number.isNaN(s.values[i*FIELDS]))continue;
+      const value=this.seriesCell(s,i);
+      // Only an implicit negative-zero hold changes under the wire mode's Map key.
+      if(Object.is(value.hold,-0)&&zeroMode===undefined)zeroMode=(yield*modalHoldPrepared((function*(){
+        for(let j=(readFrom-tile.from)/tile.cell;tile.from+j*tile.cell<readTo;j++)if(!Number.isNaN(s.values[j*FIELDS]))yield s.values[j*FIELDS+5];
+      })()))===0;
+      const row=canonicalCell(value,readFrom,this.cell,since,previous,Object.is(value.hold,-0)&&zeroMode?0:value.hold);
+      previous=row.last;consume(row);
+    }
+  }
+
+  private *readChunkPrepared<S>(plot:boolean,now:number,plane:Plane,readSeries:(s:PackedSeries,from:number,to:number)=>Preparation<S|null>):Preparation<Omit<Chunk,'series'>&{series:S[]}>{
+    this.readers++;try{
     const readFrom=plane==='native'?this.nativeFrom:this.readFrom,readTo=plane==='native'?this.nativeTo:this.readTo;
     const first = (readFrom - this.from) / this.cell;
-    const chunk: Chunk = {from: readFrom, to: readTo, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []};
+    const chunk: Omit<Chunk,'series'>&{series:S[]} = {from: readFrom, to: readTo, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []};
     if(plane!=='activity')for(const [source,index,active,agent] of this.sourceWork){if(index>=first&&this.from+index*this.cell<readTo)(chunk.activity.sourceWork??=[]).push([source,index-first,active,agent]);yield;}
     if(plane!=='native')for (const session of this.sessions) {chunk.activity.sessions.push([...session]); yield;}
     if(plane!=='native')for (const key in this.devices) {chunk.activity.devices[key] = this.devices[key]; yield;}
@@ -272,28 +350,8 @@ export class HistoryTile {
       if(this.hasMeters)chunk.meterSeries=yield* this.meters.chunkPrepared(readFrom,readTo);
       if(this.hasMoneyWork&&!plot)chunk.moneyWork=[...this.moneyWork.values()].map(group=>({...group,cells:group.cells.filter(row=>this.from+row[0]*this.cell>=readFrom&&this.from+row[0]*this.cell<readTo).map(row=>[row[0]-(readFrom-this.from)/this.cell,...row.slice(1)] as typeof row),edges:group.edges.filter(edge=>edge[1]>=readFrom&&edge[1]<readTo)}));
       for (const s of this.series.values()) {
-        if (plot) {
-          const cells: Chunk['series'][number]['cells'] = [];
-          for (let i = first; this.from + i * this.cell < readTo; i++) {
-            yield;
-            const at = i * FIELDS;
-            if (Number.isNaN(s.values[at])) continue;
-            const end = s.ends?.[i];
-            cells.push([i - first, s.values[at], 0, 0, {g: s.values[at + 4] ? 1 : undefined, h: s.values[at + 5], ...(end !== undefined && !Number.isNaN(end) ? {u:end} : {})}]);
-          }
-          if (cells.length) chunk.series.push({source: s.source, window: s.window, hold: 0, open: null, cells});
-          continue;
-        }
-        const cells: DecodedCell[] = [];
-        for (let i = first; this.from + i * this.cell < readTo; i++) {
-            yield;
-          const at = i * FIELDS;
-          if (Number.isNaN(s.values[at])) continue;
-          const v = s.values.subarray(at, at + FIELDS);
-          const end = s.ends?.[i];
-          cells.push({at: this.from + i * this.cell, low: v[0], first: v[1], last: v[2], open: Number.isNaN(v[3]) ? null : v[3], gap: !!v[4], hold: v[5], spent: v[6], covered: v[7], work: [v[8], v[9], v[10]], ...(end !== undefined && !Number.isNaN(end) ? {validUntil:end} : {})});
-        }
-        if (cells.length) chunk.series.push(yield* encodeCellsPrepared(s.source, s.window, readFrom, this.cell, Math.max(known.work, known.sourceWork?.[s.source]??(known.sourceWork?Infinity:known.sources[s.source]??Infinity)), cells));
+        const series=yield*readSeries(s,readFrom,readTo);
+        if(series)chunk.series.push(series);
       }
     }
     if(plane==='native')return chunk;
@@ -311,5 +369,6 @@ export class HistoryTile {
       chunk.activity.cells.push([i - first, active, members, groups]);
     }
     return chunk;
+    }finally{this.readers--;}
   }
 }

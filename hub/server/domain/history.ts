@@ -84,7 +84,7 @@ export type SourceEvent =
   | {sourceId: string; at: number; kind: 'early_reset'; windows: string[]}
   | {sourceId: string; at: number; kind: 'resets_granted'; count: number}
   | {sourceId:string;at:number;kind:'plan';plan:string;previous:{at:number;plan:string}|null;expiresAt:number};
-export function* planEventsPrepared(chunks:readonly Chunk[],from:number,to:number,now:number):Preparation<(SourceEvent&{kind:'plan'})[]> {
+export function* planEventsPrepared(chunks:readonly Pick<Chunk,'plans'>[],from:number,to:number,now:number):Preparation<(SourceEvent&{kind:'plan'})[]> {
   const result:(SourceEvent&{kind:'plan'})[]=[],seen=new Set<string>();
   for(const chunk of chunks)for(const raw of chunk.plans??[]){
     yield;const row=planRowAt(raw,now);if(!row||row[1]<from||row[1]>=to)continue;
@@ -189,13 +189,36 @@ export function* decodeCellsPrepared(series: SeriesCells, from: number, cell: nu
   return cells;
 }
 
+/** Local packed cells keep the wire reader's precision and implicit defaults. */
+export function canonicalCell(value:DecodedCell,from:number,cell:number,since:number,previous:number|null|undefined,hold=value.hold):DecodedCell {
+  const low=Math.round(value.low*100)/100,spent=round4(value.spent),start=roundOpen(value.open);
+  const open=previous===undefined||start!==previous?start:previous;
+  const first=round4(value.first),last=round4(value.last);
+  const at=from+((value.at-from)/cell)*cell;
+  const work:DecodedCell['work']=[round4(value.work[0]),value.work[1],round4(value.work[2])];
+  const base=value.at>=since?spent:0;
+  return {at,low,spent,covered:value.covered,open,first:start===null&&first!==low?first:low,last:last!==low?last:low,gap:!!value.gap,
+    hold,...(value.validUntil===undefined?{}:{validUntil:value.validUntil}),
+    work:work[0]!==base||work[1]!==0||work[2]!==0?work:[at>=since?spent:0,0,0]};
+}
+
+export function* modalHoldPrepared(values:Iterable<number>):Preparation<number>{
+  const holds=new Map<number,number>();
+  for(const hold of values){holds.set(hold,(holds.get(hold)??0)+1);yield;}
+  return (yield*ordered(holds,(a,b)=>b[1]-a[1]))[0][0];
+}
+
+/** Renderer-only readers borrow pinned buffers for the lifetime of one preparation. */
+export type DecodedSeriesReader={source:string;window:string;consumeCells(since:number,consume:(cell:DecodedCell)=>void):Preparation<void>};
+export type DecodedChunk=Omit<Chunk,'series'>&{series:DecodedSeriesReader[]};
+
 const DIMENSIONS: Dimension[] = ['source', 'project', 'device'];
 const dimensionOf = {s: 'source', p: 'project', d: 'device'} as const;
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 type Group = {key: string; name: string | null; activeMs: number; agentMs: number; refs: Set<string>; bars: Map<number, number>};
 
 /** Reset markers use the earliest time and stable window order, including filled tile heads. */
-export function* resetEventsPrepared(chunks: readonly Chunk[], windows: ReadonlySet<string>, from: number, to: number): Preparation<(SourceEvent & {kind: 'early_reset'})[]> {
+export function* resetEventsPrepared(chunks: readonly Pick<Chunk,'resets'>[], windows: ReadonlySet<string>, from: number, to: number): Preparation<(SourceEvent & {kind: 'early_reset'})[]> {
   const events: (SourceEvent & {kind: 'early_reset'})[] = [];
   const matching: Chunk['resets'] = [];
   for (const chunk of chunks) for (const row of chunk.resets) {if (windows.has(`${row[0]} ${row[1]}`) && row[2] >= from && row[2] < to) matching.push(row); yield;}
@@ -212,6 +235,14 @@ export function* resetEventsPrepared(chunks: readonly Chunk[], windows: Readonly
 
 /** A frame is an additive record of whole cells; only session identity needs a set. */
 export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, target: Target, windows: ReadonlySet<string>): Preparation<History> {
+  return yield* composeChunksPrepared(chunks,meta,target,windows);
+}
+
+export function* composeDecodedPrepared(chunks:readonly DecodedChunk[],meta:HistoryMeta,target:Target,windows:ReadonlySet<string>):Preparation<History> {
+  return yield* composeChunksPrepared(chunks,meta,target,windows);
+}
+
+function* composeChunksPrepared(chunks:readonly (Chunk|DecodedChunk)[],meta:HistoryMeta,target:Target,windows:ReadonlySet<string>):Preparation<History> {
   const {cell, k0, k1} = target;
   const since = k0 * cell;
   const to = Math.min((k1 + 1) * cell, Math.max(target.now, meta.now));
@@ -291,9 +322,8 @@ export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, ta
     const key = `${values.source} ${values.window}`;
     if (!windows.has(key)) continue;
     let row = series.get(key);
-    for (const v of yield* decodeCellsPrepared(values, chunk.from, cell, S(values.source))) {
-      yield;
-      if (!inFrame(v.at)) continue;
+    const consume=(v:DecodedCell)=>{
+      if (!inFrame(v.at)) return;
       if (!row) {
         const from = Math.max(since, S(values.source));
         const available=meta.known.sourceWork?values.source in meta.known.sourceWork:values.source in meta.known.sources;
@@ -314,7 +344,9 @@ export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, ta
         line.work.coveredMs += v.work[1];
         line.work.duringWork += v.work[2];
       }
-    }
+    };
+    if('consumeCells' in values)yield*values.consumeCells(S(values.source),consume);
+    else for(const value of yield*decodeCellsPrepared(values,chunk.from,cell,S(values.source))){yield;consume(value);}
   }
   const resets = yield* resetEventsPrepared(chunksInOrder, windows, since, (k1 + 1) * cell);
   const grants: SourceEvent[] = [];

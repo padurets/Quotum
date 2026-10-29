@@ -1,13 +1,14 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import vm,{runInNewContext} from 'node:vm';
-import {activityOracle,assertActivityOverlap,assertActivityOutside,assertActivityCancellation,assertActivityGestureRange,FIXED_ACTIVITY_BUDGET,fixedActivityScript,fixedActivityGestureScript,fixedActivityGestureReceipt,fixedActivityPointerParkScript,fixedActivityPointerPark,retainInterruptedActivity} from '../fixedActivity';
+import {activityOracle,assertActivityOverlap,assertActivityOutside,assertActivityCancellation,assertActivityGestureRange,FIXED_ACTIVITY_BUDGET,fixedActivityBurst,fixedActivityScript,fixedActivityGestureScript,fixedActivityGestureReceipt,fixedActivityPointerParkScript,fixedActivityPointerPark,retainInterruptedActivity} from '../fixedActivity';
 import {packWork,type WorkTrace} from '../../server/domain/periodWork';
-import type {PeriodRequest} from '../../server/domain/periodRead';
+import type {PeriodRequest,PeriodReply} from '../../server/domain/periodRead';
 import {fixture,drawings,flush,NOW} from '../../ui/test/periodRuntimeFixture';
 import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
 import {publishDataFilters} from '../../ui/lib/filterSelection';
 import {HistoryPool} from '../../ui/lib/historyPool';
+import {PeriodTransport} from '../../ui/lib/periodTransport';
 import {TILE_CELLS,MAX_READ_TILES} from '../../server/domain/history';
 import {Preparations} from '../../ui/lib/prepare';
 import {plotGroups} from '../../ui/lib/historyPlot';
@@ -64,6 +65,53 @@ for(const period of ['24h','30d'])test(`the complete fixed Activity script insta
   pool.register({estimatedBytes:0,evictionCandidates:()=>[]});
   const checkpoint=vm.runInContext("__quotumHistoryPoolReceipt.checkpoint('seed/settled')",context);
   assert.equal(checkpoint.members[0].pending.preparationSize,3,'the fixed Activity probe forwards the shared scheduler to the receipt observer');
+});
+
+// Execute the shipped probe against its real transport and microtask scheduler.
+function burstFixture(){
+  const pool=new HistoryPool(),requests:{body:PeriodRequest;signal:AbortSignal;complete():void}[]=[],adopted:number[]=[];let revision=0,now=0;
+  const basis={run:'run',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range:{from:0,to:NOW}};
+  const transport=new PeriodTransport(pool,()=>({board:'synthetic',generation:1,revision,resourceGeneration:revision,
+    request:{version:1,selection:{mode:'range',from:0,to:NOW},evaluatedAt:revision,sessions:{}}}),reply=>{adopted.push(Number(reply.basis.revision));},
+    (_board,body,signal)=>new Promise<PeriodReply>((resolve,reject)=>{
+      requests.push({body,signal,complete:()=>resolve({basis:{...basis,revision:String(body.evaluatedAt)}})});
+      signal.addEventListener('abort',()=>reject(signal.reason),{once:true});
+    }));
+  class Storage {setItem(){}getItem(){return null;}}
+  const context=vm.createContext({Storage,localStorage:new Storage(),Map,Set,WeakMap,WeakRef,Headers,Request,URL,pool,
+    performance:{now:()=>now},location:{href:'http://fixture.invalid/'},document:{querySelector:()=>null},fetch:async()=>{throw Error('no HTTP');}});
+  vm.runInContext('window=globalThis;',context);vm.runInContext(fixedActivityScript('24h'),context);context.__quotumInspectHistoryPool(pool);
+  const member={transport,retained:new Map(),valueCache:new Map(),estimatedBytes:0,evictionCandidates:()=>[],activityAt(){},changed(_event:unknown){revision++;transport.change();}};
+  pool.register(member);const api=context.__quotumFixedActivity;api.observeNews();
+  return {api,pool,requests,adopted,transport,time:(at:number)=>{now=at;},cdp:{evaluate:async<T>(source:string)=>vm.runInContext(source,context) as T},
+    news:(from:number)=>member.changed({type:'hub',event:{type:'history',data:{workSince:from}}}),
+    finish:async()=>{requests.at(-1)?.complete();await flush();assert.equal(pool.activeFlights,0);}};
+}
+
+test('burst waits for each delivered update beyond the old pause before its one final work request',async()=>{
+  const h=burstFixture(),updates:number[]=[],deadline=NOW+30_000;
+  await fixedActivityBurst(h.cdp,{floorAt:NOW,through:async at=>{updates.push(at);return at;}},async(test,until)=>{
+    assert.equal(until,deadline);h.time(updates.length===3?401:updates.length*10);h.news(updates.at(-1)!-100);await flush();
+    assert.equal(await h.cdp.evaluate(test),true);assert.equal(h.requests.length,0,'all three delivered events remain before dispatch');
+  },deadline);
+  await flush();assert.deepEqual(updates,[NOW+200,NOW+300,NOW+400]);assert.equal(h.requests.length,1);
+  assert.ok(h.requests[0].body.sessions);assert.equal(h.requests[0].signal.aborted,false);await h.finish();assert.deepEqual(h.adopted,[3]);
+});
+
+test('a flush queued before the hold cannot dispatch until resume',async()=>{
+  const h=burstFixture();h.news(NOW+100);h.api.holdDispatch();await flush();assert.equal(h.requests.length,0);
+  h.api.resumeDispatch();await flush();assert.equal(h.requests.length,1);await h.finish();assert.deepEqual(h.adopted,[1]);
+});
+
+for(const failure of ['receipt timeout','producer throw'])test('burst restores dispatch after '+failure,async()=>{
+  const h=burstFixture(),original=(h.transport as unknown as {flush:unknown}).flush,error=new Error(failure),deadlines:number[]=[];
+  await assert.rejects(fixedActivityBurst(h.cdp,{floorAt:NOW,through:async at=>{
+    if(failure==='producer throw')throw error;h.news(at-100);return at;
+  }},async(_test,deadline)=>{deadlines.push(deadline);throw error;},NOW+30_000),value=>value===error);
+  assert.equal((h.transport as unknown as {flush:unknown}).flush,original);
+  assert.deepEqual(deadlines,failure==='receipt timeout'?[NOW+30_000]:[]);
+  if(failure==='producer throw')h.news(NOW+500);
+  await flush();assert.equal(h.requests.length,1,'restoration admits the pending work');await h.finish();
 });
 
 test('native gesture range compares URL endpoints with a full historical selection',()=>{

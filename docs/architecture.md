@@ -2377,7 +2377,12 @@ HTTP and processing together, including raw answers waiting for a tile reservati
 A shared response retains its transport reservation until every family has committed
 or discarded its private preparation; cancelling one family preserves the others.
 Quota, budget and subscription-funds readers share that pool and a 15 MiB retained-tile and staged-growth
-budget. Global eviction considers only nonvisible, unreserved tiles; an incoming frame
+budget. Before removing whole nonvisible, unreserved tiles, global eviction can release
+an exclusively owned monetary prefix of a partially visible tile that precedes every
+requested frame. The latest shared gesture or selection protects its cells even before
+that reader receives the change. Borrowed or shared packed versions remain intact;
+reclaim cancels their reader's pending projections and removes only unborrowed storage.
+The live window continues to advance with the shared clock. An incoming frame
 that cannot fit fails losslessly without evicting the other reader's visible frame. Flights and reservations remain owned until commit or
 discard. Projections pin the current tile entry and its write sequence. Eviction outside
 the complete target preserves its pending composition; its board, epoch, metadata,

@@ -63,6 +63,28 @@ function* unpack(bytes:Uint8Array,metadata:MeterMetadata):Preparation<UnpackedCe
 export class MeterTile {
   private readonly series=new Map<string,Packed>();
   private metadata=new MeterMetadata();
+  private shared=false;
+  private readers=0;
+  share(){this.shared=true;return this;}
+  prefixBytes(before:number){
+    if(this.shared)return 0;
+    let bytes=0;
+    for(const packed of this.series.values())for(const [i,cell]of packed.cells)if(this.from+i*this.cell<before)bytes+=cell.bytes;
+    return bytes;
+  }
+  /** Eviction releases only exclusively owned packed cells, never a published reading. */
+  discardPrefix(before:number){
+    if(this.shared||this.readers)return 0;
+    const initial=this.bytes;
+    for(const [key,packed]of this.series){
+      for(const [i,cell]of packed.cells)if(this.from+i*this.cell<before){
+        for(const id of cell.references)this.metadata.release(id);
+        packed.cells.delete(i);packed.bytes-=cell.bytes;
+      }
+      if(!packed.cells.size)this.series.delete(key);
+    }
+    return initial-this.bytes;
+  }
   constructor(private readonly from:number,private readonly cell:number) {}
   get bytes() {
     const metadataBytes = this.metadata.bytes;
@@ -72,6 +94,8 @@ export class MeterTile {
   }
   *clonePrepared():Preparation<MeterTile> {
     const copy=new MeterTile(this.from,this.cell);
+    // A live packed version may still own unchanged leaves after this copy commits.
+    if(this.series.size){this.shared=true;copy.shared=true;}
     copy.metadata=yield* this.metadata.clonePrepared();
     for(const [key,packed] of this.series){copy.series.set(key,packed);yield;}
     return copy;
@@ -106,6 +130,7 @@ export class MeterTile {
   }
   chunk(from:number,to:number):MeterSeriesCells[] {return drain(this.chunkPrepared(from,to));}
   *chunkPrepared(from:number,to:number):Preparation<MeterSeriesCells[]> {
+    this.readers++;try{
     const first=(from-this.from)/this.cell,last=(to-this.from)/this.cell;
     const result:MeterSeriesCells[]=[];
     for(const packed of this.series.values()) {
@@ -129,5 +154,6 @@ export class MeterTile {
       if(cells.length)result.push({...packed.series,semantics:before,cells});
     }
     return result;
+    }finally{this.readers--;}
   }
 }

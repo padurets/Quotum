@@ -18,9 +18,9 @@ export class ValueChanges {
   readonly paths:ValuePath[]=[];
   private readonly ids=new Map<string,number>();
   constructor(private readonly reserve:(bytes:number)=>void) {}
-  pathId(path:ValuePath){const key=JSON.stringify(path),old=this.ids.get(key);if(old!==undefined)return old;this.reserve(key.length*6+96);const id=this.paths.length;this.ids.set(key,id);this.paths.push(path);return id;}
+  pathId(path:ValuePath){const key=JSON.stringify(path),old=this.ids.get(key);if(old!==undefined)return old;this.reserve(key.length*6+96);const id=this.paths.length;this.ids.set(key,id);this.paths.push([...path]);return id;}
   between(before:unknown,after:unknown,path:ValuePath=[],output:ValueChange[]=[]):ValueChange[] {
-    return this.compare(before,after,path,output);
+    return this.compare(before,after,[...path],output);
   }
   /** Compare the predicted numbers in place, without copying the preceding summary. */
   advanced(before:unknown,after:unknown,steps:readonly (readonly [number,number])[],offset:number):ValueChange[] {
@@ -40,7 +40,10 @@ export class ValueChanges {
       // The tail splice leaves every field edited below its start in place.
       if(before.length&&after.length&&before.every(value=>value&&typeof value==='object'&&!Array.isArray(value))&&after.every(value=>value&&typeof value==='object'&&!Array.isArray(value))){
         const length=Math.min(before.length,after.length);
-        for(let i=0;i<length;i++)this.compare(before[i],after[i],[...path,i],output,advance?.children?.get(String(i)));
+        for(let i=0;i<length;i++){
+          path.push(i);
+          try{this.compare(before[i],after[i],path,output,advance?.children?.get(String(i)));}finally{path.pop();}
+        }
         output.push([this.pathId(path),length,before.length-length,after.slice(length)]);return output;
       }
       // Boundary points enter or leave while the other exact points stay unchanged.
@@ -52,12 +55,17 @@ export class ValueChanges {
     if(before&&after&&typeof before==='object'&&typeof after==='object'&&Array.isArray(before)===Array.isArray(after)&&(!Array.isArray(before)||before.length===(after as unknown[]).length)){
       const a=before as Record<string,unknown>,b=after as Record<string,unknown>;
       for(const key of Object.keys(a)){
-        const next=[...path,Array.isArray(before)?Number(key):key];
-        if(!Object.hasOwn(b,key)||b[key]===undefined){if(a[key]!==undefined)output.push([this.pathId(next)]);}
-        else if(a[key]===undefined)output.push([this.pathId(next),b[key]]);
-        else this.compare(a[key],b[key],next,output,advance?.children?.get(key));
+        path.push(Array.isArray(before)?Number(key):key);
+        try{
+          if(!Object.hasOwn(b,key)||b[key]===undefined){if(a[key]!==undefined)output.push([this.pathId(path)]);}
+          else if(a[key]===undefined)output.push([this.pathId(path),b[key]]);
+          else this.compare(a[key],b[key],path,output,advance?.children?.get(key));
+        }finally{path.pop();}
       }
-      for(const key of Object.keys(b))if(!Object.hasOwn(a,key)&&b[key]!==undefined)output.push([this.pathId([...path,Array.isArray(before)?Number(key):key]),b[key]]);
+      for(const key of Object.keys(b))if(!Object.hasOwn(a,key)&&b[key]!==undefined){
+        path.push(Array.isArray(before)?Number(key):key);
+        try{output.push([this.pathId(path),b[key]]);}finally{path.pop();}
+      }
     }else output.push([this.pathId(path),after]);
     return output;
   }
