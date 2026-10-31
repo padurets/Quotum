@@ -535,7 +535,7 @@ change as it was.
 | `event` | `data` | When |
 |---|---|---|
 | `hello` | `{epoch, now, client, heartbeatMs}` | First. `epoch`: when this start of the hub began, base 36. `now`: the hub's clock. `client`: the path of the page's entry script the hub serves (`/assets/index-<hash>.js`), null without a build. `heartbeatMs`: 25000. |
-| `snapshot` | `{providers, sourceAccess, board, view, viewRevision, connectionsRevision, deviceContacts?, historyStart, workAuthority, sources, sessions, unattributedSessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
+| `snapshot` | `{providers, sourceAccess, board, view, viewRevision, connectionsRevision, deviceContacts?, historyStart, workAuthority, workStamp?, sources, sessions, unattributedSessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
 | `board` | `{board?: {id, name, personal}, projectColorsRevision?, projectColorsAuthority?}` | Board name or project-colour references changed. |
 | `projectColors` | `{version: 1, pins, revision, authority}` | Matching authorized browser project colours; omitted for the native background reader. |
 | `view` | `{view, revision}` | The board's view was saved. The monotonic revision belongs to this board. |
@@ -552,9 +552,9 @@ change as it was.
 | `mine` | `{sources: string[]}` | Which sources of the board the reader's devices measure changed. |
 | `sourceAccess` | `{<source id>: {error, expiresAt, expiryKind, canRefresh, credentialIds}}` | The reader's own connector access changed, cleared when the holding or board access ends. |
 | `boards` | `{boards}` | The reader's boards changed: made, deleted, renamed, joined, left. |
-| `history` | `{sources: string[], since, changes?, workSince?, workAuthority?}` | Measurements or admitted credited work changed from `since` (see [Reading history](#reading-history)); `since: 0` invalidates the affected history evidence. Changed work authority and relevant project or machine names replace the next delta with a fresh `snapshot`. Current financial updates keep the delta protocol; prepared or queued financial updates whose authority has changed are rechecked before delivery and replaced with a current `snapshot`. Hiding or showing a card changes the `view` without changing admitted work or sending `history`. |
+| `history` | `{sources: string[], since, changes?, workSince?, workAuthority?, workStamp?}` | Measurements or admitted credited work changed from `since` (see [Reading history](#reading-history)); `since: 0` invalidates the affected history evidence. Changed work authority and relevant project or machine names replace the next delta with a fresh `snapshot`. Current financial updates keep the delta protocol; prepared or queued financial updates whose authority has changed are rechecked before delivery and replaced with a current `snapshot`. Hiding or showing a card changes the `view` without changing admitted work or sending `history`. |
 | `resets` | `{resets, trackers, past}` | The reset trackers' news changed. |
-| `ping` | `{now}` | Every `heartbeatMs`, with the hub's clock. |
+| `ping` | `{now, workStamp?}` | Every `heartbeatMs`, with the hub's clock and, when available, its registered-work state. |
 | `bye` | `{reason}` | Last: the hub lets the reader go (see below). |
 
 The board's `view` includes `layout: {columns: 6, places: {<widget id>: {x, y, w, h?}}}`.
@@ -591,6 +591,28 @@ history events. Changed or missing legacy authority retires retained work, quota
 accounting and prepared drawings before a replacement completes, including on failure.
 An unchanged identity preserves the last complete presentation while the new baseline
 waits or fails. Neither this identity nor a retained cursor grants access to a read.
+
+`workStamp` is `{watch, seq, authority, at}`. `watch` identifies a watched board's
+work-state lifetime, `seq` is a nonnegative safe integer that increases for relevant
+registered-work changes, `authority` is the same opaque context as the snapshot's
+`workAuthority`, and `at` is the hub time of confirmation. The calendar basis has
+its own reader-scoped identity; it is not interchangeable with this authority.
+Financial-only news and work outside the admitted board do not advance the sequence.
+A nonce rotation preserves sequence ordering while that watch remains alive; a new
+connection lifetime retires old grants and in-flight calendar adoption.
+
+A stamp confirms a version, independently of smoothed event delivery. A newer
+version cannot certify an older calendar proof. A history stamp additionally binds
+its version to the notice's accumulated work invalidation boundary. Queued notices
+retain their captured version; an ambiguous merge omits the stamp rather than
+assigning the poll answer's newer version to an older boundary. The browser waits
+for the ordinary invalidation/read to reconcile such a gap. A later confirmation
+of the same version advances time coverage without making a compatible earlier
+HTTP capture obsolete. A heartbeat alone starts no history request.
+
+Native attention streams (`desktop=1`) omit browser work stamps from snapshots,
+history and pings, preserving their native frame budget. The dashboard in the
+desktop window uses the ordinary browser stream and its calendar contract.
 
 `providers` is the public code-owned catalogue: each entry has `id`, `name`, `color`,
 `logoAsset`, `order`, `measuredBy` (`client` or `hub`), `meterKinds`, `resets`, and either
@@ -728,7 +750,7 @@ a repeated hour has separate positions in hourly mode, while coarser intervals
 retain its full duration. A nonexistent hour is padding, not registered zero.
 
 `POST /api/boards/:board/period` accepts optional
-`calendar: {zone: string, cursor?: string, relative?: true}`. The zone is a valid named zone of at
+`calendar: {zone: string, cursor?: string, relative?: true, freshness?: true}`. The zone is a valid named zone of at
 most 128 ASCII characters; a cursor has at most 2048 URL-safe ASCII characters
 (letters, digits, hyphen, underscore, dot). Reader-supplied edges are rejected.
 The server derives one stable UTC-day-aligned partition from the evaluated common
@@ -775,10 +797,35 @@ or session identities. On the wire it replaces `cells`; the common decoder
 integrates its exact change points to restore the same fine cells. Deltas still
 replace only their changed cells and do not repeat this proof.
 
+For a live selection, `freshness: true` negotiates a complete anonymous work curve
+with `workStamp` in the calendar value. Its proof includes already registered future
+stretches, up to the latest admitted stored endpoint or capture time, whichever is
+later. Thus `proof.cut` may exceed the common `basis.evidenceCut`; restored cells
+and visible work remain clipped to the selected range and actual time. The bound
+comes from retained work, including after a hub restart or a backward clock
+correction, rather than a fixed allowance past the current clock. Admission floors
+and current device ownership also apply to this bound. If no work stamp is available,
+the request receives the legacy bounded answer and its ordinary authority checks;
+it grants no empty-tail extension.
+
+The negotiated live cursor has an independent namespace and binds the watched
+lifetime, reader, board, selection, zone, work authority, filter and run. Its identity
+does not depend on UTC partition edges. A delta carries `proof` with exact
+`replaceFrom`/`replaceTo` bounds, replacement availability/retention/cursor metadata,
+and `workStamp`; its wire `patch` is empty. The browser merges the anonymous tapes
+and reconstructs the current fine partition under the same history budget. It
+never combines new numeric cells with an old work curve. A backward expansion of
+the selection, a shrinking proof horizon, a lost notification, or a retired watch
+requires a complete baseline. Requests without the capability retain the previous
+cell-patch encoding and cursor semantics; fixed selections retain their bounded
+contract.
+
 The browser may retain these anonymous integrals in the shared history budget.
 Their contiguous intervals can reconstruct a previously read selection or a
-small shift of its endpoints without splitting rounded cell totals. A live
-return keeps its accepted evidence cut; it never invents work past that cut.
+small shift of its endpoints without splitting rounded cell totals. Legacy reads
+keep their accepted evidence cut. A stamped live curve contains the registered
+positive geometry of its version; a matching later stamp also confirms the empty
+suffix through `at`. Future work is never displayed ahead of the current clock.
 Work, authority, filter and zone changes invalidate the proofs. Eviction or a
 gap falls back to a bounded common-period read.
 
@@ -792,13 +839,19 @@ and makes no additional history request. Selection, filters or authority changes
 retire prior values immediately; an old generation cannot restore them.
 
 Null means unavailable history; an available zero means no registered work.
-Partial bounds do not prove complete observation. Positive totals expire when
-retention or a moving live boundary can reduce their included durations. The
-shared clock removes expired contributions in the affected bucket's paint and
-readout without HTTP polling or rebuilding geometry. Only buckets with expiring
-contributions subscribe to the clock and carry `data-time`; the widget itself
-does not. Fine interval frames remain at their accepted evidence until a refresh
-or civil-date change; idle minutes alone do not rebuild data.
+Partial bounds do not prove complete observation. The live viewport always follows
+`[now - period, now]`, independently of its last HTTP capture. Exact integrals clip
+work at both moving boundaries and rolling retention; no fine-cell total is divided
+proportionally or removed wholesale while some of its work remains in range.
+The shared clock drives the separate time projection, including civil-date, DST,
+orientation and scale changes. Buckets, labels and open details use current clipped
+bounds for paint, accessibility and interval/day actions. Accepted data and its
+preparation remain outside the timed plot: clock movement neither decodes or merges
+work nor repeats fine-work preparation. A civil rollover starts no HTTP request.
+Cached curves remain charged while a reading or prepared display holds them, even
+after cache eviction. After disconnect the window still moves over retained evidence;
+already confirmed coverage stays valid without extending into unconfirmed time.
+Reconnection automatically reconciles the registered-work version and any gap.
 Work, authority and reconnect events refresh the projection; pure
 financial news does not. Hiding the widget removes its demand.
 
@@ -1574,6 +1627,11 @@ when it falls further behind, or when the hub restarts, and a poll with it then 
 new lease with a snapshot. A lease is the session's and the board's it was made for. A
 lease let go for a newer reader answers `bye` with `limit` once: at once to a poll
 waiting on it, else to the next.
+
+A poll answer may also contain `workStamp`. Apply its events before this confirmation
+and the answer's clock update. A queued history event's own stamp can be older than
+the outer confirmation; the outer stamp does not widen that event's invalidation
+boundary. Unchanged validated poll answers preserve their prepared compression.
 
 ## Limits
 

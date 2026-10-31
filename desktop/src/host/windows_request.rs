@@ -17,6 +17,17 @@ pub const OVERFLOW: u64 = 4;
 pub const CALLBACK_OVERLAP: u64 = 8;
 pub const PARTIAL: u64 = 16;
 pub const CAPTURE_OVERLAP: u64 = 32;
+pub const LIFE_SEEN: u64 = 1;
+pub const CLOSE_CALL: u64 = 2;
+pub const CLOSE_QUEUED: u64 = 4;
+pub const CLOSE_FAILED: u64 = 8;
+pub const DESTROY_CALL: u64 = 16;
+pub const DESTROY_QUEUED: u64 = 32;
+pub const DESTROY_FAILED: u64 = 64;
+pub const CLOSE_EVENT: u64 = 128;
+pub const DESTROYED_EVENT: u64 = 256;
+pub const BROWSER_UNKNOWN: u64 = 512;
+pub const ASSOCIATION_UNKNOWN: u64 = 1024;
 
 struct Entry {
     busy: AtomicBool,
@@ -98,8 +109,12 @@ impl Records {
             return;
         }
         row.sequence.store(sequence + 1, SeqCst);
-        for (to, value) in row.values.iter().zip(values.iter().copied().chain(std::iter::repeat(0))) {
-            to.store(value, SeqCst);
+        for (index, (to, value)) in
+            row.values.iter().zip(values.iter().copied().chain(std::iter::repeat(0))).enumerate()
+        {
+            if index < values.len() || !(2..=5).contains(&lane) || index < 7 {
+                to.store(value, SeqCst);
+            }
         }
         row.epoch.store(self.next(&self.epoch), SeqCst);
         row.sequence.store(sequence + 2, SeqCst);
@@ -107,6 +122,70 @@ impl Records {
     }
     pub fn mark(&self, lane: usize, request: u64, thread: u32, stage: u64, subject: u64, details: [u64; 2]) {
         self.write(lane, &[request, 0, u64::from(thread), stage, subject, details[0], details[1]]);
+    }
+    // Tails of rows 2/4 hold the last main/compact (request, HWND, browser PID).
+    // Rows 3/5 independently hold (request, HWND, lifecycle flags), not COM Close.
+    // A reserved head marks only numeric initialization, never loaded or shown.
+    fn tail(&self, lane: usize, request: u64, thread: u32, window: u64, value: u64, merge: bool) -> bool {
+        if !self.enabled || request == 0 || thread == 0 || window == 0 {
+            return false;
+        }
+        let row = &self.entries[lane];
+        if row.busy.compare_exchange(false, true, SeqCst, SeqCst).is_err() {
+            self.fail(OVERLAP);
+            return false;
+        }
+        let sequence = row.sequence.load(SeqCst);
+        if sequence >= MAX || [request, window, value].iter().any(|n| *n > MAX) {
+            self.fail(OVERFLOW);
+            row.busy.store(false, SeqCst);
+            return false;
+        }
+        let old = std::array::from_fn::<_, 3, _>(|i| row.values[i + 7].load(SeqCst));
+        let same = old[..2] == [request, window];
+        let life = lane == 3 || lane == 5;
+        let accepted = if merge { same } else { same || request > old[0] };
+        let next = if accepted {
+            [request, window, if merge || life && same { old[2] | value } else { value }]
+        } else if !merge && life && request == old[0] && window != old[1] {
+            [old[0], old[1], old[2] | ASSOCIATION_UNKNOWN]
+        } else {
+            row.busy.store(false, SeqCst);
+            return false;
+        };
+        if next.iter().any(|n| *n > MAX) {
+            self.fail(OVERFLOW);
+            row.busy.store(false, SeqCst);
+            return false;
+        }
+        if next != old {
+            row.sequence.store(sequence + 1, SeqCst);
+            if sequence == 0 {
+                for (to, n) in
+                    row.values.iter().zip([request, 0, u64::from(thread), 100, window, u64::from(lane >= 4), 0])
+                {
+                    to.store(n, SeqCst);
+                }
+            }
+            for (to, n) in row.values[7..].iter().zip(next) {
+                to.store(n, SeqCst);
+            }
+            row.epoch.store(self.next(&self.epoch), SeqCst);
+            row.sequence.store(sequence + 2, SeqCst);
+        }
+        row.busy.store(false, SeqCst);
+        accepted
+    }
+    pub fn lifecycle_begin(&self, compact: bool, request: u64, thread: u32, window: u64) -> bool {
+        self.tail(if compact { 5 } else { 3 }, request, thread, window, LIFE_SEEN, false)
+    }
+    pub fn lifecycle(&self, compact: bool, request: u64, thread: u32, window: u64, flags: u64) {
+        self.tail(if compact { 5 } else { 3 }, request, thread, window, flags, true);
+    }
+    pub fn browser_binding(&self, compact: bool, request: u64, thread: u32, window: u64, pid: u32) {
+        if pid != 0 && self.lifecycle_begin(compact, request, thread, window) {
+            self.tail(if compact { 4 } else { 2 }, request, thread, window, u64::from(pid), false);
+        }
     }
     pub fn callback(&self, thread: u32) -> Callback<'_> {
         if !self.enabled {
@@ -497,6 +576,73 @@ mod tests {
         records.mark(1, 7, 44, 2, 0, [1, 0]);
         assert!(native.owner(21, 400).is_none());
         assert!(sink.values.borrow().is_empty());
+    }
+    #[test]
+    fn binding_tails_survive_generic_marks_without_fabricating_compact_milestones() {
+        let r = Records::new(true);
+        r.browser_binding(true, 9, 21, 500, 5356);
+        let first = r.snapshot();
+        assert_eq!(&first.rows[4].values[7..], &[9, 500, 5356]);
+        assert_eq!(&first.rows[4].values[2..4], &[21, 100]);
+        assert_eq!(&first.rows[5].values[2..4], &[21, 100]);
+        r.mark(4, 10, 22, 1, 0, [1, 0]);
+        assert_eq!(&r.snapshot().rows[4].values[7..], &[9, 500, 5356]);
+        assert_eq!(r.snapshot().rows[4].values[3], 1);
+    }
+    #[test]
+    fn old_lifecycle_and_binding_callbacks_cannot_relabel_a_new_window() {
+        let r = Records::new(true);
+        r.browser_binding(false, 7, 21, 400, 5356);
+        r.browser_binding(false, 8, 21, 500, 6000);
+        r.lifecycle(false, 7, 21, 400, DESTROYED_EVENT);
+        r.browser_binding(false, 7, 21, 400, 5356);
+        let s = r.snapshot();
+        assert_eq!(&s.rows[2].values[7..], &[8, 500, 6000]);
+        assert_eq!(&s.rows[3].values[7..], &[8, 500, LIFE_SEEN]);
+        r.lifecycle(false, 8, 21, 500, CLOSE_CALL | CLOSE_QUEUED);
+        r.lifecycle(false, 8, 21, 500, CLOSE_EVENT | DESTROYED_EVENT);
+        assert_eq!(
+            r.snapshot().rows[3].values[9],
+            LIFE_SEEN | CLOSE_CALL | CLOSE_QUEUED | CLOSE_EVENT | DESTROYED_EVENT
+        );
+    }
+    #[test]
+    fn equal_request_different_hwnd_is_association_unknown_not_global_failure() {
+        let r = Records::new(true);
+        r.browser_binding(false, 8, 21, 400, 5356);
+        r.browser_binding(false, 8, 21, 500, 6000);
+        assert_eq!(&r.snapshot().rows[2].values[7..], &[8, 400, 5356]);
+        assert_ne!(r.snapshot().rows[3].values[9] & ASSOCIATION_UNKNOWN, 0);
+        assert_eq!(r.snapshot().errors, 0);
+    }
+    #[test]
+    fn queued_calls_and_failed_observation_never_imply_destroyed_or_com_close() {
+        let r = Records::new(true);
+        r.lifecycle_begin(false, 7, 21, 400);
+        r.lifecycle(false, 7, 21, 400, DESTROY_CALL | DESTROY_QUEUED);
+        assert_eq!(r.snapshot().rows[3].values[9], LIFE_SEEN | DESTROY_CALL | DESTROY_QUEUED);
+        assert_eq!(r.snapshot().rows[3].values[9] & DESTROYED_EVENT, 0);
+        r.browser_binding(true, 8, 21, 500, 6000);
+        r.lifecycle(true, 8, 21, 500, BROWSER_UNKNOWN | CLOSE_CALL | CLOSE_FAILED | DESTROY_CALL | DESTROY_FAILED);
+        let flags = r.snapshot().rows[5].values[9];
+        assert_ne!(flags & BROWSER_UNKNOWN, 0);
+        assert_eq!(flags & (CLOSE_QUEUED | DESTROY_QUEUED | DESTROYED_EVENT), 0);
+        assert_eq!(&r.snapshot().rows[4].values[7..], &[8, 500, 6000]);
+        assert_eq!(&r.snapshot().rows[5].values[7..9], &[8, 500]);
+        assert_eq!(r.snapshot().errors, 0);
+    }
+    #[test]
+    fn tail_overlap_and_overflow_use_the_existing_atomic_unknown_protocol() {
+        let r = Records::new(true);
+        r.entries[3].busy.store(true, SeqCst);
+        assert!(!r.lifecycle_begin(false, 8, 21, 400));
+        assert_ne!(r.snapshot().errors & OVERLAP, 0);
+        let r = Records::new(true);
+        assert!(!r.lifecycle_begin(false, MAX + 1, 21, 400));
+        assert_ne!(r.snapshot().errors & OVERFLOW, 0);
+        let r = Records::new(false);
+        r.browser_binding(true, 8, 21, 400, 5356);
+        assert_eq!(r.snapshot().epoch, 0);
     }
     #[test]
     fn disabled_records_have_no_native_effect() {

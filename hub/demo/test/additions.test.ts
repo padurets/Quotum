@@ -2,6 +2,9 @@ import {VIEW_VERSION, VIEW_VERSION_HEADER} from '../../server/domain/view.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {setImmediate} from 'node:timers/promises';
+import {Events, type Clock} from '../../server/events.js';
+import {HubSources} from '../../server/hubSources.js';
 import {mkdtempSync, rmSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,18 +24,33 @@ import {Setup} from '../../server/setup.js';
 import {LEGACY_BUDGET_WIDGETS, QUOTA_WIDGETS, widgetVisible} from '../../server/domain/widgets.js';
 
 const secret = 'SYNTHETIC_PROVIDER_KEY_0123456789';
-async function harness(extended = true) {
+class TestClock implements Clock {
+  time = Date.now();
+  tasks = new Map<number, {at: number; run: () => void}>();
+  id = 0;
+  now = () => this.time;
+  after = (ms: number, run: () => void) => {const id = ++this.id; this.tasks.set(id, {at: this.time + ms, run}); return () => {this.tasks.delete(id);};};
+  tick(ms = 0) {this.time += ms; for (let i = 0; i < 100; i++) {const due = [...this.tasks].find(([, task]) => task.at <= this.time); if (!due) return; this.tasks.delete(due[0]); due[1].run();} throw new Error('timer_loop');}
+}
+const settle = async () => {for (let i = 0; i < 20; i++) await setImmediate();};
+async function harness(extended = true, managed = false) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-prototype-test-'));
   const store = new Store(path.join(dir, 'db.sqlite')), directory = new Directory(store.db);
   const key = SecretKey.parse(Buffer.from(Buffer.alloc(32, 7).toString('base64url')));
   const report = startSecrets(store.db, {current: key, previous: null, reset: null, storageAtStart: null, wasFileAtStart: false});
   const transport = new ConnectorTransport({host: '127.0.0.1', port: 443, operations: {}});
+  const clock = new TestClock(), poll = {calls: 0, delay: false, release: null as (() => void) | null};
   const connector: Connector = {id: 'openrouter', transport, abilities: ['balance'], secretFormat: value => value === secret, map: () => null,
     identify: async () => {
-      const at = Date.now();
+      const at = clock.now();
       return {account: 'a'.repeat(24), abilities: ['balance'], expiresAt: null, measurement: {type: 'meters', observedAt: at, staleAfterMs: 204_000, keys: [], inventoryComplete: false, inventoryError: 'connector_inventory_partial',
         meters: [{id: 'credits', kind: 'counter', unit: 'USD', amount: '70000000', at, staleAfterMs: 204_000, stale: false, limit: null, resetAt: null, minutes: null, scope: null, label: null}, {id: 'usage', kind: 'counter', unit: 'USD', amount: '33000000', at, staleAfterMs: 204_000, stale: false, limit: null, resetAt: null, minutes: null, scope: null, label: null}]}};
-    }, measure: async () => {throw new Error('No background provider calls in this fixture');},
+    }, measure: async (secret, _expected, signal) => {
+      if (!managed) throw new Error('No background provider calls in this fixture');
+      poll.calls++;
+      if (poll.delay) await new Promise<void>(resolve => {poll.release = resolve;});
+      return connector.identify(secret, signal);
+    },
   };
   const registry = new Map([['openrouter', connector]]), credentials = new Credentials(store, key, report, registry);
   const owner = directory.createUser('owner@fixture.example', 'Owner', 'unused-password', Date.now());
@@ -40,12 +58,77 @@ async function harness(extended = true) {
   const board = directory.createBoard('Team', owner.id, Date.now()); directory.addMember(board.id, member.id, Date.now());
   const cookies = new Map<string, string>();
   for (const user of [owner, member]) {const token = newSecret('qt_s'); directory.createSession(token, user.id, Date.now(), 60_000); cookies.set(user.id, 'quotum_session=' + token);}
-  const app = await buildApp({store, directory, credentials, ingest: new Ingest(store, directory, new Duty(), new Cadence()), pairing: new Pairing(directory), resets: new ResetFeed(undefined, () => {}), setup: new Setup(false, null), local: null}, extended ? demoAdditionControls : undefined);
-  const call = (method: 'GET' | 'POST', url: string, payload?: object, user = owner.id, origin: string | null = 'http://localhost') => app.inject({method, url, payload, headers: {[VIEW_VERSION_HEADER]:String(VIEW_VERSION),cookie: cookies.get(user)!, ...(origin ? {origin} : {})}});
+  const ingest = new Ingest(store, directory, new Duty(), new Cadence()), resets = new ResetFeed(undefined, () => {});
+  const hubSources = managed ? new HubSources(store, credentials, clock, ingest.live) : undefined;
+  const events = new Events({store, directory, ingest, resets, hubSources}, undefined, clock);
+  const histories: {source: string; since: number; scopes: readonly string[]}[] = [];
+  const app = await buildApp({store, directory, credentials, ingest, pairing: new Pairing(directory), resets, setup: new Setup(false, null), local: null, hubSources, events}, extended ? demoAdditionControls : undefined);
+  const onHistory = events.onHistory;
+  events.onHistory = (source, since, scopes, work) => {histories.push({source, since, scopes: scopes ?? []}); onHistory?.(source, since, scopes, work);};
+  const call = (method: 'GET' | 'POST', url: string, payload?: object, user = owner.id, origin: string | null = 'http://localhost') => app.inject({method, url, payload, headers: {[VIEW_VERSION_HEADER]:String(VIEW_VERSION),cookie: cookies.get(user) ?? '', ...(origin ? {origin} : {})}});
   const reserve = async (item: object, user = owner.id, boardId: string | null = board.id) => (await call('POST', '/api/additions', {requestId: randomUUID(), boardId, item}, user)).json();
-  const close = async () => {await app.close(); store.close(); transport.close(); rmSync(dir, {recursive: true, force: true});};
-  return {store, directory, credentials, owner, member, board, call, reserve, close};
+  const close = async () => {hubSources?.stop(); await app.close(); store.close(); transport.close(); rmSync(dir, {recursive: true, force: true});};
+  return {store, directory, credentials, owner, member, board, call, reserve, close, clock, hubSources, poll, histories};
 }
+
+test('the producer stop control is demo-only, authenticated and same-site', async t => {
+  const url = '/api/prototype/stop-hub-sources';
+  const normal = await harness(false); t.after(normal.close);
+  assert.equal((await normal.call('POST', url)).statusCode, 404);
+  const h = await harness(true, true); t.after(h.close);
+  let stops = 0; const stop = h.hubSources!.stop.bind(h.hubSources);
+  t.mock.method(h.hubSources!, 'stop', () => {stops++; stop();});
+  assert.equal((await h.call('POST', url, undefined, 'no-session')).statusCode, 401);
+  for (const origin of [null, 'https://foreign.example']) assert.equal((await h.call('POST', url, undefined, h.owner.id, origin)).statusCode, 403);
+  assert.equal(stops, 0);
+  const result = await h.call('POST', url);
+  assert.equal(result.statusCode, 200); assert.deepEqual(result.json(), {ok: true}); assert.equal(stops, 1);
+});
+
+test('the producer stop control fails explicitly without a composed hub producer', async t => {
+  const h = await harness(); t.after(h.close);
+  const result = await h.call('POST', '/api/prototype/stop-hub-sources');
+  assert.equal(result.statusCode, 503); assert.deepEqual(result.json(), {error: 'prototype_hub_sources_unavailable'});
+});
+
+for (const mode of ['poll', 'stop-before-poll', 'stop-inflight'] as const) test(`the fixture ${mode} preserves financial evidence and isolates fixed Activity`, async t => {
+  const h = await harness(true, true); t.after(h.close);
+  const operation = await h.reserve({kind: 'connection', provider: 'openrouter'});
+  const added = await h.call('POST', '/api/additions/' + operation.id + '/run', {secret});
+  assert.equal(added.json().state, 'complete');
+  const source = added.json().result.sourceIds[0] as string;
+  h.store.setMeasureInterval(source, 120_000);
+  h.clock.tick(1); h.hubSources!.start(); h.clock.tick(); await settle();
+  const at = h.store.state(source).successAt!;
+  assert.equal(h.poll.calls, 1); assert.equal(h.hubSources!.cadence(source).value!.next - h.clock.now(), 120_000);
+  assert.equal(h.store.state(source).staleAfterMs, 204_000);
+  const snapshot = () => JSON.stringify({
+    state: h.store.state(source), cohort: h.store.sources(h.board.id),
+    credentials: h.store.db.prepare('SELECT * FROM credentials ORDER BY id').all(),
+    holders: h.store.db.prepare('SELECT * FROM holders ORDER BY source_id, user_id').all(),
+    readings: h.store.db.prepare('SELECT * FROM readings ORDER BY source_id, meter_id, at').all(),
+    spans: h.store.db.prepare('SELECT * FROM meter_spans ORDER BY source_id, meter_id, from_at').all(),
+  });
+  const before = snapshot(); h.histories.length = 0;
+  if (mode === 'stop-before-poll') assert.equal((await h.call('POST', '/api/prototype/stop-hub-sources')).statusCode, 200);
+  if (mode === 'stop-inflight') h.poll.delay = true;
+  h.clock.tick(120_000); await settle();
+  if (mode === 'stop-inflight') {
+    assert.ok(h.poll.release, 'the scheduled poll reached its delayed synthetic answer');
+    assert.equal((await h.call('POST', '/api/prototype/stop-hub-sources')).statusCode, 200);
+    h.poll.release(); await settle();
+  }
+  if (mode === 'poll') {
+    assert.equal(h.store.state(source).successAt, at + 120_000);
+    assert.ok(h.histories.some(row => row.source === source && row.scopes.includes('budget') && row.since === at), 'unchanged amounts at a new time invalidate budget history');
+  } else {
+    assert.equal(snapshot(), before, 'stopping preserves credentials, holders, cohort, readings, spans and source state');
+    assert.deepEqual(h.histories, []); assert.equal(h.hubSources!.cadence(source).value, null);
+    h.clock.tick(240_000); await settle();
+    assert.equal(snapshot(), before); assert.deepEqual(h.histories, []);
+    assert.equal(h.poll.calls, mode === 'stop-before-poll' ? 1 : 2, 'a stopped producer never restarts');
+  }
+});
 
 test('prototype routes require explicit composition and preserve Origin and owner boundaries', async t => {
   const normal = await harness(false); t.after(normal.close);

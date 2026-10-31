@@ -9,6 +9,31 @@ import {withValueStates,periodValueAt,type PeriodValues} from '../domain/periodV
 import {brotliCompressSync,constants} from 'node:zlib';
 import {ValueChanges,applyValueChanges} from '../domain/valueChanges.js';
 
+test('patch paths stay independent during reentrant reservations and rejected nested changes',()=>{
+  let entered=false,reject=false;
+  const nested:ReturnType<ValueChanges['between']>[]=[],prefix=['outer'];
+  const registry=new ValueChanges(()=>{
+    if(reject)throw new Error('reservation denied');
+    if(!entered){entered=true;nested.push(registry.between({child:{value:1}},{child:{value:2}},['nested']));}
+  });
+  const before={nested:{child:{value:1}},outer:{rows:[{amount:'900719925474099312345',used:1},{used:2}]}},after=structuredClone(before);
+  after.nested.child.value=2;after.outer.rows[0].used=3;after.outer.rows.push({used:4});
+  const patch=registry.between(before.outer,after.outer,prefix),paths=structuredClone(registry.paths);
+  assert.deepEqual(prefix,['outer']);
+  assert.deepEqual(paths[0],['nested','child','value']);
+  const replay=structuredClone(before);applyValueChanges(replay,registry.paths,nested[0]);applyValueChanges(replay,registry.paths,patch);
+  assert.deepEqual(replay,after);
+  reject=true;
+  assert.throws(()=>registry.between({branch:{value:1}},{branch:{value:2}},prefix),/reservation denied/);
+  assert.deepEqual(prefix,['outer']);assert.deepEqual(registry.paths,paths);
+  reject=false;
+  const later=registry.between({value:1},{value:2},['later']),target={later:{value:1}};
+  applyValueChanges(target,registry.paths,later);assert.equal(target.later.value,2);
+  assert.deepEqual(registry.paths.slice(0,paths.length),paths);
+  const borrowed=['borrowed'],id=registry.pathId(borrowed);borrowed.push('changed');
+  assert.deepEqual(registry.paths[id],['borrowed']);assert.equal(registry.pathId(['borrowed']),id);
+});
+
 test('record array tails keep exact changed prefix fields without resending their monetary evidence',()=>{
   const semantics:MeterSemantics={limit:null,resetAt:null,minutes:null,scope:null,label:null,scale:6,
     conversion:{original:{meterId:'balance:credits',amount:'9007199254740993001',unit:'credits:codex',at:1001,scale:12},

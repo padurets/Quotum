@@ -4,6 +4,7 @@ import {Readable} from 'node:stream';
 import {gunzipSync} from 'node:zlib';
 import {buildApp} from '../api.js';
 import {Events,type PollAnswer} from '../events.js';
+import type {Store} from '../store/store.js';
 import {config} from '../config.js';
 import {KEEP_MS} from '../sessions.js';
 import {newSecret} from '../domain/auth.js';
@@ -161,4 +162,57 @@ test('delivery rechecking does not alter an unrelated subscriber or native reade
   assert.equal(JSON.parse(delivered.frames.find(frame=>frame.type==='projectColors')!.data).pins[0][1],'#d08770');
   assert.equal(browser.length,0);assert.equal(native.length,0);
   f.events.flush();assert.ok(browser.some(frame=>frame.type==='projectColors'));assert.deepEqual(native,[]);
+});
+
+
+test('a poll stamps registered work after its asynchronous HTTP hooks and applies no future-upper query',async t=>{
+  const f=await fixture(t,'owner');
+  const first=await f.request();const before=(first.answer as unknown as PollAnswer).workStamp!;assert.ok(before);
+  let uppers=0;t.mock.method(f.store,'workUpper',()=>{uppers++;throw Error('heartbeat queried work geometry');});
+  f.credit('queued before poll preparation');f.events.flush();
+  const lateFrom=at-30_000;
+  f.change(()=>f.store.creditWork(f.device.id,lateFrom,lateFrom+10_000,[{source:null,client:'codex',origin:'terminal',startedAt:lateFrom,project:'after asynchronous poll preparation',folder:'',identity:{kind:'legacy',ordinal:0}}]));
+  const second=await f.request(first.answer.lease),stamp=(second.answer as unknown as PollAnswer).workStamp!;
+  assert.equal(stamp.authority,f.store.workKey(f.board));assert.equal(stamp.watch,before.watch);assert.ok(stamp.seq>before.seq);assert.equal(uppers,0);
+  const notice=second.answer.events.find(event=>event.type==='history')!.data;
+  assert.ok(notice.workSince>lateFrom);assert.equal(notice.workStamp.seq,before.seq+1);assert.ok(notice.workStamp.seq<stamp.seq,'an older queued invalidation cannot certify the unflushed late work version');
+  assert.equal(f.events.deliverPoll({lease:'unknown',now:at,frames:[]}).workStamp,undefined,'unbound answers cannot certify a watch');
+});
+
+
+test('one coalesced work history notice certifies its earliest bound and complete registered version',async t=>{
+  const f=await fixture(t,'owner'),frames:PollAnswer['frames']=[];
+  const opened=f.events.open({user:f.user.id,secret:f.secret,board:f.board,kind:'stream',send:packets=>frames.push(...packets),end:()=>{}});assert.ok(opened&&opened!=='limit');t.after(opened.close);
+  const before=f.events.workStamp(f.board)!;
+  const credit=(from:number,to:number,project:string)=>f.store.creditWork(f.device.id,from,to,[{source:null,client:'codex',origin:'terminal',startedAt:from,project,folder:'',identity:{kind:'legacy',ordinal:0}}]);
+  credit(at+5000,at+7000,'later');credit(at+1000,at+2000,'earlier');
+  f.events.flush();const notices=frames.filter(packet=>packet.type==='history');assert.equal(notices.length,1);
+  const notice=JSON.parse(notices[0].data),current=f.events.workStamp(f.board)!;
+  assert.equal(notice.workSince,at+1000);assert.equal(notice.workStamp.seq,before.seq+2);assert.deepEqual(notice.workStamp,current);
+  f.events.history('inaccessible',0,['budget']);f.events.flush();assert.deepEqual(f.events.workStamp(f.board),current,'financial-only and foreign history do not advance the work version');
+});
+
+test('replacement history preserves a covered stamp and drops inconclusive distinct versions',async t=>{
+  const f=await fixture(t,'owner'),frames:PollAnswer['frames']=[];
+  const opened=f.events.open({user:f.user.id,secret:f.secret,board:f.board,kind:'stream',send:packets=>frames.push(...packets),end:()=>{}});assert.ok(opened&&opened!=='limit');t.after(opened.close);
+  const credit=(from:number,project:string)=>f.store.creditWork(f.device.id,from,from+1000,[{source:null,client:'codex',origin:'terminal',startedAt:from,project,folder:'',identity:{kind:'legacy',ordinal:0}}]);
+  credit(at+5000,'first');f.events.flush();const first=frames.find(packet=>packet.type==='history')!;frames.length=0;
+  credit(at+1000,'second');f.events.flush();const second=frames.find(packet=>packet.type==='history')!,authority=f.store.workKey(f.board);
+  const normalize=(packets:PollAnswer['frames'])=>(f.events as unknown as {historyDelivery(board:string,frames:PollAnswer['frames'],key:string,previous:string):PollAnswer['frames']}).historyDelivery(f.board,packets,authority,authority);
+  const same=normalize([first,first]);assert.equal(same.length,1);assert.deepEqual(JSON.parse(same[0].data).workStamp,JSON.parse(first.data).workStamp);
+  const merged=normalize([first,second]);assert.equal(merged.length,1);const notice=JSON.parse(merged[0].data);
+  assert.equal(notice.workSince,at+1000);assert.equal(notice.workStamp,undefined,'no frontier continuity proof permits upgrading a merged notice to the latest sequence');
+});
+
+test('a flush cannot stamp an older frontier with work registered during delivery revalidation',async t=>{
+  const f=await fixture(t,'owner'),frames:PollAnswer['frames']=[];
+  const opened=f.events.open({user:f.user.id,secret:f.secret,board:f.board,kind:'stream',send:packets=>frames.push(...packets),end:()=>{}});assert.ok(opened&&opened!=='limit');t.after(opened.close);
+  const credit=(from:number,project:string)=>f.store.creditWork(f.device.id,from,from+1000,[{source:null,client:'codex',origin:'terminal',startedAt:from,project,folder:'',identity:{kind:'legacy',ordinal:0}}]);
+  credit(at+5000,'captured frontier');
+  const key=f.store.workKey.bind(f.store);let injected=false;
+  t.mock.method(f.store,'workKey',(...args:Parameters<Store['workKey']>)=>{const value=key(...args);if(!injected){injected=true;credit(at-30_000,'registered during delivery');}return value;});
+  f.events.flush();const old=JSON.parse(frames.find(packet=>packet.type==='history')!.data);
+  assert.equal(old.workSince,at+5000);assert.equal(old.workStamp,undefined,'the copied frontier does not cover the reentrant earlier write');
+  frames.length=0;f.events.flush();const next=JSON.parse(frames.find(packet=>packet.type==='history')!.data);
+  assert.equal(next.workSince,at-30_000);assert.deepEqual(next.workStamp,f.events.workStamp(f.board));
 });

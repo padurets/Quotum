@@ -5,8 +5,8 @@ import {deadline} from './deadline';
 /** Owned history pages retain only pressure witnesses, without inter-gesture checkpoints. */
 export function historyPressureScript(){
   return `(() => {
-    const limit=64,byteLimit=65536,memberLimit=16,tileLimit=128,rows=[],members=[],ids=new WeakMap(),records=new WeakMap(),bindings=new WeakMap();
-    let serial=0,next=0,current=null,currentBytes=null,currentId=null,pressured=false,reading=null,pool=null,attached=false,pressure=false,saturated=false,bytes=0,omitted=0,errors=0,bindingErrors=0;
+    const limit=64,byteLimit=65536,memberLimit=16,tileLimit=128,rows=[],members=[],ids=new WeakMap(),records=new WeakMap(),bindings=new WeakMap(),attempts=new WeakMap();
+    let serial=0,next=0,current=null,currentBytes=null,currentId=null,pressured=false,reading=null,pool=null,attached=false,pressure=false,saturated=false,bytes=0,omitted=0,errors=0,bindingErrors=0,callerMissing=0,sending=null,critical=null,currentPreparing=null;
     const number=v=>typeof v==='number'&&Number.isFinite(v)?v:null;
     const id=v=>v&&typeof v==='object'?(ids.has(v)?ids.get(v):(ids.set(v,++next),next)):null;
     const scope=v=>v==='quota'?0:v==='budget'?1:v==='funds'?2:null;
@@ -40,13 +40,43 @@ export function historyPressureScript(){
       const admitted=pool.active.get(flight)?.owner,known=admitted?members.find(v=>v.member===admitted||v.member?.transport===admitted):undefined;
       return{memberId:known?.id??null,kind:known?'chart-staging':'unknown'};
     };
+    const capture=()=>{
+      if(critical||currentId===null)return;
+      critical={preparing:currentPreparing,attemptId:attempts.get(current)??null,frames:[],frameCount:0,sourceCount:0,observerMs:null};
+      const started=performance.now(),frames=[],sources=new Set();let visited=0,frameCount=0;
+      // DOM metadata identifies this page's entry; only numeric coordinates survive.
+      if(typeof document!=='undefined'&&typeof location!=='undefined'){
+        const origin=new URL(location.href).origin;
+        for(const script of document.scripts){
+          if(visited++===16){callerMissing++;break;}
+          if(script.type!=='module'||typeof script.src!=='string')continue;
+          const url=new URL(script.src,location.href);
+          if(url.origin===origin&&!url.search&&!url.hash&&/^[/]assets[/]index-[A-Za-z0-9_-]+[.]js$/.test(url.pathname))sources.add(url.href);
+        }
+      }
+      const source=sources.size===1?[...sources][0]:null;
+      if(source)for(const line of String(new Error().stack??'').split(String.fromCharCode(10))){
+        const match=line.match(/:([0-9]+):([0-9]+)[)]?$/);if(!match)continue;
+        const before=line.slice(0,match.index),prefix=before.slice(0,-source.length),at=Number(match[1]),column=Number(match[2]);
+        if(before.endsWith(source)&&(prefix.endsWith('(')||prefix.trim()==='at')){
+          frameCount++;
+          if(Number.isSafeInteger(at)&&at>0&&Number.isSafeInteger(column)&&column>0){if(frames.length<16)frames.push([1,at,column]);}
+          else callerMissing++;
+        }
+      }
+      if(!source||!frameCount||frameCount>16)callerMissing++;
+      const attemptId=attempts.get(current)??null;
+      if(current&&owner(current).kind==='transport'&&!attemptId)callerMissing++;
+      critical={preparing:currentPreparing,attemptId,frames,frameCount,sourceCount:sources.size,observerMs:performance.now()-started};
+    };
     window.__quotumHistoryPressure={
       read:()=>{
-        const receipt={status:attached&&members.filter(v=>v.member).length===4&&members.filter(v=>v.member&&v.kind===0).length===1&&members.filter(v=>v.member&&v.kind===1).length===3&&[0,1,2].every(s=>members.some(v=>v.member&&v.kind===1&&v.scope===s))&&!omitted&&!errors&&!bindingErrors?'complete':'insufficient-evidence',attached,limit,byteLimit,memberLimit,tileLimit,bytes,omitted,omissionCountExact:false,errors,bindingErrors,members:members.map(v=>({memberId:v.id,memberKind:v.kind,boundScope:v.scope,active:!!v.member})),rows:rows.slice()};
+        const receipt={status:attached&&members.filter(v=>v.member).length===4&&members.filter(v=>v.member&&v.kind===0).length===1&&members.filter(v=>v.member&&v.kind===1).length===3&&[0,1,2].every(s=>members.some(v=>v.member&&v.kind===1&&v.scope===s))&&!omitted&&!errors&&!bindingErrors&&!callerMissing?'complete':'insufficient-evidence',attached,limit,byteLimit,memberLimit,tileLimit,bytes,omitted,omissionCountExact:false,errors,bindingErrors,callerMissing,members:members.map(v=>({memberId:v.id,memberKind:v.kind,boundScope:v.scope,active:!!v.member})),rows:rows.slice()};
         while(JSON.stringify(receipt).length>byteLimit&&receipt.rows.length){receipt.bytes-=JSON.stringify(receipt.rows.pop()).length;receipt.omitted++;receipt.status='insufficient-evidence';}
         return receipt;
       },
       request:(attemptId,body)=>{
+        if(sending)observe(()=>{sending.count++;if(typeof attemptId!=='string'||!/^b[0-9]+:[0-9]+$/.test(attemptId)||sending.count!==1){bindingErrors++;return;}attempts.set(sending.flight,attemptId);});
         if(!pressure)return;if(saturated){omitted++;return;}
         observe(()=>{
           if(typeof attemptId!=='string'||!/^b[0-9]+:[0-9]+$/.test(attemptId)||typeof body!=='string'||body.length>16384){omitted++;return;}
@@ -62,13 +92,14 @@ export function historyPressureScript(){
       attached=true;pool=value;
       const originalReserve=pool.reserve;
       pool.reserve=function(flight,amount){
-        const previous=current,previousBytes=currentBytes,previousId=currentId,previousPressure=pressured;
-        current=flight;currentBytes=amount;currentId=++serial;pressured=false;
+        const previous=current,previousBytes=currentBytes,previousId=currentId,previousPressure=pressured,previousCritical=critical,previousPreparing=currentPreparing;
+        current=flight;currentBytes=amount;currentId=++serial;pressured=false;critical=null;currentPreparing=observe(()=>{const value=flight?.preparing;return typeof value==='boolean'?value:null;});
         let accepted=null,complete=false;
         try{const result=originalReserve.call(this,flight,amount);accepted=result;complete=true;return result;}
         finally{
-          if(pressured){if(saturated)omitted++;else observe(()=>emit('reserve-critical',{reserveId:currentId,flightId:id(flight),owner:owner(flight),bytes:number(amount),accepted,complete}));}
-          current=previous;currentBytes=previousBytes;currentId=previousId;pressured=previousPressure;
+          // Pool trimming has unwound, so bounded stacks reach the actual caller.
+          if(pressured){if(saturated)omitted++;else observe(()=>{capture();emit('reserve-critical',{reserveId:currentId,flightId:id(flight),owner:owner(flight),bytes:number(amount),accepted,complete,...critical});});}
+          current=previous;currentBytes=previousBytes;currentId=previousId;pressured=previousPressure;critical=previousCritical;currentPreparing=previousPreparing;
         }
       };
       const originalRegister=pool.register;
@@ -80,6 +111,15 @@ export function historyPressureScript(){
           const chart=member.grids instanceof Map,period=member.transport&&member.retained instanceof Map&&member.valueCache instanceof Map;
           const record={member,id:id(member),kind:chart?1:period?0:null,scope:null};members.push(record);records.set(member,record);
           if(record.kind===null)errors++;
+          if(period&&typeof member.transport.send==='function'){
+            const send=member.transport.send;
+            member.transport.send=function(...args){
+              const previous=sending;let active=null;
+              observe(()=>{const matches=[...this.flights].filter(f=>f.controller.signal===args[2]);if(matches.length!==1){bindingErrors++;return;}active={flight:matches[0],count:0};});
+              sending=active;
+              try{return send.apply(this,args);}finally{observe(()=>{if(active&&active.count!==1){attempts.delete(active.flight);bindingErrors++;}});sending=previous;}
+            };
+          }else if(period)bindingErrors++;
           if(period&&typeof member.transport.read==='function'){
             const read=member.transport.read;
             member.transport.read=function(key,query,signal,...args){

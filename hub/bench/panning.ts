@@ -93,7 +93,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       evidence?.save('panning-stage', {initiator, period, stage: 'starting', viewport: [1280,2400], throttle: 4, geometry});
       const edgeSeries:PanReading['edgeSeries']=[];
       const traced=period===nativeTarget.split('/')[1]?familyTrace:undefined;
-      const detailed=!!traced&&(nativeTarget==='session/30d'||nativeTarget==='quota/24h');
+      const detailed=!!traced&&(nativeTarget==='session/30d'||nativeTarget==='quota/24h'||nativeTarget==='budget/30d');
       const samplerSource=`(() => {
         const initiator=${JSON.stringify(initiator)},period=${JSON.stringify(period)};
         const transactions=${panTransactionsScript(32,detailed&&initiator==='quota'&&period==='24h')};let nextRequest=0;

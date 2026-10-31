@@ -22,7 +22,7 @@ import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
 import {fixtureTiming, idlePhaseProblems, idlePhaseScript, idleWindow, overviewCards, quietAfter, stillProblems, stillSnapshot, warmUntil, type IdlePhase} from './still.js';
 import {hear, type Heard} from './stream.js';
-import {frequencyKeys, frequencySource, normalizeUpdates, moneyView, selectMoney} from './controls.js';
+import {frequencyKeys, frequencySource, normalizeUpdates, moneyView, selectMoney, recentCalendarTotalScript} from './controls.js';
 import {panning} from './panning.js';
 import {panningProblems,type NativePanTarget} from './panningBudget.js';
 import {seedPanningBudgets,panningSet} from './fixture.js';
@@ -165,7 +165,7 @@ async function main() {
     address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
     if (idleCpuMode && (!['trace','profile','native-trace','native-profile'].includes(idleCpuMode) || !options.ci || options.cdp || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
     if (poolDiagnostic && (poolDiagnostic !== '1' || !options.ci || options.cdp || idleCpuMode || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting history pool diagnostic mode');
-    if (process.env.QUOTUM_BENCH_NATIVE_TARGET && (!nativeFrameMode || !['activity/24h','session/30d','quota/24h'].includes(nativeFrameTarget))) throw new Stop('Unknown or conflicting native trace target');
+    if (process.env.QUOTUM_BENCH_NATIVE_TARGET && (!nativeFrameMode || !['activity/24h','session/30d','quota/24h','budget/30d'].includes(nativeFrameTarget))) throw new Stop('Unknown or conflicting native trace target');
     await prepare(address);
     if(!quota24Trace)chrome = options.cdp ? null : findChrome(process.env);
     if (!options.cdp && !chrome) throw new Stop('No Chrome to run: set QUOTUM_CHROME, put google-chrome or chromium on PATH, or pass --cdp <http://host:port>.');
@@ -339,7 +339,7 @@ async function main() {
           period:p?{generation:p.generation,revision:p.revision,workNeeded:p.workNeeded,dirty:[...p.dirtyScopes],error:p.get().error,calendar:p.calendar.state.error,calendarNeeded:p.calendar.needed,completed:p.transport.completed,failed:p.transport.failed,
             flights:[...p.transport.flights].map(f=>({extras:f.extras,preparing:!!f.preparing,aborted:f.controller.signal.aborted,sections:Object.keys(f.intent.request)}))}:null};
       };};
-      ${nativeFrameMode&&(nativeFrameTarget==='session/30d'||quota24Trace)?`(() => {
+      ${nativeFrameMode&&(nativeFrameTarget==='session/30d'||nativeFrameTarget==='budget/30d'||quota24Trace)?`(() => {
         const inspect=window.__quotumInspectPreparations;
         window.__quotumInspectPreparations=value=>{if(typeof inspect==='function')inspect(value);window.__quotumPanPreparations=value;};
       })();`:''}
@@ -541,6 +541,8 @@ async function main() {
     evidence.checked(monetary.problems);
     evidence.save('money', monetary);
     evidence.begin('fixed-activity');
+    // Fixed Activity owns work updates; scheduled money polls would add unrelated history reads.
+    await ana.post('/api/prototype/stop-hub-sources');
     say('checking paint-only emphasis and shared Activity filters, late-work cells and cancellation at 24h/30d');
     const selectedActivity=await fixedActivity(browser,stand,evidence,coverage);
     evidence.checked(selectedActivity.problems);
@@ -991,7 +993,7 @@ async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cd
       // The opposite end of a live period may retire older work during this report.
       // Check the recent buckets receiving this credit, with one fixed comparison cut.
       const calendarFrom=Date.now()-2*3_600_000;
-      calendarTotal=`Array.from(document.querySelectorAll('.agent-hours-heatmap [data-agent-ms]')).filter(node=>Number(node.getAttribute('data-heatmap-cell'))>=${calendarFrom}).reduce((sum,node)=>sum+Number(node.getAttribute('data-agent-ms')),0)`;
+      calendarTotal=recentCalendarTotalScript(calendarFrom);
       calendarBefore=await cdp.evaluate<number>(calendarTotal);
       requests = new Requests(cdp,true); requests.counting = true;traffic.push(requests);
       from = Date.now();

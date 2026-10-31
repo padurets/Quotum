@@ -5,8 +5,8 @@ import type {PeriodRange} from './period.js';
 import type {Stretch} from './work.js';
 import type {CalendarCell,CalendarProof} from './workCalendar.js';
 
-export function calendarCurve(proof:CalendarProof,range:PeriodRange,cut:number,known:number|null,reserve:(bytes:number)=>void,release?:(bytes:number)=>void){
-  if(!Number.isSafeInteger(proof.retentionMs)||proof.retentionMs<=0||proof.periodMs!==undefined&&(!Number.isSafeInteger(proof.periodMs)||proof.periodMs<900_000||proof.periodMs>31*86_400_000)||proof.from!==range.from||proof.cut!==cut||!Array.isArray(proof.sources)||proof.sources.length!==1||!proof.sources[0]||proof.sources[0].id!=='work'||proof.sources[0].knownFrom!==known)throw new Error('invalid_calendar_proof');
+export function calendarCurve(proof:CalendarProof,range:PeriodRange,cut:number,known:number|null,reserve:(bytes:number)=>void,release?:(bytes:number)=>void,fresh=false){
+  if(!Number.isSafeInteger(proof.retentionMs)||proof.retentionMs<=0||proof.periodMs!==undefined&&(!Number.isSafeInteger(proof.periodMs)||proof.periodMs<900_000||proof.periodMs>31*86_400_000)||proof.from!==range.from||(fresh?proof.cut<cut:proof.cut!==cut)||!Array.isArray(proof.sources)||proof.sources.length!==1||!proof.sources[0]||proof.sources[0].id!=='work'||proof.sources[0].knownFrom!==known)throw new Error('invalid_calendar_proof');
   const curves=sourceWorkCurves(proof,reserve,undefined,release),curve=curves.groups.source.get('work');if(!curve)throw new Error('invalid_calendar_proof');return {curve,bytes:curves.bytes??0};
 }
 
@@ -31,7 +31,7 @@ export function* calendarProof(rows:Iterable<Stretch>,range:PeriodRange,cut:numb
   return {version:1,from:range.from,cut,patterns,sources:[{id:'work',knownFrom:known,blocks}]};
 }
 
-export type CalendarSegment={from:number;to:number;curve:WorkTimeline};
+export type CalendarSegment={from:number;to:number;curve:Pick<WorkTimeline,'read'|'working'|'next'|'slope'>};
 /** The same integral clips arbitrary selection edges, including sub-minute cache shifts. */
 export function calendarProjection(edges:readonly number[],range:PeriodRange,cut:number,known:number|null,retained:number,retention:number,period:number|undefined,segments:readonly CalendarSegment[]):CalendarCell[]{
   return edges.slice(0,-1).map((edge,i)=>{

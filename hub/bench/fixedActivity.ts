@@ -101,12 +101,24 @@ export function fixedActivityScript(period:string){return historyPoolReceiptScri
   const inspectPreparations=window.__quotumInspectPreparations;
   window.__quotumInspectPreparations=value=>{if(typeof inspectPreparations==='function')inspectPreparations(value);scheduler=value;const replace=scheduler.replace;scheduler.replace=function(owner,work,...rest){stats.jobsStarted++;const next=work.next;work.next=function(...args){const start=performance.now();try{stats.advances++;return next.apply(this,args);}finally{stats.preparationMs+=performance.now()-start;}};return replace.call(this,owner,work,...rest);};};
   const status=()=>{const p=reader(),h=chart()?.get().history,s=p?.activityProjectionState(h),t=p?.transport;return {registered:!!p,error:s?.error,loading:p?.get().loading,ready:s?.ready,calendarPending:!!p?.calendar.demand(),transportPending:!!(t?.scheduled||t?.queue.length||t?.flights.size),preparing:scheduler?.size,flights:pool.activeFlights,bytes:pool.estimatedBytes,members:pool.members.size};};
-  window.__quotumFixedActivity={reset,reader,status,observeNews:()=>{const p=reader(),changed=p.changed;p.changed=function(event,...args){if(event?.type==='hub'&&event.event.type==='history')news.add(event.event.data.workSince);return changed.call(this,event,...args);};},heardSince:at=>news.has(at),holdDispatch:()=>{const t=reader().transport,schedule=t.schedule;t.schedule=()=>{};return window.__quotumFixedActivity.resumeDispatch=()=>{t.schedule=schedule;schedule.call(t);};},sample:()=>{
+  window.__quotumFixedActivity={reset,reader,status,observeNews:()=>{const p=reader(),changed=p.changed;p.changed=function(event,...args){if(event?.type==='hub'&&event.event.type==='history')news.add(event.event.data.workSince);return changed.call(this,event,...args);};},heardSince:at=>news.has(at),holdDispatch:()=>{const t=reader().transport,flush=t.flush;t.flush=()=>{};return window.__quotumFixedActivity.resumeDispatch=()=>{t.flush=flush;t.schedule();};},sample:()=>{
     const p=reader(),c=chart(),h=c?.get().history;if(!h||!p.activityProjectionState(h).ready)return null;
     const a=p.project(h,'quota',Date.now(),true).activity;
     return {...stats,numbers:{agentMs:a.agentMs,activeMs:a.activeMs,agents:a.agents},activity:a,tiles:[...c.grids.values()].flatMap(grid=>[...grid.values()].map(tile=>{if(!ids.has(tile))ids.set(tile,++serial);return[tile.from,tile.to,ids.get(tile)];}))};
   },ready:()=>{const s=status();return !!s.ready&&!s.calendarPending&&!s.transportPending&&s.flights===0&&s.preparing===0&&!document.querySelector('.chart>svg[data-draw-ready="false"],.activity.is-loading,.history.is-loading,.budget-history.is-loading,.subscription-funds.is-loading');}};
 })();`;}
+
+/** Delivery, rather than HTTP acceptance, puts every burst update before dispatch. */
+export async function fixedActivityBurst(cdp:Pick<Cdp,'evaluate'>,actor:Pick<ObservedWork,'floorAt'|'through'>,
+  waitFor:(test:string,deadline:number)=>Promise<void>,deadline:number){
+  await cdp.evaluate('window.__quotumFixedActivity.holdDispatch()');
+  try{
+    for(const offset of [200,300,400]){
+      await actor.through(actor.floorAt+offset);
+      await waitFor(`window.__quotumFixedActivity.heardSince(${actor.floorAt+offset-100})`,deadline);
+    }
+  }finally{await cdp.evaluate('window.__quotumFixedActivity.resumeDispatch()');}
+}
 
 export function assertActivityGestureRange(actual:{from:number;to:number},selection:{from:number;to:number}){
   assert.deepEqual(actual,{from:selection.from,to:selection.to},'gesture setup must preserve its requested historical range');
@@ -429,14 +441,14 @@ export async function fixedActivity(browser:Browser,stand:Stand,evidence?:Pick<E
         }
         return current;
       };
-      const phase=async(name:string,run:()=>Promise<void>,expected:number|null)=>{
+      const phase=async(name:string,run:(deadline:number)=>Promise<void>,expected:number|null)=>{
         cdp.at(`fixed-activity/${days}d/${name}`);
         const start=bodies.bodies.length;await cdp.evaluate('window.__quotumFixedActivity.reset()');const at=Date.now();
         const deadline=at+30_000;
         referenceReceipt={requests:0,requestBytes:0,decodedBytes:0,encodedBytes:0};
         const metrics=async()=>{const {metrics}=await cdp.send<{metrics:{name:string;value:number}[]}>('Performance.getMetrics');return Object.fromEntries(metrics.map(metric=>[metric.name,metric.value]));};
         const before=await metrics();
-        await run();
+        await run(deadline);
         if(expected){while(bodies.bodies.slice(start).filter(row=>row.body.sessions).length<expected){if(Date.now()>deadline)throw Error(name+' did not dispatch its shared reads');await pause(30);}}
         await pause(350);await settled(deadline);while(bodies.active.size||bodies.pending.size){await Promise.allSettled([...bodies.pending]);await pause(20);}
         const coherentAt=Date.now();
@@ -474,11 +486,7 @@ export async function fixedActivity(browser:Browser,stand:Stand,evidence?:Pick<E
       const clean=baseline.tiles.filter(([,to])=>to<=dirty);
       assert.ok(clean.length);for(const row of clean)assert.deepEqual(isolated.current.tiles.find(([from,to])=>from===row[0]&&to===row[1]),row);
       assert.equal(isolated.current.activity.barMs,baseline.activity.barMs);
-      await phase('burst before dispatch',async()=>{
-        await cdp.evaluate('window.__quotumFixedActivity.holdDispatch()');
-        await actor.through(actor.floorAt+200);await actor.through(actor.floorAt+300);await actor.through(actor.floorAt+400);await pause(350);
-        await cdp.evaluate('window.__quotumFixedActivity.resumeDispatch()');
-      },1);
+      await phase('burst before dispatch',deadline=>fixedActivityBurst(cdp,actor,waitFor,deadline),1);
       const intercepted=async(trigger:()=>Promise<void>,whileHeld:()=>Promise<void>,holdFollowing=false)=>{
         type Paused={requestId:string;networkId?:string};
         let release!:(event:{requestId:string;networkId?:string})=>void;

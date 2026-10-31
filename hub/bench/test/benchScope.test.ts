@@ -27,7 +27,7 @@ const declarations=['parseArgs','main'].map(name=>{
 const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={main,parseArgs};',{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},
 }).outputText;
-type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'fixed-activity'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace'|'suffix-throw'|'suffix-budget'|'suffix-cancel'|'suffix-cleanup'|'suffix-error-cleanup'|'suffix-returned-problems'|'reversal-throw'|'measurement-details-throw'|'suffix-no-exposure';
+type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'fixed-activity'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace'|'suffix-throw'|'suffix-budget'|'suffix-cancel'|'suffix-cleanup'|'suffix-error-cleanup'|'suffix-returned-problems'|'reversal-throw'|'measurement-details-throw'|'suffix-no-exposure'|'stop-hub-sources';
 async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),diagnosticFiles=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
   const bootstraps:string[]=[];
@@ -40,7 +40,10 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   const events=new EventCounts(()=>now);for(let i=0;i<5;i++)events.push('event: ping\ndata: {}\n\n');
   const source={id:'fixture',successAt:env.TEST_FRESH_OBSERVATION?now:now-600_000,staleAfterMs:3_600_000,windows:[]};
   const overview={sources:[source],forecast:{},board:{id:'board'}};
-  const person={personalBoard:'board',cookie:'session=fixture',get:async()=>overview,post:async(url:string,body:{intervalMs:number})=>{assert.equal(url,'/api/boards/board/sources/first-card/frequency');assert.equal(body.intervalMs,120000);mark('saved-frequency');}};
+  const person={personalBoard:'board',cookie:'session=fixture',get:async()=>overview,post:async(url:string,body?:{intervalMs:number})=>{
+    if(url==='/api/prototype/stop-hub-sources'){assert.equal(body,undefined);mark('stop-hub-sources');if(fault==='stop-hub-sources')throw Error('stop-hub-sources-original');return;}
+    assert.equal(url,'/api/boards/board/sources/first-card/frequency');assert.equal(body?.intervalMs,120000);mark('saved-frequency');
+  }};
   const set={id:'all',scene:'still'},stand={set,start:now,people:new Map([['ana',person]])};
   const browser={owned:true,endpoint:'fixture',launchReport:()=>({mode:'owned'}),close:async()=>{
     mark('browser-close');if(fault==='browser-close'||env.TEST_BROWSER_CLOSE==='1')throw Error('browser-close-red');
@@ -160,6 +163,35 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
 }
 const tail=['measure','work','observed-work','private-work','frequency','panning','credits','money','fixed-activity','measurement-details'];
 const order=(calls:string[])=>calls.filter(call=>call==='history'||call==='openTab'||tail.includes(call));
+for(const scope of ['all','dashboard','updates'])test(`${scope} stops scheduled money polls before opening fixed Activity`,async()=>{
+  const out=await run(['--scope',scope]);assert.equal(out.error,undefined);assert.deepEqual(out.exits,[0]);
+  const expected=['money','phase:fixed-activity','stop-hub-sources','fixed-activity'];
+  assert.deepEqual(out.calls.filter(call=>expected.includes(call)),expected);
+});
+for(const scope of ['all','updates'])test(`${scope} refuses fixed Activity after a failed producer stop and still cleans up`,async()=>{
+  const out=await run(['--scope',scope],'stop-hub-sources');assert.deepEqual(out.exits,[1]);
+  assert.ok(out.logs.some(line=>line.includes('stop-hub-sources-original')));
+  assert.ok(out.calls.includes('phase:fixed-activity'));assert.ok(!out.calls.includes('fixed-activity'));
+  assert.ok(!out.calls.includes('measurement-details'));
+  assert.equal((out.saved.get('coverage') as ReturnType<Coverage['summary']>).status,'incomplete');
+  for(const action of ['stream-close','conditioning-close','browser-close','demo-stop'])assert.equal(out.calls.filter(call=>call===action).length,1);
+});
+for(const scope of ['all','updates'])for(const cleanupFails of [false,true])test(`${scope} attributes a failed producer stop to fixed Activity with cleanup failure=${cleanupFails}`,async t=>{
+  const dir=mkdtempSync(path.join(os.tmpdir(),'quotum-stop-journal-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const out=await run(['--scope',scope],'stop-hub-sources',{TEST_REAL_EVIDENCE:dir,...(cleanupFails?{TEST_BROWSER_CLOSE:'1'}:{})});
+  assert.equal(out.error,undefined);assert.deepEqual(out.exits,[1]);
+  const manifest=JSON.parse(readFileSync(path.join(dir,out.journalEvidence!.id,'manifest.json'),'utf8'));
+  assert.deepEqual(manifest.primaryFailure,{phase:'fixed-activity',classification:'runtime'});
+  assert.equal(manifest.journal.find((row:{phase:string})=>row.phase==='money').outcome,'passed');
+  const activity=manifest.journal.find((row:{phase:string})=>row.phase==='fixed-activity');
+  assert.equal(activity.outcome,'failed');assert.equal(activity.classification,'runtime');
+  assert.equal(manifest.journal.find((row:{phase:string})=>row.phase==='measurement-details').outcome,'unreached');
+  const cleanup=manifest.journal.filter((row:{phase:string})=>row.phase==='cleanup');
+  assert.equal(cleanup.length,1);assert.equal(cleanup[0].outcome,cleanupFails?'failed':'passed');
+  assert.equal(cleanup[0].classification,cleanupFails?'cleanup':undefined);
+  assert.ok(!out.calls.includes('fixed-activity'));assert.ok(!out.calls.includes('measurement-details'));
+  for(const action of ['stream-close','conditioning-close','browser-close','demo-stop'])assert.equal(out.calls.filter(call=>call===action).length,1);
+});
 test('actual main ages the whole fixture and still waits for the opened page to settle',async()=>{
   const cell=300_000,minute=60_000,base=Date.parse('2026-10-15T12:00:10Z');
   for(let phase=0;phase<5;phase++){
@@ -334,15 +366,15 @@ for(const mode of ['native-trace','native-profile'])for(const scope of ['all','d
   assert.ok(result.calls.indexOf('native-trace-created')>result.calls.indexOf('frequency'));
   assert.equal(result.calls.filter(call=>call==='native-trace-close').length,1);
 });
-for(const fault of ['panning','panning-throw','cancel'] as const)test('native-trace preserves original '+fault,async()=>{
-  const result=await run(['--scope','dashboard'],fault,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'native-trace'});
+for(const target of [undefined,'budget/30d'])for(const fault of ['panning','panning-throw','cancel'] as const)test('native-trace '+(target??'default')+' preserves original '+fault,async()=>{
+  const result=await run(['--scope','dashboard'],fault,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'native-trace',...(target?{QUOTUM_BENCH_NATIVE_TARGET:target}:{})});
   assert.equal(result.error,undefined);assert.deepEqual(result.exits,[1]);assert.deepEqual(result.statuses,[fault==='cancel'?'cancelled':'failed']);
   assert.equal(result.calls.filter(call=>call==='native-trace-close').length,1);
   if(fault==='panning')assert.ok((result.saved.get('result') as {problems:string[]}).problems.includes('panning-red'));
   if(fault==='panning-throw')assert.ok(result.logs.some(line=>line.includes('panning-original')));
 });
-for(const mode of ['native-trace','native-profile'])test('history still rejects '+mode+' before preparation',async()=>{
-  const result=await run(['--scope','history'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode});assert.match(String(result.error),/scope/i);assert.deepEqual(result.calls,[]);
+for(const target of [undefined,'budget/30d'])for(const scope of ['history','updates','panning'])for(const mode of ['native-trace','native-profile'])test(scope+' still rejects '+mode+' '+(target??'default')+' before preparation',async()=>{
+  const result=await run(['--scope',scope],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,...(target?{QUOTUM_BENCH_NATIVE_TARGET:target}:{})});assert.match(String(result.error),/scope/i);assert.deepEqual(result.calls,[]);
 });
 for(const mode of ['native-trace','native-profile','trace','profile'])test(mode+' refuses attached, non-CI and conflicting diagnostic runs before preparation',async()=>{
   const cases:[string[],Record<string,string>,boolean][]=[
@@ -663,20 +695,26 @@ for(const direct of [false,true])test('actual main preserves reversal failure an
   for(const name of ['stream-close','browser-close','demo-stop'])assert.equal(out.calls.filter(call=>call===name).length,1);
 });
 
-for(const mode of ['native-trace','native-profile'])test('native target routes session30d through actual main with every original phase and owned cleanup '+mode,async()=>{
-  const result=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,QUOTUM_BENCH_NATIVE_TARGET:'session/30d'});
+for(const target of ['session/30d','budget/30d'])for(const mode of ['native-trace','native-profile'])test('native target routes '+target+' through actual main with every original phase and owned cleanup '+mode,async()=>{
+  const result=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,QUOTUM_BENCH_NATIVE_TARGET:target});
   assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);assert.deepEqual(result.statuses,['diagnostic']);
-  assert.equal(result.calls.filter(call=>call==='native-target:session/30d').length,1);assert.equal(result.calls.filter(call=>call==='native-trace-created').length,1);
+  assert.equal(result.calls.filter(call=>call==='native-target:'+target).length,1);assert.equal(result.calls.filter(call=>call==='native-trace-created').length,1);
+  assert.equal(result.calls.includes('idle-trace-created'),false);
+  const bootstrap=result.bootstraps.find(source=>source.includes('__quotumPanPreparations'));assert.ok(bootstrap,'the selected target receives the actual scheduler hook');
+  const inspections:unknown[]=[],page={__quotumInspectPreparations:(value:unknown)=>inspections.push(value)};
+  runInNewContext(bootstrap,{window:page,localStorage:{getItem:()=>null,setItem:()=>{}}});
+  const scheduler={fixture:'scheduler'};page.__quotumInspectPreparations(scheduler);
+  assert.deepEqual(inspections,[scheduler]);assert.equal((page as typeof page&{__quotumPanPreparations:unknown}).__quotumPanPreparations,scheduler);
   for(const phase of tail)assert.equal(result.calls.filter(call=>call===phase).length,1);
   const panned=result.saved.get('panning') as {reports:unknown[]};assert.equal(panned.reports.length,10);
   for(const action of ['stream-close','native-trace-close','browser-close','demo-stop'])assert.equal(result.calls.filter(call=>call===action).length,1);
-  const failed=await run(['--scope','dashboard'],'panning',{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,QUOTUM_BENCH_NATIVE_TARGET:'session/30d'});
+  const failed=await run(['--scope','dashboard'],'panning',{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,QUOTUM_BENCH_NATIVE_TARGET:target});
   assert.deepEqual(failed.exits,[1]);assert.deepEqual(failed.statuses,['failed']);assert.ok((failed.saved.get('result') as {problems:string[]}).problems.includes('panning-red'));
   for(const action of ['native-trace-close','browser-close','demo-stop'])assert.equal(failed.calls.filter(call=>call===action).length,1);
 });
 
 test('native target refuses unknown or non-native selection before preparation and preserves the default',async()=>{
-  for(const [mode,target] of [['native-trace','session/24h'],['native-profile','activity/30d'],['trace','session/30d'],['','session/30d']]){
+  for(const [mode,target] of [['native-trace','session/24h'],['native-profile','activity/30d'],['native-trace','budget/24h'],['native-profile','funds/30d'],['trace','session/30d'],['','session/30d'],['trace','budget/30d'],['','budget/30d']]){
     const result=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,QUOTUM_BENCH_NATIVE_TARGET:target});
     assert.match(String(result.error),/native trace target/i);assert.ok(!result.calls.includes('prepare'));assert.ok(!result.calls.includes('launch'));
   }

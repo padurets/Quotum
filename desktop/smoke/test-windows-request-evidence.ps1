@@ -32,6 +32,29 @@ function Test-Receipt([string]$Name,[scriptblock]$Arrange,[scriptblock]$Assert) 
 $accepted={param($e) if($e.Status -ne 'qualified' -or $e.LinkStatus -ne 'qualified' -or -not $e.CallbackAccepted -or $e.Request -ne 100){throw 'Actual accepted revision lost its unique numeric binding'}}
 $unknown={param($e) if($e.CallbackAccepted -or $e.LinkStatus -eq 'qualified'){throw 'Incomplete or ambiguous evidence accepted the callback'}}
 Test-Receipt 'accepted-partial-pipeline' {} {param($e) & $accepted $e;if($null -eq [QuotumWindowProbe]::ForRequest($e,1) -or $null -ne [QuotumWindowProbe]::ForRequest($e,2) -or $e.Frame.Rows[2].Status -ne 'unknown-milestone'){throw 'An absent build marker became observed'}}
+Test-Receipt 'browser-metadata-without-milestones' {
+  param($f,$b)
+  foreach($lane in 2..5){
+    $row=$f.Rows[$lane];$row.Sequence=2;$row.Epoch=3
+    $row.Values=[long[]]@(100,0,44,100,0,0,0,100,700,9001)
+  }
+} {
+  param($e)
+  & $accepted $e
+  foreach($lane in 2..5){
+    if($e.Frame.Rows[$lane].Status -ne 'unknown-milestone' -or $null -ne [QuotumWindowProbe]::ForRequest($e,$lane) -or $e.Frame.Rows[$lane].Values[9] -ne 9001){throw 'Browser metadata fabricated a milestone or lost its raw binding'}
+  }
+}
+Test-Receipt 'browser-metadata-with-real-build' {
+  param($f,$b)
+  $row=$f.Rows[2];$row.Sequence=2;$row.Epoch=3
+  $row.Values=[long[]]@(100,0,44,2,700,0,0,100,700,9001)
+} {param($e)& $accepted $e;if($null -eq [QuotumWindowProbe]::ForRequest($e,2) -or $e.Frame.Rows[2].Values[9] -ne 9001){throw 'Browser metadata hid an observed build'}}
+Test-Receipt 'browser-metadata-without-valid-head' {
+  param($f,$b)
+  $row=$f.Rows[4];$row.Sequence=2;$row.Epoch=3
+  $row.Values=[long[]]@(100,0,0,0,0,0,0,100,700,9001)
+} $unknown
 Test-Receipt 'accepted-hide-revision' {param($f,$b)$f.Rows[0].Values[3]=3;$f.Rows[0].Values[5]=0} {param($e)& $accepted $e;if($e.WantedCompact){throw 'Hide was reinterpreted as show'}}
 Test-Receipt 'callback-entered-before-acceptance' {param($f,$b)$f.Rows[0].Values[0]=0;$f.Rows[0].Values[3]=1;$f.Rows[0].Values[5]=0} {param($e)& $unknown $e;if(-not $e.CallbackObserved -or $e.LinkStatus -ne 'observed-not-accepted'){throw 'Callback entry was relabelled as policy acceptance'}}
 Test-Receipt 'cross-request-worker' {param($f,$b)$f.Rows[1].Values[0]=99} {param($e)& $accepted $e;if($null -ne [QuotumWindowProbe]::ForRequest($e,1) -or $e.Frame.Rows[1].Status -ne 'other-request'){throw 'Another revision was joined into the accepted request'}}

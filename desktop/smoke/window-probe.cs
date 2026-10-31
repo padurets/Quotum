@@ -347,7 +347,8 @@ public static class QuotumWindowProbe {
     for(int lane=0;lane<15;lane++){
       var row=frame.Rows[lane];
       if(row==null || row.Lane!=lane || !RecordComplete(row,frame.After.Epoch)){e.Status="unknown-partial";return e;}
-      row.Status=row.Sequence==0?"unknown-milestone":"qualified";
+      // Stage 100 initializes browser metadata without observing the lane's milestone.
+      row.Status=row.Sequence==0 || lane>=2 && lane<=5 && row.Values[3]==100?"unknown-milestone":"qualified";
     }
     long first=Math.Max(1,frame.After.Activations-7);
     e.ActivationOmissions=Math.Max(0,frame.After.Activations-8);

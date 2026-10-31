@@ -18,7 +18,7 @@ import {periodValues,nearbyPeriodValues} from '../periodValues.js';
 import {periodValueAt,hasPeriodValue,withValueStates} from '../domain/periodValues.js';
 import {HistoryLimit,HistoryTiles} from '../history.js';
 import {PeriodReader,periodInputBytes} from '../periodRead.js';
-import {Events} from '../events.js';
+import {Events,type Frame} from '../events.js';
 import {sharedWork} from '../periodWork.js';
 import {expandPeriod,type PeriodWireReply} from '../domain/periodWire.js';
 import {HISTORY_BYTES_PER_MEASUREMENT} from '../../bench/budget.js';
@@ -27,7 +27,11 @@ import {shifted,canShift} from '../domain/periodShift.js';
 import {expandHistory,type HistoryBasis} from '../domain/history.js';
 import {transaction} from '../touches.js';
 import {defaultFilters,workFilter} from '../domain/dataFilters.js';
-import {PeriodCurves,sourceWorkCurves} from '../domain/periodCurves.js';
+import {PeriodCurves,sourceWorkCurves,mergeSourceWorkTape} from '../domain/periodCurves.js';
+import {calendarCurve,calendarProjection} from '../domain/calendarWork.js';
+import {calendarCells,calendarPartition,type WorkStamp} from '../domain/workCalendar.js';
+import {evaluatedRange} from '../domain/period.js';
+import {drain} from '../domain/prepare.js';
 
 const M=60_000,H=60*M,now=1_800_000_000_000;
 
@@ -67,18 +71,19 @@ test('project selection precedes live and fixed union, facets and cursor-bound d
   assert.equal(empty.sessions.value.refs.length,0);assert.notEqual(empty.sessions.value.available,false);
   assert.equal(sourceWorkCurves(empty.sourceWork.value).groups.source.get(h.source)!.read(empty.basis.range,true),120*M);
 });
-async function fixture(start=now-3*H) {
+async function fixture(start=now-3*H,extend?:Parameters<typeof buildApp>[1]) {
   const store=new Store(':memory:',start),directory=new Directory(store.db);
   const user=directory.createUser('a@example.com','A','unused',start),board=directory.boards(user.id)[0].id;
   const token=newSecret('qt_s');directory.createSession(token,user.id,Date.now(),24*H);
   const source=store.source('codex','a'.repeat(24),start);store.hold(source,user.id,start);
   const device=directory.saveDevice({userId:user.id,machine:{id:'machine-0123456789',name:'Laptop',os:'linux',arch:'x86_64'},agent:'quotum/0.6.0',tokenId:null},start).id;
   const hub:Hub={store,directory,ingest:new Ingest(store,directory,new Duty(),new Cadence()),resets:new ResetFeed(undefined,()=>{}),pairing:new Pairing(directory),setup:new Setup(false,null),local:null};
-  const app=await buildApp(hub);
+  const events=new Events(hub);hub.events=events;
+  const app=await buildApp(hub,extend);
   const read=(body:PeriodRequest,asBoard=board)=>app.inject({method:'POST',url:`/api/boards/${asBoard}/period`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`},payload:body});
   const credit=(from:number,to:number,id='stable')=>store.creditWork(device,from,to,[{source,origin:'terminal',startedAt:start,project:'Project',folder:'folder',identity:{kind:'stable',sessionId:id}}]);
   const details=(body:unknown)=>app.inject({method:'POST',url:`/api/boards/${board}/period/sessions`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`},payload:body as object});
-  return {store,directory,hub,app,user,board,source,device,read,credit,details};
+  return {store,directory,hub,app,user,board,source,device,read,credit,details,events,token};
 }
 
 test('activity cells omit native drawing extraction while retaining independent native evidence and exact selected work',async t=>{
@@ -846,7 +851,7 @@ test('heatmap-only deltas replace fine intervals, bind selection, and read no fi
 test('heatmap request derives its bounded partition and rejects independent reader edges',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,calendar:{zone:'UTC'}};
-  for(const calendar of [{zone:'invalid/zone'},{zone:'UTC',edges:[now-H,now]},{zone:'UTC',cursor:'é'},{zone:'UTC',cursor:'x'.repeat(2049)},{zone:'UTC',relative:false},{zone:'UTC',relative:'true'}])assert.equal((await h.read({...body,calendar:calendar as never})).statusCode,400);
+  for(const calendar of [{zone:'invalid/zone'},{zone:'UTC',edges:[now-H,now]},{zone:'UTC',cursor:'é'},{zone:'UTC',cursor:'x'.repeat(2049)},{zone:'UTC',relative:false},{zone:'UTC',relative:'true'},{zone:'UTC',freshness:false},{zone:'UTC',freshness:'true'},{zone:'UTC',freshness:null}])assert.equal((await h.read({...body,calendar:calendar as never})).statusCode,400);
   assert.equal((await h.read({...body,selection:{mode:'live',periodMs:32*24*H}})).statusCode,400);
   const first=expandPeriod((await h.read(body)).json<PeriodWireReply>());if(first.calendar?.state!=='complete')throw new Error('availability');
   assert.ok(first.calendar.value.cells.length<=2880);assert.ok(first.calendar.value.cells.some(c=>c.agentMs===0));assert.ok(first.calendar.value.cells.some(c=>c.agentMs===null));
@@ -872,4 +877,207 @@ test('retention replaces only selected historical intervals while later work sta
   const reply=expandPeriod(result.json<PeriodWireReply>());if(reply.calendar?.state!=='delta')throw new Error('delta');
   const cells=initial.calendar.value.cells.slice();for(const [i,c] of reply.calendar.value.updates)cells[i]=c;assert.equal(cells.reduce((n,c)=>n+(c.agentMs??0),0),50*M);
   assert.deepEqual(reply.calendar.basis.range,request.selection.mode==='range'?{from:request.selection.from,to:request.selection.to}:null);
+});
+
+
+function watchCalendar(h:Awaited<ReturnType<typeof fixture>>) {
+  const opened=h.events.open({board:h.board,user:h.user.id,secret:h.token,kind:'stream',send:()=>{},end:()=>{}});
+  if(!opened||opened==='limit')throw Error('watch unavailable');return opened;
+}
+const freshCalendar=(at:number,cursor?:string):PeriodRequest=>({version:1,selection:{mode:'live',periodMs:H},evaluatedAt:at,calendar:{zone:'UTC',freshness:true,...(cursor?{cursor}:{})}});
+
+test('fresh live proof retains accepted future geometry and rejects a backward window without widening cells or siblings',async t=>{
+  let at=now;t.mock.method(Date,'now',()=>at);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  h.credit(now-5000,now+20_000);h.credit(now+4*H,now+4*H+10_000,'far');
+  // The board watch starts after both future rows have entered the retained ledger.
+  const watched=watchCalendar(h);t.after(watched.close);
+  const reply=expandPeriod((await h.read({...freshCalendar(at),sessions:{},facets:true})).json<PeriodWireReply>());
+  if(reply.calendar?.state!=='complete'||reply.sessions?.state!=='complete'||reply.facets?.state!=='complete')throw Error('fresh proof');
+  const value=reply.calendar.value,proof=value.proof!;
+  assert.equal(proof.cut,now+4*H+10_000);assert.equal(value.workStamp?.authority,h.store.workKey(h.board));
+  assert.equal(value.cells.reduce((sum,c)=>sum+(c.agentMs??0),0),5000);
+  assert.equal(sourceWorkCurves(proof).groups.source.get('work')!.read({from:now-5000,to:now+10_000}),15_000);
+  assert.equal(workedSessions(reply.sessions.value,reply.basis.range,at).reduce((sum,r)=>sum+r.workedMs,0),5000);
+  assert.ok(reply.facets.value.ranges!.every(r=>r.to<=at));
+  at=now-10_000;
+  const backward=expandPeriod((await h.read(freshCalendar(at,value.cursor))).json<PeriodWireReply>());
+  assert.equal(backward.calendar?.state,'complete','backward live left edge cannot reuse a narrower proof');
+});
+
+test('fresh live midnight delta replaces anonymous proof exactly without repeating fine cells or changing the key',async t=>{
+  let at=Math.floor(now/86_400_000)*86_400_000+86_400_000-5000;t.mock.method(Date,'now',()=>at);
+  const h=await fixture(at-2*H);t.after(async()=>{await h.app.close();h.store.close();});const watched=watchCalendar(h);t.after(watched.close);
+  h.credit(at-30_000,at+20_000);
+  const first=expandPeriod((await h.read(freshCalendar(at))).json<PeriodWireReply>());if(first.calendar?.state!=='complete')throw Error('baseline');
+  at+=10_000;h.credit(at-1000,at+1000,'new');
+  const response=await h.read(freshCalendar(at,first.calendar.value.cursor));assert.equal(response.statusCode,200,response.body);
+  const wire=response.json();assert.deepEqual(wire.calendar.value.patch,[]);assert.ok(wire.calendar.value.proof);
+  const delta=expandPeriod(wire);if(delta.calendar?.state!=='delta')throw Error('midnight delta');
+  assert.equal(delta.calendar.basis.calendarKey,first.calendar.basis.calendarKey);assert.deepEqual(delta.calendar.value.updates,[]);
+  assert.equal(delta.calendar.value.proof!.replaceFrom,at-1000);assert.equal(delta.calendar.value.proof!.replaceTo,at+10_000,'old accepted future endpoint remains the upper frontier');
+  const merged=mergeSourceWorkTape(first.calendar.value.proof!,delta.calendar.value.proof!);
+  const fresh=expandPeriod((await h.read(freshCalendar(at))).json<PeriodWireReply>());if(fresh.calendar?.state!=='complete')throw Error('oracle');
+  const a=sourceWorkCurves(merged).groups.source.get('work')!,b=sourceWorkCurves(fresh.calendar.value.proof!).groups.source.get('work')!;
+  for(let end=at-H;end<=merged.cut;end+=137)assert.equal(a.read({from:at-H,to:end}),b.read({from:at-H,to:end}));
+});
+
+test('lost calendar notification or access check rotates the watch and forces an old cursor to a complete baseline',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});const watched=watchCalendar(h);t.after(watched.close);
+  h.credit(now-10_000,now-5000);
+  const baseline=expandPeriod((await h.read(freshCalendar(now))).json<PeriodWireReply>());if(baseline.calendar?.state!=='complete')throw Error('baseline');
+  const callback=h.events.onClientHistory;h.events.onClientHistory=()=>{throw Error('lost journal');};
+  h.credit(now-5000,now+20_000);h.events.onClientHistory=callback;
+  const result=expandPeriod((await h.read(freshCalendar(now,baseline.calendar.value.cursor))).json<PeriodWireReply>());if(result.calendar?.state!=='complete')throw Error('lost notification reused cursor');
+  assert.notEqual(result.calendar.value.workStamp!.watch,baseline.calendar.value.workStamp!.watch);
+  assert.ok(result.calendar.value.workStamp!.seq>baseline.calendar.value.workStamp!.seq,'nonce rotation retains order against delayed pings');
+  const access=h.store.workAccess.bind(h.store);let fail=true;
+  const mock=t.mock.method(h.store,'workAccess',(...args:Parameters<Store['workAccess']>)=>{if(fail){fail=false;throw Error('lost access');}return access(...args);});
+  h.events.clientHistory(h.user.id,now,h.device);mock.mock.restore();
+  assert.equal(h.events.workStamp(h.board),undefined,'failed access retires the transport instead of waiting indefinitely for another work notification');
+  const reconnected=watchCalendar(h);t.after(reconnected.close);
+  const repaired=expandPeriod((await h.read(freshCalendar(now,result.calendar.value.cursor))).json<PeriodWireReply>());assert.equal(repaired.calendar?.state,'complete');
+});
+
+test('fresh work stamp ignores financial and foreign work and its raw upper obeys owner and temporal admission',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});const watched=watchCalendar(h);t.after(watched.close);
+  const initial=h.events.workStamp(h.board)!;h.events.history(h.source,now,['budget']);h.events.clientHistory('foreign-user',now,'foreign-device');
+  assert.deepEqual(h.events.workStamp(h.board),initial);
+  h.credit(now-1000,now+20_000);
+  const access=h.store.workAccess(h.board);assert.equal(h.store.workUpper(access),now+20_000);
+  const scope=access.devices.get(h.device)!;
+  assert.equal(h.store.workUpper({...access,devices:new Map([[h.device,{...scope,from:now+20_000}]])}),0,'pre-admission endpoint is private');
+  assert.equal(h.store.workUpper({...access,devices:new Map([[h.device,{...scope,owner:'foreign-user'}]])}),0,'captured owner must still own the current device');
+  const stamp=h.events.workStamp(h.board)!;assert.ok(stamp.seq>initial.seq);assert.equal(stamp.watch,initial.watch);
+  const legacy=expandPeriod((await h.read({...freshCalendar(now),calendar:{zone:'UTC'}})).json<PeriodWireReply>());if(legacy.calendar?.state!=='complete')throw Error('legacy');
+  assert.equal(legacy.calendar.value.workStamp,undefined);assert.equal(legacy.calendar.value.proof!.cut,now);
+  const fixed={...freshCalendar(now),selection:{mode:'range' as const,from:now-H,to:now}};
+  const ordinary=(await h.read({...fixed,calendar:{zone:'UTC'}})).json();
+  assert.deepEqual((await h.read(fixed)).json(),ordinary,'fixed ranges preserve their complete wire contract even when freshness is requested');
+});
+
+test('fresh proof rejects work changed after cooperative preparation, including after the old evidence cut',async t=>{
+  t.mock.method(Date,'now',()=>now);let change:(()=>void)|undefined;
+  const h=await fixture(now-3*H,app=>{app.addHook('onSend',async(request,_reply,payload)=>{if(request.url.includes('/period')&&change){await Promise.resolve();const run=change;change=undefined;run();}return payload;});});
+  t.after(async()=>{await h.app.close();h.store.close();});const watched=watchCalendar(h);t.after(watched.close);
+  h.credit(now-5000,now+20_000);
+  change=()=>h.credit(now+H,now+H+1000,'hook');
+  const refused=await h.read(freshCalendar(now));assert.equal(refused.statusCode,503,refused.body);assert.deepEqual(refused.json(),{error:'unavailable'});
+  const original=h.store.admittedWork.bind(h.store);let mutated=false;
+  t.mock.method(h.store,'admittedWork',(...args:Parameters<Store['admittedWork']>)=>{const rows=original(...args);if(!mutated){mutated=true;h.credit(now+2*H,now+2*H+1000,'preparation');}return rows;});
+  const retry=expandPeriod((await h.read(freshCalendar(now))).json<PeriodWireReply>());if(retry.calendar?.state!=='complete')throw Error('retry baseline');
+  assert.equal(retry.calendar.value.proof!.cut,now+2*H+1000);assert.equal(retry.calendar.value.workStamp!.seq,h.events.workStamp(h.board)!.seq);
+});
+
+
+test('fresh live upper shrink and a recreated watch each require a full anonymous baseline',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});let watched=watchCalendar(h);t.after(()=>watched.close());
+  h.credit(now-1000,now+20_000);
+  const first=expandPeriod((await h.read(freshCalendar(now))).json<PeriodWireReply>());if(first.calendar?.state!=='complete')throw Error('baseline');
+  h.store.db.prepare('DELETE FROM agent_work WHERE to_at>?').run(now);h.events.clientHistory(h.user.id,now-1000,h.device);
+  const shrink=expandPeriod((await h.read(freshCalendar(now,first.calendar.value.cursor))).json<PeriodWireReply>());if(shrink.calendar?.state!=='complete')throw Error('shrinking upper reused cursor');
+  assert.equal(shrink.calendar.value.proof!.cut,now);
+  const before=shrink.calendar.value.workStamp!;watched.close();assert.equal(h.events.workStamp(h.board),undefined);watched=watchCalendar(h);
+  const rejoined=expandPeriod((await h.read(freshCalendar(now,shrink.calendar.value.cursor))).json<PeriodWireReply>());if(rejoined.calendar?.state!=='complete')throw Error('recreated watch reused cursor');
+  assert.notEqual(rejoined.calendar.value.workStamp!.watch,before.watch);assert.equal(rejoined.calendar.value.workStamp!.seq,0);
+});
+
+test('fresh work sequence ends its watched transport before unsafe overflow',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const ended:string[]=[];const opened=h.events.open({board:h.board,user:h.user.id,secret:h.token,kind:'stream',send:()=>{},end:reason=>ended.push(reason)});if(!opened||opened==='limit')throw Error('watch');t.after(opened.close);
+  const watched=(h.events as unknown as {watched:Map<string,{workSeq:number}>}).watched.get(h.board)!;watched.workSeq=Number.MAX_SAFE_INTEGER-1;
+  h.events.clientHistory(h.user.id,now,h.device);assert.deepEqual(ended,['restart']);assert.equal(h.events.workStamp(h.board),undefined);
+});
+
+
+test('unwatched fresh reads and oversized future proofs never certify a quiet suffix',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  h.credit(now-1000,now+20_000);
+  const unwatched=expandPeriod((await h.read(freshCalendar(now))).json<PeriodWireReply>());if(unwatched.calendar?.state!=='complete')throw Error('unwatched baseline');
+  assert.equal(unwatched.calendar.value.workStamp,undefined);
+  const repeated=expandPeriod((await h.read(freshCalendar(now,unwatched.calendar.value.cursor))).json<PeriodWireReply>());assert.equal(repeated.calendar?.state,'delta','an unwatched request keeps legacy cursor behavior without a freshness grant');
+  const watched=watchCalendar(h);t.after(watched.close);
+  const tiles=new HistoryTiles(h.store,1_000_000),reader=new PeriodReader(h.hub,tiles,h.events);
+  const pin=tiles.reservation();pin.add(985_000);
+  const refused=expandPeriod(JSON.parse(reader.read(h.board,h.user.id,freshCalendar(now))));assert.deepEqual(refused.calendar,{state:'error',error:'history_limit'});
+  pin.close();const recovered=expandPeriod(JSON.parse(reader.read(h.board,h.user.id,freshCalendar(now))));assert.equal(recovered.calendar?.state,'complete');
+});
+
+for(const boundary of ['preparation','HTTP hook'] as const)test('fresh calendar revalidates timed link authority at '+boundary+' without a database write',async t=>{
+  let at=now,advance=false;t.mock.method(Date,'now',()=>at);
+  const h=await fixture(now-3*H,app=>{app.addHook('onSend',async(request,_reply,payload)=>{if(boundary==='HTTP hook'&&request.url.includes('/period')&&advance){await Promise.resolve();advance=false;at+=20;}return payload;});});
+  t.after(async()=>{await h.app.close();h.store.close();});
+  h.store.db.prepare('INSERT INTO client_links VALUES (?,?,?,?,?,?,?,?,?,?)').run('timed',h.user.id,'codex',h.device,null,null,h.source,now+10,null,now);
+  const watched=watchCalendar(h);t.after(watched.close);h.credit(now-1000,now+20_000);h.events.flush();
+  const authority=h.store.workKey(h.board);advance=true;
+  if(boundary==='preparation'){
+    const original=h.store.admittedWork.bind(h.store);
+    t.mock.method(h.store,'admittedWork',(...args:Parameters<Store['admittedWork']>)=>{const rows=original(...args);if(advance){advance=false;at+=20;}return rows;});
+  }
+  const response=await h.read(freshCalendar(now));assert.notEqual(h.store.workKey(h.board),authority);
+  if(boundary==='HTTP hook'){assert.equal(response.statusCode,503,response.body);assert.deepEqual(response.json(),{error:'unavailable'});}
+  else {assert.equal(response.statusCode,200,response.body);const reply=expandPeriod(response.json<PeriodWireReply>());if(reply.calendar?.state!=='complete')throw Error('timed authority retry');assert.equal(reply.calendar.value.workStamp!.authority,h.store.workKey(h.board));}
+});
+
+test('fresh authority validation charges memory without retiring its watched transport on a budget refusal',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});const watched=watchCalendar(h);t.after(watched.close);
+  const before=h.events.workStamp(h.board)!,denied=new HistoryLimit();let used=0;
+  assert.throws(()=>h.events.workStamp(h.board,now,undefined,bytes=>{if(used+bytes>1000)throw denied;used+=bytes;},bytes=>{used-=bytes;}),error=>error===denied);
+  assert.equal(used,0);assert.equal(h.events.readers,1);assert.deepEqual(h.events.workStamp(h.board),before);
+});
+
+
+test('a restarted reader recovers its future horizon after clock rollback and heartbeat projections match the retained ledger',async t=>{
+  let at=now+5*H;t.mock.method(Date,'now',()=>at);
+  const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  // Both stretches are accepted in the past before the old hub stops.
+  h.credit(now-5000,now+20_000,'near');h.credit(now+4*H,now+4*H+10_000,'far');
+  const previousRun=h.events.epoch;await h.app.close();at=now;
+  const timers:{ms:number;active:boolean;run():void}[]=[],frames:Frame[]=[];
+  const events=new Events(h.hub,undefined,{now:()=>at,after(ms,run){
+    const timer={ms,active:true,run(){if(!timer.active)return;timer.active=false;run();}};timers.push(timer);return ()=>{timer.active=false;};
+  }},null);
+  t.after(()=>events.close());
+  const reader=new PeriodReader(h.hub,new HistoryTiles(h.store),events);
+  const watched=events.open({board:h.board,user:h.user.id,secret:h.token,kind:'stream',send:packets=>frames.push(...packets),end:()=>{}});
+  if(!watched||watched==='limit')throw Error('restarted watch');t.after(watched.close);
+  const heartbeatMs=JSON.parse(watched.frames.find(packet=>packet.type==='hello')!.data).heartbeatMs as number;
+  const upper=h.store.workUpper.bind(h.store);let upperReads=0;
+  t.mock.method(h.store,'workUpper',(...args:Parameters<Store['workUpper']>)=>{upperReads++;return upper(...args);});
+  const reply=expandPeriod(JSON.parse(reader.read(h.board,h.user.id,freshCalendar(at))));
+  if(reply.calendar?.state!=='complete')throw Error('restart baseline');
+  const value=reply.calendar.value,proof=value.proof!,stamp=value.workStamp!;
+  assert.notEqual(reply.basis.run,previousRun);assert.equal(reply.basis.revision,'0','a new PeriodReader has no retained dirty journal');
+  assert.equal(stamp.seq,0,'a new Events watch has no retained work version');assert.equal(proof.cut,now+4*H+10_000);
+  assert.ok(proof.cut>at+30_000);assert.equal(upperReads,1);
+  assert.equal(value.cells.reduce((sum,cell)=>sum+(cell.agentMs??0),0),5000);
+  const {curve}=calendarCurve(proof,reply.basis.range,reply.basis.evidenceCut,value.availableFrom,()=>{},undefined,true);
+  for(const [cut,total] of [[now+25_000,25_000],[now+4*H+5000,5000],[now+4*H+20_000,10_000]]){
+    at=cut;const heartbeat=timers.findLast(timer=>timer.active&&timer.ms===heartbeatMs);assert.ok(heartbeat);heartbeat.run();
+    const ping=JSON.parse(frames.at(-1)!.data) as {now:number;workStamp:WorkStamp};assert.equal(frames.at(-1)!.type,'ping');
+    assert.equal(ping.now,at);assert.equal(ping.workStamp.at,at);assert.equal(ping.workStamp.watch,stamp.watch);assert.equal(ping.workStamp.seq,stamp.seq);assert.equal(ping.workStamp.authority,stamp.authority);
+    const range=evaluatedRange({mode:'live',periodMs:H},ping.now),edges=calendarPartition(range),retained=Math.max(0,at-proof.retentionMs);
+    const projected=calendarProjection(edges,range,at,value.availableFrom,retained,proof.retentionMs,H,[{from:proof.from,to:proof.cut,curve}]);
+    const rows=h.store.admittedWork(h.store.workAccess(h.board,at),range.from,range.to);
+    const oracle=drain(calendarCells(rows,edges,edges.slice(1).map((_,i)=>i),at,value.availableFrom,retained,proof.retentionMs,range,H)).map(([,cell])=>cell);
+    assert.deepEqual(projected,oracle);assert.equal(projected.reduce((sum,cell)=>sum+(cell.agentMs??0),0),total);
+    assert.equal(upperReads,1,'heartbeats validate freshness without querying the future ledger horizon');
+  }
+});
+
+test('an unwatched freshness request retains legacy access revalidation during preparation',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const shared=h.directory.createBoard('Shared',h.user.id,now-H).id;h.credit(now-5000,now-1000);
+  const admitted=h.store.admittedWork.bind(h.store);let revoked=false;
+  t.mock.method(h.store,'admittedWork',(...args:Parameters<Store['admittedWork']>)=>{
+    const rows=admitted(...args);
+    if(!revoked){revoked=true;const policy=h.store.sessionDevices(shared,h.user.id)[0];h.store.setDeviceSessions(shared,h.device,h.user.id,false,policy.revision,now);}
+    return rows;
+  });
+  const response=await h.read({...freshCalendar(now),sessions:{}},shared);assert.equal(response.statusCode,200,response.body);
+  const reply=expandPeriod(response.json<PeriodWireReply>());
+  if(reply.calendar?.state!=='complete'||reply.sessions?.state!=='complete')throw Error('unwatched legacy fallback');
+  assert.equal(reply.calendar.value.cells.reduce((sum,cell)=>sum+(cell.agentMs??0),0),0,'revoked work cannot survive an unwatched freshness request');
+  assert.deepEqual(workedSessions(reply.sessions.value,reply.basis.range,now),[]);assert.equal(reply.calendar.value.workStamp,undefined);assert.equal(reply.calendar.value.proof!.cut,reply.basis.evidenceCut);
+  const legacy=expandPeriod((await h.read({...freshCalendar(now),calendar:{zone:'UTC'},sessions:{}},shared)).json<PeriodWireReply>());
+  assert.deepEqual(reply,legacy,'without a work watch the negotiated request keeps the full legacy proof and guards');
 });

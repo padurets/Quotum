@@ -24,13 +24,20 @@ function fixture(){
  return {hub,store,directory,owner,reader,board,device,events,tiles,period,reading,credit,toggle,close:()=>{events.close();store.close();}};
 }
 
+function legacySnapshot(value:import('../projection.js').Snapshot) {
+ const {workStamp,...legacy}=value;assert.ok(workStamp);assert.deepEqual(Object.keys(workStamp).sort(),['at','authority','seq','watch']);
+ assert.match(workStamp.watch,/^[-_A-Za-z0-9]{22}$/);assert.ok(Number.isSafeInteger(workStamp.seq)&&workStamp.seq>=0);
+ assert.equal(workStamp.at,at);assert.equal(workStamp.authority,value.workAuthority);
+ return legacy;
+}
+
 test('source-less boards receive work news and closed empty tiles invalidate without watchers',t=>{
  const h=fixture();t.after(h.close);const read=()=>h.tiles.read(h.board,M,at-60*M,at,at,h.store.authorizedSources(h.board));assert.equal(JSON.parse(read()[0]).activity.cells.length,0);let calls=0;const original=h.store.cells.bind(h.store);t.mock.method(h.store,'cells',(...args:Parameters<Store['cells']>)=>{calls++;return original(...args);});h.credit(at-30*M,at-M);assert.ok(JSON.parse(read()[0]).activity.cells.length>0);assert.equal(calls,1);
  const frames:Frame[]=[],opened=h.events.open({...h.reading,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});assert.ok(opened&&opened!=='limit');h.credit(at-M,at-30_000);h.events.flush();const history=frames.filter(f=>f.type==='history').map(f=>JSON.parse(f.data));assert.equal(history.length,1);assert.deepEqual(history[0].sources,[]);assert.equal(history[0].workSince,at-M);assert.equal(history[0].workAuthority,h.store.workKey(h.board));
 });
 
 for(const flush of [false,true])test(`queued poll work is withdrawn ${flush?'after':'before'} producer flush, including same-clock OFF/ON`,async t=>{
- const h=fixture();t.after(h.close);const first=await h.events.poll(h.reading,undefined);assert.ok(first&&first!=='limit');h.credit(at-M,at-30_000);h.events.flush();h.toggle(false);if(flush)h.events.flush();const off=await h.events.poll(h.reading,first.lease);assert.ok(off&&off!=='limit');assert.deepEqual(off.frames.map(f=>f.type),['snapshot','filters','projectColors']);const value=JSON.parse(off.frames[0].data);assert.deepEqual(value,new Projection(h.hub).snapshot(h.reader.id,h.board,at));assert.deepEqual(value!.unattributedSessions,[]);
+ const h=fixture();t.after(h.close);const first=await h.events.poll(h.reading,undefined);assert.ok(first&&first!=='limit');h.credit(at-M,at-30_000);h.events.flush();h.toggle(false);if(flush)h.events.flush();const off=await h.events.poll(h.reading,first.lease);assert.ok(off&&off!=='limit');assert.deepEqual(off.frames.map(f=>f.type),['snapshot','filters','projectColors']);const value=JSON.parse(off.frames[0].data);assert.deepEqual(legacySnapshot(value),new Projection(h.hub).snapshot(h.reader.id,h.board,at));assert.deepEqual(value!.unattributedSessions,[]);
  h.toggle(true);const on=await h.events.poll(h.reading,first.lease);assert.ok(on&&on!=='limit');assert.deepEqual(on.frames.map(f=>f.type),['snapshot','filters','projectColors']);assert.notEqual(JSON.parse(on.frames[0].data).workAuthority,value!.workAuthority);
 });
 

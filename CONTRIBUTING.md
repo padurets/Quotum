@@ -48,6 +48,8 @@ funds history without waking quota or wallet analytics. A separate fixed Activit
 shared-filter totals and bar values, clean-cell reuse, coalesced late work, cancelled
 responses and all transport/preparation costs under the existing pool limits.
 Emphasis owns no reader and receives no extra-read allowance.
+After the money checks, the demo stops its hub-managed measurement producer before
+opening fixed Activity baselines, preserving credentials, source holdings and history.
 Each fixed Activity period saves its bounded pool journal before checking completeness.
 With evidence enabled, its existing final phase sample also retains the journal before
 assertions. A failed page saves that partial snapshot and its phase before closing;
@@ -77,6 +79,28 @@ selected scope: missing, duplicate, failed or undersampled results fail coverage
 The full command requires 218 results: 132 history, 76 updates and ten panning results.
 Evidence retains phase start/end/duration, partial coverage and the original failure
 before cleanup; an unreached phase cannot count as passed.
+
+For one manual correctness check of that complete sequence in Actions, select
+`combined_benchmark` with a full lowercase source SHA and the SHA256 of the previously
+built client from that source. For example, using those recorded pins:
+
+```sh
+gh workflow run ci.yml --ref "$WORKFLOW_REF" -f combined_benchmark=true \
+  -f diagnostic_ref="$SOURCE_SHA" -f expected_client_sha256="$CLIENT_SHA256"
+```
+
+`WORKFLOW_REF` selects the workflow revision; `SOURCE_SHA` selects the checkout whose
+compiled client must match `CLIENT_SHA256`. Record both revisions separately. This
+manual route runs only the existing `bench-dashboard` job, with `--ci --scope all`
+and its unchanged 20-minute limit. Tags, malformed pins and every other diagnostic
+mode are rejected before checkout. The post-build check verifies the actual checkout
+and client hashes before Chrome starts. The native-target default is ignored.
+All 218 named results and their minimum samples, budgets and cleanup checks remain
+required; always-uploaded evidence keeps partial results and unreached phases after
+failure or cancellation. This is one correctness attempt, not a performance experiment:
+retain the first outcome without retry, replacement or a longer limit. Ordinary CI
+still requires the three independent benchmark jobs.
+
 Direct pull-request CI and Desktop runs cancel superseded runs of the same workflow
 and PR. Different PRs, main pushes, manual runs and reusable release calls remain
 independent. CPU diagnostics (`trace`,
@@ -286,9 +310,10 @@ An explicit diagnostic replay may also intervene. Neither can provide a passing
 canonical result.
 `native-trace` and `native-profile` observe `activity/24h` by default. With either
 mode, `QUOTUM_BENCH_NATIVE_TARGET=session/30d` selects the five-hour limits chart at
-30d; the manual CI input `native_target` chooses the same cell. All dashboard
-scenarios keep their workloads, budgets and deadlines. The `session/30d` selection
-also writes `native-panning-receipt.json` after its measured report freezes. Movement
+30d, and `budget/30d` selects the balance chart at 30d; the manual CI input
+`native_target` chooses the same cell. All dashboard scenarios keep their workloads,
+budgets and deadlines. Both selections also write `native-panning-receipt.json`
+after the measured report freezes. Movement
 intervals, consumed inputs, wrapped RAF callbacks and preparation slices share a
 4096-entry journal and a 4 MiB artifact bound. Missing coverage or overflow is
 insufficient evidence; trace overlap does not establish causal ownership, and

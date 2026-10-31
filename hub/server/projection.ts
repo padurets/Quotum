@@ -59,6 +59,7 @@ export type Snapshot = Omit<BoardPart, 'lineup'> & {
   sourceAccess:Record<string,SourceAccess>;
   historyStart: number;
   workAuthority: string;
+  workStamp?:import('./domain/workCalendar.js').WorkStamp;
   sources: Card[];
   sessions: Record<string, BoardSession[]>;
   unattributedSessions: BoardSession[];

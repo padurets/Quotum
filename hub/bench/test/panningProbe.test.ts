@@ -739,17 +739,17 @@ test('coalesced input is credited only when its own position has reached the dat
 
 
 /** These tests execute the shipped sampler, report export and preparation queue. */
-const nativeFixture=()=>fixture('session',true,false,true,new Preparations({now:()=>0,post:()=>{}}));
+const nativeFixture=(initiator:'session'|'budget'='session')=>fixture(initiator,true,false,true,new Preparations({now:()=>0,post:()=>{}}));
 const receipt=(f:ReturnType<typeof fixture>)=>{assert.equal(typeof f.reading.readDiagnostic,'function','selected native receipt is installed');return f.reading.readDiagnostic!();};
 const canonical=(f:ReturnType<typeof fixture>)=>JSON.parse(JSON.stringify({frames:f.reading.frames,latency:f.reading.latency,inputs:f.reading.inputs,updated:f.reading.updated,chartUpdates:f.reading.chartUpdates,pending:f.reading.pending.length,reads:f.reads,geometry:[f.historySvg,f.sessionSvg,f.activitySvg,f.budgetSvg,f.fundsSvg].map(svg=>({...svg.dataset,height:svg.style.height})),poses:[f.historyLayer,f.sessionLayer,f.activityLayer,f.budgetLayer,f.fundsLayer].map(layer=>[layer.style.transform,layer.slides.style.transform]),clip:f.activityClip.style}));
 
-test('selected native receipt keeps sub-50ms frames and exact input/RAF joins without changing the probe',()=>{
-  const off=fixture('session',true),on=nativeFixture();
+for(const initiator of ['session','budget'] as const)test(initiator+' native receipt keeps sub-50ms frames and exact input/RAF joins without changing the probe',()=>{
+  const off=fixture(initiator,true),on=nativeFixture(initiator);
   for(const f of [off,on]){f.wheel(10,15);f.requestFrame(()=>f.update(1,30));f.runFrame(30);f.wheel(40,44);f.requestFrame(()=>f.update(2,64.2));f.runFrame(64.2);}
   assert.deepEqual(canonical(on),canonical(off));assert.equal(off.reading.readDiagnostic,undefined);
   assert.equal(receipt(on).status,'insufficient-evidence','sampling is still active');
   const report=on.freeze(),d=report.nativeDiagnostic;assert.ok(d);assert.equal(d.status,'complete');
-  assert.equal(d.initiator,'session');assert.equal(d.period,'30d');assert.equal(d.frames.length,1);assert.ok(Math.abs(d.frames[0].ms-34.2)<1e-10);
+  assert.equal(d.initiator,initiator);assert.equal(d.period,'30d');assert.equal(d.frames.length,1);assert.ok(Math.abs(d.frames[0].ms-34.2)<1e-10);
   const frame=d.frames[0],input=d.inputs.find(row=>row.id===2)!;assert.equal(frame.at,64.2);assert.equal(frame.stamp,64.2);assert.equal(frame.index,0);
   assert.equal(input.sampleId,frame.sampleId);assert.equal(input.rafId,frame.rafId);assert.equal(input.token,frame.token);assert.equal(input.reached,frame.at);
   assert.deepEqual([input.at,input.delivered,input.reached,input.ms,input.queued,input.processed],[40,44,64.2,24.200000000000003,4,20.200000000000003]);
@@ -772,8 +772,8 @@ test('selected native receipt retains stationary clamps, reversal and the final 
   assert.equal(frozen.status,'complete');assert.deepEqual(Array.from(frozen.inputs,row=>row.reached),[40,40]);assert.equal(frozen.frames.length,0);
 });
 
-test('selected native receipt retains a sub-50ms compositor fold with its actual phase',()=>{
-  const f=nativeFixture();
+for(const initiator of ['session','budget'] as const)test(initiator+' native receipt retains a sub-50ms compositor fold with its actual phase',()=>{
+  const f=nativeFixture(initiator);
   for(const svg of [f.historySvg,f.activitySvg,f.budgetSvg,f.fundsSvg,f.sessionSvg])delete svg.dataset.panEnd;
   f.historyLayer.getAnimations=()=>[{playState:'running'}];
   f.paintFold(f.historyLayer,'translateX(40px) scaleX(.6)');f.runFrame(10);
@@ -894,7 +894,7 @@ test('selected native trace targets exactly its original cell and keeps the defa
   assert.deepEqual(initiators,['quota','session','activity','budget','funds']);assert.deepEqual(periods.map(row=>row[0]),['24h','30d']);
   assert.ok(selected.get('familyTrace'));assert.ok(selected.get('traced'));
   assert.ok(source.indexOf('const familyTrace=')<source.indexOf('await panningReload('),'source binding begins before the selected family reload');
-  for(const target of ['activity/24h','session/30d','quota/24h']){
+  for(const target of ['activity/24h','session/30d','quota/24h','budget/30d']){
     const observed:string[]=[],created:string[]=[],detailedCells:string[]=[];
     for(const initiator of initiators){
       const context={initiator,nativeTarget:target,nativeTrace:()=>{created.push(initiator);return{};}};

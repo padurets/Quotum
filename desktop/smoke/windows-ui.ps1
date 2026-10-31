@@ -420,7 +420,7 @@ try {
       throw "Window exceeds the monitor work area: $bounds"
     }
     $result.windows += ,$bounds
-    $entry = [ordered]@{}
+    $entry = [ordered]@{window=$window.ToInt64()}
     $result.cycles += $entry
     $search = [Diagnostics.Stopwatch]::StartNew()
     try {
@@ -448,6 +448,7 @@ try {
     if (-not $second.WaitForExit(10000) -or $second.ExitCode -ne 0) { throw 'The second instance did not hand off to the first' }
     $entry.secondExitMs = $clock.ElapsedMilliseconds - $closed
     $window = Wait-Window
+    $entry.reopenedWindow = $window.ToInt64()
     $entry.windowMs = $clock.ElapsedMilliseconds - $closed
     if ($browsers[$cycle]) { $entry.browserAliveAtWindow = -not $browsers[$cycle].HasExited }
   }
