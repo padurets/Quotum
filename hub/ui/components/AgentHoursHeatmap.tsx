@@ -1,5 +1,6 @@
 import {memo,useMemo,useLayoutEffect,useRef,useState,useSyncExternalStore,type CSSProperties,type KeyboardEvent,type RefObject} from 'react';
 import {createPortal,flushSync} from 'react-dom';
+import {LayoutObserver} from '../lib/layoutObserver';
 import {boardPeriod} from '../lib/period';
 import {CALENDAR_OPACITY,calendarLevel,exactAgentHours} from '../lib/workCalendar';
 import {heatmapLayoutPrepared,heatCellAt,heatCellChangesAt,heatDateLabel,heatIntervalLabel,HEATMAP_MIN,HEATMAP_NATURAL,type HeatCell,type HeatmapLayout} from '../lib/heatmap';
@@ -107,7 +108,7 @@ export const AgentHoursHeatmap=memo(function AgentHoursHeatmap({arrange}:{arrang
     }
   };
   useLayoutEffect(()=>measure.current(),[sizing?.manual,sizing?.allocated,sizing?.width,sizing?.report,loading,error,locale,layout.naturalHeight]);
-  useLayoutEffect(()=>{const node=root.current;if(!node)return;const observer=new ResizeObserver(()=>flushSync(()=>measure.current()));observer.observe(node);return()=>observer.disconnect();},[]);
+  useLayoutEffect(()=>{const node=root.current;if(!node)return;const observer=new LayoutObserver(()=>flushSync(()=>measure.current()));observer.observe(node);return()=>observer.disconnect();},[]);
   useLayoutEffect(()=>()=>sizing?.report(null),[sizing?.report]);
   const tab=layout.cells.find(c=>c.key===focused)??layout.cells.reduce<HeatCell|undefined>((best,c)=>!best||Math.abs(c.from-Number(focused))<Math.abs(best.from-Number(focused))?c:best,undefined);
   const openRange=(range:{from:number;to:number})=>{

@@ -16,6 +16,7 @@ import {t} from '../i18n';
 import {barsOf} from '../lib/place';
 import {pixels, same, SizingContext, type Report, type Size} from './sizing';
 import {WidgetSizing} from '../lib/widgetSizing';
+import {LayoutObserver, pauseLayoutObservers} from '../lib/layoutObserver';
 import {
   cellOf,
   edgeScroll,
@@ -183,7 +184,11 @@ export function Widgets({
       const column=`${spot.x+1} / span ${spot.w}`,row=`${spot.y+1} / span ${spot.h}`;
       if(node.style.gridColumn!==column)node.style.gridColumn=column;
       if(node.style.gridRow!==row)node.style.gridRow=row;
-      if(node.style.getPropertyValue('--fill')!==`${fill}px`)node.style.setProperty('--fill',`${fill}px`);
+      if(node.style.getPropertyValue('--fill')!==`${fill}px`){
+        const root=bodies.current.get(spot.id)?.querySelector(':scope > .card, :scope > .panel');
+        if(root)pauseLayoutObservers(root);
+        node.style.setProperty('--fill',`${fill}px`);
+      }
       // Keep keyboard reading order in step with geometry, including after React
       // reconciles a changed set of widgets against its earlier child order.
       const next:Element|null=previous?previous.nextElementSibling:grid.current.firstElementChild;
@@ -236,7 +241,7 @@ export function Widgets({
     place.current();
   });
   useLayoutEffect(() => {
-    const observer = new ResizeObserver(() => measure());
+    const observer = new LayoutObserver(() => measure());
     for (const body of bodies.current.values()) {
       const root = body.querySelector(':scope > .card, :scope > .panel');
       if (root) observer.observe(root);

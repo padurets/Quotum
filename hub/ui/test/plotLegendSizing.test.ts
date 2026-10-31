@@ -21,7 +21,7 @@ test('plot allocation follows natural legend height, width and locale without re
     getComputedStyle:()=>({minHeight:'300',getPropertyValue:()=> '0'}),
     ResizeObserver:class{constructor(public run:()=>void){observers.push(this);}observe(){}disconnect(){}},
     MutationObserver:class{observe(){}disconnect(){}},
-    require:(name:string)=>name==='react'?react:{useLocale:()=>locale,pan:{active:()=>null,shifting:()=>false,onPhase:()=>()=>{}}},
+    require:(name:string)=>name==='../lib/layoutObserver'?{LayoutObserver:context.ResizeObserver}:name==='react'?react:{useLocale:()=>locale,pan:{active:()=>null,shifting:()=>false,onPhase:()=>()=>{}}},
   };
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/sizing.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
   const render=()=>{cursor=0;effects.length=0;const result=context.exports.usePlot(panel);effects.forEach(run=>run());plot=result.plot;return result;};

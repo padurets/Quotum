@@ -1,5 +1,6 @@
 import {createContext, useCallback, useContext, useLayoutEffect, useRef, useState, type RefObject} from 'react';
 import {useLocale} from '../i18n';
+import {LayoutObserver} from '../lib/layoutObserver';
 
 /** What a widget needs, in CSS pixels: at least (`min`), and to show all of itself (`natural`). */
 export type Size = {min: number; natural: number};
@@ -69,7 +70,7 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
   useLayoutEffect(() => measure.current(), [sizing?.manual, sizing?.allocated, sizing?.width, locale]);
   useLayoutEffect(() => {
     let legend: HTMLElement | null = null;
-    const observer = new ResizeObserver(() => measure.current());
+    const observer = new LayoutObserver(() => measure.current());
     const follow = () => {
       const next = panel.current?.querySelector<HTMLElement>(':scope > .legend') ?? null;
       if (next === legend) return false;

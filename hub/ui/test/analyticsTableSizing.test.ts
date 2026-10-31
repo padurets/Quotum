@@ -15,6 +15,7 @@ function fixture() {
  const jsx={jsx:(type:any,props:any)=>({type,props}),jsxs:(type:any,props:any)=>({type,props})};
  const modules: Record<string, unknown> = {'react':react,'react/jsx-runtime':jsx,'../lib/table':{tableLayout},'../lib/clock':{},'../lib/view':{},'../i18n':{},'./Popover':{}};
  const context={exports:{} as any,require:(name:string)=>modules[name]??{},getComputedStyle:(target:any)=>{styles++;return {paddingLeft:String(target.left),paddingRight:String(target.right)};},ResizeObserver:class {targets=new Set();constructor(private readonly run:any){observers.push(this);}observe(target:any){this.targets.add(target);}disconnect(){this.targets.clear();}deliver(){if(this.targets.has(root))this.run([{target:root}],this);}}};
+ modules['../lib/layoutObserver']={LayoutObserver:context.ResizeObserver};
  runInNewContext(ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
  const box={current:{closest:()=>root}};
  const render=()=>{cursor=0;const model=context.exports.useTableLayout(box,columns.map(column=>column.width),nameWidth);for(const {index,run} of pending.splice(0)){hooks[index].cleanup?.();hooks[index].cleanup=run();}return model;};

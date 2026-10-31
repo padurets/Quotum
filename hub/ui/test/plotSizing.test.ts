@@ -27,7 +27,7 @@ function fixture() {
     queueMicrotask: (run: () => void) => microtasks.push(run), getComputedStyle: () => ({getPropertyValue: () => '0'}),
     onTimeRange: (run: () => void) => {rangeListeners.push(run); return () => {};}, timeRange: () => range, onPrefs: () => () => {}, prefs: () => ({range: '24h', kind: 'weekly', activityBy: 'provider'}), page: {listen: () => () => {}},
     MutationObserver: class {constructor(run: () => void) {mutations.push(run);} observe() {} disconnect() {}},
-    ResizeObserver: class {
+    LayoutObserver: class {
       targets = new Set<object>();
       constructor(private readonly run: (entries: unknown[]) => void) {observers.push(this);}
       observe(target: object) {this.targets.add(target);}
