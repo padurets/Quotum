@@ -1867,6 +1867,10 @@ Every widget is arranged on one grid. A row is 48 px (a 32 px track and a 16 px 
 Content measurements update grid positions and reading order directly, without a
 React render of the grid or neighbouring widgets. Only a widget whose own allocated
 height changes hears a sizing update; layout edits still reconcile through React.
+Before changing a widget's empty fill, the grid pauses its root's layout observers
+until the next frame. The fill still commits before paint; re-observation reads any
+intervening content changes without feeding that intentional resize into the same
+observer delivery cycle. Other roots and inner measurements remain observed.
 Each widget reports its content's natural height and minimum.
 The grid rounds that height to whole rows unless the owner chose a height (`h`, in rows),
 clamped to the content minimum. Unchanged visible content keeps its reading surface

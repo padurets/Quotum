@@ -48,6 +48,7 @@ function widgetFixture(border=0,manual=true,columns=[120,120,180,180],structure=
       observe(target:unknown){this.record.targets.add(target);this.record.initial.add(target);}disconnect(){this.record.targets.clear();this.record.initial.clear();}
     },
   };
+  modules['../lib/layoutObserver']={LayoutObserver:context.ResizeObserver};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/TableWidget.tsx',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,target:ts.ScriptTarget.ES2022}}).outputText,context);
   const height=(id:string)=>rowHeights.get(id)??(id==='row-55'?220:root.clientWidth<800?80:44);
   const body=()=>{

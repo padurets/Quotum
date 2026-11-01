@@ -20,6 +20,7 @@ test('the shared table fit follows resize and hidden columns at the exact padded
     getComputedStyle:()=>({paddingLeft:'22px',paddingRight:'22px'}),
     ResizeObserver:class{constructor(callback:()=>void){fit=callback;}observe(){}disconnect(){disconnects++;}},
   };
+  modules['../lib/layoutObserver']={LayoutObserver:context.ResizeObserver};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/TableWidget.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   const read=(visible=columns)=>context.exports.useTableLayout(panel as any,visible,240).layout;
   read();assert.equal(read(),'table');

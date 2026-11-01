@@ -28,7 +28,7 @@ for(const locale of ['en','ru'])for(const order of ['already-ready','immediate',
     document:input.document,isFocusReturn:focus.exports.isFocusReturn,
     useSyncExternalStore:(_subscribe:unknown,get:()=>unknown)=>get(),usePref:()=> 'calendar',useLocale:()=>locale,formatLocale:()=>locale==='ru'?'ru-RU':'en-US',useTimeRange:h.selectedRange,useSizing:()=>null,
     ...heatmap,useClock:()=>NOW,hubNow:()=>NOW,boardPeriod:h.period,t:(key:string)=>key,num:String,CATEGORY_COLORS:['blue'],CALENDAR_OPACITY:[0,.2,.4,.6,.8,1],
-    setTimeRange:h.selectRange,ResizeObserver:class{observe(){}disconnect(){}},Popover:'popover',Segmented:'segmented',SlidersIcon:'icon',ReadState:'readstate'};
+    setTimeRange:h.selectRange,LayoutObserver:class{observe(){}disconnect(){}},Popover:'popover',Segmented:'segmented',SlidersIcon:'icon',ReadState:'readstate'};
   const source=readFileSync(new URL('../components/AgentHoursHeatmap.tsx',import.meta.url),'utf8').replace(/^import .*;$/mg,'');
   runInNewContext(ts.transpileModule(source+'\nexports.ClockProjection=ClockProjection;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   const render=()=>{

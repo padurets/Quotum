@@ -7,6 +7,7 @@ import {Popover} from './Popover';
 import {Segmented} from './Kit';
 import {fillOf,pixels,same,useSizing} from './sizing';
 import {tableCell,type Cell,type TimedCell} from './TableCell';
+import {LayoutObserver} from '../lib/layoutObserver';
 
 export const SortIcon=()=> <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M4 3v10M1.5 10.5 4 13l2.5-2.5M9 4h5M9 8h3.5M9 12h2"/></svg>;
 export function TableGrouping<Id extends string>({value,options,onChange}:{value:Id;options:[Id,string][];onChange:(value:Id)=>void}){
@@ -63,7 +64,7 @@ export function useTableLayout(box:RefObject<HTMLElement|null>,columns:readonly 
     const measure=()=>{const width=root.clientWidth;
       const style=getComputedStyle(root),padding=edges??parseFloat(style.paddingLeft)+parseFloat(style.paddingRight)-20;
       space.current={element:root,width,padding,widthKey};fit();};
-    const observer=new ResizeObserver(measure);observer.observe(root);
+    const observer=new LayoutObserver(measure);observer.observe(root);
     // Column changes fit the last observed box without forcing layout of the plots.
     if(space.current?.element===root&&space.current.widthKey===widthKey)fit();else measure();return ()=>observer.disconnect();
   },[box,key,nameWidth,edges,widthKey]);
@@ -139,7 +140,7 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
   useLayoutEffect(()=>{
     const body=sizing?.manual?measured.current:live.current;
     const rows=new Set([...(body?.children??[])].filter(row=>!row.hasAttribute('data-table-total')));
-    const observer=new ResizeObserver(entries=>{
+    const observer=new LayoutObserver(entries=>{
       const root=panel.current,entry=entries.find(entry=>entry.target===root),box=entry?.borderBoxSize;
       if(root&&box?.length===1&&box[0].inlineSize===0){suspended.current=root;return;}
       const resumed=!!root&&suspended.current===root&&!!entry;
