@@ -1,8 +1,11 @@
-import {nodeConfig} from '@docouno/env/eslint';
-import reactHooks from 'eslint-plugin-react-hooks';
-import globals from 'globals';
+import {nodeConfig, reactLibraryConfig} from '@docouno/env/eslint';
 
 const tsconfigRootDir = import.meta.dirname;
+const reactEntries = reactLibraryConfig(tsconfigRootDir);
+const browserGlobals =
+  reactEntries.find(entry => entry.name === 'devkit/javascript')?.languageOptions?.globals ?? {};
+const reactHooksPlugins =
+  reactEntries.find(entry => entry.name === 'devkit/react-library')?.plugins ?? {};
 
 export default [
   ...nodeConfig(tsconfigRootDir),
@@ -17,9 +20,9 @@ export default [
     name: 'quotum-hub/ui-app-project',
     files: ['ui/**/*.{ts,tsx}', 'vite.config.ts', 'vite.bundle.config.ts'],
     ignores: ['ui/test/**'],
-    plugins: {'react-hooks': reactHooks},
+    plugins: reactHooksPlugins,
     languageOptions: {
-      globals: globals.browser,
+      globals: browserGlobals,
       parserOptions: {
         ecmaFeatures: {jsx: true},
         project: ['./tsconfig.app.json'],
@@ -40,9 +43,9 @@ export default [
   {
     name: 'quotum-hub/demo-ui-project',
     files: ['demo/ui/**/*.tsx', 'vite.demo.config.ts'],
-    plugins: {'react-hooks': reactHooks},
+    plugins: reactHooksPlugins,
     languageOptions: {
-      globals: globals.browser,
+      globals: browserGlobals,
       parserOptions: {
         ecmaFeatures: {jsx: true},
         project: ['./tsconfig.demo-ui.json'],
