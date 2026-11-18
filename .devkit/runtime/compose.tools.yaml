@@ -1,0 +1,102 @@
+# Tool tasks are noninteractive; application services live in the managed app projection.
+x-task: &task
+  init: true
+  user: "${DEVKIT_UID:?}:${DEVKIT_GID:?}"
+  working_dir: "${DEVKIT_WORKDIR:-/workspace}"
+  read_only: true
+  stop_grace_period: 2s
+  network_mode: "${DEVKIT_TASK_NETWORK:-none}"
+  tmpfs:
+    - /tmp:mode=1777
+  labels:
+    io.docouno.devkit.checkout: "${DEVKIT_PROJECT_NAME:?}"
+    io.docouno.devkit.role: tool
+
+x-node-environment: &node-environment
+  HOME: /tmp/devkit-home
+  CI: "true"
+  NPM_CONFIG_CACHE: /cache/npm
+  NPM_CONFIG_USERCONFIG: /dev/null
+  NPM_CONFIG_UPDATE_NOTIFIER: "false"
+  NPM_CONFIG_FUND: "false"
+  NPM_CONFIG_AUDIT: "false"
+  ELECTRON_CACHE: /cache/electron
+  VITE_API_ENABLED: "${VITE_API_ENABLED:-false}"
+
+x-source: &source
+  type: bind
+  source: "${DEVKIT_PROJECT_ROOT:?}"
+  target: /workspace
+  read_only: true
+  bind: {create_host_path: false, selinux: z}
+
+x-component: &component
+  type: bind
+  source: "${DEVKIT_COMPONENT_ROOT:-${DEVKIT_PROJECT_ROOT}}"
+  target: "${DEVKIT_WORKDIR:-/workspace}"
+  read_only: ${DEVKIT_SOURCE_READ_ONLY:-true}
+  bind: {create_host_path: false, selinux: z}
+
+services:
+  control:
+    image: "${DEVKIT_NODE_IMAGE:?}"
+    init: true
+    user: "${DEVKIT_UID:?}:${DEVKIT_GID:?}"
+    working_dir: /workspace
+    network_mode: none
+    read_only: true
+    stop_grace_period: 2s
+    environment:
+      DEVKIT_NODE_VERSION: "${DEVKIT_NODE_VERSION:?}"
+    labels:
+      io.docouno.devkit.checkout: "${DEVKIT_PROJECT_NAME:?}"
+      io.docouno.devkit.role: control
+    volumes:
+      - *source
+  node: &node
+    <<: *task
+    image: "${DEVKIT_NODE_IMAGE:?}"
+    environment: *node-environment
+    volumes:
+      - *source
+      - *component
+      - type: bind
+        source: "${DEVKIT_PROJECT_ROOT:?}/.devkit/cache/npm"
+        target: /cache/npm
+        bind: {create_host_path: false, selinux: z}
+      - type: bind
+        source: "${DEVKIT_PROJECT_ROOT:?}/.devkit/cache/electron"
+        target: /cache/electron
+        bind: {create_host_path: false, selinux: z}
+  desktop:
+    <<: *node
+    image: "${DEVKIT_DESKTOP_IMAGE:-devkit-unprepared-desktop}"
+    shm_size: 256m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - "seccomp=${DEVKIT_PROJECT_ROOT:?}/.devkit/runtime/desktop-seccomp.json"
+  rust:
+    <<: *task
+    image: "${DEVKIT_RUST_IMAGE:-devkit-unprepared-rust}"
+    # rustdoc compiles temporary test executables here. Keep the source read-only.
+    tmpfs:
+      - /tmp:mode=1777,exec
+    environment:
+      HOME: /tmp/devkit-home
+      CI: "true"
+      CARGO_HOME: /cache/cargo
+      CARGO_TARGET_DIR: "/workspace/${DEVKIT_CURRENT_COMPONENT:-.}/target"
+      RUSTUP_AUTO_INSTALL: "0"
+      DEVKIT_RUST_VERSION: "${DEVKIT_RUST_VERSION:?}"
+    volumes:
+      - *source
+      - *component
+      - type: bind
+        source: "${DEVKIT_COMPONENT_ROOT:-${DEVKIT_PROJECT_ROOT}}/target"
+        target: "/workspace/${DEVKIT_CURRENT_COMPONENT:-.}/target"
+        bind: {create_host_path: false, selinux: z}
+      - type: bind
+        source: "${DEVKIT_PROJECT_ROOT:?}/.devkit/cache/cargo"
+        target: /cache/cargo
+        bind: {create_host_path: false, selinux: z}

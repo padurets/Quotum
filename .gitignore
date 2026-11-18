@@ -1,12 +1,26 @@
 # Dependencies and builds
-node_modules/
-dist/
-target/
+**/node_modules/
+/dist/
+/target/
+/release/
+/apps/*/dist/
+/packages/*/dist/
+/apps/*/target/
+/packages/*/target/
+/apps/*/release/
+/packages/*/release/
+/hub/dist/
 npm/dist/
 *.tsbuildinfo
 coverage/
 /hub/server/secrets/managed-key.dll
 /hub/server/secrets/.managed-key-*/
+/apps/hub/server/secrets/managed-key.dll
+/apps/hub/server/secrets/.managed-key-*/
+
+# Devkit local caches and transient state
+.devkit/cache/
+.devkit/state/
 
 # Data and logs of a running hub or agent
 data/

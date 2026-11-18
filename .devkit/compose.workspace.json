@@ -1,0 +1,10 @@
+{
+  "services": {
+    "node": {
+      "volumes": []
+    },
+    "desktop": {
+      "volumes": []
+    }
+  }
+}
