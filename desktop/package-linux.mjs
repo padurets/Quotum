@@ -10,7 +10,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
 const target = 'x86_64-unknown-linux-gnu';
 if (process.platform !== 'linux' || process.arch !== 'x64') throw new Error('Linux x64 packaging requires a Linux x64 host');
-const version = JSON.parse(readFileSync(path.join(here, '../hub/package.json'))).version;
+const version = JSON.parse(readFileSync(path.join(here, '../apps/hub/package.json'))).version;
 const cargo = readFileSync(path.join(here, 'Cargo.toml'), 'utf8');
 if (!cargo.includes(`version = "${version}"`)) throw new Error('desktop and hub versions differ');
 const run = (file, argv, cwd = here) => execFileSync(file, argv, {cwd, stdio: 'inherit'});

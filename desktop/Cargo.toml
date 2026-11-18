@@ -16,7 +16,7 @@ publish = false
 chrono = { version = "0.4.44", default-features = false, features = ["clock"] }
 # The cancellable loopback connector uses this version's unversioned transport API.
 ureq = { version = "=3.4.2", default-features = false }
-quotum-core = { path = "../agent/crates/core" }
+quotum-core = { path = "../apps/agent/crates/core" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 getrandom = "0.4.3"

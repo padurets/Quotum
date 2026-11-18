@@ -1,13 +1,25 @@
 # The hub uses separate named data and key volumes; see the README's Docker command.
 # The first account needs the setup code the hub prints to its log (`docker logs`).
 
+# Production dependencies are installed cleanly without workspace symlinks.
+FROM --platform=$BUILDPLATFORM node:24-alpine AS prod-deps
+WORKDIR /workspace
+COPY package.json package-lock.json ./
+COPY apps/hub/package.json ./apps/hub/package.json
+RUN npm ci --omit=dev --workspace=apps/hub --ignore-scripts --no-audit --no-fund \
+    && rm -rf node_modules/quotum-hub node_modules/.package-lock.json apps/hub/node_modules/.package-lock.json \
+    && mkdir -p /prod-node_modules \
+    && if [ -d node_modules ]; then cp -a node_modules/. /prod-node_modules/; fi \
+    && if [ -d apps/hub/node_modules ]; then cp -a apps/hub/node_modules/. /prod-node_modules/; fi
+
 # JavaScript is built once, natively; the image of every platform only copies it (no native modules).
 FROM --platform=$BUILDPLATFORM node:24-alpine AS build
-WORKDIR /hub
+WORKDIR /workspace
 COPY package.json package-lock.json ./
+COPY apps/hub/package.json ./apps/hub/package.json
 RUN npm ci --ignore-scripts --no-audit --no-fund
-COPY . .
-RUN npm run build && npm prune --omit=dev --ignore-scripts
+COPY apps/hub ./apps/hub
+RUN npm --workspace=apps/hub run build
 
 FROM node:24-alpine
 LABEL org.opencontainers.image.title="Quotum hub" \
@@ -22,9 +34,9 @@ ENV NODE_ENV=production \
     QUOTUM_MANAGED_CONTAINER=1 \
     QUOTUM_ALLOWED_HOSTS=*
 WORKDIR /hub
-COPY --from=build /hub/package.json ./
-COPY --from=build /hub/node_modules ./node_modules
-COPY --from=build /hub/dist ./dist
+COPY --from=prod-deps /workspace/apps/hub/package.json ./
+COPY --from=prod-deps /prod-node_modules ./node_modules
+COPY --from=build /workspace/apps/hub/dist ./dist
 RUN mkdir -p /data /keys && chmod 700 /keys && chown node:node /data /keys
 USER node
 VOLUME /data
