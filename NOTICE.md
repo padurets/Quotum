@@ -14,7 +14,7 @@ Quotum is MIT-licensed (see `LICENSE`). It includes or relies on:
   in the image's `node_modules`; the desktop app's hub, bundled into one file, lists
   them in `server-licenses.md` next to it.
 
-- **Provider icons** in `hub/ui/icons/` come from [LobeHub Icons](https://github.com/lobehub/lobe-icons)
+- **Provider icons** in `apps/hub/ui/icons/` come from [LobeHub Icons](https://github.com/lobehub/lobe-icons)
   (MIT). Claude, Codex and Antigravity names and logos are trademarks of their
   respective owners; they are used only to label the data shown for each provider.
   This project is not affiliated with or endorsed by Anthropic, OpenAI or Google.

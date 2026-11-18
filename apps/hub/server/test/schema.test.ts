@@ -1,0 +1,735 @@
+import {decodeView} from '../domain/view.js';
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
+import {STEPS, SCHEMA_VERSION, migrate} from '../store/schema.js';
+
+import {Store} from '../store/store.js';
+import {CurrencyStore} from '../store/currencies.js';
+
+test('measurement controls upgrade the unified layout without changing session sharing or inventory', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    for (const step of STEPS.slice(0, 26)) db.exec(step);
+    db.exec('PRAGMA user_version=26');
+    db.prepare('INSERT INTO board_device_sessions VALUES (?,?,?,?)').run(
+      'board',
+      'device',
+      123,
+      'saved-revision',
+    );
+    db.prepare('INSERT INTO device_clients VALUES (?,?,?,?)').run('device', 'codex', '1.2.3', 456);
+    migrate(db, 1000);
+    migrate(db, 1001);
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, SCHEMA_VERSION);
+    assert.deepEqual(
+      {...db.prepare('SELECT * FROM board_device_sessions').get()!},
+      {board_id: 'board', device_id: 'device', enabled_since: 123, revision: 'saved-revision'},
+    );
+    assert.deepEqual(
+      {...db.prepare('SELECT * FROM device_clients').get()!},
+      {device_id: 'device', client: 'codex', version: '1.2.3', seen_at: 456, observed_at: null},
+    );
+    for (const table of [
+      'device_measurement_policies',
+      'source_measurement_preferences',
+      'device_measurement_control',
+      'measurement_mutations',
+      'resource_origins',
+    ])
+      assert.equal(db.prepare(`SELECT count(*) AS n FROM ${table}`).get()!.n, 0);
+  } finally {
+    db.close();
+  }
+});
+
+/**
+ * Every step a release shipped, by its hash. A database records which steps it has
+ * run, so a shipped step that changes afterwards leaves databases without what it now
+ * creates. A new layout is a new step: add its hash here once it is released.
+ */
+const RELEASED = [
+  '02cb748c205697bd5af76c42c46d7bdb09ab4ec3d311a7841f89ccf552fb48ff', // 0.2
+  '93bef51f9d1b8ff1ad525301dfeac3f98c87068d6211e6e02f6388bc1de4cfb2', // 0.3
+  'f0137f7875aee26476d1eb2b6f010b1365475c6e8cc452e863c282c4104c729b', // 0.4
+  '1fd789e182b8d729fc874051306490e42a2b6c37d36cca805ec47464fafdf999', // 0.4
+  '2001aa53d351ad58d717191dea8ada0028145647b8372751d54edf73e50c84bf', // 0.5
+  '9ff26257825602cd24c4e8b209e8ff9ac70a8713dbc9697720c3b1d0a50d1748', // 0.5
+  '559b6e3b19e7c77db182ef425a747de69a2ebe2ddc7c69169616d2746d98bcc6', // 0.6
+  '90c23490c93cd2088d4f97f52a579161ea62c476b91469a39e18af1952cdb7bb', // 0.6
+  '383d526454a7ae7d0c38b7847e43255c4af60ff8bcceeb478baed4e11b6eac04', // 0.6
+  '977e810f34cba9fb6c5774f89edd11e918f15376c8979795be2ac4e72db52f07', // 0.7
+  'e7cb09c9c37e5d1095e71d713c2e7b378d2f67fa5ebb8b0c3aedc7a78cb5e9b9', // 0.7
+  '3b86ba00d52469c2cc0526df8fef2be35b788fbfd75254e526654da319c4f2c1', // 0.7
+  '3462b3e197deb9f67bc1ff67f1c7b926b13f7dc966c8a8ca2a4b66fe34ba8305', // 0.7
+  '35088adae77f67915193590cc15fa7a4b2d2554d0ec71b7a067dcc8015066aa6', // 0.7
+  'f871e8078d0e3ee57f783201cf47c518643eb9f4b21293a4393957c859e2f8e3', // 0.7
+  '8926d768166db825d4610fdbee22bf5681a6a44f56250c905c52789cedb66873', // 0.7
+  'e6f545f3c89467d2a9001e201d0c7617c120951b2d44bc2bb1ec692a14264459', // 0.7
+  'b0c1b4b2223ca37cfe45a6bbc59036b0a4f64ac05908d344f903a4b0fe663fc6', // 0.7
+  'c290ec9435336ada28e76004d7b3a071ffbcc541c5ba385f6f0290b1516c7118', // 0.7
+  'b4ae9c2c749fcff165b0da116a55a018573aef239a49782a430646ec185d8a3b', // 0.7
+  '6473155deb63913aaa36369cc0f2754d8db2e832143c478552ac30e5dd2e18ad', // 0.8
+  '17db4fd369edb9244b9f91d9aeed145c3d04ad8ba6e95d06247f07a63527d11a', // 0.8
+  'bf3fb77129e17adf7a1d55117c385e8d7f82aa4d7bcc44022324b03b8eab21cf', // 0.8
+  '72a359ff208784feb6c3b4d0e3e19bffb5d874c96b53decfe0e31877a000e0f9', // 0.8
+  '5b045fcd04d2819087da0d68dda4f2ce2620910be96d998971607a7c8163c275', // 0.8
+  '17db4fd369edb9244b9f91d9aeed145c3d04ad8ba6e95d06247f07a63527d11a', // 0.8
+  '5aee0357006d702f280f91798957eccebd6d3ce89539d10a8f4fa7ae2a531dd2', // 0.8
+  '09c69657adf530e616463503b173932672e0843aa6528f8c85bb1f6da485c560', // 0.8
+  '75cee7ccf32f42f85b6457fad74a01fd95f7bfcb7240034558230769d9c9e679', // 0.8
+  '052cc524949d8fb24604a3703d312b72ba76b6688901875d98dfa1dc22f690b8', // 0.8
+  '23e0a852ce3e63f5d25157e1e694dabba612b05eaef7b24749804a93cdd08dc5', // 0.8
+  'cf957f4262cff5175dac698fe6be860d103f77652de4c91720d6de927b193dfe', // 0.8
+  'a59bf0629881b9f92a983fbd789b79534b6fa42be6470d4b2351454081662aab', // 0.9
+  '7e5e544a65e388c26c9bb598e85fe82a4541ae335bc5b359704de737bbe39ae3', // 0.10
+  '676d8829026790c62b760531313228a0974992ed939b8555b1bb7ef50d1a31c4', // 0.10
+];
+
+test('released layout steps never change; new ones come after them', () => {
+  const hashes = STEPS.map(step => createHash('sha256').update(step).digest('hex'));
+  assert.deepEqual(hashes.slice(0, RELEASED.length), RELEASED);
+});
+
+test("a hub of 0.3 drops the sums of agents' work and keeps how they work from the upgrade on", () => {
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'quotum-schema-')), 'db.sqlite');
+  const [made, upgraded] = [1_790_000_000_000, 1_800_000_000_000];
+  const old = new DatabaseSync(file);
+  for (const step of STEPS.slice(0, 2)) old.exec(step);
+  old.exec('PRAGMA user_version = 2');
+  old.prepare('INSERT INTO meta VALUES (?, ?)').run('historyStart', String(made));
+  old.prepare('INSERT INTO work VALUES (?, ?, ?, ?)').run('codex:1', made, 60_000, 60_000);
+  old.close();
+
+  const store = new Store(file, upgraded);
+  const tables = (
+    store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+      name: string;
+    }[]
+  ).map(t => t.name);
+  assert.ok(!tables.includes('work'));
+  assert.ok(['agent_sessions', 'agent_work', 'project_names'].every(t => tables.includes(t)));
+  assert.equal(store.agentWorkSince(), upgraded);
+  assert.equal(store.historyStart(upgraded), made, 'history itself goes back as far as before');
+  store.close();
+
+  const fresh = new Store(':memory:', upgraded);
+  assert.equal(fresh.agentWorkSince(), fresh.historyStart(upgraded));
+  fresh.close();
+});
+
+test('identity migration preserves exact legacy session IDs, keys and intervals', () => {
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'quotum-identity-schema-')), 'db.sqlite');
+  const old = new DatabaseSync(file);
+  for (const step of STEPS.slice(0, 7)) old.exec(step);
+  old.exec('PRAGMA user_version = 7');
+  old.exec(
+    "INSERT INTO agent_sessions VALUES (42, 'device', 'codex:1', 'terminal', 123, 'P', 'wt', 3), (97, 'device', 'codex:2', 'app', 456, '', '', 0)",
+  );
+  old.exec('INSERT INTO agent_work VALUES (42, 1000, 2000), (42, 3000, 4000), (97, 1500, 3500)');
+  const sessions = old.prepare('SELECT * FROM agent_sessions ORDER BY id').all();
+  const work = old.prepare('SELECT * FROM agent_work ORDER BY session_id, from_at').all();
+  old.close();
+  const store = new Store(file, 5000);
+  assert.deepEqual(
+    store.db
+      .prepare(
+        'SELECT id, device_id, source_id, origin, started_at, project, folder, ordinal FROM agent_sessions ORDER BY id',
+      )
+      .all(),
+    sessions,
+  );
+  assert.deepEqual(
+    store.db.prepare('SELECT * FROM agent_work ORDER BY session_id, from_at').all(),
+    work,
+  );
+  assert.deepEqual(
+    store.db
+      .prepare('SELECT producer_id FROM agent_sessions')
+      .all()
+      .map(row => row.producer_id),
+    [null, null],
+  );
+  assert.match(
+    String(
+      store.db
+        .prepare(
+          "EXPLAIN QUERY PLAN SELECT id FROM agent_sessions WHERE device_id='device' AND client='codex' AND COALESCE(source_id,'')='codex:1' AND source_id='codex:1' AND started_at=123 AND origin='terminal' AND project='P' AND folder='wt' AND ordinal=3 AND producer_id IS NULL",
+        )
+        .get()!.detail,
+    ),
+    /agent_sessions_legacy_key/,
+  );
+  assert.match(
+    String(
+      store.db
+        .prepare(
+          "EXPLAIN QUERY PLAN SELECT id FROM agent_sessions WHERE device_id='device' AND client='codex' AND producer_id='abc' AND COALESCE(source_id,'')='codex:1' AND source_id='codex:1' AND origin='terminal' AND project='P' AND folder='wt'",
+        )
+        .get()!.detail,
+    ),
+    /agent_sessions_stable_key/,
+  );
+  store.close();
+});
+
+test('money storage upgrades the stable-session layout without changing its identities or work', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    for (const step of STEPS.slice(0, 8)) db.exec(step);
+    db.exec('PRAGMA user_version = 8');
+    db.exec(
+      "INSERT INTO agent_sessions VALUES (42, 'device', 'codex:1', 'terminal', 123, 'P', 'wt', 0, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')",
+    );
+    db.exec('INSERT INTO agent_work VALUES (42, 1000, 2000)');
+    const sessions = db.prepare('SELECT * FROM agent_sessions').all(),
+      work = db.prepare('SELECT * FROM agent_work').all();
+    migrate(db, 3000);
+    assert.deepEqual(
+      db
+        .prepare(
+          'SELECT id,device_id,source_id,origin,started_at,project,folder,ordinal,producer_id FROM agent_sessions',
+        )
+        .all(),
+      sessions,
+    );
+    assert.deepEqual(db.prepare('SELECT * FROM agent_work').all(), work);
+    assert.equal(db.prepare('PRAGMA user_version').get()?.user_version, SCHEMA_VERSION);
+    for (const name of ['readings', 'meter_spans', 'meter_contexts'])
+      assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
+  } finally {
+    db.close();
+  }
+});
+
+test('the shared currency upgrade preserves native state and legacy history and imports only proven estimates', () => {
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'quotum-currency-upgrade-')), 'db.sqlite'),
+    at = Date.UTC(2026, 9, 5) + 1000,
+    date = at - 1000;
+  const old = new DatabaseSync(file);
+  for (const step of STEPS.slice(0, 12)) old.exec(step);
+  old.exec('PRAGMA user_version = 12');
+  old.prepare("INSERT INTO meta VALUES ('historyStart',?)").run(String(at));
+  old
+    .prepare("INSERT INTO sources(id,provider,account,created_at) VALUES ('s','deepseek','a',0)")
+    .run();
+  const native = {
+    id: 'balance:CNY',
+    unit: 'CNY',
+    amount: '110000000',
+    kind: 'balance' as const,
+    limit: null,
+    resetAt: null,
+    minutes: null,
+    scope: 'wallet',
+    label: 'Original',
+    at,
+    staleAfterMs: 60_000,
+    stale: false,
+  };
+  const derived = {
+    ...native,
+    id: 'converted:balance:USD',
+    unit: 'USD',
+    amount: '15714286',
+    scope: 'ecb:2026-10-05',
+    label: '≈ CNY → USD (ECB)',
+  };
+  const rate = {date, at, usdPerEur: '1000000', cnyPerEur: '7000000'};
+  old.prepare('INSERT INTO state VALUES (?,?)').run(
+    's',
+    JSON.stringify({
+      id: 's',
+      provider: 'deepseek',
+      plan: '',
+      successAt: at,
+      error: null,
+      windows: [],
+      resets: null,
+      staleAfterMs: 60_000,
+      meters: [native, derived],
+      usdRate: rate,
+      balanceStatus: {
+        isAvailable: true,
+        at,
+        staleAfterMs: 60_000,
+        partial: true,
+        issues: ['rate_unavailable'],
+      },
+    }),
+  );
+  for (const meter of [native, derived]) {
+    old
+      .prepare('INSERT INTO readings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(
+        's',
+        meter.id,
+        at,
+        null,
+        meter.kind,
+        meter.unit,
+        BigInt(meter.amount),
+        null,
+        null,
+        null,
+        meter.scope,
+        meter.label,
+        60_000,
+      );
+    old
+      .prepare(
+        'INSERT INTO meter_spans(source_id,meter_id,from_at,to_at,stale_after_ms,interrupted_at) VALUES (?,?,?,?,?,?)',
+      )
+      .run('s', meter.id, at, at, 60_000, at + 10_000);
+  }
+  old
+    .prepare('INSERT INTO meter_contexts VALUES (?,?,?,?,?,?)')
+    .run(
+      's',
+      'usdRate',
+      at,
+      at,
+      60_000,
+      JSON.stringify({type: 'usdRate', date, usdPerEur: rate.usdPerEur, cnyPerEur: rate.cnyPerEur}),
+    );
+  old.close();
+  const store = new Store(file, at);
+  try {
+    assert.deepEqual(store.state('s').meters, [native]);
+    assert.equal(store.state('s').balanceStatus?.partial, false);
+    assert.ok(!JSON.stringify(store.state('s')).includes('usdRate'));
+    const valued = store.currencies.project('s', native, 'USD', at)!;
+    assert.equal(valued.amount, '15714286');
+    assert.equal(valued.scope, 'wallet');
+    assert.equal(valued.label, 'Original');
+    assert.equal(valued.conversion?.original.amount, '110000000');
+    assert.equal(valued.conversion?.rate.fetchedAt, at);
+    assert.equal(
+      store.currencies.spans('s', 'fx:USD:balance:CNY', at + 10000)[0].interruptedAt,
+      at + 10000,
+    );
+    assert.equal(store.currencies.spans('s', 'fx:USD:balance:CNY', at + 10000)[0].observedFrom, at);
+    assert.equal(
+      store.meters.readings('s', 'converted:balance:USD', 0, at + 1)[0].amount,
+      '15714286',
+    );
+    assert.equal(
+      store.db.prepare("SELECT count(*) n FROM exchange_rates WHERE source<>'codex-default'").get()
+        ?.n,
+      1,
+    );
+  } finally {
+    store.close();
+  }
+});
+
+test('unreleased declared-account layouts adopt canonical provenance without losing encrypted rows or history', () => {
+  for (const version of [10, 11, 12, 13, 14]) {
+    const db = new DatabaseSync(':memory:');
+    try {
+      for (const step of STEPS.slice(0, 9)) db.exec(step);
+      db.exec(
+        "ALTER TABLE credentials ADD COLUMN expiry_kind TEXT NOT NULL DEFAULT 'none' CHECK(expiry_kind IN ('at','none','unknown')); ",
+      );
+      db.exec(STEPS[10]);
+      for (const step of STEPS.slice(11, version + 1)) db.exec(step);
+      db.exec('PRAGMA user_version=' + version);
+      const owner = {id: 'owner'};
+      db.prepare('INSERT INTO users(id,email,name,password,created_at) VALUES (?,?,?,?,?)').run(
+        owner.id,
+        'migration@example.com',
+        'Owner',
+        'fixture',
+        1,
+      );
+      db.prepare(
+        "INSERT INTO sources(id,provider,account,created_at) VALUES ('s','deepseek','native',1)",
+      ).run();
+      db.prepare('INSERT INTO declared_accounts VALUES (?,?,?,?,?,?,?,?)').run(
+        'account',
+        owner.id,
+        'deepseek',
+        's',
+        'Private',
+        'private',
+        1,
+        0,
+      );
+      const cipher = Buffer.from('encrypted fixture'),
+        nonce = Buffer.alloc(12, 7);
+      db.prepare(
+        'INSERT INTO credentials(id,user_id,provider,source_id,cipher,nonce,key_version,abilities,created_at,expires_at,expiry_kind) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+      ).run('key', owner.id, 'deepseek', 's', cipher, nonce, 1, '["balance"]', 1, 100000, 'at');
+      db.prepare('INSERT INTO readings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(
+        's',
+        'balance:USD',
+        1,
+        null,
+        'balance',
+        'USD',
+        11000000n,
+        null,
+        null,
+        null,
+        'account',
+        null,
+        60000,
+      );
+      migrate(db, 2);
+      const saved = db.prepare('SELECT * FROM credentials WHERE id=?').get('key')!;
+      assert.deepEqual(Buffer.from(saved.cipher as Uint8Array), cipher);
+      assert.deepEqual(Buffer.from(saved.nonce as Uint8Array), nonce);
+      assert.equal(saved.expiry_kind, 'dated');
+      assert.equal(
+        db.prepare('SELECT owner_id FROM source_identity WHERE source_id=?').get('s')?.owner_id,
+        owner.id,
+      );
+      assert.equal(db.prepare('SELECT amount FROM readings').get()?.amount, 11000000);
+      db.prepare('DELETE FROM credentials WHERE id=?').run('key');
+      assert.equal(
+        db.prepare('SELECT lifecycle_revision FROM declared_accounts').get()?.lifecycle_revision,
+        1,
+      );
+      assert.equal(db.prepare('PRAGMA user_version').get()?.user_version, SCHEMA_VERSION);
+      migrate(db, 3);
+    } finally {
+      db.close();
+    }
+  }
+});
+
+test('board additions append to the integrated currency layout while analytics migration preserves view settings, shares and encrypted access', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    for (const step of STEPS.slice(0, 15)) db.exec(step);
+    db.exec('PRAGMA user_version = 15');
+    db.exec(
+      "INSERT INTO users VALUES ('owner','upgrade@example.test','Owner','fixture',1); INSERT INTO boards VALUES ('board','Board',0,'owner',1); INSERT INTO members VALUES ('board','owner','owner',1)",
+    );
+    const payload = JSON.stringify({
+      hidden: ['source:deepseek:123456789abc'],
+      order: ['legacy'],
+      names: {legacy: 'Kept'},
+      unknown: {kept: true},
+    });
+    db.prepare('INSERT INTO views VALUES (?,?,?,?)').run('board', payload, 'owner', 1);
+    db.exec(
+      "INSERT INTO sources(id,provider,account,created_at) VALUES ('deepseek:123456789abc','deepseek','native',1); INSERT INTO holders VALUES ('deepseek:123456789abc','owner',1); INSERT INTO shares VALUES ('board','deepseek:123456789abc','owner',1); INSERT INTO source_identity VALUES ('deepseek:123456789abc','declared','owner')",
+    );
+    const cipher = Buffer.from('encrypted fixture'),
+      nonce = Buffer.alloc(12, 9);
+    db.prepare(
+      "INSERT INTO credentials(id,user_id,provider,source_id,cipher,nonce,key_version,abilities,created_at,expiry_kind) VALUES ('key','owner','deepseek','deepseek:123456789abc',?,?,1,'[\"balance\"]',1,'unknown')",
+    ).run(cipher, nonce);
+    const before = Object.fromEntries(
+      ['sources', 'holders', 'shares', 'credentials'].map(table => [
+        table,
+        db.prepare('SELECT * FROM ' + table).all(),
+      ]),
+    );
+    migrate(db, 2);
+    for (const table of ['sources', 'holders'])
+      assert.deepEqual(db.prepare('SELECT * FROM ' + table).all(), before[table]);
+    assert.deepEqual(
+      db.prepare('SELECT board_id,source_id,shared_by,shared_at FROM shares').all(),
+      before.shares,
+    );
+    const grant = db
+      .prepare('SELECT budget_since,budget_anchor_at,budget_revision FROM shares')
+      .get()!;
+    assert.equal(grant.budget_since, 0);
+    assert.equal(grant.budget_anchor_at, 0);
+    assert.match(String(grant.budget_revision), /^[0-9a-f]{32}$/);
+    const credential = db.prepare('SELECT * FROM credentials').get()!;
+    assert.equal(credential.access_revision, 0);
+    delete credential.access_revision;
+    assert.deepEqual([credential], before.credentials);
+    const saved = db.prepare('SELECT payload,revision,updated_by,updated_at FROM views').get()!;
+    assert.deepEqual(
+      {...saved, payload: undefined},
+      {payload: undefined, revision: 1, updated_by: 'owner', updated_at: 1},
+    );
+    const view = decodeView(JSON.parse(String(saved.payload)))!;
+    assert.equal(view.version, 5);
+    assert.deepEqual(view.names, {legacy: 'Kept'});
+    assert.deepEqual(view.hidden, ['source:deepseek:123456789abc']);
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, SCHEMA_VERSION);
+    assert.equal(SCHEMA_VERSION, 35);
+  } finally {
+    db.close();
+  }
+});
+
+test('financial availability bounds upgrade without changing sparse or pair readings', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    for (const step of STEPS.slice(0, 30)) db.exec(step);
+    db.exec('PRAGMA user_version=30');
+    db.exec(
+      "INSERT INTO sources(id,provider,account,created_at) VALUES ('s','openrouter','native',1)",
+    );
+    const insert = db.prepare(
+      'INSERT INTO readings(source_id,meter_id,at,previous_at,kind,unit,amount,limit_amount,reset_at,minutes,scope,label,stale_after_ms,pair_anchor) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    );
+    for (const [at, pair] of [
+      [1, 0],
+      [2, 1],
+    ])
+      insert.run(
+        's',
+        'usage',
+        at,
+        at - 1,
+        'counter',
+        'USD',
+        9007199254740993n,
+        null,
+        100,
+        null,
+        null,
+        null,
+        60000,
+        pair,
+      );
+    const read = () => {
+        const query = db.prepare('SELECT * FROM readings ORDER BY at');
+        query.setReadBigInts(true);
+        return query.all();
+      },
+      before = read();
+    migrate(db, 3);
+    assert.deepEqual(
+      read(),
+      before,
+      'upgrading the index preserves exact native amounts and every pair endpoint',
+    );
+    const sql =
+      'SELECT at,stale_after_ms,reset_at FROM readings INDEXED BY readings_sparse WHERE source_id=? AND pair_anchor=0';
+    assert.deepEqual(
+      db
+        .prepare(sql)
+        .all('s')
+        .map(row => ({...row})),
+      [{at: 1, stale_after_ms: 60000, reset_at: 100}],
+    );
+    const plan = db.prepare('EXPLAIN QUERY PLAN ' + sql).all('s');
+    assert.ok(
+      plan.some(row => String(row.detail).includes('COVERING INDEX readings_sparse')),
+      'availability boundaries need no table lookups',
+    );
+    assert.equal(db.prepare('PRAGMA user_version').get()?.user_version, SCHEMA_VERSION);
+  } finally {
+    db.close();
+  }
+});
+
+test('historical batch lookup upgrades without changing retained observations', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    for (const step of STEPS.slice(0, 22)) db.exec(step);
+    db.exec('PRAGMA user_version=22');
+    const insert = db.prepare(
+      "INSERT INTO samples VALUES ('source',?,?,'weekly',NULL,?,NULL,10080,60000)",
+    );
+    for (const [window, at, used] of [
+      ['a', 10, 90],
+      ['b', 10, 20],
+      ['a', 20, 5],
+      ['c', 20, 15],
+      ['a', 30, 12],
+    ] as const)
+      insert.run(window, at, used);
+    const before = db.prepare('SELECT * FROM samples ORDER BY source_id,window_id,at').all();
+    migrate(db, 40);
+    migrate(db, 41);
+    assert.deepEqual(
+      db.prepare('SELECT * FROM samples ORDER BY source_id,window_id,at').all(),
+      before,
+    );
+    const query =
+      'SELECT window_id,used FROM samples WHERE source_id=? AND at=(SELECT max(at) FROM samples WHERE source_id=? AND at<?) ORDER BY window_id';
+    assert.deepEqual(
+      db
+        .prepare(query)
+        .all('source', 'source', 30)
+        .map(row => [row.window_id, row.used]),
+      [
+        ['a', 5],
+        ['c', 15],
+      ],
+    );
+    assert.match(
+      db
+        .prepare('EXPLAIN QUERY PLAN ' + query)
+        .all('source', 'source', 30)
+        .map(row => row.detail)
+        .join('\n'),
+      /samples_by_source_time/,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test('currency lifecycle upgrade backfills stable pair ordering without changing quotes or pins', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    for (const step of STEPS.slice(0, 16)) db.exec(step);
+    db.exec('PRAGMA user_version=16');
+    db.exec(
+      "INSERT INTO users VALUES ('owner','currency-upgrade@example.com','Owner','fixture',1)",
+    );
+    const id = 'personal:' + 'a'.repeat(24);
+    db.prepare('INSERT INTO currency_definitions VALUES (?,?,?,?,?,?,?)').run(
+      id,
+      'owner',
+      'Points',
+      'PT',
+      2,
+      null,
+      'initial',
+    );
+    const insert = db.prepare('INSERT INTO exchange_rates VALUES (?,?,?,?,?,?)');
+    for (const [quote, date, fetched, rate] of [
+      ['initial', 0, 1, '2000000'],
+      ['revised', 0, 2, '3000000'],
+      ['dated', 20, 30, '4000000'],
+    ] as const)
+      insert.run(
+        quote,
+        'manual',
+        date,
+        fetched,
+        JSON.stringify({
+          source: 'manual',
+          base: 'USD',
+          date,
+          fetchedAt: fetched,
+          validUntil: null,
+          rates: {USD: '1000000', [id]: rate},
+        }),
+        'owner',
+      );
+    db.prepare('INSERT INTO currency_bindings VALUES (?,?,?,?,?,?,?,?)').run(
+      'owner',
+      'source',
+      'USD',
+      id,
+      10,
+      15,
+      '',
+      '[{"id":"initial","from":"1000000","to":"2000000"}]',
+    );
+    const quotes = db.prepare('SELECT * FROM exchange_rates ORDER BY id').all(),
+      pins = db.prepare('SELECT * FROM currency_bindings').all();
+    migrate(db, 100);
+    migrate(db, 101);
+    assert.deepEqual(db.prepare('SELECT * FROM exchange_rates ORDER BY id').all(), quotes);
+    assert.deepEqual(db.prepare('SELECT * FROM currency_bindings').all(), pins);
+    assert.deepEqual(
+      db
+        .prepare('SELECT quote_id FROM currency_rate_changes ORDER BY sequence')
+        .all()
+        .map(row => row.quote_id),
+      ['initial', 'revised', 'dated'],
+    );
+    assert.equal(
+      db.prepare("SELECT count(*) n FROM currency_rate_changes WHERE kind='stop'").get()?.n,
+      0,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test('public rate sequences migrate per owner and never reuse pruned numbers after reopening', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    for (const step of STEPS.slice(0, 17)) db.exec(step);
+    db.exec('PRAGMA user_version=17');
+    for (const owner of ['a', 'b'])
+      db.prepare('INSERT INTO users VALUES (?,?,?,?,?)').run(
+        owner,
+        owner + '@example.com',
+        owner,
+        'fixture',
+        1,
+      );
+    for (const [index, owner] of ['a', 'b', 'b', 'a'].entries())
+      db.prepare(
+        "INSERT INTO currency_rate_changes(owner_id,currency_id,base,effective_at,recorded_at,kind) VALUES (?,'old','USD',?,?,'stop')",
+      ).run(owner, index, index);
+    migrate(db, 100);
+    migrate(db, 101);
+    assert.deepEqual(
+      db
+        .prepare('SELECT owner_sequence FROM currency_rate_changes ORDER BY sequence')
+        .all()
+        .map(row => row.owner_sequence),
+      [1, 1, 2, 2],
+    );
+    db.prepare('DELETE FROM currency_rate_changes WHERE owner_id=?').run('a');
+    const c = new CurrencyStore(db),
+      id = c.create(
+        'a',
+        {name: 'Points', symbol: 'PT', fractionDigits: 2},
+        'USD',
+        '2000000',
+        110,
+      ).id;
+    assert.equal(c.rateHistory('a', id, undefined).changes[0].sequence, 3);
+    const reopened = new CurrencyStore(db);
+    reopened.setRate('a', id, 'USD', '3000000', 120, 120);
+    assert.deepEqual(
+      reopened.rateHistory('a', id, undefined).changes.map(change => change.sequence),
+      [4, 3],
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test('client migration preserves the schema-20 ledger and null-source contexts remain unique per client', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    for (const step of STEPS.slice(0, 20)) db.exec(step);
+    db.exec('PRAGMA user_version=20');
+    db.exec(
+      "INSERT INTO agent_sessions VALUES (42,'device','codex:1','terminal',123,'P','wt',0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),(53,'device','not safe:1','app',124,'','',1,NULL)",
+    );
+    db.exec('INSERT INTO agent_work VALUES (42,1000,2000),(42,3000,4000),(53,1500,3500)');
+    const work = db.prepare('SELECT * FROM agent_work ORDER BY session_id,from_at').all();
+    migrate(db, 5000);
+    assert.deepEqual(
+      db
+        .prepare('SELECT id,client,producer_id,account_by FROM agent_sessions ORDER BY id')
+        .all()
+        .map(r => ({...r})),
+      [
+        {id: 42, client: 'codex', producer_id: 'a'.repeat(32), account_by: 'legacy'},
+        {id: 53, client: 'unknown', producer_id: null, account_by: 'legacy'},
+      ],
+    );
+    assert.deepEqual(
+      db.prepare('SELECT * FROM agent_work ORDER BY session_id,from_at').all(),
+      work,
+    );
+    const add = db.prepare(
+      "INSERT INTO agent_sessions(device_id,client,source_id,origin,started_at,project,folder,ordinal,producer_id) VALUES('device',?,NULL,'terminal',123,'P','wt',0,?)",
+    );
+    for (const producer of [null, 'b'.repeat(32)]) {
+      add.run('opencode', producer);
+      assert.throws(() => add.run('opencode', producer), /UNIQUE/);
+      add.run('future-client', producer);
+    }
+    const rows = db.prepare('SELECT count(*) AS n FROM agent_sessions').get();
+    migrate(db, 6000);
+    assert.deepEqual(db.prepare('SELECT count(*) AS n FROM agent_sessions').get(), rows);
+  } finally {
+    db.close();
+  }
+});

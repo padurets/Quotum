@@ -10,9 +10,9 @@ Quotum shows how much of coding-agent subscriptions (Claude Code, Codex, Antigra
 left, across machines. Two parts, a contract between them, and an app that puts both on
 one machine:
 
-- `agent/` — Rust workspace: `crates/core` (a provider adapter per client, schedule,
+- `apps/agent/` — Rust workspace: `crates/core` (a provider adapter per client, schedule,
   settings, delivery), `crates/cli` (the `quotum` command).
-- `hub/` — Node 24, Fastify, the SQLite built into Node, a React dashboard:
+- `apps/hub/` — Node 24, Fastify, the SQLite built into Node, a React dashboard:
   `server/domain` (the rules), `server/store` (SQLite), `server/routes`, `ui/`.
 - `spec/ingest-v1.md` — the protocol between them; `spec/dashboard-v1.md` — the events
   the hub pushes to its dashboard.
@@ -22,29 +22,37 @@ one machine:
 
 Also `npm/` (the npm packages and the build that cross-compiles the agent), `install/`
 (the installers for `curl … | sh` and PowerShell), `deploy/`
-(Compose behind Caddy), `.github/workflows` (CI; releases from a version tag).
+(Compose behind Caddy), `.devkit/` (the pinned Devkit container workflow for `apps/agent`
+and `apps/hub`), `.github/workflows` (CI; releases from a version tag).
 [docs/architecture.md](docs/architecture.md) explains how it all works and why; read the
 relevant part before changing behaviour.
 
 ## Checking a change
 
 ```sh
-cd hub && npm ci && npm run typecheck && npm test && npm run build
-cd agent && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked
-node desktop/prepare.mjs && cd desktop && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked
+make setup && make doctor && make check && make test && make build
+make check-desktop
 ```
 
-Run the checks of every part you touched; a change is done when they pass. The app's
-come after `prepare.mjs` (it builds the hub and fetches Node, which the app's build
-reads), and on Linux they need the system packages listed in CONTRIBUTING.md. A change
-to `agent/crates/core` or to the hub touches the app too. CI also runs the agent on
+Or directly on the host without Devkit containers:
+
+```sh
+npm ci && (cd apps/hub && npm run check && npm test && npm run build)
+(cd apps/agent && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked)
+node desktop/prepare.mjs && (cd desktop && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked)
+```
+
+Run the checks of every part you touched. Run the desktop checks after
+`prepare.mjs` or `make prepare-desktop`, which builds the hub bundle and fetches
+Node for the app. On Linux, install the system packages in CONTRIBUTING.md first. A change
+to `apps/agent/crates/core` or to the hub touches the app too. CI also runs the agent on
 macOS and Windows, and builds the app on Windows and Linux and runs each build
 (`desktop/smoke/`): if you change process handling (`process.rs`, `stop.rs`,
 `holder.rs`, `activity.rs`, `desktop/src/hub.rs`) or start at login and can check only
 one system, say so.
 
-`npm run bench` in `hub/` (after `npm run build`) measures the board in headless Chrome
-against its budget (`hub/bench/budget.ts`). An idle board has neither measurements nor
+`npm run bench` in `apps/hub/` (after `npm run build`, or `make bench` from the root) measures the board in headless Chrome
+against its budget (`apps/hub/bench/budget.ts`). An idle board has neither measurements nor
 working agents: it asks the hub nothing and renders only what shows time. Exact UTC
 calendar-only card events are checked against the stream baseline and retained in raw
 traffic; they permit no additional rendering, requests or script cost. Every
@@ -80,11 +88,11 @@ Captured transaction bounds clamp the expected input position at history and liv
 every event remains measured. A clamped event reaching an already displayed boundary
 adds no movement frame, and a later gesture cannot credit an earlier gesture's input.
 
-`npm start` in `hub/` serves the built dashboard on `127.0.0.1:8080` (a new hub prints
-the setup code of the first account to its log). `npm run demo` in `hub/` serves it on
+`npm start` in `apps/hub/` serves the built dashboard on `127.0.0.1:8080` (a new hub prints
+the setup code of the first account to its log). `npm run demo` in `apps/hub/` serves it on
 throwaway data with every state the board knows that lasts on a working hub, needing no
 network or account; see *The demo board* in [CONTRIBUTING.md](CONTRIBUTING.md).
-`cargo run -p quotum` in `agent/` measures this machine once through the clients
+`cargo run -p quotum` in `apps/agent/` measures this machine once through the clients
 installed on it; that makes no model requests, but it does start the real clients.
 `cargo run` in `desktop/` starts the app with its hub and agent, which measures with
 this machine's `quotum` settings and state as the installed app would (`QUOTUM_CONFIG`,
@@ -94,14 +102,15 @@ runs only while its stdin is open.
 
 ## Rules
 
-For an isolated development stand on Linux, use `make dev`, `make info`, `make logs`
-and `make down` at the actual worktree root (see *Worktree development stands* in
-CONTRIBUTING.md). Creation prepares configuration only. Independent tool calls must
-pass the created worktree's returned path explicitly as their working directory.
-Use the configured remote browser for visuals; do not provision a second browser.
-`make dev-test` checks the lifecycle tooling. Component check wrappers strip preview
-configuration, serialize heavy runs and use Docker for Rust; canonical CI performance
-and platform smoke checks still apply.
+For an isolated containerized development stand on Linux, use `make dev`,
+`make status`, `make logs app=hub` and `make down` at the checkout root (see *Development
+stands* in CONTRIBUTING.md). Devkit publishes container port `8080` on an ephemeral
+`127.0.0.1` host port per checkout (`make status` prints the bound port; `make logs app=hub`
+prints the synthetic sign-in). Independent tool calls must pass the worktree's path
+explicitly as their working directory. Use the configured remote browser for visuals; do
+not provision a second browser. `make doctor`, `make check`, `make test` and `make build`
+run in pinned Devkit Node 24 and Rust containers; canonical CI performance and platform
+smoke checks still apply.
 
 - **Tests never start a real client.** They use recorded answers and stand-in programs.
   Keep it that way: no test may depend on an account, the network or an installed
@@ -112,7 +121,7 @@ and platform smoke checks still apply.
   separate runtime UID for the fixture and its observing probe.
 - **The agent never touches secrets.** It never reads provider tokens, cookies or
   credential files, never makes a model request and never calls provider APIs. A new
-  provider is an adapter in `agent/crates/core/src/providers/` that asks the provider's
+  provider is an adapter in `apps/agent/crates/core/src/providers/` that asks the provider's
   own command-line client.
 - **Trusted hub keys are write-only.** Connector credentials pass through the hub's
   secrets service, are encrypted before SQLite sees them, and never enter board
@@ -150,13 +159,13 @@ and platform smoke checks still apply.
   into `spec/ingest-v1.md` in the same commit, including its Privacy section; a change to
   the events the hub tells its dashboard, into `spec/dashboard-v1.md`.
 - **Released database layouts are frozen.** A new layout is a new step at the end of
-  `hub/server/store/schema.ts`; never edit a released step.
+  `apps/hub/server/store/schema.ts`; never edit a released step.
 - **Two languages everywhere.** Every UI string goes into every catalog in
-  `hub/ui/i18n`; every change to `README.md` goes into `README.ru.md` too.
-- **One version.** `agent/Cargo.toml`, `agent/Cargo.lock`, `desktop/Cargo.toml`,
-  `desktop/Cargo.lock`, `hub/package.json` and `hub/package-lock.json` always carry the
-  same version; see *Releasing* in the README. `desktop/Cargo.lock` also locks
-  `quotum-core`: after a change to its dependencies, `cargo metadata --format-version 1`
+  `apps/hub/ui/i18n`; every change to `README.md` goes into `README.ru.md` too.
+- **One version.** `apps/agent/Cargo.toml`, `apps/agent/Cargo.lock`, `desktop/Cargo.toml`,
+  `desktop/Cargo.lock`, `package.json`, `package-lock.json` and `apps/hub/package.json`
+  always carry the same version; see *Releasing* in the README. `desktop/Cargo.lock` also
+  locks `quotum-core`: after a change to its dependencies, `cargo metadata --format-version 1`
   in `desktop/` updates it (no build needed), or `desktop.yml` fails on `--locked`.
 - **The app's bridge stays narrow.** The board in the app's window reaches the app only
   through the commands in `desktop/src/ipc.rs`, each behind its origin check; what the
@@ -196,28 +205,28 @@ and platform smoke checks still apply.
   height or reduce its plot. Permanent information areas need useful visible content in
   the ordinary view, such as Activity's summary. A blank preview strip is not a solution
   to layout shifts and must not prevent the owner from making a widget shorter.
-- **Look at a change on the demo board** (`npm run build && npm run demo` in `hub/`), in
+- **Look at a change on the demo board** (`npm run build && npm run demo` in `apps/hub/`), in
   both languages, not only through tests. A state the board did not show before gets an
-  entry in `hub/demo/catalogue.ts` with the codes it shows; `npm test` checks them. One
+  entry in `apps/hub/demo/catalogue.ts` with the codes it shows; `npm test` checks them. One
   a working hub never holds for long is named in the catalogue's header instead, with
   the tests that hold it.
 - **Build from the shared pieces.** A menu, dropdown or any panel that opens from a
-  button is a `Popover` (`hub/ui/components/Popover.tsx`); a dialog or side panel is a
-  `Modal` (`hub/ui/components/Kit.tsx`). They are glass: the `glass` class and its
-  tokens in `hub/ui/style.css`, as are the tooltips of our own (the charts', from
-  `hub/ui/components/Tooltip.tsx`, a card's dot's). A new floating surface uses one of
+  button is a `Popover` (`apps/hub/ui/components/Popover.tsx`); a dialog or side panel is a
+  `Modal` (`apps/hub/ui/components/Kit.tsx`). They are glass: the `glass` class and its
+  tokens in `apps/hub/ui/style.css`, as are the tooltips of our own (the charts', from
+  `apps/hub/ui/components/Tooltip.tsx`, a card's dot's). A new floating surface uses one of
   them rather than styling its own. Nothing floating scrolls the page, lengthens it or
   widens it: a panel opens whole in the window, under the bars stuck at its top, on the
   side of its button where it fits, or where there is more room, cut to that room and
-  scrolling inside (`sideOf` in `hub/ui/lib/place.ts`); a chart's tooltip keeps to the
+  scrolling inside (`sideOf` in `apps/hub/ui/lib/place.ts`); a chart's tooltip keeps to the
   window too (`placeOf`, and `edgeOf` for its labels past the edge). A chart along the
-  analytics' time reads and moves through `useTimeAxis` (`hub/ui/components/timeAxis.ts`),
+  analytics' time reads and moves through `useTimeAxis` (`apps/hub/ui/components/timeAxis.ts`),
   keeps its own options in its settings, and has its legend under it. Clicking entries independently emphasizes several series.
-- Scrollbars have one style, set once at the top of `hub/ui/style.css`; nothing styles its own.
-- Sortable tables reuse `hub/ui/components/TableWidget.tsx` for their headers and menu
+- Scrollbars have one style, set once at the top of `apps/hub/ui/style.css`; nothing styles its own.
+- Sortable tables reuse `apps/hub/ui/components/TableWidget.tsx` for their headers and menu
   choices, including active colour, arrow spacing and keyboard behavior. Reader sorting
   stays separate from the owner's column controls.
-- Chart legends share `hub/ui/components/seriesFocus.ts`: click, Enter/Space and
+- Chart legends share `apps/hub/ui/components/seriesFocus.ts`: click, Enter/Space and
   touch toggle independent in-memory choices; pointer or focus-visible previews one
   series with pointer priority. Preview/chosen/other opacity multipliers are
   1/0.65/0.4; without a preview, chosen series are 1, and an empty choice restores
@@ -253,12 +262,12 @@ and platform smoke checks still apply.
   fixed background, and widgets have no `backdrop-filter` (floating surfaces and the
   sticky bars may): whole-window repainting during scroll is expensive, especially
   with software rendering. Nothing polls: data comes as the hub's events into the page's
-  store, and a widget reads its own part of it with a hook of `hub/ui/lib/board.ts`,
+  store, and a widget reads its own part of it with a hook of `apps/hub/ui/lib/board.ts`,
   never the board passed down, so it renders only when that part changes. What shows
-  time is a small part of its own that reads `useClock(changesAt)` (`hub/ui/lib/clock.ts`)
+  time is a small part of its own that reads `useClock(changesAt)` (`apps/hub/ui/lib/clock.ts`)
   with a `…ChangesAt` of its own beside the function that words it, tested to read the
   same until then; nothing that shows data or time keeps a timer of its own, only a
-  tooltip or a gesture may wait a moment (`hub/ui/test/timers.test.ts` lists where), and
+  tooltip or a gesture may wait a moment (`apps/hub/ui/test/timers.test.ts` lists where), and
   what shows time is marked `data-time`, as `npm run bench` counts it.
 - A card tells how its measurements go in the logo's dot and its news in marks on the
   left of its tray, with the details in a tooltip or a panel, never in a line of its own; neither
@@ -310,7 +319,7 @@ and platform smoke checks still apply.
   amounts and recorded conversion provenance; changing a display preference must not
   rewrite provider history or turn exchange movements into spending. Percentage quotas
   and non-monetary counters keep their own units.
-- **Times.** Say when as `stamp` in `hub/ui/lib/format.ts` does: "26 September 14:00",
+- **Times.** Say when as `stamp` in `apps/hub/ui/lib/format.ts` does: "26 September 14:00",
   never "today" or "tomorrow", never seconds; under a heading that already gives the day,
   the time alone. Where how soon or how long ago matters more, and room is short (a mark,
   a cell, the line under a limit, a panel's heading), say that instead (`countdown`,
@@ -328,8 +337,8 @@ and platform smoke checks still apply.
 - Settings sections share their page's surface: `.settings-section` separates them
   with space and a rule. Reuse `.settings-list` for aligned names, details and actions,
   and `.button` for visible actions; do not nest decorative panels inside the content.
-- Colours come from the tokens at the top of `hub/ui/style.css`, and the colours of
-  series from `hub/ui/lib/providers.ts`. Status colours (ok, warn, crit) are for status
+- Colours come from the tokens at the top of `apps/hub/ui/style.css`, and the colours of
+  series from `apps/hub/ui/lib/providers.ts`. Status colours (ok, warn, crit) are for status
   only: how much of a limit is left, a source or device in trouble, a destructive
   action; never decoration or a series.
   Missing, partial, unsupported or invalid supplier quota replies use `warn`. Known

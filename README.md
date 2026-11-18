@@ -310,7 +310,7 @@ setting up. For HTTPS on a domain of your own, [deploy/compose.yaml](deploy/comp
 runs the hub behind Caddy, which gets the certificate by itself:
 `QUOTUM_DOMAIN=quotum.example.com docker compose up -d`.
 
-Without Docker: clone the repository, then `cd hub && npm ci && npm run build && npm start` (Node.js 24 or newer),
+Without Docker: clone the repository, then `npm ci && cd apps/hub && npm run build && npm start` (Node.js 24 or newer),
 which listens on `127.0.0.1:8080` and prints the setup code to the terminal.
 
 **2. Install the agent and look at this machine's limits.**
@@ -372,7 +372,7 @@ licences) and as a bare binary (`quotum-cli-<platform>`, what the installers and
 `quotum update` fetch), with checksums (`SHA256SUMS`) and
 [build provenance](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
 (`gh attestation verify <file> -R padurets/quotum`). **From source:**
-`cd agent && cargo build --release` (Rust 1.85 or newer) gives `target/release/quotum`.
+`cd apps/agent && cargo build --release` (Rust 1.85 or newer) gives `target/release/quotum`.
 
 ## Connecting DeepSeek
 
@@ -755,7 +755,7 @@ app's local hub shows diagnostics while its agent settings control its one machi
 | `QUOTUM_ALLOWED_HOSTS` | `127.0.0.1,localhost` (image: `*`) | Host names the hub answers to, or `*` for any; other hosts get 403. Setting it replaces the default |
 | `QUOTUM_PUBLIC_URL` | taken from the request | The address shown to agents and used in invite links |
 | `QUOTUM_TRUST_PROXY` | — | Believe a proxy about the client's address and protocol: `true`, a number of hops, or addresses and CIDR ranges |
-| `QUOTUM_DATA_DIR` | `hub/data` (image: `/data`) | Where the SQLite database lives |
+| `QUOTUM_DATA_DIR` | `apps/hub/data` (image: `/data`) | Where the SQLite database lives |
 | `QUOTUM_SECRET_KEY`, `QUOTUM_SECRET_KEY_FILE` | automatic separate storage | Optional explicit encryption key: 32 random bytes as unpadded base64url, or a protected file outside the data directory. Set one input only; explicit inputs override automatic storage. See [server deployment](deploy/README.md) |
 | `QUOTUM_SECRET_DIR` | POSIX: sibling of the real data directory with `.keys`; image: `/keys` | Optional separate persistent key directory, outside data. Not used with an explicit key. Windows standalone uses private HKCU registry storage instead and rejects this option in automatic mode |
 | `QUOTUM_SECRET_KEY_PREVIOUS`, `QUOTUM_SECRET_KEY_PREVIOUS_FILE` | — | Matching previous encryption key during rotation. Set one previous input only; back up keys separately and retain the old key for its matching backups |
@@ -784,7 +784,7 @@ over plain HTTP/1.1, about five.
   dashboard.
 - [CONTRIBUTING.md](CONTRIBUTING.md): checking a change and what to keep in mind;
   [SECURITY.md](SECURITY.md): reporting a vulnerability privately.
-- `npm run demo` in `hub/` (after `npm run build`): a live board on throwaway data with
+- `npm run demo` in `apps/hub/` (after `npm run build`): a live board on throwaway data with
   every state the dashboard knows that lasts on a working hub, no network or account
   needed; Ctrl+C stops it and leaves nothing behind. `npm run demo -- showcase` is the
   board of the images above. `npm run demo -- money --still` puts subscriptions beside
@@ -793,45 +793,48 @@ over plain HTTP/1.1, about five.
 Project layout:
 
 ```
-agent/crates/core     adapters for each client, schedule, settings, delivery to the hub
-agent/crates/cli      the `quotum` command
-npm/                  the npm packages: a launcher and a prebuilt binary per platform
-install/              the installers for `curl … | sh` and PowerShell
-deploy/               running the hub with Docker Compose behind Caddy (HTTPS)
-desktop/              the desktop app (Rust, Electron on Linux, Tauri on Windows): the agent, its own hub and board in a window
-.github/workflows     tests on every push; everything released from a version tag
-spec/                 the protocols: the agent to the hub, the hub to its dashboard
-hub/server/domain     the rules: windows, spending, resets, the ingest format
-hub/server/store      SQLite: layout, measurements, people and devices
-hub/server/routes     HTTP routes for people and for agents
-hub/server/*.ts       ingest, duty, device pairing, sessions, the reset trackers
-hub/ui                the dashboard (React), translations in hub/ui/i18n
-hub/demo              the demo board: a catalogue of every state a working hub holds, kept alive
+apps/agent/crates/core  adapters for each client, schedule, settings, delivery to the hub
+apps/agent/crates/cli   the `quotum` command
+npm/                    the npm packages: a launcher and a prebuilt binary per platform
+install/                the installers for `curl … | sh` and PowerShell
+deploy/                 running the hub with Docker Compose behind Caddy (HTTPS)
+desktop/                the desktop app (Rust, Electron on Linux, Tauri on Windows): the agent, its own hub and board in a window
+.devkit/                pinned Devkit container workflow for `apps/agent` and `apps/hub`
+.github/workflows       tests on every push; everything released from a version tag
+spec/                   the protocols: the agent to the hub, the hub to its dashboard
+apps/hub/server/domain  the rules: windows, spending, resets, the ingest format
+apps/hub/server/store   SQLite: layout, measurements, people and devices
+apps/hub/server/routes  HTTP routes for people and for agents
+apps/hub/server/*.ts    ingest, duty, device pairing, sessions, the reset trackers
+apps/hub/ui             the dashboard (React), translations in apps/hub/ui/i18n
+apps/hub/demo           the demo board: a catalogue of every state a working hub holds, kept alive
 ```
 
-`npm test` and `npm run typecheck` in `hub/`, `cargo test` and `cargo clippy` in
-`agent/` and `desktop/` check everything (the app's after `node desktop/prepare.mjs`);
-CI runs them on every push. `node npm/build.mjs` builds the
-npm packages (it needs cargo-zigbuild and zig; see the script), `docker build hub` the
-hub's image.
+`make setup && make check && make test && make build` checks `apps/agent/` and `apps/hub/`
+in pinned Devkit containers (or `npm test` and `npm run check` in `apps/hub/`, `cargo test`
+and `cargo clippy` in `apps/agent/`); `make check-desktop` checks `desktop/` after
+`node desktop/prepare.mjs`. CI runs them on every push. `node npm/build.mjs` builds the
+npm packages (it needs cargo-zigbuild and zig; see the script),
+`docker build -f apps/hub/Dockerfile .` the hub's image.
 
 ### Releasing
 
 Prepare a release branch and a pull request into `main`. Set the new version in
-`agent/Cargo.toml` (`[workspace.package]`), `desktop/Cargo.toml` and `hub/package.json`,
-then update their lock files. The npm package template stays at `0.0.0`:
+`apps/agent/Cargo.toml` (`[workspace.package]`), `desktop/Cargo.toml`, `package.json` and
+`apps/hub/package.json`, then update their lock files (`apps/agent/Cargo.lock`,
+`desktop/Cargo.lock`, `package-lock.json`). The npm package template stays at `0.0.0`:
 `npm/build.mjs` sets the published packages' version from the agent's manifest.
 Add the hashes of any new database layout steps to `RELEASED` in
-`hub/server/test/schema.test.ts`; every step shipped by a release is frozen.
+`apps/hub/server/test/schema.test.ts`; every step shipped by a release is frozen.
 Refresh the README screenshots in both languages from the demo board, check the upgrade
 instructions and prepare the release notes outside the repository.
 
 For example, to prepare 0.10.2 on that branch:
 
 ```sh
-(cd hub && npm version 0.10.2 --no-git-tag-version)
-# agent/Cargo.toml and desktop/Cargo.toml: version = "0.10.2"
-(cd agent && cargo metadata --format-version 1 >/dev/null)
+npm version 0.10.2 --no-git-tag-version --include-workspace-root --workspaces
+# apps/agent/Cargo.toml and desktop/Cargo.toml: version = "0.10.2"
+(cd apps/agent && cargo metadata --format-version 1 >/dev/null)
 (cd desktop && cargo metadata --format-version 1 >/dev/null)
 ```
 
@@ -849,7 +852,7 @@ git push origin v0.10.2
 ```
 
 [release.yml](.github/workflows/release.yml) refuses a tag that is not annotated or
-whose version differs from any of those six files. The tag's message becomes the
+whose version differs from any of those seven files. The tag's message becomes the
 release notes. The workflow checks the code again, builds the agent for every platform
 and runs the desktop packages through their installation and smoke checks. Only after
 all binaries are ready does it publish the hub's image and npm packages, then create
@@ -863,7 +866,7 @@ again, and it replaces the old trusts.
 
 ### Adding a language
 
-The dashboard's text lives in `hub/ui/i18n`. Copy `ru.ts` to a file named after the
+The dashboard's text lives in `apps/hub/ui/i18n`. Copy `ru.ts` to a file named after the
 language's code (`de.ts`), translate the strings, rename its export, and add it to
 `LOCALES` in `index.ts` (an import and one line). The type checker and `npm test` then
 make sure every key is translated, the `{placeholders}` match and every plural form the

@@ -14,7 +14,7 @@
  *   node npm/build.mjs            build every platform
  *   node npm/build.mjs linux-x64  build some of them (the others are left out of `quotum`)
  *
- * The version is the agent's (agent/Cargo.toml). A release tag builds and publishes them
+ * The version is the agent's (apps/agent/Cargo.toml). A release tag builds and publishes them
  * from CI (.github/workflows/release.yml); `node npm/publish.mjs` is what it runs.
  */
 import {execFileSync} from 'node:child_process';
@@ -26,11 +26,11 @@ import {thirdPartyLicenses} from './licenses.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
-const agent = path.join(root, 'agent');
+const agent = path.join(root, 'apps/agent');
 const dist = path.join(here, 'dist');
 
 const version = /\[workspace\.package\][^[]*?\nversion = "([^"]+)"/.exec(readFileSync(path.join(agent, 'Cargo.toml'), 'utf8'))?.[1];
-if (!version) throw new Error('no version in agent/Cargo.toml');
+if (!version) throw new Error('no version in apps/agent/Cargo.toml');
 
 const launcher = readFileSync(path.join(here, 'quotum/bin/quotum.js'), 'utf8');
 const listed = JSON.parse(/const SUPPORTED = (\[[^\]]*\])/.exec(launcher)?.[1].replaceAll("'", '"') ?? '[]');
@@ -75,7 +75,7 @@ for (const p of platforms) {
     version,
     description: `The Quotum agent for ${p.title}; installed by \`quotum\`.`,
     ...shared,
-    repository: {...main.repository, directory: 'agent'},
+    repository: {...main.repository, directory: 'apps/agent'},
     os: [p.os],
     cpu: [p.cpu],
     files: ['bin', 'THIRD_PARTY_LICENSES.md'],

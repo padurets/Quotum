@@ -19,10 +19,10 @@ they are built this way.
 └───────────────────────────────┘
 ```
 
-- **agent/** — a small native program: Rust, one binary per platform, about 3 MB. It
+- **apps/agent/** — a small native program: Rust, one binary per platform, about 3 MB. It
   measures limits through each agent's own command-line client and delivers them to a
   hub in the [ingest format](../spec/ingest-v1.md).
-- **hub/** — the dashboard service: Node 24, Fastify, the SQLite built into Node, a
+- **apps/hub/** — the dashboard service: Node 24, Fastify, the SQLite built into Node, a
   React UI. It decides which device measures which subscription, stores measurements,
   applies the rules (what counts as spending, what is a reset, what is a gap) and
   serves the dashboard. The hub measures z.ai subscriptions and OpenRouter budgets
@@ -513,7 +513,7 @@ subscription:
   A new eligible claim or the holder's own successful recovery restores planning;
   the shared successful-data baseline still determines fixed due times.
 
-Duty decides who measures; the hub's **pace** (`hub/server/cadence.ts`) decides when,
+Duty decides who measures; the hub's **pace** (`apps/hub/server/cadence.ts`) decides when,
 from what it sees of the subscription everywhere, which no single machine does:
 
 - The device on duty asks every 15 seconds, one request for all its subscriptions,
@@ -902,7 +902,7 @@ them), kept for 90 days.
   plan chosen explicitly is not kept as chosen, and adds none.
 - **The forecast by time** says where a window leads, the same over any period (the
   forecast by work is told with agents' work, under *Delivery*). A weekly window's is the
-  hub's (`hub/server/domain/forecast.ts`), one for the whole hub, and goes by how its
+  hub's (`apps/hub/server/domain/forecast.ts`), one for the whole hub, and goes by how its
   subscription spends. It follows the window as a series through its resets over the last
   23 days of samples: what was spent between two samples is spread over the ten-minute
   cells between them, time without samples or with a rolling window not yet begun is time
@@ -1561,8 +1561,8 @@ connection to its board's [events](../spec/dashboard-v1.md) (`GET /api/events`),
 hub tells it the board as it is, then each part of it that changes, within a tenth of a
 second. On the hub, whatever changes data says what it touched (a source, a board, a
 person); a moment later the hub puts the touched parts of every board being read
-together again (`hub/server/projection.ts`) and sends each reader only what differs from
-what it last got (`hub/server/events.ts`). What changes with time alone (a card going
+together again (`apps/hub/server/projection.ts`) and sends each reader only what differs from
+what it last got (`apps/hub/server/events.ts`). What changes with time alone (a card going
 stale, a machine's agents no longer shown, a holder falling silent, a past reset leaving
 the history, a subscription's forecasts worked out again at its hour) it tells when that
 comes: it keeps the moment each board being read next
@@ -1581,7 +1581,7 @@ five tabs of a hub in one browser wait for each other.
 
 ### The page's connection
 
-`hub/ui/lib/live.ts` does what this table says and nothing else; its code and tests name
+`apps/hub/ui/lib/live.ts` does what this table says and nothing else; its code and tests name
 the rows. `mode` is a stream or long polls (for ten minutes once chosen); `short` counts
 streams in a row that ended before their first `ping`, closed neither by the page nor
 with `bye`; retries back off 1, 2, 5, 10 and 30 s, ±20%, and start over once `live` or
@@ -1618,12 +1618,12 @@ is `online`, the tab shown, `pageshow`, `focus`, or a timer of its own more than
 | 17 | `polling` | a poll answered | applies its events in order, none after `bye`; asks again at once, or opens a stream once the time for polls is up | `polling`, `connecting` | cleared; as above when it opens a stream |
 | 18 | any but `paused` | the tab hidden for 30 s, counted from when it was hidden (or the page loaded hidden), whatever board it was given meanwhile, if any | ends the connection and its timers | `paused` | kept once lost; cleared while only opening |
 
-In the page, the events go through one reducer into a store (`hub/ui/lib/board.ts`); each
+In the page, the events go through one reducer into a store (`apps/hub/ui/lib/board.ts`); each
 widget reads its own part of it and renders only when that part changes (a card, its
 agents, its pace, its forecasts, the list of agents, the chart), and a part the same as before stays
 the same object. What shows time (how long ago, how soon, the freshness dot, the plan's
 mark, that the hub cannot be reached) is a small part of its own that tells the page's
-one clock (`hub/ui/lib/clock.ts`) when it reads otherwise, and renders only then: the
+one clock (`apps/hub/ui/lib/clock.ts`) when it reads otherwise, and renders only then: the
 clock keeps one timer for the whole page, none on a hidden tab, and counts in the hub's
 time as the hub's messages tell it. Chart geometry moves on a cell of the history's grid
 at a time. Activity totals, legend amounts and open readouts follow their exact selected
@@ -1720,7 +1720,7 @@ target can read independently. Errors and retries belong to the target that requ
 them. Time alone never rebuilds or reads history; cells past the hub's cut are
 known empty until new data arrives, and a response predating news cannot restore that
 proof. Nothing that shows data or time keeps a timer of its
-own (a tooltip or a gesture may wait a moment; `hub/ui/test/timers.test.ts` lists where).
+own (a tooltip or a gesture may wait a moment; `apps/hub/ui/test/timers.test.ts` lists where).
 Range validity advances the latest read's hub time by monotonic elapsed time from
 its request's start, including its delivery delay; a range
 wholly beyond its current grid cut returns to the chosen period.
@@ -2633,7 +2633,7 @@ fit it lists each window with what is left, then its other values, each with its
 Agent-hours and the share of spending while active are off by default: adding either can
 turn a table as wide as the board into a list.
 
-Text is translated through typed catalogs in `hub/ui/i18n`: English is the source,
+Text is translated through typed catalogs in `apps/hub/ui/i18n`: English is the source,
 every other language must translate all its keys (checked by the type checker and by
 tests, together with placeholders and plural forms). The hub stores nothing in a
 particular language: window kinds and error states are codes, and personal boards have
@@ -2654,7 +2654,7 @@ no name of their own, so each reader sees "My limits" in their language.
   `quotum-core`, the library the `quotum` command is built on, with `quotum`'s own
   settings (`config.toml`) and state folder, so the command and the app measure alike.
 - **Its hub** is the hub of the same commit bundled into one file
-  (`hub/vite.bundle.config.ts`), run by the Node.js 24 the app carries under its own
+  (`apps/hub/vite.bundle.config.ts`), run by the Node.js 24 the app carries under its own
   name, `quotum-node` (a deb or an rpm puts it in `/usr/bin`, where `node` is the
   `nodejs` package's). It listens on `127.0.0.1` only, on a port chosen once from
   20000–39999 and remembered: the port is part of the page's origin, and with it of what

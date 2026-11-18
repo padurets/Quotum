@@ -1,0 +1,445 @@
+import {readHistory} from './historyRead.js';
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
+import {Store} from '../store/store.js';
+import {SCHEMA_VERSION} from '../store/schema.js';
+import {config} from '../config.js';
+import type {WindowMeasurement as Measurement, Win} from '../domain/quota.js';
+
+const start = 1_800_000_000_000;
+const BOARD = 'board';
+const USER = 'user';
+const win = (change: Partial<Win> = {}): Win => ({
+  id: 'weekly',
+  kind: 'weekly',
+  label: null,
+  used: 20,
+  remaining: 80,
+  resetAt: start + 86_400_000,
+  minutes: 10080,
+  ...change,
+});
+const measurement = (change: Partial<Measurement> = {}): Measurement => ({
+  observedAt: start,
+  plan: 'Pro',
+  windows: [win()],
+  staleAfterMs: 300_000,
+  resets: null,
+  ...change,
+});
+
+/** A store with one person's personal board; `seen` is a source their device measures. */
+function fresh() {
+  const store = new Store(':memory:', start);
+  store.db.prepare("INSERT INTO boards VALUES (?, '', 1, ?, ?)").run(BOARD, USER, start);
+  return store;
+}
+const seen = (
+  store: Store,
+  provider: 'claude' | 'codex' | 'antigravity',
+  account: string,
+  user = USER,
+) => {
+  const id = store.source(provider, account, start);
+  store.hold(id, user, start);
+  return id;
+};
+
+test('a source appears when first seen and shows it is waiting for data', () => {
+  const store = fresh();
+  assert.deepEqual(store.states(BOARD), []);
+  assert.deepEqual(store.states('elsewhere'), [], 'a board that does not exist shows nothing');
+  const id = seen(store, 'codex', 'account-a');
+  assert.deepEqual(
+    store.states(BOARD).map(s => [s.id, s.provider, s.error]),
+    [[id, 'codex', 'waiting']],
+  );
+  store.close();
+});
+
+test('failures keep the last good values on screen', () => {
+  const store = fresh();
+  const id = seen(store, 'codex', 'account-a');
+  store.record(id, measurement());
+  store.fail(id, 'not_logged_in');
+  const state = store.state(id);
+  assert.deepEqual(
+    [state.successAt, state.windows[0].used, state.error],
+    [start, 20, 'not_logged_in'],
+  );
+  store.record(id, measurement({observedAt: start + 240_000}));
+  assert.equal(store.state(id).error, null);
+  store.close();
+});
+
+test('history returns one series per source and window, in the order of the cards', () => {
+  const store = fresh();
+  const claude = seen(store, 'claude', 'account-c');
+  const codex = seen(store, 'codex', 'account-a');
+  const windows = (used: number) => [
+    win({used}),
+    win({id: 'session', kind: 'session', minutes: 300, used: used * 2, resetAt: start + 3_600_000}),
+  ];
+  store.record(codex, measurement({windows: windows(20)}));
+  store.record(codex, measurement({observedAt: start + 240_000, windows: windows(25)}));
+  store.record(claude, measurement({windows: [win({used: 5})]}));
+  const history = readHistory(store, BOARD, start - 1, 60_000).series;
+  assert.deepEqual(
+    history
+      .map(s => [s.sourceId, s.windowId, s.consumed])
+      .sort(
+        (a, b) =>
+          String(a[0]).localeCompare(String(b[0])) || String(b[1]).localeCompare(String(a[1])),
+      ),
+    [
+      [claude, 'weekly', 0],
+      [codex, 'weekly', 5],
+      [codex, 'session', 10],
+    ],
+  );
+  assert.deepEqual(
+    readHistory(store, 'elsewhere', start - 1, 60_000).series,
+    [],
+    'boards do not see each other',
+  );
+  store.close();
+});
+
+test('a period of history ends where it is asked to and is read from its edges', () => {
+  const store = fresh();
+  const codex = seen(store, 'codex', 'account-a');
+  for (const [minutes, used] of [
+    [0, 20],
+    [4, 25],
+    [8, 31],
+  ])
+    store.record(
+      codex,
+      measurement({observedAt: start + minutes * 60_000, windows: [win({used})]}),
+    );
+  const [series] = readHistory(store, BOARD, start - 1, 60_000, {to: start + 5 * 60_000}).series;
+  assert.deepEqual(
+    [series.points.length, series.consumed, series.remainingAtStart, series.remainingAtEnd],
+    [2, 5, 80, 75],
+  );
+  assert.equal(series.points.at(-1)![0], start + 4 * 60_000, 'nothing after its end');
+  store.close();
+});
+
+test('a source is kept once: on the personal board of everyone who measures it, and where they shared it', () => {
+  const store = fresh();
+  store.db
+    .prepare(
+      "INSERT INTO boards VALUES ('bob-board', '', 1, 'bob', ?), ('team', 'Team', 0, 'user', ?)",
+    )
+    .run(start, start);
+  store.db
+    .prepare(
+      "INSERT INTO members VALUES ('team', 'user', 'owner', ?), ('team', 'bob', 'member', ?)",
+    )
+    .run(start, start);
+  const shared = seen(store, 'claude', 'team-account');
+  assert.equal(
+    seen(store, 'claude', 'team-account', 'bob'),
+    shared,
+    'the same account is the same source',
+  );
+  const own = seen(store, 'codex', 'bob-account', 'bob');
+  assert.deepEqual(
+    store.sources('bob-board').map(s => [s.id, s.holders]),
+    [
+      [shared, ['bob', 'user']],
+      [own, ['bob']],
+    ],
+  );
+  assert.deepEqual(store.sources('team'), [], 'nothing on a shared board until someone shares it');
+
+  store.share('team', shared, 'user', start);
+  store.share('team', own, 'bob', start);
+  assert.deepEqual(
+    store.sources('team').map(s => [s.id, s.sharedBy]),
+    [
+      [shared, 'user'],
+      [own, 'bob'],
+    ],
+  );
+  store.record(shared, measurement());
+  assert.deepEqual(
+    readHistory(store, 'team', start - 1, 60_000).series.map(s => s.sourceId),
+    [shared],
+  );
+
+  // Bob leaves the team: his own subscription goes with him, the one Alice measures too stays.
+  store.db.prepare("DELETE FROM members WHERE board_id = 'team' AND user_id = 'bob'").run();
+  store.unshareOrphans('team');
+  assert.deepEqual(
+    store.sources('team').map(s => s.id),
+    [shared],
+  );
+  store.removeBoard('team');
+  assert.deepEqual(store.sources('team'), []);
+  assert.equal(store.sources(BOARD).length, 1, 'the sources stay with their people');
+  store.close();
+});
+
+test('limits back before their reset time and free resets granted are events for the chart', () => {
+  const store = fresh();
+  const id = seen(store, 'codex', 'account-a');
+  const at = (minutes: number) => start + minutes * 60_000;
+  const weekly = (used: number, resetAt = start + 3 * 86_400_000) => win({used, resetAt});
+  const session = (used: number) =>
+    win({id: 'session', kind: 'session', minutes: 300, used, resetAt: start + 3 * 3_600_000});
+  store.record(
+    id,
+    measurement({
+      observedAt: at(0),
+      windows: [weekly(90), session(40)],
+      resets: {available: 0, expiring: []},
+    }),
+  );
+  store.record(
+    id,
+    measurement({
+      observedAt: at(2),
+      windows: [weekly(91), session(41)],
+      resets: {available: 1, expiring: []},
+    }),
+  );
+  // A free reset used: both windows back at zero days before their reset.
+  store.record(
+    id,
+    measurement({
+      observedAt: at(4),
+      windows: [weekly(0, start + 7 * 86_400_000), session(0)],
+      resets: {available: 0, expiring: []},
+    }),
+  );
+  store.record(
+    id,
+    measurement({
+      observedAt: at(6),
+      windows: [weekly(1, start + 7 * 86_400_000), session(1)],
+      resets: {available: 0, expiring: []},
+    }),
+  );
+  const {events} = readHistory(store, BOARD, start - 1, 60_000);
+  assert.deepEqual(events, [
+    {
+      sourceId: id,
+      at: at(0),
+      kind: 'plan',
+      plan: 'Pro',
+      previous: null,
+      expiresAt: at(0) + config.retention.sampleDays * 86_400_000 + 1,
+    },
+    {sourceId: id, at: at(2), kind: 'resets_granted', count: 1},
+    {sourceId: id, at: at(4), kind: 'early_reset', windows: ['session', 'weekly']},
+  ]);
+  store.close();
+});
+
+test('old samples are pruned after the retention period', () => {
+  const store = fresh();
+  const id = seen(store, 'codex', 'account-a');
+  store.record(id, measurement());
+  store.record(id, measurement({observedAt: start + 100 * 86_400_000}));
+  store.prune(start + 100 * 86_400_000);
+  assert.equal(
+    readHistory(store, BOARD, start + 100 * 86_400_000, 60_000).series[0].points.length,
+    1,
+  );
+  store.close();
+});
+
+test("a subscription's recorded plan changes appear once in chart history, including its first known plan", () => {
+  const store = fresh();
+  const id = seen(store, 'claude', 'account-a');
+  const at = (hours: number) => start + hours * 3_600_000;
+  for (const [hours, plan] of [
+    [0, 'pro'],
+    [1, 'pro'],
+    [2, ''],
+    [3, 'max'],
+    [4, 'max'],
+    [5, 'pro'],
+  ] as const)
+    store.record(id, measurement({observedAt: at(hours), plan}));
+  // The first plan is kept too: it is where the history begins; no plan reported is no change.
+  assert.deepEqual(store.planChanges(id, at(10)), [
+    {at: at(0), plan: 'pro'},
+    {at: at(3), plan: 'max'},
+    {at: at(5), plan: 'pro'},
+  ]);
+  assert.deepEqual(store.planChanges(id, at(4)), [
+    {at: at(0), plan: 'pro'},
+    {at: at(3), plan: 'max'},
+  ]);
+  assert.deepEqual(
+    readHistory(store, BOARD, 0, 60_000).events.map(event =>
+      event.kind === 'plan' ? [event.at, event.plan, event.previous] : event,
+    ),
+    [
+      [at(0), 'pro', null],
+      [at(3), 'max', {at: at(0), plan: 'pro'}],
+      [at(5), 'pro', {at: at(3), plan: 'max'}],
+    ],
+  );
+  store.close();
+});
+
+test('pruning keeps the plan a subscription has, and forgets what the forecasts kept of long ago', () => {
+  const store = fresh();
+  const id = seen(store, 'claude', 'account-a');
+  const other = seen(store, 'codex', 'account-b');
+  const day = 86_400_000;
+  store.record(id, measurement({plan: 'pro'}));
+  store.record(id, measurement({observedAt: start + day, plan: 'max'}));
+  store.record(other, measurement({plan: 'plus'}));
+  store.record(other, measurement({observedAt: start + day, plan: 'pro'}));
+  store.record(other, measurement({observedAt: start + 95 * day, plan: 'max'}));
+  store.keep([
+    ['forecast:old', JSON.stringify({asOf: start, memoryIn: null, memoryOut: null})],
+    ['forecast:new', JSON.stringify({asOf: start + 95 * day, memoryIn: null, memoryOut: null})],
+    ['forecast:broken', '{'],
+  ]);
+  store.prune(start + 100 * day);
+  assert.deepEqual(
+    store.planChanges(id, start + 100 * day),
+    [{at: start + day, plan: 'max'}],
+    'the one in effect stays however old',
+  );
+  // The last one before the cutoff tells a later one is a change.
+  assert.deepEqual(
+    store.planChanges(other, start + 100 * day),
+    [
+      {at: start + day, plan: 'pro'},
+      {at: start + 95 * day, plan: 'max'},
+    ],
+    'one older than that is gone',
+  );
+  assert.equal(store.kept('forecast:old'), null);
+  assert.equal(store.kept('forecast:broken'), null);
+  assert.ok(store.kept('forecast:new'));
+  assert.ok(store.kept('historyStart'), 'the rest of meta stays');
+  store.close();
+});
+
+test("a series' samples are read from a moment, with the last one before it", () => {
+  const store = fresh();
+  const id = seen(store, 'codex', 'account-a');
+  for (const minutes of [0, 10, 20, 30])
+    store.record(
+      id,
+      measurement({observedAt: start + minutes * 60_000, windows: [win({used: minutes})]}),
+    );
+  assert.deepEqual(
+    store.seriesSamples(id, 'weekly', start + 15 * 60_000, start + 25 * 60_000).map(s => s.used),
+    [10, 20],
+  );
+  assert.deepEqual(
+    store.seriesSamples(id, 'weekly', start - 60_000, start + 60 * 60_000).map(s => s.used),
+    [0, 10, 20, 30],
+  );
+  assert.deepEqual(store.seriesSamples(id, 'weekly', start, start)[0], {
+    at: start,
+    used: 0,
+    resetAt: start + 86_400_000,
+    minutes: 10080,
+  });
+  store.close();
+});
+
+test('resets the trackers report are kept, once each, until the retention period ends', () => {
+  const store = fresh();
+  const grant = {at: start, url: 'https://example.com/1', text: 'A banked reset for everyone'};
+  store.announce('codex', grant);
+  store.announce('codex', grant);
+  store.announce('claude', {...grant, at: start + 3_600_000});
+  assert.deepEqual(store.announcements(start - 1), {
+    codex: [grant],
+    claude: [{...grant, at: start + 3_600_000}],
+  });
+  assert.deepEqual(store.announcements(start + 1), {claude: [{...grant, at: start + 3_600_000}]});
+  store.prune(start + 100 * 86_400_000);
+  assert.deepEqual(store.announcements(0), {});
+  store.close();
+});
+
+test('a new database gets the current layout; one from a newer version is refused', () => {
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'quotum-')), 'db.sqlite');
+  const store = new Store(file, start);
+  assert.equal(
+    Number((store.db.prepare('PRAGMA user_version').get() as any).user_version),
+    SCHEMA_VERSION,
+  );
+  assert.equal(store.historyStart(start), start);
+  store.close();
+  const raw = new DatabaseSync(file);
+  raw.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
+  raw.close();
+  assert.throws(() => new Store(file, start), /layout/);
+});
+
+test('history starts when the database was made, or at an older sample while one is kept', () => {
+  const store = fresh();
+  const day = 86_400_000;
+  assert.equal(store.historyStart(start), start, 'a new database');
+  const id = seen(store, 'codex', 'account-a');
+  store.record(id, measurement({observedAt: start + 60_000}));
+  assert.equal(store.historyStart(start), start, 'a newer sample changes nothing');
+  store.record(seen(store, 'codex', 'old-spool'), measurement({observedAt: start - 100 * day}));
+  assert.equal(
+    store.historyStart(start),
+    start,
+    'a sample dated before the retention period moves nothing, pruned or not',
+  );
+  const older = start - 20 * day;
+  store.record(seen(store, 'codex', 'retained-spool'), measurement({observedAt: older}));
+  assert.equal(
+    store.historyStart(start),
+    older,
+    'measurements an agent kept for days, delivered to a new hub',
+  );
+  const later = older + 91 * day;
+  store.prune(later);
+  assert.equal(store.historyStart(later), start, 'back to the creation once that sample is gone');
+  store.record(id, measurement({observedAt: 0}));
+  assert.equal(store.historyStart(later), start, 'a sample from a clock not set yet moves nothing');
+  store.close();
+});
+
+test('a database of a development version before 0.2 is refused, not misread', () => {
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'quotum-')), 'db.sqlite');
+  const raw = new DatabaseSync(file);
+  raw.exec(
+    'CREATE TABLE sources (id TEXT PRIMARY KEY, board_id TEXT NOT NULL); PRAGMA user_version = 1',
+  );
+  raw.close();
+  assert.throws(() => new Store(file, start), /before 0\.2/);
+});
+
+test('the names a board’s history is keyed by are found by project, not by reading every session of a machine', t => {
+  // Read with every answer of history and every look at a watched board: without the index a person with many sessions stalls the hub for each.
+  const store = fresh();
+  const prepare = store.db.prepare.bind(store.db);
+  let query = '';
+  t.mock.method(store.db, 'prepare', (sql: string) => {
+    if (/\bFROM project_names n\b/.test(sql) && /\bagent_sessions\b/.test(sql)) query = sql;
+    return prepare(sql);
+  });
+  store.workKey(BOARD);
+  assert.ok(query, 'the production authority query is exercised');
+  const plan = (prepare(`EXPLAIN QUERY PLAN ${query}`).all('[]', '[]') as {detail: string}[]).map(
+    row => row.detail,
+  );
+  assert.ok(!plan.some(detail => /^SCAN n\b/.test(detail)), plan.join('\n'));
+  assert.ok(
+    plan.some(detail => /agent_sessions_by_project \(device_id=\? AND project=\?/.test(detail)),
+    plan.join('\n'),
+  );
+  store.close();
+});

@@ -10,7 +10,7 @@ const target = 'x86_64-pc-windows-msvc';
 const output = path.resolve(process.env.CARGO_TARGET_DIR || path.join(here, 'target'), target, 'release');
 const bundle = path.join(output, 'bundle/portable');
 const stage = path.join(bundle, 'Quotum');
-const {version} = JSON.parse(readFileSync(path.join(here, '../hub/package.json'), 'utf8'));
+const {version} = JSON.parse(readFileSync(path.join(here, '../apps/hub/package.json'), 'utf8'));
 const archive = path.join(bundle, `Quotum_${version}_x64-portable.zip`);
 rmSync(stage, {recursive: true, force: true});
 mkdirSync(stage, {recursive: true});

@@ -4,7 +4,7 @@ How an open dashboard hears what changes on its board: the hub pushes it. The pa
 for a board's events once, gets the board as it is, then only the parts that change, as
 soon as they change; between changes neither side does anything for it but a heartbeat.
 The page and the hub ship together, so this is not a contract across versions: a page of
-another build reloads (see [hello](#events)). The reference implementation is `hub/`.
+another build reloads (see [hello](#events)). The reference implementation is `apps/hub/`.
 
 ## Asking for events
 
@@ -1292,7 +1292,7 @@ activity. Access is checked before the query: `401 unauthorized` without a sessi
 `404 board_not_found` without access to the board. A malformed query is
 `400 invalid_request`. The answer is `application/json`, never reused by HTTP caches.
 
-The grid rule is shared by hub and page (`hub/server/domain/history.ts`). Its cells are
+The grid rule is shared by hub and page (`apps/hub/server/domain/history.ts`). Its cells are
 1, 5, 15, 30, 60, 120, 360 and 720 minutes; a frame takes the finest cell that keeps its
 length within 360 cells, with 5% over allowed. Reading accepts the grids a frame of at
 most 31 days uses, through 120 minutes. A cell is `[k·cell, (k+1)·cell)`, aligned to the

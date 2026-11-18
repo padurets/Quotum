@@ -1,0 +1,64 @@
+{
+  "services": {
+    "hub": {
+      "image": "${DEVKIT_NODE_IMAGE:?}",
+      "init": true,
+      "user": "${DEVKIT_UID:?}:${DEVKIT_GID:?}",
+      "working_dir": "/workspace/apps/hub",
+      "command": [
+        "npm",
+        "run",
+        "dev"
+      ],
+      "environment": {
+        "HOME": "/tmp/devkit-home",
+        "NPM_CONFIG_UPDATE_NOTIFIER": "false"
+      },
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "${DEVKIT_PROJECT_ROOT:?}",
+          "target": "/workspace",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false,
+            "selinux": "z"
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${DEVKIT_PROJECT_ROOT:?}/node_modules",
+          "target": "/workspace/node_modules",
+          "read_only": false,
+          "bind": {
+            "create_host_path": false,
+            "selinux": "z"
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${DEVKIT_PROJECT_ROOT:?}/apps/hub/node_modules",
+          "target": "/workspace/apps/hub/node_modules",
+          "read_only": false,
+          "bind": {
+            "create_host_path": false,
+            "selinux": "z"
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${DEVKIT_PROJECT_ROOT:?}/apps/hub/dist",
+          "target": "/workspace/apps/hub/dist",
+          "read_only": false,
+          "bind": {
+            "create_host_path": false,
+            "selinux": "z"
+          }
+        }
+      ],
+      "ports": [
+        "127.0.0.1::8080"
+      ]
+    }
+  }
+}

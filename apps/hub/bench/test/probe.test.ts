@@ -1,0 +1,848 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import {NODES, nodeOf, probeScript, rendered, type Fiber, type Reading} from '../probe.js';
+import {idleObservationProblems, measuredProblems} from '../budget.js';
+
+/** A stand-in element: its tag, classes and attributes, and `closest` for the simple selectors the probe uses. */
+class Element {
+  readonly nodeType = 1;
+  readonly children: Element[] = [];
+  constructor(
+    readonly tagName: string,
+    readonly className: string,
+    private readonly attributes: Record<string, string>,
+    public parentElement: Element | null,
+  ) {
+    parentElement?.children.push(this);
+  }
+  hasAttribute(name: string) {
+    return Object.hasOwn(this.attributes, name);
+  }
+  getAttribute(name: string) {
+    return this.attributes[name] ?? null;
+  }
+  contains(node: unknown): boolean {
+    for (let element = node as Element | null; element; element = element.parentElement)
+      if (element === this) return true;
+    return false;
+  }
+  private matches(selector: string) {
+    const attribute = selector.match(/^\[([\w-]+)\]$/);
+    if (attribute) return this.hasAttribute(attribute[1]);
+    const [tag, klass] = selector.split('.');
+    return (
+      (!tag || this.tagName.toLowerCase() === tag) && this.className.split(' ').includes(klass)
+    );
+  }
+  closest(selector: string): Element | null {
+    const any = selector.split(',').map(s => s.trim());
+    for (let e: Element | null = this; e; e = e.parentElement)
+      if (any.some(s => e!.matches(s))) return e;
+    return null;
+  }
+  querySelectorAll(selector: string): Element[] {
+    const selectors = selector.split(',').map(s => s.trim());
+    return this.children.flatMap(child => [
+      ...(selectors.some(s => child.matches(s)) ? [child] : []),
+      ...child.querySelectorAll(selector),
+    ]);
+  }
+}
+
+const el = (
+  tag: string,
+  parent: Element | null,
+  attributes: Record<string, string> = {},
+  className = '',
+) => new Element(tag.toUpperCase(), className, attributes, parent);
+
+/** A fiber of the new tree; `was` is its version in the old one (null: mounted in this commit). */
+function fiber(
+  tag: number,
+  options: {flags?: number; was?: Fiber | null; stateNode?: unknown; children?: Fiber[]} = {},
+): Fiber {
+  const f: Fiber = {
+    tag,
+    flags: options.flags ?? 0,
+    child: null,
+    sibling: null,
+    return: null,
+    alternate: options.was ?? null,
+    stateNode: options.stateNode ?? null,
+  };
+  const children = options.children ?? [];
+  children.forEach((c, i) => {
+    c.return = f;
+    c.sibling = children[i + 1] ?? null;
+  });
+  f.child = children[0] ?? null;
+  return f;
+}
+
+const FUNCTION = 0;
+const ROOT = 3;
+const HOST = 5;
+const MEMO = 15;
+const PERFORMED = 1;
+
+test('a component counts as rendered when it did work or was mounted; a subtree React did not go into does not count, whatever flags it kept', () => {
+  const oldChild = fiber(FUNCTION, {flags: PERFORMED});
+  const untouched = fiber(ROOT, {was: fiber(ROOT, {children: [oldChild]})});
+  untouched.child = oldChild;
+  assert.deepEqual(rendered(untouched), [], 'the same child as before: nothing below rendered');
+
+  const worked = fiber(FUNCTION, {flags: PERFORMED, was: fiber(FUNCTION)});
+  const bailed = fiber(MEMO, {flags: 0, was: fiber(MEMO)});
+  const mountedLeaf = fiber(MEMO);
+  const mounted = fiber(FUNCTION, {children: [mountedLeaf]});
+  const parent = fiber(FUNCTION, {
+    flags: PERFORMED,
+    was: fiber(FUNCTION, {children: [fiber(FUNCTION)]}),
+    children: [worked, bailed, mounted],
+  });
+  const root = fiber(ROOT, {was: fiber(ROOT, {children: [fiber(FUNCTION)]}), children: [parent]});
+  assert.deepEqual(new Set(rendered(root)), new Set([parent, worked, mounted, mountedLeaf]));
+});
+
+test("a component's work is counted in the part of the page its first element is in: a label that shows time, not the card around it", () => {
+  const card = el('article', null, {'data-card': 's1'}, 'card');
+  const label = el('span', card, {'data-time': ''});
+  const labelLeaf = fiber(FUNCTION, {children: [fiber(HOST, {stateNode: label})]});
+  const cardComponent = fiber(FUNCTION, {
+    children: [fiber(HOST, {stateNode: card, children: [labelLeaf]})],
+  });
+  assert.equal(nodeOf(labelLeaf, NODES), label);
+  assert.equal(nodeOf(cardComponent, NODES), card);
+  // One that renders nothing of its own counts where it sits.
+  const empty = fiber(FUNCTION);
+  const host = fiber(HOST, {stateNode: el('div', card), children: [empty]});
+  assert.equal(host.child, empty);
+  assert.equal(nodeOf(empty, NODES), card);
+  assert.equal(
+    nodeOf(fiber(FUNCTION, {children: [fiber(HOST, {stateNode: el('main', null)})]}), NODES),
+    null,
+    'outside every part: the page',
+  );
+});
+
+test('opening and closing legend details stay separate while real chart renders remain counted', () => {
+  const p = page(),
+    panel = el('section', null, {'data-time': 'chart'}, 'budget-history');
+  const detail = el('span', null, {'data-series-details': ''}, 'tooltip series-tip');
+  const opened = fiber(FUNCTION, {children: [fiber(HOST, {stateNode: detail})]});
+  const closed = fiber(FUNCTION, {flags: PERFORMED, was: opened});
+  fiber(HOST, {stateNode: panel, children: [closed]});
+  assert.equal(nodeOf(opened, NODES), detail);
+  assert.equal(
+    nodeOf(closed, NODES),
+    detail,
+    'an empty detail fiber must not fall back to its chart ancestor',
+  );
+  p.hook.onCommitFiberRoot(1, {current: closed});
+  assert.equal(p.bench.read().renders[0].kind, null);
+  p.bench.reset();
+  p.hook.onCommitFiberRoot(1, {
+    current: fiber(FUNCTION, {children: [fiber(HOST, {stateNode: panel, children: [opened]})]}),
+  });
+  assert.ok(
+    p.bench.read().renders.some(part => part.kind === 'chart'),
+    'the detail exemption cannot hide work in a chart data consumer',
+  );
+});
+
+test('a legend focus description renders its entry while a real chart render still counts', () => {
+  const p = page(),
+    panel = el('section', null, {'data-time': 'chart'}, 'activity');
+  const entry = el('div', panel, {'data-series-legend': ''}, 'activity-legend-item');
+  const focused = fiber(FUNCTION, {children: [fiber(HOST, {stateNode: el('button', entry)})]});
+  p.hook.onCommitFiberRoot(1, {current: focused});
+  assert.equal(nodeOf(focused, NODES), entry);
+  assert.ok(!p.bench.read().renders.some(part => part.kind === 'chart'));
+  p.hook.onCommitFiberRoot(1, {
+    current: fiber(FUNCTION, {children: [fiber(HOST, {stateNode: panel, children: [focused]})]}),
+  });
+  assert.ok(p.bench.read().renders.some(part => part.kind === 'chart'));
+});
+
+test('a removed legend keeps the region where it rendered without exempting later header work', () => {
+  const p = page(),
+    panel = el('section', null, {'data-time': 'chart'}, 'history');
+  const entry = el('button', panel, {'data-series-legend': ''}, 'legend-item');
+  const root = fiber(FUNCTION, {children: [fiber(HOST, {stateNode: entry})]});
+  p.hook.onCommitFiberRoot(1, {current: root});
+  p.mutate(entry);
+  entry.parentElement = null;
+  const removed = p.bench.read();
+  assert.equal(
+    removed.renders[0].region,
+    'analytics',
+    'reading after removal cannot turn past chart work into page work',
+  );
+  assert.equal(removed.renders[0].widget, 'quota');
+  assert.equal(removed.mutations[0].region, 'analytics');
+  entry.parentElement = el('header', null, {}, 'topbar');
+  p.hook.onCommitFiberRoot(1, {current: root});
+  assert.deepEqual(
+    p.bench.read().renders.map(row => [row.region, row.count]),
+    [
+      ['analytics', 1],
+      ['header', 1],
+    ],
+    'the same element rendering in a forbidden region must still fail',
+  );
+  p.bench.reset();
+  entry.parentElement = null;
+  p.hook.onCommitFiberRoot(1, {current: root});
+  assert.equal(
+    p.bench.read().renders[0].region,
+    'page',
+    'a legend marker grants no blanket analytics exemption',
+  );
+});
+
+/** Runs the probe as the browser gets it, in a context of its own with a stand-in DOM. */
+function page() {
+  type Mutation = {
+    type?: string;
+    attributeName?: string;
+    target: unknown;
+    addedNodes?: unknown[];
+    removedNodes?: unknown[];
+  };
+  let observer: ((records: Mutation[]) => void) | undefined;
+  let observing = false;
+  const context: Record<string, unknown> = {
+    performance,
+    document: {body: {}, readyState: 'complete', addEventListener() {}},
+    MutationObserver: class {
+      constructor(callback: (records: Mutation[]) => void) {
+        observer = callback;
+      }
+      observe() {
+        observing = true;
+      }
+      disconnect() {
+        observing = false;
+      }
+    },
+  };
+  vm.runInNewContext(probeScript(), context);
+  const hook = context.__REACT_DEVTOOLS_GLOBAL_HOOK__ as {
+    supportsFiber: boolean;
+    onCommitFiberRoot(id: number, root: {current: Fiber}): void;
+  };
+  const probed = context.__quotumBench as {
+    reset(): void;
+    pause(): void;
+    read(): Reading;
+    moneyChanged(id: string, amount: string): number | null;
+    seriesChanged(key: string, last: string): number | null;
+    forgetCards(): void;
+  };
+  // What the page answers comes over as JSON, as Runtime.evaluate returns it.
+  const bench = {
+    reset: () => probed.reset(),
+    pause: () => probed.pause(),
+    read: (): Reading => JSON.parse(JSON.stringify(probed.read())),
+    moneyChanged: (id: string, amount: string) => probed.moneyChanged(id, amount),
+    seriesChanged: (key: string, last: string) => probed.seriesChanged(key, last),
+    forget: () => probed.forgetCards(),
+  };
+  return {
+    hook,
+    bench,
+    observing: () => observing,
+    mutate: (...targets: unknown[]) => observer!(targets.map(target => ({target}))),
+    record: (...records: Mutation[]) => observer!(records),
+    insert: (target: Element, ...addedNodes: unknown[]) =>
+      observer!([{type: 'childList', target, addedNodes}]),
+  };
+}
+
+test('credit heartbeats require a new DOM commit of the exact observation, series and amount', () => {
+  const {bench, mutate} = page(),
+    observedAt = 286000;
+  const found = () =>
+    bench.seriesChanged('credit balance:credits', observedAt + ':99960000') !== null;
+  const draw = (key: string, last: string) =>
+    mutate(el('path', el('g', null, {'data-series': key, 'data-last': last})));
+  bench.reset();
+  assert.equal(found(), false);
+  for (const [key, last] of [
+    ['another balance:credits', '286000:99960000'],
+    ['credit balance:credits', '286000:100000000'],
+    ['credit balance:credits', '280000:99960000'],
+    ['credit balance:credits', '300000:99960000'],
+  ]) {
+    draw(key, last);
+    assert.equal(found(), false);
+  }
+  draw('credit balance:credits', '286000:99960000');
+  assert.equal(found(), true);
+  bench.reset();
+  assert.equal(found(), false, 'a previous change cannot credit an unchanged heartbeat');
+  draw('credit balance:credits', '286000:99960000');
+  assert.equal(found(), true);
+});
+
+test('the live probe distinguishes subscription funds, quota and wallets inside shared analytics', () => {
+  const p = page(),
+    analytics = el('section', null, {}, 'analytics');
+  for (const [name, widget] of [
+    ['history', 'quota'],
+    ['forecast', 'quota'],
+    ['budget-history', 'budget'],
+    ['budget-table', 'budget'],
+    ['subscription-funds', 'funds'],
+    ['activity', 'activity'],
+    ['activity history', 'activity'],
+  ] as const) {
+    const panel = el(
+      'section',
+      analytics,
+      name.endsWith('table') || name === 'forecast' ? {} : {'data-time': 'chart'},
+      name,
+    );
+    p.bench.reset();
+    p.hook.onCommitFiberRoot(1, {
+      current: fiber(FUNCTION, {children: [fiber(HOST, {stateNode: panel})]}),
+    });
+    p.mutate(panel);
+    const reading = p.bench.read();
+    assert.equal(reading.renders[0].widget, widget);
+    assert.equal(reading.mutations[0].widget, widget);
+    assert.equal(reading.renders[0].region, 'analytics');
+  }
+});
+
+test('a finished measurement probe disconnects and reset resumes complete counting', () => {
+  const {hook, bench, mutate, observing} = page();
+  const card = el('article', null, {'data-card': 's1'}, 'card');
+  const root = fiber(ROOT, {
+    children: [fiber(FUNCTION, {children: [fiber(HOST, {stateNode: card})]})],
+  });
+  hook.onCommitFiberRoot(1, {current: root});
+  mutate(card);
+  const before = bench.read();
+  bench.pause();
+  assert.equal(observing(), false);
+  hook.onCommitFiberRoot(1, {current: root});
+  mutate(card);
+  assert.deepEqual(bench.read(), before, 'even a late callback cannot resume the finished phase');
+  bench.reset();
+  assert.equal(observing(), true);
+  assert.equal(bench.read().commits, 0);
+  hook.onCommitFiberRoot(1, {current: root});
+  mutate(card);
+  const resumed = bench.read();
+  assert.equal(resumed.commits, 1);
+  assert.equal(resumed.renders[0].count, 1);
+  assert.equal(resumed.mutations[0].count, 1);
+  assert.deepEqual(Object.keys(resumed.cardChanged), ['s1']);
+});
+
+test('the probe, sent as text, counts a part of the page once per commit however many components rendered in it', () => {
+  const {hook, bench} = page();
+  assert.equal(hook.supportsFiber, true, 'React injects into it');
+  const card = el('article', null, {'data-card': 's1'}, 'card');
+  const header = el('header', null, {}, 'topbar');
+  const inCard = () =>
+    fiber(FUNCTION, {
+      flags: PERFORMED,
+      was: fiber(FUNCTION),
+      children: [fiber(HOST, {stateNode: el('div', card)})],
+    });
+  const root = fiber(ROOT, {
+    was: fiber(ROOT),
+    children: [
+      inCard(),
+      inCard(),
+      inCard(),
+      fiber(FUNCTION, {children: [fiber(HOST, {stateNode: header})]}),
+    ],
+  });
+  hook.onCommitFiberRoot(1, {current: root});
+  hook.onCommitFiberRoot(1, {current: root});
+  const reading = bench.read();
+  assert.equal(reading.commits, 2);
+  assert.deepEqual(reading.renders.map(r => [r.region, r.time, r.count]).sort(), [
+    ['card:s1', false, 2],
+    ['header', false, 2],
+  ]);
+  assert.ok(reading.instrumentMs >= 0);
+  bench.reset();
+  assert.deepEqual(bench.read().renders, []);
+});
+
+test('a graph measurement is seen only at its expected point value', () => {
+  const {bench, mutate} = page();
+  const attrs = {'data-series': 's1 weekly', 'data-last': '60000:80'};
+  const path = el('path', el('section', null, {}, 'analytics'), attrs);
+  mutate(path);
+  assert.ok(bench.seriesChanged('s1 weekly', '60000:80') !== null);
+  assert.equal(bench.seriesChanged('s1 weekly', '60000:79'), null);
+  attrs['data-last'] = '60000:79';
+  mutate(path);
+  assert.ok(bench.seriesChanged('s1 weekly', '60000:79') !== null);
+  bench.forget();
+  assert.equal(bench.seriesChanged('s1 weekly', '60000:79'), null);
+});
+
+test('the first plotted point counts when React inserts a ready series or its whole SVG subtree', () => {
+  const {bench, insert} = page();
+  const region = el('section', null, {}, 'analytics');
+  const svg = el('svg', region);
+  const series = el('g', svg, {'data-series': 's1 weekly', 'data-last': '60000:79'});
+  el('path', series);
+  assert.equal(
+    bench.seriesChanged('s1 weekly', '60000:79'),
+    null,
+    'building detached geometry is not a DOM change',
+  );
+  insert(svg, series);
+  const first = bench.seriesChanged('s1 weekly', '60000:79');
+  assert.ok(Number.isFinite(first), 'childList targets the parent, not the new series');
+  assert.equal(
+    bench.seriesChanged('s1 weekly', '60000:80'),
+    null,
+    'an inserted point still needs the expected value',
+  );
+  insert(svg, series);
+  assert.equal(
+    bench.seriesChanged('s1 weekly', '60000:79'),
+    first,
+    'keep the first observed commit',
+  );
+  bench.forget();
+  insert(region, svg, {nodeType: 3});
+  assert.ok(
+    Number.isFinite(bench.seriesChanged('s1 weekly', '60000:79')),
+    'a new ancestor carries its plotted descendants',
+  );
+});
+
+test('the probe observes the exact changed financial value inside a timed card tray', () => {
+  const {bench, record, hook} = page();
+  const card = el('article', null, {'data-card': 'codex:fixture'}, 'card');
+  const tray = el('footer', card, {'data-time': 'tray'}, 'card-foot');
+  const trigger = el('button', el('span', tray, {}, 'funds-tray'), {}, 'tray-pill funds-mark');
+  const attributes = {'data-money': '100000000'};
+  const value = el('b', trigger, attributes, 'funds-value');
+  assert.equal(
+    bench.moneyChanged('codex:fixture', '100000000'),
+    null,
+    'an existing value is not new evidence',
+  );
+  // A store update renders the memoized SourceCard and its timed money child.
+  const funds = fiber(FUNCTION, {
+    flags: PERFORMED,
+    was: fiber(FUNCTION),
+    children: [fiber(HOST, {stateNode: trigger})],
+  });
+  const source = fiber(MEMO, {
+    flags: PERFORMED,
+    was: fiber(MEMO),
+    children: [fiber(HOST, {stateNode: card, children: [funds]})],
+  });
+  hook.onCommitFiberRoot(1, {current: fiber(ROOT, {was: fiber(ROOT), children: [source]})});
+  attributes['data-money'] = '99960000';
+  record({type: 'attributes', attributeName: 'data-money', target: value});
+  const first = bench.moneyChanged('codex:fixture', '99960000');
+  assert.ok(typeof first === 'number' && Number.isFinite(first));
+  assert.equal(
+    bench.moneyChanged('codex:fixture', '100000000'),
+    null,
+    'the old amount cannot satisfy the next measurement',
+  );
+  assert.equal(
+    bench.moneyChanged('codex:other', '99960000'),
+    null,
+    'the evidence belongs to its card',
+  );
+  record({type: 'characterData', target: {nodeType: 3, parentElement: value}});
+  assert.equal(
+    bench.moneyChanged('codex:fixture', '99960000'),
+    first,
+    'keep the first observed commit',
+  );
+  assert.deepEqual(bench.read().cardChanged, {}, 'generic clock exclusion remains intact');
+  assert.deepEqual(
+    bench.read().mutations.map(row => [row.region, row.time, row.kind]),
+    [['card:codex:fixture', true, 'tray']],
+  );
+  const reading = bench.read(),
+    measurement = {card: 'codex:fixture', ...reading, latencies: [0], from: first!, to: first! + 1};
+  assert.deepEqual(
+    measuredProblems(measurement),
+    [],
+    'finite amount evidence still passes through the full card render budget',
+  );
+  assert.ok(
+    measuredProblems({...measurement, renders: reading.renders.filter(row => row.time)}).some(
+      problem => problem.includes('the card rendered 0 times'),
+    ),
+    'a missing parent render cannot be hidden by the new latency evidence',
+  );
+  bench.forget();
+  assert.equal(bench.moneyChanged('codex:fixture', '99960000'), null);
+  record({type: 'characterData', target: {nodeType: 3, parentElement: value}});
+  assert.ok(
+    bench.moneyChanged('codex:fixture', '99960000') !== null,
+    'text changes within the amount are observed too',
+  );
+  bench.reset();
+  assert.equal(bench.moneyChanged('codex:fixture', '99960000'), null);
+  bench.pause();
+  record({type: 'attributes', attributeName: 'data-money', target: value});
+  assert.equal(
+    bench.moneyChanged('codex:fixture', '99960000'),
+    null,
+    'a late callback cannot revive a paused observer',
+  );
+});
+
+test('clock, status and other-card changes cannot stand in for the requested financial value', () => {
+  const {bench, record, insert} = page();
+  const card = el('article', null, {'data-card': 'codex:fixture'}, 'card');
+  const tray = el('footer', card, {'data-time': 'tray'}, 'card-foot');
+  const value = el('b', tray, {'data-money': '99960000'}, 'funds-value');
+  const time = el('span', tray, {'data-time': 'ago'});
+  record(
+    {type: 'characterData', target: {nodeType: 3, parentElement: time}},
+    {type: 'attributes', attributeName: 'class', target: tray},
+    {type: 'attributes', attributeName: 'class', target: value},
+  );
+  insert(tray, el('span', tray, {'data-time': 'ago'}));
+  const otherValue = el('b', el('article', null, {'data-card': 'codex:other'}), {
+    'data-money': '99960000',
+  });
+  record({type: 'attributes', attributeName: 'data-money', target: otherValue});
+  record({
+    type: 'attributes',
+    attributeName: 'data-money',
+    target: el('b', null, {'data-money': '99960000'}),
+  });
+  assert.equal(bench.moneyChanged('codex:fixture', '99960000'), null);
+  assert.ok(bench.moneyChanged('codex:other', '99960000') !== null);
+  assert.equal(bench.moneyChanged('codex:other', '99920000'), null);
+});
+
+test('inserted financial values are observed in their card without scanning unchanged siblings', () => {
+  const {bench, insert} = page();
+  const card = el('article', null, {'data-card': 'codex:fixture'});
+  const tray = el('footer', card, {'data-time': 'tray'});
+  const existing = el('b', tray, {'data-money': '100000000'});
+  const mark = el('span', tray),
+    value = el('b', mark, {'data-money': '99960000'});
+  insert(mark, value);
+  assert.ok(bench.moneyChanged('codex:fixture', '99960000') !== null);
+  assert.equal(bench.moneyChanged('codex:fixture', '100000000'), null);
+  bench.forget();
+  insert(tray, mark);
+  assert.ok(
+    bench.moneyChanged('codex:fixture', '99960000') !== null,
+    'a ready subtree carries its value',
+  );
+  assert.equal(bench.moneyChanged('codex:fixture', existing.getAttribute('data-money')!), null);
+});
+
+test('the probe counts DOM changes by part once per callback, and notes when a card first changed outside what shows time', () => {
+  const {bench, mutate} = page();
+  const card = el('article', null, {'data-card': 's1'}, 'card');
+  const label = el('span', card, {'data-time': 'ago'});
+  const text = {nodeType: 3, parentElement: label};
+  mutate(text, label);
+  assert.deepEqual(bench.read().cardChanged, {}, 'a label that shows time is the clock, not news');
+  mutate(el('b', card), el('i', card));
+  const reading = bench.read();
+  assert.deepEqual(
+    reading.mutations.map(m => [m.region, m.time, m.count]),
+    [
+      ['card:s1', true, 1],
+      ['card:s1', false, 1],
+    ],
+  );
+  assert.deepEqual(Object.keys(reading.cardChanged), ['s1']);
+  assert.match(reading.mutations[0].node, /^span\[data-time=ago\]#\d+$/);
+});
+
+test('detached text retains same-batch removal context while the original idle page failure survives', () => {
+  for (const time of [true, false]) {
+    const p = page(),
+      card = el('article', null, {'data-card': 'private-canary'}),
+      label = el('span', card, time ? {'data-time': 'reset'} : {}, 'private-class');
+    const text = {nodeType: 3, parentElement: null, isConnected: false};
+    p.record(
+      {type: 'characterData', target: text},
+      {type: 'childList', target: label, removedNodes: [text]},
+    );
+    const r = p.bench.read(),
+      samples = r.unattributedMutations!.samples;
+    assert.equal(samples.length, 1);
+    assert.equal(samples[0].type, 'characterData');
+    assert.equal(samples[0].hasParent, false);
+    assert.equal(samples[0].connected, false);
+    assert.deepEqual(samples[0].removals, [
+      {index: 1, kind: 'exact', region: 'card', time, ownerFound: true},
+    ]);
+    assert.equal(samples[0].limited, false);
+    assert.equal(JSON.stringify(r.unattributedMutations).includes('private-canary'), false);
+    assert.equal(JSON.stringify(r.unattributedMutations).includes('private-class'), false);
+    assert.ok(
+      idleObservationProblems({
+        from: 0,
+        to: 120000,
+        cellMs: 300000,
+        requests: {count: 0, byPath: {}},
+        events: {ping: 5},
+        renders: r.renders,
+        mutations: r.mutations,
+        scriptMsPerSecond: 0,
+      }).some(v => v.includes('changed outside what shows time: page page')),
+    );
+  }
+});
+
+test('connected unowned changes and ambiguous removals gain no inferred time owner', () => {
+  const p = page(),
+    text = {nodeType: 3, parentElement: null, isConnected: false},
+    clock = el('span', null, {'data-time': 'reset'}),
+    plain = el('div', null);
+  p.record(
+    {type: 'characterData', target: text},
+    {type: 'childList', target: clock, removedNodes: [text]},
+    {type: 'childList', target: plain, removedNodes: [text]},
+  );
+  let r = p.bench.read();
+  assert.equal(r.unattributedMutations!.samples[0].removals.length, 2);
+  assert.equal(r.unattributedMutations!.samples[0].removals[1].ownerFound, false);
+  assert.ok(r.mutations.some(v => !v.time && v.region === 'page'));
+  p.bench.reset();
+  p.record({
+    type: 'attributes',
+    attributeName: 'private-canary',
+    target: Object.assign(plain, {isConnected: true}),
+  });
+  r = p.bench.read();
+  assert.equal(r.unattributedMutations!.samples[0].reason, 'attribute:other');
+  assert.equal(r.unattributedMutations!.samples[0].connected, true);
+  assert.deepEqual(r.unattributedMutations!.samples[0].removals, []);
+  assert.ok(r.mutations.some(v => !v.time));
+  assert.equal(JSON.stringify(r.unattributedMutations).includes('private-canary'), false);
+});
+
+test('unattributed mutation context has bounded samples and scanning and resets per phase', () => {
+  const p = page(),
+    text = {nodeType: 3, parentElement: null, isConnected: false};
+  p.record(...Array.from({length: 70}, () => ({type: 'characterData', target: text})));
+  let r = p.bench.read();
+  assert.equal(r.unattributedMutations!.samples.length, 8);
+  assert.equal(r.unattributedMutations!.omitted, 62);
+  assert.equal(r.unattributedMutations!.samples[0].limited, true);
+  assert.equal(r.mutations[0].count, 1);
+  p.bench.reset();
+  r = p.bench.read();
+  assert.deepEqual(r.unattributedMutations, {samples: [], omitted: 0});
+});
+
+test('diagnostic removal context does not name nodes ahead of the original counters', () => {
+  const p = page(),
+    card = el('article', null, {'data-card': 's1'}),
+    clock = el('span', card, {'data-time': 'reset'}),
+    text = {nodeType: 3, parentElement: null, isConnected: false};
+  p.record(
+    {type: 'attributes', target: card},
+    {type: 'characterData', target: text},
+    {type: 'childList', target: clock, removedNodes: [text]},
+  );
+  const r = p.bench.read();
+  assert.match(r.mutations[0].node, /#1$/);
+  assert.match(r.mutations[2].node, /#2$/);
+  assert.equal(r.unattributedMutations!.samples[0].removals[0].time, true);
+});
+
+test('late styles of uniquely removed clock labels retain their chart owner across a large batch', () => {
+  const p = page(),
+    clocks = Array.from({length: 5}, () =>
+      Object.assign(el('g', el('section', null, {}, 'history'), {'data-time': 'axis'}), {
+        isConnected: true,
+      }),
+    );
+  const labels = clocks.map(() => Object.assign(el('text', null), {isConnected: false}));
+  p.record(
+    ...clocks.map((target, index) => ({type: 'childList', target, removedNodes: [labels[index]]})),
+    ...Array.from({length: 75}, () => ({
+      type: 'attributes',
+      attributeName: 'style',
+      target: clocks[0],
+    })),
+    ...labels.map(target => ({type: 'attributes', attributeName: 'style', target})),
+  );
+  const reading = p.bench.read();
+  assert.equal(reading.mutations.length, 5);
+  assert.ok(
+    reading.mutations.every(row => row.time && row.region === 'analytics' && row.count === 1),
+  );
+  assert.deepEqual(
+    idleObservationProblems({
+      from: 0,
+      to: 120000,
+      cellMs: 300000,
+      requests: {count: 0, byPath: {}},
+      events: {ping: 5},
+      renders: reading.renders,
+      mutations: reading.mutations,
+      scriptMsPerSecond: 0,
+    }),
+    [],
+  );
+  assert.equal(reading.unattributedMutations!.samples.length, 5);
+  assert.ok(
+    reading.unattributedMutations!.samples.every(
+      sample => sample.recovered === true && sample.limited,
+    ),
+  );
+});
+
+test('removed clock attribution never exempts unrelated or ambiguous page changes', () => {
+  const scenarios = [
+    'no-removal',
+    'conflict-after64',
+    'card',
+    'header',
+    'non-time',
+    'disconnected-owner',
+    'unknown-owner-connection',
+    'connected-label',
+    'before-removal',
+    'subtree',
+    'added-again',
+    'record-limit',
+    'node-limit',
+    'unowned-sibling',
+    'retagged-owner',
+    'retagged-ancestor',
+    'moved-owner',
+  ] as const;
+  for (const scenario of scenarios) {
+    const p = page(),
+      panel = el('section', null, {}, 'history');
+    const parent =
+      scenario === 'card'
+        ? el('article', null, {'data-card': 's1'})
+        : scenario === 'header'
+          ? el('header', null, {}, 'topbar')
+          : panel;
+    const clock = Object.assign(
+      el('g', parent, scenario === 'non-time' ? {} : {'data-time': 'axis'}),
+      {isConnected: scenario !== 'disconnected-owner'},
+    );
+    if (scenario === 'unknown-owner-connection')
+      delete (clock as {isConnected?: boolean}).isConnected;
+    const label = Object.assign(el('text', null), {isConnected: scenario === 'connected-label'});
+    const style = {type: 'attributes', attributeName: 'style', target: label},
+      remove = {type: 'childList', target: clock, removedNodes: [label]};
+    let records: Parameters<typeof p.record> =
+      scenario === 'no-removal' ? [style] : [remove, style];
+    if (scenario === 'before-removal') records = [style, remove];
+    if (scenario === 'conflict-after64')
+      records = [
+        remove,
+        ...Array.from({length: 70}, () => ({type: 'attributes', target: clock})),
+        {...remove, target: el('div', null)},
+        style,
+      ];
+    if (scenario === 'subtree')
+      records = [
+        {...remove, removedNodes: [{nodeType: 1, contains: (node: unknown) => node === label}]},
+        style,
+      ];
+    if (scenario === 'added-again')
+      records = [remove, {type: 'childList', target: clock, addedNodes: [label]}, style];
+    if (scenario === 'record-limit')
+      records = [
+        remove,
+        ...Array.from({length: 4096}, () => ({type: 'attributes', target: clock})),
+        style,
+      ];
+    if (scenario === 'node-limit')
+      records = [
+        {...remove, removedNodes: [label, ...Array.from({length: 4096}, () => ({nodeType: 1}))]},
+        style,
+      ];
+    if (scenario === 'unowned-sibling')
+      records.push({
+        type: 'attributes',
+        attributeName: 'style',
+        target: Object.assign(el('i', null), {isConnected: false}),
+      });
+    if (scenario === 'retagged-owner')
+      records = [remove, {type: 'attributes', attributeName: 'data-time', target: clock}, style];
+    if (scenario === 'retagged-ancestor')
+      records = [remove, {type: 'attributes', attributeName: 'class', target: panel}, style];
+    if (scenario === 'moved-owner')
+      records = [
+        remove,
+        {type: 'childList', target: panel, removedNodes: [clock], addedNodes: [clock]},
+        style,
+      ];
+    p.record(...records);
+    const reading = p.bench.read();
+    assert.ok(
+      reading.mutations.some(row => row.region === 'page' && !row.time),
+      scenario,
+    );
+    if (scenario !== 'unowned-sibling')
+      assert.equal(
+        reading.unattributedMutations!.samples.find(
+          sample => sample.type === 'attributes' && sample.reason === 'attribute:style',
+        )?.recovered,
+        false,
+        scenario,
+      );
+    assert.ok(
+      idleObservationProblems({
+        from: 0,
+        to: 120000,
+        cellMs: 300000,
+        requests: {count: 0, byPath: {}},
+        events: {ping: 5},
+        renders: reading.renders,
+        mutations: reading.mutations,
+        scriptMsPerSecond: 0,
+      }).some(problem => problem.includes('changed outside what shows time')),
+      scenario,
+    );
+  }
+});
+
+test('a removal in an earlier observer batch cannot authorize a later detached style', () => {
+  const p = page(),
+    clock = Object.assign(el('g', el('section', null, {}, 'history'), {'data-time': 'axis'}), {
+      isConnected: true,
+    }),
+    label = Object.assign(el('text', null), {isConnected: false});
+  p.record({type: 'childList', target: clock, removedNodes: [label]});
+  p.bench.reset();
+  p.record({type: 'attributes', attributeName: 'style', target: label});
+  assert.ok(p.bench.read().mutations.some(row => row.region === 'page' && !row.time));
+});
+
+test('moving the removal container under a clock cannot authorize its earlier removal', () => {
+  const p = page(),
+    panel = el('section', null, {}, 'history'),
+    clock = Object.assign(el('g', panel, {'data-time': 'axis'}), {isConnected: true});
+  // At delivery this previously ordinary container is already inside the clock.
+  const holder = Object.assign(el('g', clock), {isConnected: true}),
+    label = Object.assign(el('text', null), {isConnected: false});
+  p.record(
+    {type: 'childList', target: holder, removedNodes: [label]},
+    {type: 'childList', target: panel, removedNodes: [holder]},
+    {type: 'childList', target: clock, addedNodes: [holder]},
+    {type: 'attributes', attributeName: 'style', target: label},
+  );
+  const reading = p.bench.read();
+  assert.equal(reading.unattributedMutations!.samples[0].recovered, false);
+  assert.ok(reading.mutations.some(row => row.region === 'page' && !row.time));
+});

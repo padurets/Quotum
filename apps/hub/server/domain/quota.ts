@@ -1,0 +1,134 @@
+import type {Provider} from './sources.js';
+import type {BalanceStatus, KeyPart, Meter, MeterMeasurement, QuotaStatus} from './meters.js';
+import type {
+  CreditBalance,
+  CreditBalanceState,
+  Delivery,
+  ResourceObservation,
+  ResourceStatuses,
+} from './resources.js';
+
+/** A window's length as the agent classifies it (spec: Window `kind`). */
+export type Kind = 'session' | 'weekly' | 'other';
+
+/** One quota window of one source at one point in time. */
+export type Win = {
+  id: string;
+  kind: Kind;
+  /** The model pool the window covers ("Fable", "Gemini"), when the provider names one. */
+  label: string | null;
+  used: number;
+  remaining: number;
+  resetAt: number | null;
+  minutes: number | null;
+};
+
+/**
+ * Free resets of the limits an account holds: how many, and how many expire when (soonest
+ * first, an unknown time last; empty from a client that gives only the count).
+ */
+export type FreeResets = {available: number; expiring: {count: number; expiresAt: number | null}[]};
+
+/** One measurement of a source: every window the client reported at one moment. */
+export type WindowMeasurement = {
+  observedAt: number;
+  plan: string;
+  windows: Win[];
+  /** How long this measurement stays representative: the next one is due before then. */
+  staleAfterMs: number;
+  /** Null when the client does not report free resets. */
+  resets: FreeResets | null;
+  resourceStatus?: ResourceStatuses;
+  balances?: CreditBalance[];
+};
+export type Measurement = WindowMeasurement | MeterMeasurement;
+
+/** A stored window value. */
+export type Sample = Win & {
+  sourceId: string;
+  provider: Provider;
+  at: number;
+  staleAfterMs: number;
+  /** An explicit unavailable observation ends this sample's availability exclusively. */
+  validUntil?: number;
+};
+
+/** What a card shows: the last measurement of a source and how the latest attempt went. */
+export type SourceState = {
+  id: string;
+  provider: Provider;
+  plan: string;
+  successAt: number | null;
+  /** `waiting` before the first measurement, else what the agent reported (spec: Failure). */
+  error: string | null;
+  windows: Win[];
+  staleAfterMs: number | null;
+  resets: FreeResets | null;
+  balanceStatus?: BalanceStatus;
+  meters?: Meter[];
+  quota?: QuotaStatus;
+  keys?: KeyPart[];
+  inventory?: {complete: boolean; observed: number; missing: number; error: string | null};
+  creditBalance?: CreditBalanceState;
+  resources?: {windows?: ResourceObservation; resets?: ResourceObservation};
+  /** Private transport progress; never a financial observation in board projections. */
+  delivery?: Delivery;
+};
+
+export const deliveryOf = (state: SourceState): Delivery | null =>
+  state.delivery ??
+  (state.successAt !== null && state.staleAfterMs !== null
+    ? {at: state.successAt, staleAfterMs: state.staleAfterMs}
+    : null);
+
+/** Released quota providers report a successful batch instead of independent observations. */
+export function quotaObservation(
+  state: SourceState,
+  resource: 'windows' | 'resets',
+): ResourceObservation | null {
+  return (
+    state.resources?.[resource] ??
+    (state.successAt !== null &&
+    state.staleAfterMs !== null &&
+    (resource === 'windows' || state.resets !== null)
+      ? {status: 'observed', at: state.successAt, staleAfterMs: state.staleAfterMs}
+      : null)
+  );
+}
+
+export type Edge = {
+  valid: boolean;
+  delta: number;
+  reason: 'continuous' | 'gap' | 'reset' | 'correction' | 'unknown-reset';
+};
+
+const RESET_TOLERANCE = 60_000;
+
+/**
+ * Whether consumption between two consecutive samples of one window is provable.
+ * Only positive movement inside one uninterrupted reset window counts.
+ */
+export function edge(
+  a: Pick<Sample, 'at' | 'used' | 'resetAt' | 'staleAfterMs' | 'validUntil'>,
+  b: Pick<Sample, 'at' | 'used' | 'resetAt' | 'staleAfterMs'>,
+): Edge {
+  const no = (reason: Edge['reason']): Edge => ({valid: false, delta: 0, reason});
+  const elapsed = b.at - a.at;
+  if (elapsed <= 0 || elapsed > a.staleAfterMs || b.at >= (a.validUntil ?? Infinity))
+    return no('gap');
+
+  if (a.resetAt === null || b.resetAt === null) {
+    return Math.abs(b.used - a.used) < 0.05
+      ? {valid: true, delta: 0, reason: 'continuous'}
+      : no('unknown-reset');
+  }
+  if (b.at >= a.resetAt + RESET_TOLERANCE) return no('reset');
+
+  // An idle rolling window reports "now + window length": its reset time drifts
+  // forward with the clock. That is the same window, not a reset.
+  const shift = b.resetAt - a.resetAt;
+  if (shift < -RESET_TOLERANCE || shift > elapsed + RESET_TOLERANCE) return no('reset');
+
+  if (b.used < a.used - 0.05) return no('correction');
+  return {valid: true, delta: Math.max(0, b.used - a.used), reason: 'continuous'};
+}

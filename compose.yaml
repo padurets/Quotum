@@ -1,0 +1,18 @@
+services:
+  hub:
+    environment:
+      QUOTUM_BIND: "0.0.0.0"
+      QUOTUM_PORT: "8080"
+      QUOTUM_ALLOWED_HOSTS: "127.0.0.1,localhost,hub"
+    tmpfs:
+      - /tmp:mode=1777
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8080/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s

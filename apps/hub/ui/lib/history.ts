@@ -1,0 +1,2898 @@
+import type {HistoryReadOwner} from './periodTransport';
+import {onDataFilters, filtersReady, effectiveFilters} from './filterSelection';
+import {executableWorkFilters, workFilter, type WorkFilter} from '../../server/domain/dataFilters';
+import type {HistoryPool} from './historyPool';
+import {historyPool} from './historyPool';
+import {boardPeriod, followPeriod, type ActivityFrame} from './period';
+import {workChange} from './workChanges';
+import type {HistoryScope} from '../../server/domain/history';
+import {
+  widgetVisible,
+  QUOTA_WIDGETS,
+  BUDGET_WIDGETS,
+  SUBSCRIPTION_FUNDS,
+  ACTIVITY,
+} from '../../server/domain/widgets';
+import {useMemo, useRef, useSyncExternalStore} from 'react';
+import {
+  CLOCK_TOLERANCE_MS,
+  MAX_READ_TILES,
+  TILE_CELLS,
+  cellStart,
+  historyReadTo,
+  composeDecodedPrepared,
+  expandHistory,
+  targetOf,
+  tileEnd,
+  tileOf,
+  tileStart,
+  planEventsAt,
+  planEventsDeadline,
+  type Chunk,
+  type DecodedChunk,
+  type HistoryAnswer,
+  type HistoryBasis,
+  type Target,
+} from '../../server/domain/history';
+import {page, type PageEvent, type PageState} from './board';
+import {clock, hubNow, useClock, type PageClock} from './clock';
+import {HistoryTile} from './historyTiles';
+import {ApiError, UNAUTHORIZED} from './http';
+import {periodOf, frameChangesAt} from './periods';
+import {onPrefs, prefs} from './prefs';
+import {shallowEqual, type Store} from './store';
+import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} from './timeRange';
+import type {History} from './types';
+import type {MeterSelection} from '../../server/domain/meterHistory';
+import type {MoneyFamily} from '../../server/domain/providers';
+import {moneyReadSelection} from './moneySelection';
+import {subscriptionSelection} from './subscription';
+import {pan, type Pan} from './pan';
+import {plotPrepared, type Coverage, type PlotBuffer} from './historyPlot';
+
+import {prepare, preparations, type Preparation, type Preparations} from './prepare';
+
+const SETTLE_MS = 300;
+const RETRY_MS = 15_000;
+const STORED_BYTES = 15 * 1024 * 1024;
+
+export type HistoryEnv = {
+  visibleFrom?(): number;
+  clock?: PageClock;
+  read(
+    board: string,
+    cell: number,
+    from: number,
+    to: number,
+    signal?: AbortSignal,
+    meters?: MeterSelection,
+    meta?: HistoryBasis,
+    owner?: HistoryReadOwner,
+    activityOnly?: boolean,
+  ): Promise<HistoryAnswer>;
+  /** The shared transport owns HTTP admission until this reader settles its answer. */
+  sharedTransport?: boolean;
+  /** Budget work may live outside this reader; quota history also owns activity. */
+  workInPresentation?: boolean;
+  now(): number;
+  /** Elapsed time stays independent of corrections to the estimated hub clock. */
+  elapsedNow?(): number;
+  setTimeout(run: () => void, ms: number): unknown;
+  clearTimeout(timer: unknown): void;
+  dropTimeRange(): void;
+  accessLost?(): void;
+  retry?(selectedWork?: boolean): void;
+  schedule?(run: () => void): void;
+  preparations?: Preparations | null;
+};
+export type Shown = {
+  history: History | null;
+  loading: boolean;
+  presentation: number;
+  error?: 'history_limit' | 'history_failed' | 'filters_limit';
+};
+type HistoryBoundary = {board: string; at: number; start: number};
+type Flight = {
+  submitted: boolean;
+  started: boolean;
+  start?: () => void;
+  finish?: () => void;
+  seq: number;
+  epoch: number;
+  target: string;
+  newsSeq: number;
+  cell: number;
+  from: number;
+  to: number;
+  touched: number;
+  nativeTouched: number;
+  nativeContext: string;
+  nativeVersion: number;
+  startedAt: number;
+  controller: AbortController;
+  role: 'visible' | 'ahead';
+  activityOnly: boolean;
+};
+type ResponseOwner = {answer: HistoryAnswer; keys: string[]; started: boolean; limited?: boolean};
+type TilePin = {tile: HistoryTile; seq: number; from: number; to: number};
+export type PlotInterest = {
+  token: number;
+  length: number;
+  from: number;
+  to: number;
+  direction: -1 | 0 | 1;
+};
+
+/** History belongs to the open board. Cells are read only when missing or touched. */
+export class HistoryStore {
+  private board: string | null = null;
+  private active = true;
+  private activityActive = true;
+  private ready = false;
+  private run: string | null = null;
+  private epoch = 0;
+  private seq = 0;
+  private metaSeq = 0;
+  private newsSeq = 0;
+  private deferredNews: {target: string; epoch: number; since: number; nativeSince: number} | null =
+    null;
+  private nativeProof: {
+    cellsCursor: string;
+    cell: number;
+    from: number;
+    to: number;
+    context: string;
+  } | null = null;
+  private lineupKey = '';
+  private workAuthority: string | undefined;
+  private workKey: string | undefined;
+  private workAvailable = true;
+  private nativeVersion = 0;
+  private composedNativeVersion = -1;
+  private shownNativeVersion = 0;
+  private financialVersion = -1;
+  private nativePresentation = 0;
+  private activityPresentation = 0;
+  // Work adoption and drawing preparation complete independently.
+  private activityRevision = 0;
+  private shownActivityRevision = -1;
+  private snapshotEvidence: string | undefined;
+  private windowsKey = '';
+  private windows = new Set<string>();
+  private meters: MeterSelection | undefined;
+  private period = '24h';
+  private selected: TimeRange | null = null;
+  // This cache hint never participates in the live time axis or its projections.
+  private seenFrom = Infinity;
+  private shown: History | null = null;
+  private presentation = 0;
+  private meta: HistoryBasis | null = null;
+  private metaAt: number | null = null;
+  private historyStart = 0;
+  private boundary: HistoryBoundary | null = null;
+  private readonly boundaryListeners = new Set<() => void>();
+  getBoundary = () => this.boundary;
+  subscribeBoundary = (listener: () => void) => {
+    this.boundaryListeners.add(listener);
+    return () => void this.boundaryListeners.delete(listener);
+  };
+  private setBoundary(value: HistoryBoundary | null) {
+    this.boundary = value;
+    for (const listener of this.boundaryListeners) listener();
+  }
+  private cutTo: number | null = null;
+  private readonly grids = new Map<number, Map<number, HistoryTile>>();
+  private readonly flights = new Set<Flight>();
+  private readonly timers = new Map<'settle' | 'retry' | 'activityRetry', unknown>();
+  private changedAt = -Infinity;
+  private scheduled = false;
+  private needsCompose = false;
+  private readonly listeners = new Set<() => void>();
+  private readonly financialListeners = new Set<() => void>();
+  private state: Shown = {history: null, loading: false, presentation: 0};
+  private financialState: Shown = this.state;
+  private historyLimit = false;
+  private activityError: 'history_limit' | 'history_failed' | null = null;
+  private readError = false;
+  private interest: PlotInterest | null = null;
+  private panReads = false;
+  private cohort = '';
+  // Only unvisited optional cells live here; aborting transport does not refund them.
+  private readonly optional = new Set<number>();
+  private inheritedExtra = false;
+  private plotPending = false;
+  private plot: PlotBuffer | null = null;
+  private drawingPlot: PlotBuffer | null = null;
+  private strip: Target | null = null;
+  private stripToken = 0;
+  private version = 0;
+  private plotVersion = -1;
+  private plotIdentity = '';
+  private aheadStopped = false;
+  private readonly plotListeners = new Set<() => void>();
+  private activityPlot: PlotBuffer | null = null;
+  private readonly activityPlotListeners = new Set<() => void>();
+  private nativePlotIdentity = '';
+  private readonly plotOwner = {};
+  private readonly composeOwner = {};
+  private composeIdentity = '';
+  private composeCurrent: ((target: Target) => boolean) | null = null;
+  private readonly responses = new Map<Flight, ResponseOwner>();
+  private readonly reservations = new Map<string, Flight>();
+  private readonly plotChunks = new Map<
+    string,
+    {
+      tile: HistoryTile | null;
+      seq: number;
+      from: number;
+      to: number;
+      chunk: Chunk;
+      deadline?: number;
+    }
+  >();
+  private readonly planWatch: ReturnType<PageClock['watch']>;
+  private stopPlanClock: (() => void) | null = null;
+  private planDeadline = Infinity;
+
+  constructor(
+    private readonly env: HistoryEnv,
+    private readonly budget = STORED_BYTES,
+    readonly scope?: HistoryScope,
+    private readonly pool?: HistoryPool,
+  ) {
+    this.planWatch = (env.clock ?? clock).watch();
+    pool?.register(this);
+  }
+
+  metadataToken(board: string) {
+    return this.board === board && this.meta?.run === this.run ? this.meta?.meta : undefined;
+  }
+
+  /** Settings keep the board's live context without reading or preparing its charts. */
+  setActive(active: boolean) {
+    if (this.active === active) return;
+    this.active = active;
+    this.schedulePlanClock();
+    if (active) {
+      if (this.activityError === 'history_failed') this.retry();
+      else this.schedule();
+    } else {
+      this.cancelProjection();
+      this.abortFlights();
+      this.clear('settle');
+      this.clear('retry');
+      this.clear('activityRetry');
+    }
+  }
+
+  setActivityActive(active: boolean) {
+    if (active === this.activityActive) return;
+    this.activityActive = active;
+    this.cancelProjection();
+    if (!active) this.clearActivityPlot();
+    this.version++;
+    this.plotVersion = -1;
+    this.needsCompose = true;
+    this.schedule();
+  }
+  private get wantsActivity() {
+    return this.activityActive && this.workAvailable && !this.activityError;
+  }
+
+  open(board: string) {
+    if (board === this.board) return;
+    this.close();
+    this.board = board;
+  }
+
+  private get preparations() {
+    return this.env.preparations === undefined ? preparations() : this.env.preparations;
+  }
+
+  private cancelProjection() {
+    this.preparations?.cancel(this.plotOwner);
+    this.preparations?.cancel(this.composeOwner);
+    this.plotIdentity = this.composeIdentity = '';
+    this.composeCurrent = null;
+  }
+
+  close() {
+    this.deferredNews = null;
+    this.cancelProjection();
+    this.presentation++;
+    this.nativePresentation++;
+    this.activityPresentation++;
+    this.activityRevision++;
+    this.epoch++;
+    this.board = null;
+    this.nativeProof = null;
+    this.workAuthority = undefined;
+    this.workKey = undefined;
+    this.workAvailable = true;
+    this.setBoundary(null);
+    this.ready = false;
+    this.historyLimit = false;
+    this.readError = false;
+    this.activityError = null;
+    this.run = null;
+    this.shown = this.meta = null;
+    this.metaAt = null;
+    this.metaSeq = 0;
+    this.cutTo = null;
+    this.grids.clear();
+    this.seenFrom = Infinity;
+    this.abortFlights();
+    this.interest = null;
+    this.panReads = false;
+    this.cohort = '';
+    this.optional.clear();
+    this.plotPending = false;
+    this.strip = null;
+    this.plotChunks.clear();
+    this.setPlot(null);
+    this.clear('settle');
+    this.clear('retry');
+    this.clear('activityRetry');
+    this.changedAt = -Infinity;
+    this.publish();
+  }
+
+  hello(run: string) {
+    this.snapshotEvidence = undefined;
+    if (run === this.run) return;
+    this.run = run;
+    this.setBoundary(null);
+    this.invalidate();
+    this.ready = false;
+  }
+
+  snapshot(
+    lineup: string[],
+    windows: Iterable<string> = this.windows,
+    historyStart = 0,
+    workAuthority?: string,
+    evidence?: string,
+  ) {
+    const changedWork =
+      (this.scope !== 'budget' || (this.env.workInPresentation !== false && this.meters?.work)) &&
+      this.workAuthority !== undefined &&
+      (!workAuthority || workAuthority !== this.workAuthority);
+    this.workAuthority = workAuthority;
+    const unchanged = evidence !== undefined && evidence === this.snapshotEvidence;
+    this.snapshotEvidence = evidence;
+    if (
+      this.ready &&
+      unchanged &&
+      !changedWork &&
+      this.lineupKey === keyOf(lineup) &&
+      historyStart <= this.historyStart
+    )
+      return;
+    if (changedWork || this.removesSource(lineup) || historyStart > this.historyStart) {
+      this.retirePresentation();
+      this.grids.clear();
+    }
+    this.historyStart = historyStart;
+    this.setBoundary(null);
+    this.lineupKey = keyOf(lineup);
+    this.setWindows(windows);
+    this.invalidate();
+    this.ready = true;
+    this.publish();
+    this.schedule();
+  }
+
+  lineup(lineup: string[]) {
+    if (keyOf(lineup) === this.lineupKey) return;
+    if (this.removesSource(lineup)) {
+      this.retirePresentation();
+      this.grids.clear();
+    }
+    this.lineupKey = keyOf(lineup);
+    this.invalidate();
+    this.publish();
+    this.schedule();
+  }
+
+  private removesSource(lineup: string[]) {
+    return (
+      this.lineupKey !== '' &&
+      (JSON.parse(this.lineupKey) as string[]).some(id => !lineup.includes(id))
+    );
+  }
+
+  setWindows(windows: Iterable<string>) {
+    const next = new Set(windows);
+    const key = keyOf([...next]);
+    if (key === this.windowsKey) return;
+    if ([...this.windows].some(window => !next.has(window))) this.retirePresentation('native');
+    this.windowsKey = key;
+    this.windows = next;
+    this.nativeVersion++;
+    this.needsCompose = true;
+    this.version++;
+    this.publish();
+    this.schedule();
+  }
+
+  setMeters(meters: MeterSelection | undefined) {
+    if (JSON.stringify(meters) === JSON.stringify(this.meters)) return;
+    this.retirePresentation('native');
+    this.meters = meters;
+    this.historyLimit = false;
+    this.readError = false;
+    this.activityError = null;
+    this.clear('activityRetry');
+    this.meta = null;
+    this.metaAt = null;
+    this.grids.clear();
+    this.shown = null;
+    this.invalidate();
+    this.schedule();
+    this.publish();
+  }
+
+  /** Selected activity has a lifetime of its own; native observations keep theirs. */
+  setWorkFilter(key: string, filter?: WorkFilter) {
+    if (this.scope === 'budget' || key === this.workKey) return false;
+    this.flushNews();
+    const available = !filter || executableWorkFilters(filter);
+    const initialized = this.workKey !== undefined;
+    this.workKey = key;
+    this.workAvailable = available;
+    if (!initialized && !this.grids.size && !this.flights.size) return false;
+    this.presentation++;
+    this.activityPresentation++;
+    this.activityRevision++;
+    this.epoch++;
+    this.cancelProjection();
+    this.abortFlights();
+    for (const tiles of this.grids.values())
+      for (const [id, tile] of tiles) tiles.set(id, tile.retireActivity());
+    this.plotIdentity = '';
+    this.plotVersion = -1;
+    this.version++;
+    this.clearActivityPlot();
+    this.needsCompose = true;
+    this.historyLimit = false;
+    this.readError = false;
+    this.activityError = null;
+    this.clear('activityRetry');
+    this.clear('retry');
+    this.clear('settle');
+    this.schedule();
+    this.publish();
+    return true;
+  }
+
+  news(since: number, workAuthority?: string, activitySince = Infinity, nativeSince = since) {
+    const authorityChanged =
+      this.workAuthority !== undefined &&
+      workAuthority !== undefined &&
+      workAuthority !== this.workAuthority;
+    if (
+      authorityChanged ||
+      activitySince < (this.selected?.to ?? this.env.now() + CLOCK_TOLERANCE_MS)
+    )
+      this.activityRevision++;
+    if (workAuthority || since === 0) this.workAuthority = workAuthority;
+    this.newsSeq++;
+    this.cutTo = null;
+    this.aheadStopped = false;
+    if (since === 0) {
+      if (this.scope !== 'budget') {
+        this.retirePresentation();
+        this.grids.clear();
+      }
+      this.invalidate();
+      this.publish();
+    } else {
+      const target = this.selected && !this.interest ? timeRangeKey(this.selected) : null;
+      if (!authorityChanged && target && since >= this.selected!.to) {
+        // A later observation cannot change this exact fixed interval. Keep its
+        // boundary until another target or read needs the surrounding cells.
+        const previous = this.deferredNews;
+        if (previous && (previous.target !== target || previous.epoch !== this.epoch))
+          this.flushNews();
+        this.deferredNews = {
+          target,
+          epoch: this.epoch,
+          since: Math.min(since, this.deferredNews?.since ?? Infinity),
+          nativeSince: Math.min(nativeSince, this.deferredNews?.nativeSince ?? Infinity),
+        };
+        return;
+      }
+      this.flushNews();
+      this.invalidateSince(since, nativeSince);
+    }
+    this.schedule();
+  }
+
+  private invalidateSince(since: number, nativeSince = since) {
+    for (const [cell, tiles] of this.grids)
+      for (const tile of tiles.values()) {
+        if (tile.to > since)
+          tile.validTo = Math.min(tile.validTo, Math.max(tile.readFrom, cellStart(since, cell)));
+        if (tile.to > nativeSince)
+          tile.nativeValidTo = Math.min(
+            tile.nativeValidTo,
+            Math.max(tile.nativeFrom, cellStart(nativeSince, cell)),
+          );
+      }
+    for (const flight of this.flights)
+      if (flight.epoch === this.epoch) {
+        if (flight.to > since)
+          flight.touched = Math.min(flight.touched, cellStart(since, flight.cell));
+        if (flight.to > nativeSince)
+          flight.nativeTouched = Math.min(
+            flight.nativeTouched,
+            cellStart(nativeSince, flight.cell),
+          );
+      }
+  }
+
+  private flushNews() {
+    const pending = this.deferredNews;
+    this.deferredNews = null;
+    if (!pending || pending.epoch !== this.epoch) return;
+    this.invalidateSince(pending.since, pending.nativeSince);
+  }
+
+  choose(period: string, selected: TimeRange | null) {
+    const key = selected ? timeRangeKey(selected) : period;
+    if (key === (this.selected ? timeRangeKey(this.selected) : this.period)) return;
+    this.flushNews();
+    this.preparations?.cancel(this.composeOwner);
+    this.composeIdentity = '';
+    this.composeCurrent = null;
+    this.period = period;
+    this.historyLimit = false;
+    this.readError = false;
+    this.activityError = null;
+    this.clear('activityRetry');
+    this.selected = selected;
+    this.seenFrom = Math.min(this.seenFrom, selected?.from ?? this.env.now() - periodOf(period).ms);
+    if (!this.interest) this.panReads = false;
+    this.needsCompose = true;
+    this.reconsiderResponses();
+    this.clear('retry');
+    const now = this.env.now();
+    const quick = now - this.changedAt < SETTLE_MS;
+    this.changedAt = now;
+    this.clear('settle');
+    if (quick)
+      this.timers.set(
+        'settle',
+        this.env.setTimeout(() => {
+          this.clear('settle');
+          this.schedule();
+        }, SETTLE_MS),
+      );
+    this.schedule();
+    this.publish();
+  }
+
+  get = () => {
+    if (this.expirePlans()) this.publish();
+    return this.state;
+  };
+  getActivityPresentation = () => this.activityPresentation;
+  /** Only a completed selected drawing can join the current work summary. */
+  isActivityCurrent = (history: History | null) =>
+    !!history && history === this.shown && this.shownActivityRevision === this.activityRevision;
+  getFinancial = () => {
+    if (this.expirePlans()) this.publish();
+    return this.financialState;
+  };
+  subscribeFinancial = (listener: () => void) => {
+    this.financialListeners.add(listener);
+    return () => {
+      this.financialListeners.delete(listener);
+    };
+  };
+  getPlot = () => {
+    if (this.expirePlans()) this.publish();
+    return this.plot;
+  };
+  getDrawingPlot = () => {
+    if (this.expirePlans()) this.publish();
+    return this.drawingPlot;
+  };
+  getActivityPlot = () => {
+    if (this.expirePlans()) this.publish();
+    return this.activityPlot;
+  };
+  subscribeActivityPlot = (listener: () => void) => {
+    this.activityPlotListeners.add(listener);
+    return () => {
+      this.activityPlotListeners.delete(listener);
+    };
+  };
+  subscribePlot = (listener: () => void) => {
+    this.plotListeners.add(listener);
+    return () => void this.plotListeners.delete(listener);
+  };
+
+  /** Geometry changes do not choose a committed target or compose its totals. */
+  pan(interest: PlotInterest) {
+    this.seenFrom = Math.min(this.seenFrom, interest.from);
+    this.flushNews();
+    const previous = this.interest;
+    if (!previous) {
+      // Active input invalidates composition; its identity must leave with the job.
+      this.preparations?.cancel(this.composeOwner);
+      this.composeIdentity = '';
+      this.composeCurrent = null;
+    }
+    this.interest = interest;
+    this.panReads = true;
+    this.plotPending = true;
+    const next = this.plotTarget();
+    const cell = next.cell;
+    if (this.meters && this.plot?.cell === cell) this.setPlotFrame(this.plot);
+    const cohort = `${interest.token}:${this.epoch}:${cell}`;
+    if (this.cohort !== cohort) {
+      this.cohort = cohort;
+      this.optional.clear();
+      this.inheritedExtra = [...this.flights].some(
+        f => f.cell === cell && (f.from < next.k0 * cell || f.to > (next.k1 + 1) * cell),
+      );
+    }
+    for (const at of this.optional)
+      if (at >= next.k0 * cell && at <= next.k1 * cell) this.optional.delete(at);
+    this.reconsiderResponses();
+    if (
+      !previous ||
+      previous.token !== interest.token ||
+      previous.direction !== interest.direction ||
+      Math.floor(previous.from / cell) !== next.k0 ||
+      Math.ceil(previous.to / cell) - 1 !== next.k1
+    ) {
+      this.aheadStopped = false;
+      this.clear('settle');
+      this.clear('retry');
+      this.evict();
+      this.schedule();
+    }
+  }
+
+  endPan(commit: boolean) {
+    this.interest = null;
+    // Release keeps the last strip until the complete frame is ready. Rebuilding
+    // that strip would decode the same cells alongside the final composition.
+    this.preparations?.cancel(this.plotOwner);
+    this.panReads = commit;
+    this.cohort = '';
+    this.optional.clear();
+    this.reconsiderResponses();
+    const target = this.target();
+    let retained = false;
+    for (const flight of [...this.flights]) {
+      if (
+        flight.epoch !== this.epoch ||
+        flight.cell !== target.cell ||
+        flight.to <= target.k0 * target.cell ||
+        flight.from > target.k1 * target.cell
+      )
+        this.abort(flight);
+      else if (this.pool && retained) this.abort(flight);
+      else {
+        flight.role = 'visible';
+        retained = true;
+      }
+    }
+    if (!commit) {
+      this.plotPending = false;
+      this.strip = null;
+      this.plotChunks.clear();
+      this.setPlot(null);
+    }
+    this.clear('settle');
+    this.clear('retry');
+    this.schedule();
+  }
+  subscribe = (listener: () => void) => {
+    this.listeners.add(listener);
+    return () => void this.listeners.delete(listener);
+  };
+  get estimatedBytes() {
+    let bytes = 0;
+    for (const tiles of this.grids.values()) {
+      let gridBytes = 0;
+      for (const tile of tiles.values()) gridBytes += tile.bytes;
+      bytes += gridBytes;
+    }
+    return (
+      bytes +
+      (this.nativeProof
+        ? 256 + 2 * (this.nativeProof.cellsCursor.length + this.nativeProof.context.length)
+        : 0)
+    );
+  }
+
+  private invalidate() {
+    this.nativeProof = null;
+    this.activityRevision++;
+    this.deferredNews = null;
+    this.cancelProjection();
+    this.activityError = null;
+    this.clear('activityRetry');
+    this.epoch++;
+    this.nativeVersion++;
+    this.cohort = this.interest
+      ? `${this.interest.token}:${this.epoch}:${this.plotTarget().cell}`
+      : '';
+    this.optional.clear();
+    this.inheritedExtra = false;
+    this.cutTo = null;
+    this.metaAt = null;
+    this.clear('retry');
+    this.abortFlights();
+    this.version++;
+    this.aheadStopped = false;
+    this.strip = null;
+    this.plotChunks.clear();
+    this.setPlot(null);
+    for (const tiles of this.grids.values())
+      for (const tile of tiles.values()) {
+        tile.readFrom = tile.validTo = tile.readTo = tile.from;
+        tile.nativeFrom = tile.nativeValidTo = tile.nativeTo = tile.from;
+      }
+    this.needsCompose = true;
+  }
+
+  private target(): Target {
+    const length = this.selected ? this.selected.to - this.selected.from : periodOf(this.period).ms;
+    const key = this.selected ? timeRangeKey(this.selected) : this.period;
+    return targetOf(length, Math.max(this.env.now(), this.meta?.now ?? 0), key, this.selected);
+  }
+
+  private elapsedNow() {
+    return this.env.elapsedNow?.() ?? performance.now();
+  }
+
+  /** A different resource or authority cannot borrow the previous complete frame. */
+  private retirePresentation(scope: 'all' | 'native' = 'all') {
+    this.presentation++;
+    this.nativePresentation++;
+    if (scope === 'all') {
+      this.activityPresentation++;
+      this.activityRevision++;
+    }
+    this.shown = null;
+    this.cancelProjection();
+    this.strip = null;
+    this.plotChunks.clear();
+    this.setPlot(null);
+  }
+
+  private publish() {
+    this.schedulePlanClock();
+    this.expirePlans();
+    const history = this.shown;
+    const nativeLoading =
+      !this.historyLimit &&
+      !this.readError &&
+      ((!history && this.ready) ||
+        (!this.plotPending && !!history && history.range !== this.target().key));
+    const nativeError = this.historyLimit
+      ? ('history_limit' as const)
+      : this.readError
+        ? ('history_failed' as const)
+        : undefined;
+    const loading = this.workAvailable && !this.activityError && nativeLoading,
+      error = !this.workAvailable
+        ? ('filters_limit' as const)
+        : (nativeError ?? this.activityError ?? undefined);
+    if (
+      history !== this.state.history ||
+      loading !== this.state.loading ||
+      error !== this.state.error ||
+      this.presentation !== this.state.presentation
+    ) {
+      this.state = {history, loading, presentation: this.presentation, ...(error ? {error} : {})};
+      for (const listener of this.listeners) listener();
+    }
+    const prior = this.financialState,
+      old = prior.history;
+    const sameNative =
+      this.scope === 'quota' &&
+      !!history &&
+      !!old &&
+      this.shownNativeVersion === this.financialVersion &&
+      history.range === old.range &&
+      history.range === this.target().key &&
+      history.cellMs === old.cellMs &&
+      history.historyStart === old.historyStart;
+    const same =
+      sameNative ||
+      history === old ||
+      (!!history &&
+        !!old &&
+        (this.scope !== 'quota' || history.series === old.series) &&
+        history.meterSeries === old.meterSeries &&
+        history.range === old.range &&
+        history.since === old.since &&
+        history.cellMs === old.cellMs &&
+        history.historyStart === old.historyStart);
+    const financialLoading = nativeLoading,
+      financialError = nativeError;
+    this.financialVersion = this.shownNativeVersion;
+    if (
+      !same ||
+      financialLoading !== prior.loading ||
+      financialError !== prior.error ||
+      this.nativePresentation !== prior.presentation
+    ) {
+      this.financialState = {
+        history: same ? old : history,
+        loading: financialLoading,
+        presentation: this.nativePresentation,
+        ...(financialError ? {error: financialError} : {}),
+      };
+      for (const listener of this.financialListeners) listener();
+    }
+  }
+  private schedulePlanClock() {
+    if (this.scope === 'budget') return;
+    const events = [this.shown?.events, this.plot?.events, this.drawingPlot?.events].flatMap(
+      events => events ?? [],
+    );
+    this.planDeadline = Math.min(
+      ...[...this.grids.values()].flatMap(tiles =>
+        [...tiles.values()].map(tile => tile.planDeadline),
+      ),
+      planEventsDeadline(events),
+    );
+    const owner = this.env.clock ?? clock;
+    if (this.active && this.board && Number.isFinite(this.planDeadline)) {
+      this.stopPlanClock ??= owner.subscribe(this.planWatch, () => {
+        if (this.expirePlans()) this.publish();
+        else this.schedulePlanClock();
+      });
+      owner.due(this.planWatch, this.planDeadline, this.env.now());
+    } else {
+      this.stopPlanClock?.();
+      this.stopPlanClock = null;
+    }
+  }
+  private expirePlans() {
+    const now = this.env.now();
+    if (now < this.planDeadline) return false;
+    let changed = false;
+    for (const tiles of this.grids.values())
+      for (const [key, tile] of tiles) {
+        const next = tile.retirePlans(now);
+        if (next) {
+          tiles.set(key, next);
+          changed = true;
+        }
+      }
+    const shownEvents = this.shown && planEventsAt(this.shown.events, now),
+      plotEvents = this.plot && planEventsAt(this.plot.events, now),
+      drawingEvents = this.drawingPlot && planEventsAt(this.drawingPlot.events, now);
+    const plotChanged = !!this.plot && plotEvents !== this.plot.events;
+    changed ||=
+      (!!this.shown && shownEvents !== this.shown.events) ||
+      plotChanged ||
+      (!!this.drawingPlot && drawingEvents !== this.drawingPlot.events);
+    if (!changed) return false;
+    this.nativeVersion++;
+    this.cancelProjection();
+    this.version++;
+    this.plotVersion = -1;
+    this.plotChunks.clear();
+    if (this.shown && shownEvents !== this.shown.events) {
+      this.shown = {...this.shown, events: shownEvents!};
+      this.shownNativeVersion++;
+    }
+    if (this.plot && plotChanged) this.plot = {...this.plot, events: plotEvents!};
+    if (this.drawingPlot && drawingEvents !== this.drawingPlot.events)
+      this.drawingPlot = {...this.drawingPlot, events: drawingEvents!};
+    this.schedulePlanClock();
+    if (plotChanged) for (const listener of this.plotListeners) listener();
+    this.schedule();
+    return true;
+  }
+
+  private tiles(cell: number) {
+    if (!this.grids.has(cell)) this.grids.set(cell, new Map());
+    return this.grids.get(cell)!;
+  }
+
+  private tile(at: number, cell: number) {
+    const tiles = this.tiles(cell);
+    const n = tileOf(at, cell);
+    if (!tiles.has(n)) tiles.set(n, new HistoryTile(tileStart(n, cell), cell));
+    return tiles.get(n)!;
+  }
+
+  private full(target: Target, fresh = false) {
+    if (this.scope === 'quota' && !this.wantsActivity)
+      return this.nativeFull(target.cell, target.k0 * target.cell, (target.k1 + 1) * target.cell);
+    for (let k = target.k0; k <= target.k1; k++) {
+      const at = k * target.cell;
+      if (this.cutTo !== null && at >= this.cutTo) continue;
+      const tile = this.grids.get(target.cell)?.get(tileOf(at, target.cell));
+      if (!tile || at < tile.readFrom || at >= (fresh ? tile.validTo : tile.readTo)) return false;
+    }
+    return true;
+  }
+
+  private nativeContext() {
+    return JSON.stringify([this.board, this.run, this.lineupKey, this.windowsKey, this.meters]);
+  }
+
+  private nativeRequiredTo(cell: number, to: number) {
+    return Math.min(
+      to,
+      this.cutTo ?? Infinity,
+      historyReadTo(to, cell, Math.max(this.env.now(), this.meta?.now ?? 0)),
+    );
+  }
+  private activityCurrent(flight: Flight) {
+    return (
+      this.wantsActivity &&
+      flight.nativeContext === this.nativeContext() &&
+      flight.nativeVersion === this.nativeVersion &&
+      this.nativeFull(flight.cell, flight.from, this.nativeRequiredTo(flight.cell, flight.to))
+    );
+  }
+
+  private nativeFull(cell: number, from: number, to: number) {
+    for (let at = from; at < to; at += cell) {
+      if (this.cutTo !== null && at >= this.cutTo) continue;
+      const tile = this.grids.get(cell)?.get(tileOf(at, cell));
+      if (!tile || at < tile.nativeFrom || at >= tile.nativeValidTo) return false;
+    }
+    return true;
+  }
+
+  private bad(target: Target): number[] {
+    const bad: number[] = [];
+    for (let k = target.k0; k <= target.k1; k++) {
+      const at = k * target.cell;
+      if (this.cutTo !== null && at >= this.cutTo) continue;
+      const tile = this.grids.get(target.cell)?.get(tileOf(at, target.cell));
+      if (
+        this.scope === 'quota' &&
+        !this.wantsActivity &&
+        tile &&
+        at >= tile.nativeFrom &&
+        at < tile.nativeValidTo
+      )
+        continue;
+      if (
+        tile &&
+        at >= tile.readFrom &&
+        at < tile.validTo &&
+        (this.scope !== 'quota' ||
+          this.workKey === undefined ||
+          (at >= tile.nativeFrom && at < tile.nativeValidTo))
+      )
+        continue;
+      if (
+        [...this.flights].some(
+          f =>
+            f.epoch === this.epoch &&
+            f.cell === target.cell &&
+            f.from <= at &&
+            f.to > at &&
+            f.touched > at,
+        )
+      )
+        continue;
+      bad.push(at);
+    }
+    return bad;
+  }
+
+  private schedule() {
+    if (this.scheduled) return;
+    this.scheduled = true;
+    (this.env.schedule ?? queueMicrotask)(() => {
+      this.scheduled = false;
+      this.pump();
+    });
+  }
+
+  private pump() {
+    if (!this.active) return;
+    this.startWaiting();
+    this.startResponses();
+    if (!this.board || !this.ready || !this.run || this.historyLimit) return;
+    const target = this.target();
+    this.seenFrom = Math.min(
+      this.seenFrom,
+      this.interest?.from ?? this.selected?.from ?? target.now - target.length,
+    );
+    if (this.meters || this.pool) {
+      this.evict();
+      if (this.historyLimit) return;
+    }
+    if (
+      this.scope === 'quota' &&
+      !this.wantsActivity &&
+      this.shown?.range === target.key &&
+      this.composedNativeVersion === this.nativeVersion
+    )
+      this.needsCompose = false;
+    if (this.scope === 'budget' && this.meters?.ids.length === 0) {
+      this.meta ??= {
+        run: this.run,
+        now: this.env.now(),
+        historyStart: this.historyStart,
+        known: {work: 0, sources: {}},
+      };
+      this.prepareCompose(target);
+      return;
+    }
+    if (this.interest) {
+      this.publishPlot();
+      this.pumpPan();
+      this.publish();
+      return;
+    }
+    if (target.k1 < target.k0) return this.env.dropTimeRange();
+    if (this.selected && this.meta && this.metaAt !== null) {
+      // The data cut stays empty as time moves; range admission follows the hub clock.
+      const now = this.meta.now + Math.max(0, this.elapsedNow() - this.metaAt);
+      if (target.k0 * target.cell >= cellStart(now + CLOCK_TOLERANCE_MS, target.cell) + target.cell)
+        return this.env.dropTimeRange();
+    }
+    if (this.needsCompose && this.meta && this.full(target)) this.prepareCompose(target);
+    if (this.plotPending) this.publishPlot();
+    if (this.panReads) {
+      for (const flight of [...this.flights]) {
+        if (
+          flight.cell !== target.cell ||
+          flight.to <= target.k0 * target.cell ||
+          flight.from > target.k1 * target.cell
+        )
+          this.abort(flight);
+        else flight.role = 'visible';
+      }
+      this.readMissing(target, 'visible');
+      if (!this.bad(target).length && !this.flights.size) this.panReads = false;
+      return;
+    }
+    if (this.timers.has('settle') || this.timers.has('retry')) return;
+    // News accumulates behind this target's pending read; another target can read now.
+    if (
+      [...this.flights].some(
+        f => f.epoch === this.epoch && f.target === target.key && f.cell === target.cell,
+      )
+    )
+      return;
+    const bad = this.bad(target);
+    if (!bad.length) return;
+    const first = this.grids.get(target.cell)?.get(tileOf(bad[0], target.cell));
+    // Cold reads omit the unseen head. Entering a held tile's head fills it once.
+    const from =
+      !first || first.readTo === first.readFrom
+        ? bad[0]
+        : bad[0] < first.readFrom
+          ? first.from
+          : first.validTo;
+    // Coarse cells contain days of raw observations; decode one tile at a time.
+    const last = this.pool && target.cell >= 3_600_000 ? from : bad.at(-1)!;
+    const to = Math.min(
+      tileEnd(tileOf(last, target.cell), target.cell),
+      cellStart(this.env.now(), target.cell) + 2 * target.cell,
+    );
+    this.read(target, from, to, 'visible');
+  }
+
+  private plotTarget(): Target {
+    const interest = this.interest;
+    return interest
+      ? targetOf(interest.length, Math.max(this.env.now(), this.meta?.now ?? 0), 'plot', interest)
+      : this.target();
+  }
+
+  private publishPlot() {
+    if (!this.meta || !this.plotPending || !this.interest) return;
+    const visible = this.plotTarget();
+    const half = visible.length / 2;
+    if (
+      !this.strip ||
+      this.strip.cell !== visible.cell ||
+      this.stripToken !== (this.interest?.token ?? this.stripToken) ||
+      visible.k0 * visible.cell < this.strip.k0 * visible.cell + half / 2 ||
+      (visible.k1 + 1) * visible.cell > (this.strip.k1 + 1) * visible.cell - half / 2
+    ) {
+      this.stripToken = this.interest?.token ?? this.stripToken;
+      this.strip = {
+        ...visible,
+        k0: Math.floor((visible.k0 * visible.cell - half) / visible.cell),
+        k1: Math.ceil(((visible.k1 + 1) * visible.cell + half) / visible.cell) - 1,
+      };
+      this.plotVersion = -1;
+    }
+    if (this.plotVersion === this.version) return;
+    const strip = this.strip;
+    const tiles = [...(this.grids.get(strip.cell)?.values() ?? [])]
+      .filter(
+        t =>
+          t.readTo > t.readFrom &&
+          t.readTo > strip.k0 * strip.cell &&
+          t.readFrom <= strip.k1 * strip.cell,
+      )
+      .sort((a, b) => a.from - b.from);
+    const separate = this.scope === 'quota' && (this.workKey !== undefined || !this.wantsActivity);
+    const nativeTiles = separate
+      ? [...(this.grids.get(strip.cell)?.values() ?? [])]
+          .filter(
+            t =>
+              t.nativeTo > t.nativeFrom &&
+              t.nativeTo > strip.k0 * strip.cell &&
+              t.nativeFrom <= strip.k1 * strip.cell,
+          )
+          .sort((a, b) => a.from - b.from)
+      : tiles;
+    const nativeIdentity = JSON.stringify([
+      this.nativeVersion,
+      this.interest?.token,
+      strip.cell,
+      strip.k0,
+      strip.k1,
+      this.windowsKey,
+      this.cutTo,
+      nativeTiles.map(tile => [tile.from, tile.nativeSeq, tile.nativeFrom, tile.nativeTo]),
+    ]);
+    const identity = `${this.epoch}:${this.interest?.token ?? this.plot?.token}:${strip.cell}:${strip.k0}:${strip.k1}:${this.windowsKey}:${this.cutTo}:${JSON.stringify(this.meta.known)}:${tiles.map(tile => `${tile.from},${tile.writeSeq},${tile.readFrom},${tile.readTo}`).join(';')}:${separate ? nativeIdentity : ''}`;
+    this.plotVersion = this.version;
+    if (identity === this.plotIdentity) return;
+    this.plotIdentity = identity;
+    const retained = new Set([
+      ...tiles.map(tile => `${tile.cell}:${tile.from}`),
+      ...nativeTiles.map(tile => `native:${tile.cell}:${tile.from}`),
+    ]);
+    for (const key of this.plotChunks.keys()) if (!retained.has(key)) this.plotChunks.delete(key);
+    const intervals: [number, number][] = [];
+    for (const tile of tiles) {
+      const a = Math.max(tile.readFrom, strip.k0 * strip.cell),
+        b = Math.min(tile.readTo, (strip.k1 + 1) * strip.cell);
+      const last = intervals.at(-1);
+      if (last && last[1] === a) last[1] = b;
+      else intervals.push([a, b]);
+    }
+    if (this.cutTo !== null && this.cutTo <= (strip.k1 + 1) * strip.cell)
+      intervals.push([this.cutTo, (strip.k1 + 1) * strip.cell]);
+    const coverage: Coverage = intervals.sort((a, b) => a[0] - b[0]);
+    const pins = this.pins(tiles),
+      meta = this.meta,
+      windows = this.windows;
+    const token = this.interest?.token ?? this.plot?.token ?? 0,
+      epoch = this.epoch,
+      version = this.version;
+    const nativePins = this.pins(nativeTiles);
+    const valid = () =>
+      this.plotIdentity === identity &&
+      this.epoch === epoch &&
+      this.plotPending &&
+      this.windows === windows &&
+      this.pinsValid(pins) &&
+      this.pinsValid(nativePins);
+    const work = function* (
+      store: HistoryStore,
+    ): Preparation<{activity: PlotBuffer | null; native: PlotBuffer}> {
+      const chunks: Chunk[] = [];
+      if (store.wantsActivity)
+        for (const {tile, seq, from, to} of pins) {
+          const key = `${tile.cell}:${tile.from}`;
+          let saved = store.plotChunks.get(key);
+          if (
+            !saved ||
+            saved.tile !== tile ||
+            saved.seq !== seq ||
+            saved.from !== from ||
+            saved.to !== to
+          ) {
+            const chunk = yield* tile.chunkPrepared(
+              meta.known,
+              true,
+              store.env.now(),
+              separate ? 'activity' : 'all',
+            );
+            saved = {tile, seq, from, to, chunk};
+            if (valid()) store.plotChunks.set(key, saved);
+          }
+          chunks.push(saved.chunk);
+          yield;
+        }
+      const activity = store.wantsActivity
+        ? yield* plotPrepared(chunks, meta, strip, coverage, windows, token, epoch, version)
+        : null;
+      if (!separate) return {activity, native: activity!};
+      if (store.nativePlotIdentity === nativeIdentity && store.drawingPlot)
+        return {activity, native: store.drawingPlot};
+      const nativeChunks: Chunk[] = [],
+        nativeCoverage: [number, number][] = [];
+      for (const {tile} of nativePins) {
+        const key = `native:${tile.cell}:${tile.from}`,
+          from = tile.nativeFrom,
+          to = tile.nativeTo,
+          seq = tile.nativeSeq;
+        let saved = store.plotChunks.get(key);
+        if (
+          !saved ||
+          saved.seq !== seq ||
+          saved.from !== from ||
+          saved.to !== to ||
+          saved.deadline !== tile.planDeadline
+        ) {
+          const chunk = yield* tile.chunkPrepared(meta.known, true, store.env.now(), 'native');
+          saved = {tile: null, seq, from, to, chunk, deadline: tile.planDeadline};
+          if (valid()) store.plotChunks.set(key, saved);
+        }
+        nativeChunks.push(saved.chunk);
+        const a = Math.max(from, strip.k0 * strip.cell),
+          b = Math.min(to, (strip.k1 + 1) * strip.cell),
+          last = nativeCoverage.at(-1);
+        if (last && last[1] === a) last[1] = b;
+        else nativeCoverage.push([a, b]);
+        yield;
+      }
+      if (store.cutTo !== null && store.cutTo <= (strip.k1 + 1) * strip.cell)
+        nativeCoverage.push([store.cutTo, (strip.k1 + 1) * strip.cell]);
+      return {
+        activity,
+        native: yield* plotPrepared(
+          nativeChunks,
+          meta,
+          strip,
+          nativeCoverage,
+          windows,
+          token,
+          epoch,
+          version,
+        ),
+      };
+    };
+    prepare(
+      this.plotOwner,
+      work(this),
+      valid,
+      plots => this.setPlot(plots.activity, nativeIdentity, plots.native),
+      this.preparations,
+    );
+  }
+
+  private pins(tiles: HistoryTile[]): TilePin[] {
+    return tiles.map(tile => ({tile, seq: tile.writeSeq, from: tile.readFrom, to: tile.readTo}));
+  }
+  private pinsValid(pins: TilePin[]) {
+    return pins.every(
+      ({tile, seq, from, to}) =>
+        this.grids.get(tile.cell)?.get(tileOf(tile.from, tile.cell)) === tile &&
+        tile.writeSeq === seq &&
+        tile.readFrom === from &&
+        tile.readTo === to,
+    );
+  }
+
+  private prepareCompose(target: Target) {
+    // Evicting other cached cells cannot invalidate work on this frame's pinned entries.
+    if (this.composeCurrent?.(target)) return;
+    const meta = this.meta!,
+      board = this.board!,
+      epoch = this.epoch,
+      version = this.version,
+      windows = this.windows,
+      activityRevision = this.activityRevision;
+    const identity = `${epoch}:${version}:${target.key}:${target.k0}:${target.k1}`;
+    if (identity === this.composeIdentity && !this.composeCurrent) return;
+    this.composeIdentity = identity;
+    const native = this.scope === 'quota' && !this.wantsActivity;
+    const tiles = [...(this.grids.get(target.cell)?.values() ?? [])]
+      .filter(t =>
+        native
+          ? t.nativeTo > t.nativeFrom &&
+            t.nativeTo > target.k0 * target.cell &&
+            t.nativeFrom <= target.k1 * target.cell
+          : t.readTo > t.readFrom &&
+            t.readTo > target.k0 * target.cell &&
+            t.readFrom <= target.k1 * target.cell,
+      )
+      .sort((a, b) => a.from - b.from);
+    const pins = this.pins(tiles);
+    const valid = () =>
+      !this.interest &&
+      this.board === board &&
+      this.epoch === epoch &&
+      (native || this.activityRevision === activityRevision) &&
+      this.meta === meta &&
+      this.windows === windows &&
+      this.composeIdentity === identity &&
+      this.target().key === target.key &&
+      this.pinsValid(pins);
+    this.composeCurrent = next =>
+      next.key === target.key &&
+      next.cell === target.cell &&
+      next.k0 === target.k0 &&
+      next.k1 === target.k1 &&
+      valid();
+    const owner = this;
+    const work = function* (): Preparation<History> {
+      const chunks: DecodedChunk[] = [];
+      for (const {tile} of pins) {
+        chunks.push(
+          yield* tile.composeChunkPrepared(target.now, native ? 'native' : 'all', windows),
+        );
+        yield;
+      }
+      const history = {...(yield* composeDecodedPrepared(chunks, meta, target, windows)), board},
+        previous = owner.shown?.meterSeries;
+      if (owner.meters?.work && history.meterSeries && previous) {
+        const stable = new Map(
+          previous.map(series => [
+            JSON.stringify([series.sourceId, series.meterId, series.kind, series.unit]),
+            series,
+          ]),
+        );
+        for (let i = 0; i < history.meterSeries.length; i++) {
+          const next = history.meterSeries[i],
+            old = stable.get(JSON.stringify([next.sourceId, next.meterId, next.kind, next.unit]));
+          if (old && JSON.stringify(old) === JSON.stringify(next)) history.meterSeries[i] = old;
+          yield;
+        }
+        if (
+          history.meterSeries.length === previous.length &&
+          history.meterSeries.every((series, i) => series === previous[i])
+        )
+          history.meterSeries = previous;
+      }
+      return history;
+    };
+    prepare(
+      this.composeOwner,
+      work(),
+      valid,
+      history => {
+        for (const {tile} of pins) tile.shownAt = this.env.now();
+        this.composeCurrent = null;
+        if (
+          this.composedNativeVersion !== this.nativeVersion ||
+          this.shown?.range !== history.range ||
+          this.shown.cellMs !== history.cellMs ||
+          this.shown.historyStart !== history.historyStart
+        )
+          this.shownNativeVersion++;
+        this.shown = history;
+        this.shownActivityRevision = !native && this.full(target, true) ? activityRevision : -1;
+        this.composedNativeVersion = this.nativeVersion;
+        this.needsCompose = false;
+        if (this.plotPending) {
+          this.plotPending = false;
+          this.strip = null;
+          this.plotChunks.clear();
+          this.preparations?.cancel(this.plotOwner);
+          this.setPlot(null);
+        }
+        this.publish();
+      },
+      this.preparations,
+    );
+  }
+
+  private aheadTarget(visible: Target): Target {
+    const direction = this.interest!.direction;
+    const cells = this.bufferCells(visible);
+    const ahead = {
+      ...visible,
+      k0: direction < 0 ? visible.k0 - cells : visible.k1 + 1,
+      k1: direction < 0 ? visible.k0 - 1 : visible.k1 + cells,
+    };
+    ahead.k0 = Math.max(
+      ahead.k0,
+      Math.floor(
+        Math.max(this.meta?.historyStart ?? 0, this.env.now() - 90 * 86_400_000 + 3_600_000) /
+          ahead.cell,
+      ),
+    );
+    ahead.k1 = Math.min(
+      ahead.k1,
+      Math.floor((Math.max(this.env.now(), this.meta?.now ?? 0) + CLOCK_TOLERANCE_MS) / ahead.cell),
+    );
+    return ahead;
+  }
+
+  private bufferCells(target: Target) {
+    return Math.min(TILE_CELLS, Math.ceil(target.length / target.cell / 4));
+  }
+
+  private optionalOverlap(flight: Flight, visible: Target) {
+    if (!this.interest?.direction || this.aheadStopped || flight.cell !== visible.cell)
+      return false;
+    const ahead = this.aheadTarget(visible);
+    return [...this.optional].some(
+      at =>
+        at >= ahead.k0 * ahead.cell &&
+        at <= ahead.k1 * ahead.cell &&
+        at >= flight.from &&
+        at < flight.to,
+    );
+  }
+
+  private pumpPan() {
+    const visible = this.plotTarget();
+    const overlaps = (f: Flight, t: Target) =>
+      f.cell === t.cell && f.to > t.k0 * t.cell && f.from <= t.k1 * t.cell;
+    const flights = [...this.flights].sort((a, b) => {
+      const span = (f: Flight) =>
+        f.cell === visible.cell
+          ? Math.max(
+              0,
+              Math.min(f.to, (visible.k1 + 1) * visible.cell) -
+                Math.max(f.from, visible.k0 * visible.cell),
+            )
+          : 0;
+      return span(b) - span(a) || b.seq - a.seq;
+    });
+    const kept: Flight[] = [];
+    for (const flight of flights) {
+      const role = overlaps(flight, visible) ? 'visible' : 'ahead';
+      const sameTile = (f: Flight) =>
+        f.cell === flight.cell &&
+        tileOf(f.from, f.cell) <= tileOf(flight.to - 1, flight.cell) &&
+        tileOf(flight.from, flight.cell) <= tileOf(f.to - 1, f.cell);
+      // Ordinary navigation can have more pending reads. Entering pan gives those
+      // reads the same slots and tile ownership as reads started by the gesture.
+      if (
+        flight.epoch !== this.epoch ||
+        (!overlaps(flight, visible) && !this.optionalOverlap(flight, visible)) ||
+        kept.some(f => f.role === role || sameTile(f))
+      )
+        this.abort(flight);
+      else {
+        flight.role = role;
+        kept.push(flight);
+      }
+    }
+    this.readMissing(visible, 'visible');
+  }
+
+  private readMissing(target: Target, role: Flight['role']) {
+    if (
+      target.k1 < target.k0 ||
+      this.flights.size >= 2 ||
+      [...this.flights].some(f => f.role === role)
+    )
+      return;
+    if (role === 'visible' && this.timers.has('retry')) return;
+    const bad = this.bad(target);
+    // Serialize writes to a tile, including disjoint slices: writeSeq belongs to a tile.
+    const blocked = (at: number) =>
+      [...this.flights].some(
+        f =>
+          f.cell === target.cell &&
+          tileOf(at, target.cell) >= tileOf(f.from, f.cell) &&
+          tileOf(at, target.cell) <= tileOf(f.to - 1, f.cell),
+      );
+    const backwards = this.interest?.direction === -1;
+    // The shared pool also retains exact period evidence. Decode one input tile
+    // at a time, including after a fast gesture skips across several tiles.
+    const readTiles = this.pool ? 1 : MAX_READ_TILES;
+    if (backwards) bad.reverse();
+    const at = bad.find(at => !blocked(at));
+    if (at === undefined) return;
+    let from = at,
+      to = at + target.cell,
+      last = at;
+    for (const next of bad) {
+      if (backwards ? next >= at : next <= at) continue;
+      if (
+        Math.abs(next - last) !== target.cell ||
+        Math.abs(tileOf(next, target.cell) - tileOf(at, target.cell)) >= readTiles ||
+        blocked(next)
+      )
+        break;
+      from = Math.min(from, next);
+      to = Math.max(to, next + target.cell);
+      last = next;
+    }
+    const tiles = this.grids.get(target.cell),
+      first = tiles?.get(tileOf(from, target.cell)),
+      end = tiles?.get(tileOf(to - target.cell, target.cell));
+    // A skipped part of a held tile must connect to its existing fresh prefix.
+    // Empty tiles have no unseen head to fill, and fresh cells are never crossed.
+    if (first && first.readTo > first.readFrom && from >= first.readFrom)
+      from = Math.min(from, first.validTo);
+    if (end && end.readTo > end.readFrom && to < end.readFrom) to = end.readFrom;
+    if (
+      this.interest?.direction &&
+      !this.aheadStopped &&
+      !this.inheritedExtra &&
+      this.estimatedBytes < this.budget
+    ) {
+      const direction = this.interest.direction;
+      const buffer = this.bufferCells(target);
+      const requiredFrom = Math.min(from, target.k0 * target.cell);
+      const requiredTo = Math.max(to, (target.k1 + 1) * target.cell);
+      const added: number[] = [];
+      const lower =
+        Math.floor(
+          Math.max(this.meta?.historyStart ?? 0, this.env.now() - 90 * 86_400_000 + 3_600_000) /
+            target.cell,
+        ) * target.cell;
+      const upper =
+        this.cutTo ??
+        (Math.floor(
+          (Math.max(this.env.now(), this.meta?.now ?? 0) + CLOCK_TOLERANCE_MS) / target.cell,
+        ) +
+          1) *
+          target.cell;
+      for (let n = 0; n < buffer; n++) {
+        const extra = direction < 0 ? from - target.cell : to;
+        if (
+          extra < lower ||
+          extra >= upper ||
+          blocked(extra) ||
+          tileOf(Math.max(to, extra + target.cell) - 1, target.cell) -
+            tileOf(Math.min(from, extra), target.cell) >=
+            readTiles
+        )
+          break;
+        const tile = this.grids.get(target.cell)?.get(tileOf(extra, target.cell));
+        if (
+          tile &&
+          tile.readTo > tile.readFrom &&
+          ((extra >= tile.readFrom && extra < tile.validTo) ||
+            Math.min(tile.to, Math.max(to, extra + target.cell)) < tile.readFrom ||
+            Math.max(tile.from, Math.min(from, extra)) > tile.readTo)
+        )
+          break;
+        // A large foreground run may end before the viewport edge. Its extension
+        // is still necessary; only cells outside that viewport consume the buffer.
+        if (extra < target.k0 * target.cell || extra > target.k1 * target.cell) {
+          if (!this.optional.has(extra) && this.optional.size >= buffer) break;
+          if (!this.optional.has(extra)) {
+            this.optional.add(extra);
+            added.push(extra);
+          }
+        }
+        from = Math.min(from, extra);
+        to = Math.max(to, extra + target.cell);
+      }
+      // Stop the optional tail at a tile edge without shrinking below one tile.
+      // Splitting the same tile across replies repeats its series and activity metadata.
+      const span = target.cell * TILE_CELLS;
+      if (direction < 0) {
+        const aligned = Math.ceil(from / span) * span;
+        if (aligned <= requiredFrom && to - aligned >= span) from = aligned;
+      } else {
+        const aligned = Math.floor(to / span) * span;
+        if (aligned >= requiredTo && aligned - from >= span) to = aligned;
+      }
+      // These cells were never requested. Earlier attempts retain their charges.
+      for (const extra of added) if (extra < from || extra >= to) this.optional.delete(extra);
+    }
+    if (to > from) this.read(target, from, to, role);
+  }
+
+  private read(target: Target, from: number, to: number, role: Flight['role']) {
+    const boundary = this.deferredNews ? cellStart(this.deferredNews.since, target.cell) : null;
+    // Earlier necessary reads do not touch the deferred suffix. A read covering
+    // its boundary can replace it without adding another read of the fixed tail.
+    if (boundary !== null && from <= boundary && to > boundary) this.flushNews();
+    if (this.pool)
+      for (const waiting of [...this.flights])
+        if (!waiting.started && waiting.role === role) this.abort(waiting);
+    const activityOnly =
+      this.scope === 'quota' &&
+      this.wantsActivity &&
+      this.workKey !== undefined &&
+      this.nativeFull(target.cell, from, this.nativeRequiredTo(target.cell, to));
+    const flight: Flight = {
+      submitted: false,
+      started: false,
+      seq: ++this.seq,
+      epoch: this.epoch,
+      target: target.key,
+      newsSeq: this.newsSeq,
+      cell: target.cell,
+      from,
+      to,
+      touched: Infinity,
+      nativeTouched: Infinity,
+      nativeContext: this.nativeContext(),
+      nativeVersion: this.nativeVersion,
+      startedAt: this.elapsedNow(),
+      controller: new AbortController(),
+      role,
+      activityOnly,
+    };
+    this.flights.add(flight);
+    const meta = this.meta?.run === this.run ? this.meta : undefined;
+    const board = this.board!,
+      meters = this.meters,
+      nativeContext = this.nativeContext(),
+      nativeVersion = this.nativeVersion,
+      proof = this.nativeProof;
+    let finish: (() => void) | undefined;
+    const finished = this.env.sharedTransport
+      ? new Promise<void>(resolve => {
+          finish = () => resolve();
+        })
+      : undefined;
+    flight.finish = finish;
+    const owner: HistoryReadOwner | undefined = finished
+      ? {
+          finished,
+          activityProof: () => ({
+            current:
+              flight.epoch === this.epoch &&
+              nativeVersion === this.nativeVersion &&
+              nativeContext === this.nativeContext() &&
+              this.wantsActivity &&
+              this.nativeFull(target.cell, from, this.nativeRequiredTo(target.cell, to)),
+            cellsCursor:
+              proof?.context === nativeContext &&
+              proof.cell === target.cell &&
+              proof.from <= from &&
+              proof.to >= this.nativeRequiredTo(target.cell, to)
+                ? proof.cellsCursor
+                : undefined,
+          }),
+          started: activityOnly => {
+            flight.activityOnly = activityOnly ?? false;
+            flight.started = true;
+            flight.startedAt = this.elapsedNow();
+          },
+          role: () => (this.flights.has(flight) ? flight.role : null),
+          cancel: () => this.abort(flight),
+        }
+      : undefined;
+    const start = () => {
+      if (flight.controller.signal.aborted || flight.epoch !== this.epoch) {
+        this.abort(flight);
+        return;
+      }
+      if (
+        flight.activityOnly &&
+        !this.nativeFull(target.cell, from, this.nativeRequiredTo(target.cell, to))
+      )
+        flight.activityOnly = false;
+      flight.submitted = true;
+      if (!this.env.sharedTransport) flight.started = true;
+      flight.startedAt = this.elapsedNow();
+      this.env
+        .read(
+          board,
+          target.cell,
+          from,
+          to,
+          flight.controller.signal,
+          meters,
+          meta,
+          owner,
+          flight.activityOnly,
+        )
+        .then(
+          answer => this.merge(flight, answer),
+          error => this.failed(flight, error),
+        );
+    };
+    flight.start = start;
+    if (this.env.sharedTransport) this.startWaiting();
+    else if (this.pool) this.pool.request(this, flight, start, () => this.abort(flight));
+    else start();
+  }
+
+  private startWaiting() {
+    if (!this.env.sharedTransport || !this.active) return;
+    for (const flight of this.flights)
+      if (
+        !flight.submitted &&
+        flight.start &&
+        ![...this.flights].some(other => other.submitted && other.role === flight.role)
+      )
+        flight.start();
+  }
+  private abort(flight: Flight) {
+    this.preparations?.cancel(flight);
+    this.releaseResponse(flight);
+    flight.controller.abort();
+  }
+  private abortFlights() {
+    for (const flight of [...this.flights]) this.abort(flight);
+  }
+  private setActivityPlot(plot: PlotBuffer | null) {
+    if (this.activityPlot === plot) return;
+    this.activityPlot = plot;
+    for (const listener of this.activityPlotListeners) listener();
+  }
+  private clearActivityPlot() {
+    for (const key of this.plotChunks.keys())
+      if (!key.startsWith('native:')) this.plotChunks.delete(key);
+    this.setActivityPlot(null);
+  }
+  private setPlot(plot: PlotBuffer | null, nativeIdentity = '', native = plot) {
+    if (plot) {
+      const events = planEventsAt(plot.events, this.env.now());
+      if (events !== plot.events) plot = {...plot, events};
+    }
+    // Both snapshots share the prepared arrays. Moving quantities must not
+    // replace the balance drawing; new data and authority replace both.
+    this.setActivityPlot(plot);
+    if (native && nativeIdentity && nativeIdentity === this.nativePlotIdentity) return;
+    this.nativePlotIdentity = nativeIdentity;
+    this.drawingPlot = native;
+    this.setPlotFrame(native);
+  }
+  private setPlotFrame(plot: PlotBuffer | null) {
+    if (plot && this.meters && this.meta) {
+      const target = this.plotTarget(),
+        from = target.k0 * target.cell,
+        to = Math.min((target.k1 + 1) * target.cell, this.meta.now);
+      if (plot.meterFrame?.from !== from || plot.meterFrame.to !== to)
+        plot = {...plot, meterFrame: {from, to}};
+    }
+    if (this.plot === plot) return;
+    this.plot = plot;
+    for (const listener of this.plotListeners) listener();
+  }
+
+  private responsePriority(flight: Flight) {
+    if (flight.controller.signal.aborted || flight.epoch !== this.epoch) return -1;
+    const target = this.interest ? this.plotTarget() : this.target();
+    if (
+      flight.cell === target.cell &&
+      flight.to > target.k0 * target.cell &&
+      flight.from <= target.k1 * target.cell
+    )
+      return 2;
+    if (this.optionalOverlap(flight, target)) return 1;
+    return 0;
+  }
+
+  private reconsiderResponses() {
+    for (const flight of this.responses.keys())
+      if (this.responsePriority(flight) < 1) this.abort(flight);
+    this.startResponses();
+  }
+
+  private merge(flight: Flight, answer: HistoryAnswer) {
+    if (
+      !this.flights.has(flight) ||
+      flight.controller.signal.aborted ||
+      flight.epoch !== this.epoch ||
+      answer.run !== this.run
+    ) {
+      this.abort(flight);
+      return;
+    }
+    if (this.env.sharedTransport) {
+      if (answer.cells === 'activity' && !flight.activityOnly) {
+        this.abort(flight);
+        this.schedule();
+        return;
+      }
+      flight.activityOnly = answer.cells === 'activity';
+    }
+    if (flight.activityOnly && !this.activityCurrent(flight)) {
+      this.abort(flight);
+      this.schedule();
+      return;
+    }
+    if (this.responses.size >= 2) {
+      const incoming = this.responsePriority(flight);
+      const victim = [...this.responses.keys()].sort(
+        (a, b) => this.responsePriority(a) - this.responsePriority(b) || a.seq - b.seq,
+      )[0];
+      const priority = this.responsePriority(victim);
+      if (incoming > priority || (incoming === priority && flight.seq > victim.seq)) {
+        if (priority < 2) this.aheadStopped = true;
+        this.abort(victim);
+      } else {
+        if (incoming < 2) this.aheadStopped = true;
+        this.abort(flight);
+        this.schedule();
+        return;
+      }
+    }
+    const keys = [
+      ...new Set(answer.chunks.map(chunk => `${flight.cell}:${tileOf(chunk.from, flight.cell)}`)),
+    ];
+    this.responses.set(flight, {answer, keys, started: false});
+    this.startResponses();
+  }
+
+  private startResponses() {
+    for (const [flight, response] of this.responses) {
+      if (response.started || response.keys.some(key => this.reservations.has(key))) continue;
+      // A late inherited slice cannot create a bounding interval across an unread
+      // gap. Discard the whole answer and let the planner connect the current base.
+      if (
+        response.answer.chunks.some(chunk => {
+          const base = this.grids.get(flight.cell)?.get(tileOf(chunk.from, flight.cell));
+          return (
+            base &&
+            base.writeSeq <= flight.seq &&
+            base.readTo > base.readFrom &&
+            (chunk.to < base.readFrom || chunk.from > base.readTo)
+          );
+        })
+      ) {
+        this.abort(flight);
+        this.schedule();
+        continue;
+      }
+      for (const key of response.keys) this.reservations.set(key, flight);
+      response.started = true;
+      const pins = new Map<
+        HistoryTile,
+        {
+          seq: number;
+          from: number;
+          to: number;
+          staged: HistoryTile;
+          chunks: {chunk: Chunk; plane: 'all' | 'native' | 'activity'}[];
+        }
+      >();
+      const valid = () => {
+        if (flight.activityOnly && !this.activityCurrent(flight)) {
+          this.abort(flight);
+          this.schedule();
+          return false;
+        }
+        return (
+          this.responses.get(flight) === response &&
+          this.flights.has(flight) &&
+          !flight.controller.signal.aborted &&
+          flight.epoch === this.epoch &&
+          response.answer.run === this.run &&
+          response.keys.every(key => this.reservations.get(key) === flight) &&
+          [...pins].every(
+            ([base, pin]) =>
+              this.grids.get(base.cell)?.get(tileOf(base.from, base.cell)) === base &&
+              base.writeSeq === pin.seq &&
+              base.readFrom === pin.from &&
+              base.readTo === pin.to,
+          )
+        );
+      };
+      const work = function* (store: HistoryStore): Preparation<void> {
+        let completed = false;
+        try {
+          for (const chunk of response.answer.chunks) {
+            const base = store.tile(chunk.from, flight.cell);
+            if (base.writeSeq > flight.seq) continue;
+            let pin = pins.get(base);
+            if (!pin) {
+              pin = {
+                seq: base.writeSeq,
+                from: base.readFrom,
+                to: base.readTo,
+                staged: base,
+                chunks: [],
+              };
+              pins.set(base, pin);
+            }
+            const otherGrowth = [...pins].reduce(
+              (sum, [other, value]) =>
+                sum + (other === base ? 0 : Math.max(0, value.staged.bytes - other.bytes)),
+              0,
+            );
+            const admit = (bytes: number) =>
+              !store.pool ||
+              store.pool.reserve(flight, otherGrowth + Math.max(0, bytes - base.bytes));
+            // Include new empty tile headers before preparation can yield, too.
+            if (!admit(pin.staged.bytes)) {
+              response.limited = true;
+              completed = true;
+              return;
+            }
+            const plane = flight.activityOnly
+              ? 'activity'
+              : store.scope === 'quota' && !store.wantsActivity
+                ? 'native'
+                : 'all';
+            const staged = yield* pin.staged.staged(
+              chunk,
+              response.answer.known,
+              admit,
+              store.env.now(),
+              plane,
+            );
+            if (!staged) {
+              response.limited = true;
+              completed = true;
+              return;
+            }
+            pin.staged = staged;
+            pin.chunks.push({chunk, plane});
+            if (
+              store.pool &&
+              !store.pool.reserve(
+                flight,
+                [...pins].reduce(
+                  (sum, [base, pin]) => sum + Math.max(0, pin.staged.bytes - base.bytes),
+                  0,
+                ),
+              )
+            ) {
+              response.limited = true;
+              completed = true;
+              return;
+            }
+            yield;
+          }
+          completed = true;
+        } finally {
+          if (!completed && store.responses.get(flight) === response) {
+            store.releaseResponse(flight);
+            store.schedule();
+          }
+        }
+      };
+      prepare(
+        flight,
+        work(this),
+        valid,
+        () => {
+          if (response.limited) {
+            if (flight.role === 'ahead') {
+              this.aheadStopped = true;
+              this.abort(flight);
+              this.schedule();
+            } else this.limit(flight.activityOnly);
+            return;
+          }
+          // No yield between the last ownership check and the entire response's publication.
+          for (const [base, {staged, chunks}] of pins) {
+            staged.readFrom = base.readFrom;
+            staged.readTo = base.readTo;
+            staged.validTo = base.validTo;
+            staged.nativeFrom = base.nativeFrom;
+            staged.nativeTo = base.nativeTo;
+            staged.nativeValidTo = base.nativeValidTo;
+            staged.nativeSeq = base.nativeSeq;
+            staged.writeSeq = flight.seq;
+            for (const {chunk, plane} of chunks) {
+              const freshEnd = Math.max(
+                chunk.from,
+                Math.min(chunk.to, cellStart(flight.touched, flight.cell)),
+              );
+              const freshNativeEnd = Math.max(
+                chunk.from,
+                Math.min(chunk.to, cellStart(flight.nativeTouched, flight.cell)),
+              );
+              if (plane !== 'native') {
+                if (staged.readFrom === staged.readTo) {
+                  staged.readFrom = chunk.from;
+                  staged.readTo = chunk.to;
+                  staged.validTo = freshEnd;
+                } else if (chunk.from <= staged.readTo && chunk.to >= staged.readFrom) {
+                  if (chunk.from < staged.readFrom && freshEnd < staged.readFrom)
+                    staged.validTo = freshEnd;
+                  else if (chunk.from <= staged.validTo)
+                    staged.validTo = Math.max(staged.validTo, freshEnd);
+                  staged.readFrom = Math.min(staged.readFrom, chunk.from);
+                  staged.readTo = Math.max(staged.readTo, chunk.to);
+                }
+              }
+              if (plane !== 'activity') {
+                staged.nativeSeq = flight.seq;
+                if (staged.nativeFrom === staged.nativeTo) {
+                  staged.nativeFrom = chunk.from;
+                  staged.nativeTo = chunk.to;
+                  staged.nativeValidTo = freshNativeEnd;
+                } else if (chunk.from <= staged.nativeTo && chunk.to >= staged.nativeFrom) {
+                  if (chunk.from < staged.nativeFrom && freshNativeEnd < staged.nativeFrom)
+                    staged.nativeValidTo = freshNativeEnd;
+                  else if (chunk.from <= staged.nativeValidTo)
+                    staged.nativeValidTo = Math.max(staged.nativeValidTo, freshNativeEnd);
+                  staged.nativeFrom = Math.min(staged.nativeFrom, chunk.from);
+                  staged.nativeTo = Math.max(staged.nativeTo, chunk.to);
+                }
+              }
+            }
+            this.grids.get(base.cell)!.set(tileOf(base.from, base.cell), staged);
+          }
+          const answer = response.answer;
+          this.readError = false;
+          if (!flight.activityOnly) {
+            this.nativeVersion++;
+            const chunks = [...pins.values()]
+              .flatMap(pin =>
+                pin.chunks.filter(part => part.plane !== 'activity').map(part => part.chunk),
+              )
+              .sort((a, b) => a.from - b.from);
+            let end = chunks[0]?.from ?? 0;
+            const contiguous = chunks.every(chunk => {
+              const joined = chunk.from <= end;
+              end = Math.max(end, chunk.to);
+              return joined;
+            });
+            // One committed range proves cells; the coordinator's newer tape alone cannot.
+            this.nativeProof =
+              answer.cellsCursor &&
+              chunks.length === answer.chunks.length &&
+              chunks.length &&
+              contiguous &&
+              this.nativeFull(flight.cell, chunks[0].from, end)
+                ? {
+                    cellsCursor: answer.cellsCursor,
+                    cell: flight.cell,
+                    from: chunks[0].from,
+                    to: end,
+                    context: this.nativeContext(),
+                  }
+                : null;
+          }
+          if (flight.seq > this.metaSeq && !flight.activityOnly) {
+            this.metaSeq = flight.seq;
+            this.meta = {
+              run: answer.run,
+              now: answer.now,
+              historyStart: answer.historyStart,
+              known: answer.known,
+              ...(answer.meta ? {meta: answer.meta} : {}),
+            };
+            this.metaAt = flight.startedAt;
+            this.setBoundary({board: this.board!, at: answer.now, start: answer.historyStart});
+            const to = answer.chunks.at(-1)?.to;
+            if (
+              flight.newsSeq === this.newsSeq &&
+              to !== undefined &&
+              to > answer.now + CLOCK_TOLERANCE_MS
+            )
+              this.cutTo = Math.min(this.cutTo ?? to, to);
+          }
+          this.releaseResponse(flight);
+          this.needsCompose = true;
+          this.version++;
+          if (!this.bad(this.interest ? this.plotTarget() : this.target()).length)
+            this.clear('retry');
+          this.evict();
+          this.startResponses();
+          this.schedule();
+        },
+        this.preparations,
+      );
+    }
+  }
+
+  private releaseResponse(flight: Flight) {
+    this.responses.delete(flight);
+    this.flights.delete(flight);
+    this.pool?.release(flight);
+    flight.finish?.();
+    if (this.env.sharedTransport) this.schedule();
+    for (const [key, owner] of this.reservations)
+      if (owner === flight) {
+        this.reservations.delete(key);
+        const [cell, n] = key.split(':').map(Number),
+          tiles = this.grids.get(cell);
+        if (tiles?.get(n)?.writeSeq === 0) tiles.delete(n);
+      }
+  }
+
+  private failed(flight: Flight, error: unknown) {
+    this.flights.delete(flight);
+    this.pool?.release(flight);
+    flight.finish?.();
+    if (flight.controller.signal.aborted || flight.epoch !== this.epoch) return;
+    if (error instanceof Error && error.name === 'AbortError') {
+      this.schedule();
+      return;
+    }
+    if (
+      error instanceof ApiError &&
+      (error.status === 401 || error.status === 403 || error.code === 'board_not_found')
+    ) {
+      this.close();
+      this.env.accessLost?.();
+      return;
+    }
+    if (error instanceof ApiError && error.code === 'not_found') {
+      this.retirePresentation();
+      this.abortFlights();
+      this.grids.clear();
+      this.readError = true;
+      this.publish();
+      return;
+    }
+    const target = this.interest ? this.plotTarget() : this.target();
+    const needed =
+      flight.cell === target.cell &&
+      this.bad(target).some(at => at >= flight.from && at < flight.to);
+    if (!needed) {
+      this.aheadStopped = true;
+      this.schedule();
+      return;
+    }
+    if (error instanceof ApiError && error.code === 'history_limit') {
+      this.limit(flight.activityOnly);
+      return;
+    }
+    if (flight.activityOnly) {
+      if (
+        !this.interest &&
+        this.selected &&
+        error instanceof ApiError &&
+        error.code === 'history_range_invalid'
+      )
+        return this.env.dropTimeRange();
+      this.failActivity('history_failed', true);
+      return;
+    }
+    if (this.interest) {
+      const visible = this.plotTarget();
+      const needed =
+        flight.cell === visible.cell &&
+        this.bad(visible).some(at => at >= flight.from && at < flight.to);
+      if (needed) {
+        this.readError = true;
+        this.publish();
+      }
+      if (needed)
+        this.timers.set(
+          'retry',
+          this.env.setTimeout(() => {
+            this.clear('retry');
+            this.schedule();
+          }, RETRY_MS),
+        );
+      else this.aheadStopped = true;
+      this.schedule();
+      return;
+    }
+    if (
+      flight.target !== target.key ||
+      flight.cell !== target.cell ||
+      !this.bad(target).some(at => at >= flight.from && at < flight.to)
+    ) {
+      this.schedule();
+      return;
+    }
+    // A necessary read of this selected target validates it, even in a partial
+    // final batch. Obsolete and speculative failures were excluded above.
+    if (
+      error instanceof ApiError &&
+      (this.scope ? error.code === 'history_range_invalid' : error.status === 400) &&
+      this.selected
+    )
+      return this.env.dropTimeRange();
+    this.readError = true;
+    this.publish();
+    this.clear('retry');
+    this.timers.set(
+      'retry',
+      this.env.setTimeout(() => {
+        this.clear('retry');
+        this.schedule();
+      }, RETRY_MS),
+    );
+  }
+
+  private limit(activityOnly = false) {
+    if (activityOnly) {
+      this.failActivity('history_limit');
+      return;
+    }
+    this.historyLimit = true;
+    this.cancelProjection();
+    this.abortFlights();
+    this.grids.clear();
+    this.plotChunks.clear();
+    this.strip = null;
+    this.shown = null;
+    this.setPlot(null);
+    this.clear('retry');
+    this.publish();
+  }
+
+  private failActivity(error: 'history_limit' | 'history_failed', retry = false) {
+    this.activityError = error;
+    this.cancelProjection();
+    for (const flight of [...this.flights]) if (flight.activityOnly) this.abort(flight);
+    this.version++;
+    this.plotVersion = -1;
+    this.needsCompose = true;
+    this.clearActivityPlot();
+    this.clear('activityRetry');
+    if (retry) {
+      const epoch = this.epoch,
+        token = this.env.setTimeout(() => {
+          if (this.epoch !== epoch || this.timers.get('activityRetry') !== token) return;
+          this.clear('activityRetry');
+          this.retry();
+        }, RETRY_MS);
+      this.timers.set('activityRetry', token);
+    }
+    this.publish();
+    this.schedule();
+  }
+
+  evictionCandidates() {
+    const target = this.interest ? this.plotTarget() : this.target();
+    const candidates: {bytes: number; shownAt: number; priority?: 0; drop: () => void}[] = [];
+    for (const [cell, tiles] of this.grids)
+      for (const [n, tile] of tiles) {
+        if (this.reservations.has(`${cell}:${n}`)) continue;
+        if (
+          this.active &&
+          cell === target.cell &&
+          tile.to > target.k0 * cell &&
+          tile.from <= target.k1 * cell
+        ) {
+          const before = Math.min(
+              cellStart(this.seenFrom, cell),
+              target.k0 * cell,
+              cellStart(this.env.visibleFrom?.() ?? Infinity, cell),
+            ),
+            bytes = this.scope === 'budget' ? tile.prefixBytes(before) : 0;
+          if (bytes)
+            candidates.push({
+              bytes,
+              shownAt: 0,
+              priority: 0,
+              drop: () => {
+                const current = this.interest ? this.plotTarget() : this.target();
+                if (
+                  tiles.get(n) !== tile ||
+                  this.reservations.has(`${cell}:${n}`) ||
+                  cell !== current.cell ||
+                  before >
+                    Math.min(
+                      cellStart(this.seenFrom, cell),
+                      current.k0 * cell,
+                      cellStart(this.env.visibleFrom?.() ?? Infinity, cell),
+                    )
+                )
+                  return;
+                // Numeric frames are decoded copies. Retire every job/cache still borrowing packed input.
+                this.cancelProjection();
+                this.plotVersion = -1;
+                this.plotChunks.delete(`${cell}:${tile.from}`);
+                this.plotChunks.delete(`native:${cell}:${tile.from}`);
+                const freed = tile.discardPrefix(before);
+                this.schedule();
+                if (!freed) return;
+                this.nativeProof = null;
+                this.version++;
+                this.aheadStopped = true;
+              },
+            });
+          continue;
+        }
+        // The complete displayed frame owns its geometry. Its former input tiles
+        // can leave the cache while a different target is prepared.
+        candidates.push({
+          bytes: tile.bytes,
+          shownAt: tile.shownAt,
+          drop: () => {
+            tiles.delete(n);
+            this.plotChunks.delete(`${cell}:${tile.from}`);
+            this.version++;
+            this.aheadStopped = true;
+            // Another reader can evict this tile while our final projection is yielding.
+            this.schedule();
+          },
+        });
+      }
+    return candidates;
+  }
+
+  retry = () => {
+    const selected = !!this.activityError;
+    this.readError = false;
+    this.historyLimit = false;
+    this.activityError = null;
+    this.clear('retry');
+    this.clear('activityRetry');
+    this.cancelProjection();
+    this.version++;
+    this.needsCompose = true;
+    this.env.retry?.(selected);
+    this.publish();
+    this.schedule();
+  };
+
+  private evict() {
+    if (this.pool) {
+      if (!this.pool.trim()) this.limit();
+      return;
+    }
+    let bytes = this.estimatedBytes;
+    if (bytes <= this.budget) return;
+    const target = this.interest ? this.plotTarget() : this.target();
+    const ahead = this.interest?.direction ? this.aheadTarget(target) : null;
+    const candidates: {cell: number; n: number; tile: HistoryTile}[] = [];
+    for (const [cell, tiles] of this.grids)
+      for (const [n, tile] of tiles) {
+        if (this.reservations.has(`${cell}:${n}`)) continue;
+        if (cell === target.cell && tile.to > target.k0 * cell && tile.from <= target.k1 * cell)
+          continue;
+        candidates.push({cell, n, tile});
+      }
+    for (const {cell, n, tile} of candidates.sort((a, b) => a.tile.shownAt - b.tile.shownAt)) {
+      if (bytes <= this.budget) break;
+      this.grids.get(cell)!.delete(n);
+      this.version++;
+      bytes -= tile.bytes;
+      // This interest cannot retain its speculative coverage. Another response
+      // must not restart it; movement or news can try a new interest instead.
+      if (
+        ahead &&
+        cell === ahead.cell &&
+        tile.readTo > tile.readFrom &&
+        tile.readTo > ahead.k0 * cell &&
+        tile.readFrom <= ahead.k1 * cell
+      )
+        this.aheadStopped = true;
+    }
+    if (this.meters && bytes > this.budget) {
+      let visible = 0;
+      for (const tile of this.grids.get(target.cell)?.values() ?? [])
+        if (
+          tile.readTo > tile.readFrom &&
+          tile.to > target.k0 * target.cell &&
+          tile.from <= target.k1 * target.cell
+        )
+          visible += tile.bytes;
+      if (visible > this.budget) this.limit();
+    }
+  }
+
+  private clear(name: 'settle' | 'retry' | 'activityRetry') {
+    if (!this.timers.has(name)) return;
+    this.env.clearTimeout(this.timers.get(name));
+    this.timers.delete(name);
+  }
+}
+
+const keyOf = (lineup: string[]) => JSON.stringify([...lineup].sort());
+export {historyPool} from './historyPool';
+function reader(scope: HistoryScope, family: MoneyFamily = 'budget') {
+  const value = new HistoryStore(
+    {
+      visibleFrom: () =>
+        pan.get()?.from ?? timeRange()?.from ?? hubNow() - periodOf(prefs().range).ms,
+      sharedTransport: true,
+      workInPresentation: scope !== 'budget',
+      read: (_board, cell, from, to, signal, meters, meta, owner, activityOnly) =>
+        boardPeriod.transport
+          .read(
+            family === 'funds' ? 'funds' : scope,
+            {
+              cell: String(cell),
+              from: String(from),
+              to: String(to),
+              ...(pan.get() ? {evidence: 'skip'} : {}),
+              meta: meta?.meta ?? '',
+              ...(meters
+                ? {
+                    ...(meters.sources ? {sources: JSON.stringify(meters.sources)} : {}),
+                    unit: meters.unit,
+                    meters: JSON.stringify(meters.ids),
+                    ...(meters.displayCurrency ? {currency: meters.displayCurrency} : {}),
+                    ...(meters.work ? {work: '1'} : {}),
+                  }
+                : {}),
+            },
+            signal,
+            owner,
+            activityOnly,
+          )
+          .then(reply => expandHistory(reply, meta)),
+      now: hubNow,
+      setTimeout: (run, ms) => setTimeout(run, ms),
+      clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
+      dropTimeRange: () => {
+        if (timeRange()) dropTimeRange();
+      },
+      accessLost: () => {
+        page.dispatch({type: 'board-close'});
+        window.dispatchEvent(new Event(UNAUTHORIZED));
+      },
+      retry: selected => {
+        if (selected) boardPeriod.retry();
+        boardPeriod.retryHistory(family === 'funds' ? 'funds' : scope);
+      },
+    },
+    STORED_BYTES,
+    scope,
+    historyPool,
+  );
+  value.setActive(false);
+  return value;
+}
+export const quotaHistory = reader('quota'),
+  budgetHistory = reader('budget'),
+  fundsHistory = reader('budget', 'funds');
+boardPeriod.transport.metadataToken = (board, scope) =>
+  (scope === 'quota'
+    ? quotaHistory
+    : scope === 'funds'
+      ? fundsHistory
+      : budgetHistory
+  ).metadataToken(board);
+export const loader = quotaHistory;
+let shellActive = false;
+const selectedMeters = (state: PageState, scope: HistoryScope, family: MoneyFamily = 'budget') => {
+  const board = state.board;
+  if (!board) return undefined;
+  const cards = board.lineup.flatMap(id => board.cards[id] ?? []);
+  return scope === 'budget'
+    ? moneyReadSelection(
+        cards,
+        board.view,
+        prefs()[family === 'funds' ? 'funds' : 'money'],
+        board.currencies,
+        family,
+      )
+    : subscriptionSelection(cards, board.view);
+};
+function activeReaders(state = page.get()) {
+  const board = state.board;
+  quotaHistory.setActivityActive(
+    !!board && widgetVisible(board.view, ACTIVITY, board.lineup.length),
+  );
+  quotaHistory.setActive(
+    shellActive &&
+      filtersReady() &&
+      !!board &&
+      [ACTIVITY, ...QUOTA_WIDGETS].some(id => widgetVisible(board.view, id, board.lineup.length)),
+  );
+  fundsHistory.setActive(
+    shellActive &&
+      filtersReady() &&
+      !!board &&
+      widgetVisible(board.view, SUBSCRIPTION_FUNDS, board.lineup.length),
+  );
+  budgetHistory.setActive(
+    shellActive &&
+      filtersReady() &&
+      !!board &&
+      BUDGET_WIDGETS.some(id => widgetVisible(board.view, id, board.lineup.length)),
+  );
+}
+export const historyReaders = {
+  setActive(active: boolean) {
+    shellActive = active;
+    boardPeriod.activate(active);
+    activeReaders();
+  },
+};
+
+/** Event changes identify resources; a reader's choices never mutate another board's selections. */
+export function follow(
+  loader: HistoryStore,
+  store: Store<PageState, PageEvent>,
+  family: MoneyFamily = 'budget',
+) {
+  const scope = loader.scope ?? 'quota';
+  let inputs: unknown[] | undefined, meters: MeterSelection | undefined;
+  const selection = (state: PageState) => {
+    const board = state.board,
+      next = [
+        board?.id,
+        board?.lineup,
+        board?.cards,
+        board?.view,
+        board?.currencies,
+        prefs()[family === 'funds' ? 'funds' : 'money'],
+        effectiveFilters(),
+      ];
+    // Contacts update private device times, leaving every selection input shared.
+    // Reuse both the resource scan and the reader's already compared query.
+    if (!inputs || next.some((value, index) => value !== inputs![index])) {
+      inputs = next;
+      meters = selectedMeters(state, scope, family);
+    }
+    return meters;
+  };
+  return store.listen((event, state) => {
+    if (event.type === 'board-open') {
+      pan.cancel();
+      loader.open(event.id);
+    } else if (event.type === 'board-close') {
+      pan.cancel();
+      loader.close();
+    } else if (event.type === 'hub') {
+      const hub = event.event;
+      // Contacts update device rows without changing any history selection.
+      if (hub.type === 'deviceContacts') return;
+      if (hub.type === 'hello') loader.hello(hub.data.epoch);
+      else if (hub.type === 'snapshot') {
+        const board = state.board,
+          ids = board?.lineup ?? [];
+        const evidence = JSON.stringify([
+          ids.map(id => {
+            const card = board?.cards[id];
+            return scope === 'quota'
+              ? [id, card?.windows, card?.resources?.windows, card?.successAt]
+              : [id, card?.budget, card?.meters, card?.creditBalance, card?.balanceStatus];
+          }),
+          scope === 'budget' ? board?.currencies : null,
+        ]);
+        loader.snapshot(
+          ids,
+          scope === 'quota' ? windowsOf(state) : [],
+          board?.historyStart,
+          board?.workAuthority,
+          evidence,
+        );
+      } else if (hub.type === 'lineup') {
+        loader.lineup(state.board?.lineup ?? []);
+        if (scope === 'quota') loader.setWindows(windowsOf(state));
+      } else if (hub.type === 'card' && scope === 'quota') loader.setWindows(windowsOf(state));
+      else if (hub.type === 'history') {
+        const meters = selection(state),
+          selected = new Set(
+            scope === 'budget'
+              ? meters?.ids.map(([source]) => source)
+              : (meters?.sources ?? state.board?.lineup ?? []),
+          );
+        const changes = hub.data.changes?.filter(
+          change => change.scope === scope && selected.has(change.source),
+        );
+        const unknown = hub.data.sources.some(
+          source =>
+            selected.has(source) &&
+            (!hub.data.changes || !hub.data.changes.some(change => change.source === source)),
+        );
+        const nativeSince = Math.min(
+          unknown ? hub.data.since : Infinity,
+          ...(changes ?? [])
+            .filter(change => change.workOnly !== true || change.workSince === undefined)
+            .map(change => change.since),
+        );
+        const workSince = scope === 'quota' ? hub.data.workSince : undefined;
+        const work =
+          scope === 'quota'
+            ? workChange(hub.data, [...selected])
+            : {retired: false, since: Infinity};
+        if (
+          work.retired ||
+          nativeSince !== Infinity ||
+          work.since !== Infinity ||
+          workSince !== undefined
+        )
+          loader.news(
+            work.retired ? 0 : Math.min(nativeSince, work.since, workSince ?? Infinity),
+            hub.data.workAuthority,
+            work.since,
+            nativeSince,
+          );
+        else if (!hub.data.changes && hub.data.sources.some(source => selected.has(source)))
+          loader.news(hub.data.since, hub.data.workAuthority, work.since);
+      }
+    }
+    if (state.board) {
+      loader.setWorkFilter(selectedWorkKey(state), effectiveFilters() ?? undefined);
+      loader.setMeters(selection(state));
+    }
+  });
+}
+const windowsOf = (state: PageState) =>
+  Object.values(state.board?.cards ?? {}).flatMap(card =>
+    card.windows.map(window => `${card.id} ${window.id}`),
+  );
+const selectedWorkKey = (state: PageState = page.get()) => {
+  const filters = effectiveFilters();
+  return JSON.stringify([state.hubEpoch, filters ? workFilter(filters) : null]);
+};
+if (typeof window !== 'undefined') followPeriod();
+follow(quotaHistory, page);
+follow(budgetHistory, page);
+follow(fundsHistory, page, 'funds');
+page.listen((_event, state) => activeReaders(state));
+onDataFilters(() => {
+  if (quotaHistory.setWorkFilter(selectedWorkKey(), effectiveFilters() ?? undefined)) pan.cancel();
+  for (const [reader, scope, family] of [
+    [quotaHistory, 'quota', 'budget'],
+    [budgetHistory, 'budget', 'budget'],
+    [fundsHistory, 'budget', 'funds'],
+  ] as const)
+    reader.setMeters(selectedMeters(page.get(), scope, family));
+  activeReaders();
+});
+
+/** The plot follows the gesture; only its completion chooses exact quantities. */
+export function followPan(
+  loader: HistoryStore,
+  gesture: Pick<Pan, 'get' | 'subscribe'>,
+  selectedRange: () => TimeRange | null,
+) {
+  let origin: TimeRange | null = null;
+  let token: number | null = null;
+  return gesture.subscribe(() => {
+    const frame = gesture.get();
+    if (frame) {
+      token = frame.token;
+      origin = frame.origin;
+      loader.pan({
+        token: frame.token,
+        length: frame.length,
+        from: frame.from,
+        to: Math.min(frame.now, frame.to + (loader.scope === 'budget' ? 0 : frame.lookAhead)),
+        direction: frame.direction,
+      });
+    } else if (token !== null) {
+      const selected = selectedRange();
+      const committed =
+        origin === null
+          ? selected !== null
+          : selected === null || selected.from !== origin.from || selected.to !== origin.to;
+      token = null;
+      loader.endPan(committed);
+    }
+  });
+}
+
+if (typeof window !== 'undefined') {
+  followPan(quotaHistory, pan, timeRange);
+  followPan(budgetHistory, pan, timeRange);
+  followPan(fundsHistory, pan, timeRange);
+  const chosen = () => {
+    for (const reader of [quotaHistory, budgetHistory, fundsHistory]) {
+      reader.choose(prefs().range, timeRange());
+      if (page.get().board)
+        reader.setMeters(
+          selectedMeters(page.get(), reader.scope!, reader === fundsHistory ? 'funds' : 'budget'),
+        );
+    }
+  };
+  onPrefs(chosen);
+  onTimeRange(chosen);
+  chosen();
+}
+function usePeriodHistory(
+  loader: HistoryStore,
+  rolling = false,
+  financial = false,
+  activityOnly = false,
+): Shown & {drawing: History | null} {
+  const shown = useSyncExternalStore(
+    financial ? loader.subscribeFinancial : loader.subscribe,
+    financial ? loader.getFinancial : loader.get,
+    financial ? loader.getFinancial : loader.get,
+  );
+  const panning = pan.active();
+  const revision = useSyncExternalStore(
+    listener =>
+      boardPeriod.subscribeProjection(
+        loader === fundsHistory ? 'funds' : (loader.scope ?? 'quota'),
+        listener,
+      ),
+    () =>
+      (financial ? boardPeriod.getFinancialProjectionSnapshot : boardPeriod.getProjectionRevision)(
+        loader === fundsHistory ? 'funds' : (loader.scope ?? 'quota'),
+      ),
+  );
+  const retained = useRef<{board: string; history: History; deadline: number} | null>(null);
+  const now = useClock(
+    at => {
+      const next = Math.min(
+        rolling
+          ? (frameChangesAt(timeRange(), shown.history?.cellMs ?? 60_000, at) ?? Infinity)
+          : Infinity,
+        activityOnly
+          ? Infinity
+          : (boardPeriod.projectionChangesAt(
+              loader === fundsHistory ? 'funds' : (loader.scope ?? 'quota'),
+              at,
+            ) ?? Infinity),
+        activityOnly ? Infinity : (retained.current?.deadline ?? Infinity),
+      );
+      return Number.isFinite(next) ? next : null;
+    },
+    [shown, revision, panning],
+  );
+  const gesture = useRef<{active: boolean; target: string | null}>({active: false, target: null});
+  const authority = useRef<{board: string; loader: HistoryStore; presentation: number} | null>(
+    null,
+  );
+  const snapshot = useRef<{
+    inputs: readonly unknown[];
+    phase: number | null;
+    phaseRevision: number;
+    value: Shown;
+  } | null>(null);
+  // Phase bookkeeping runs even when the retained accounting frame stays the
+  // same. Only a changed snapshot should render a table or its static measure.
+  const read = useMemo(
+    () => () => {
+      const shownNow = (financial ? loader.getFinancial : loader.get)(),
+        revisionNow = (
+          financial ? boardPeriod.getFinancialProjectionSnapshot : boardPeriod.getProjectionRevision
+        )(loader === fundsHistory ? 'funds' : (loader.scope ?? 'quota')),
+        panning = pan.active();
+      const presentation = activityOnly ? loader.getActivityPresentation() : shownNow.presentation;
+      const board = page.get().board?.id ?? '';
+      const selected = timeRange(),
+        target = board + ':' + (selected ? timeRangeKey(selected) : prefs().range);
+      const workState = activityOnly ? boardPeriod.activityProjectionState(shownNow.history) : null;
+      if (workState?.retired) retained.current = null;
+      const inputs = [
+          shownNow,
+          presentation,
+          revisionNow,
+          loader,
+          panning,
+          now,
+          board,
+          target,
+          workState?.retired,
+        ],
+        previous = snapshot.current,
+        validAt = hubNow();
+      // A retained frame can outlive the raw tiles that scheduled its expiry.
+      // Retire its plan facts before even the stable-snapshot fast path.
+      const held = retained.current,
+        expired = !activityOnly && !!held && validAt >= held.deadline;
+      if (expired) {
+        const events = planEventsAt(held.history.events, validAt);
+        retained.current = {
+          ...held,
+          history: {...held.history, events},
+          deadline: planEventsDeadline(events),
+        };
+      }
+      if (!expired && previous && inputs.every((value, i) => Object.is(value, previous.inputs[i])))
+        return previous.value;
+      const at =
+        (gesture.current.active && panning === null) ||
+        shownNow !== shown ||
+        revisionNow !== revision
+          ? validAt
+          : now;
+      const candidate = (() => {
+        if (
+          authority.current?.board !== board ||
+          authority.current.loader !== loader ||
+          authority.current.presentation !== presentation
+        ) {
+          retained.current = null;
+          gesture.current = {active: false, target: null};
+          authority.current = {board, loader, presentation};
+        }
+        if (panning !== null) {
+          gesture.current.active = true;
+          gesture.current.target = null;
+        } else if (gesture.current.active) {
+          gesture.current.active = false;
+          gesture.current.target = target;
+        }
+        if (gesture.current.target !== target) gesture.current.target = null;
+        const folding = gesture.current.target === target;
+        // The data layers move through their strips during a gesture. Keep the last
+        // complete accounting frame until release, including its full opacity.
+        if (panning !== null && retained.current)
+          return {
+            ...shownNow,
+            history: retained.current.history,
+            loading: false,
+            error: shownNow.error,
+          };
+        if (!shownNow.history)
+          return activityOnly && retained.current
+            ? {...shownNow, history: retained.current.history}
+            : shownNow;
+        const scope = loader === fundsHistory ? 'funds' : (loader.scope ?? 'quota'),
+          state = workState ?? boardPeriod.projectionState(shownNow.history, scope);
+        if (!state.ready || (activityOnly && !loader.isActivityCurrent(shownNow.history)))
+          return {
+            ...shownNow,
+            history: retained.current?.history ?? null,
+            loading: !folding && !state.error && !shownNow.error,
+            error: state.error ?? shownNow.error,
+          };
+        const projected = boardPeriod.project(shownNow.history, scope, at, activityOnly),
+          deadline = activityOnly
+            ? Infinity
+            : held?.history.events === projected.events
+              ? held.deadline
+              : planEventsDeadline(projected.events);
+        const events =
+            validAt >= deadline ? planEventsAt(projected.events, validAt) : projected.events,
+          history = events === projected.events ? projected : {...projected, events};
+        retained.current = {
+          board,
+          history,
+          deadline: events === projected.events ? deadline : planEventsDeadline(events),
+        };
+        if (!shownNow.loading) gesture.current.target = null;
+        return {
+          ...shownNow,
+          history,
+          loading: folding ? false : shownNow.loading,
+          error: state.error ?? shownNow.error,
+        };
+      })();
+      const value = activityOnly ? {...candidate, presentation} : candidate;
+      snapshot.current = {
+        inputs,
+        phase: panning,
+        phaseRevision:
+          (previous?.phaseRevision ?? 0) + (previous && previous.phase !== panning ? 1 : 0),
+        value: previous && shallowEqual(previous.value, value) ? previous.value : value,
+      };
+      return snapshot.current.value;
+    },
+    [shown, revision, loader, now, financial, activityOnly],
+  );
+  const result = useSyncExternalStore(pan.onPhase, read, read);
+  // Rolling totals change with the endpoints; their unchanged drawing evidence
+  // must not restart line and stack preparation on the same clock wake.
+  const drawing = useMemo(
+    () => result.history,
+    [
+      shown,
+      revision,
+      loader,
+      snapshot.current?.phaseRevision,
+      activityOnly ? undefined : result.history?.events,
+    ],
+  );
+  return {...result, drawing};
+}
+export function useHistory(rolling = false) {
+  return usePeriodHistory(quotaHistory, rolling);
+}
+export function useActivityHistory(): Omit<Shown, 'history'> & {
+  history: ActivityFrame | null;
+  drawing: ActivityFrame | null;
+} {
+  return usePeriodHistory(quotaHistory, true, false, true);
+}
+export function useQuotaFinancialHistory() {
+  return usePeriodHistory(quotaHistory, false, true);
+}
+export function useBudgetHistory(family: MoneyFamily = 'budget', rolling = false) {
+  return usePeriodHistory(family === 'funds' ? fundsHistory : budgetHistory, rolling);
+}
+export function useBudgetFinancialHistory(family: MoneyFamily = 'budget', rolling = false) {
+  return usePeriodHistory(family === 'funds' ? fundsHistory : budgetHistory, rolling, true);
+}
+export function useHistoryPlot(activity = false): PlotBuffer | null {
+  return useSyncExternalStore(
+    activity ? quotaHistory.subscribeActivityPlot : quotaHistory.subscribePlot,
+    activity ? quotaHistory.getActivityPlot : quotaHistory.getPlot,
+    activity ? quotaHistory.getActivityPlot : quotaHistory.getPlot,
+  );
+}
+export function useBudgetHistoryPlot(family: MoneyFamily = 'budget'): PlotBuffer | null {
+  const reader = family === 'funds' ? fundsHistory : budgetHistory;
+  return useSyncExternalStore(reader.subscribePlot, reader.getDrawingPlot, reader.getDrawingPlot);
+}
+/** A fresh answer from either resource family supersedes the board's initial snapshot. */
+export function historyBegins(
+  board: string | null,
+  snapshot: number | null,
+  answers: readonly (HistoryBoundary | null)[],
+): number {
+  const current = answers.filter(
+    (answer): answer is HistoryBoundary => !!answer && answer.board === board,
+  );
+  const newest = Math.max(...current.map(answer => answer.at));
+  return current.length
+    ? Math.min(...current.filter(answer => answer.at === newest).map(answer => answer.start))
+    : (snapshot ?? 0);
+}
+const subscribeHistoryBegins = (listener: () => void) => {
+  const stops = [
+    page.subscribe(listener),
+    quotaHistory.subscribeBoundary(listener),
+    budgetHistory.subscribeBoundary(listener),
+    fundsHistory.subscribeBoundary(listener),
+  ];
+  return () => stops.forEach(stop => stop());
+};
+const readHistoryBegins = () => {
+  const board = page.get().board;
+  return historyBegins(board?.id ?? null, board?.historyStart ?? null, [
+    quotaHistory.getBoundary(),
+    budgetHistory.getBoundary(),
+    fundsHistory.getBoundary(),
+  ]);
+};
+/** Reading fresh metadata only renders navigation when its numeric boundary changes. */
+export function useHistoryBegins(): number {
+  return useSyncExternalStore(subscribeHistoryBegins, readHistoryBegins, readHistoryBegins);
+}
