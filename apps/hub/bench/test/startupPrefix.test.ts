@@ -1,0 +1,1103 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import {PassThrough} from 'node:stream';
+import {once, EventEmitter} from 'node:events';
+import {runInNewContext} from 'node:vm';
+import {test} from 'node:test';
+type Rows<T = Record<string, any>> = Omit<
+  Array<T>,
+  'find' | 'filter' | 'map' | 'flatMap' | 'some' | 'every' | 'findIndex' | 'at'
+> & {
+  find<V = T>(predicate: (value: V, index: number) => unknown): T;
+  filter<V = T>(predicate: (value: V, index: number) => unknown): Rows<T>;
+  map<U, V = T>(fn: (value: V, index: number) => U): U[];
+  flatMap<U, V = T>(fn: (value: V, index: number) => U | readonly U[]): U[];
+  some<V = T>(predicate: (value: V, index: number) => unknown): boolean;
+  every<V = T>(predicate: (value: V, index: number) => unknown): boolean;
+  findIndex<V = T>(predicate: (value: V, index: number) => unknown): number;
+  at(index: number): T;
+};
+type TraceState = Record<string, any> & {
+  invalid: number;
+  omitted: number;
+  ended: boolean;
+  pendingStack: boolean;
+  markers: Rows;
+  maps: Rows;
+  waits: Rows;
+  pendingWaits: Rows;
+};
+type TraceProtocolHandle = {state: TraceState; add: (line: string) => void};
+type ClassifierHandle = {add: (chunk: Buffer) => void; finish: () => Record<string, any>};
+const {
+  deviceNumbers,
+  fileIdentity,
+  traceProtocol,
+  fixtureProof,
+  fixtureWaitProof,
+  fixtureTermProof,
+  observeFilemapPhase,
+  filemapWindowReady,
+  controllerExitCode,
+  isolatedCI,
+  forwardBenchmark,
+  traceComplete,
+  traceInventoryComplete,
+  diagnosticClassifier,
+  runControl,
+} = (await import(new URL('../startupWaitControl.mjs', import.meta.url).href)) as {
+  deviceNumbers: (dev: string | number | bigint) => {major: string; minor: string};
+  fileIdentity: (s: Record<string, unknown>) => Record<string, string>;
+  traceProtocol: () => TraceProtocolHandle;
+  fixtureProof: (...args: any[]) => boolean;
+  fixtureWaitProof: (...args: any[]) => boolean;
+  fixtureTermProof: (...args: any[]) => boolean;
+  observeFilemapPhase: (
+    report: Record<string, any>,
+    observe: () => Promise<void>,
+    release: () => Promise<Record<string, any>>,
+  ) => Promise<boolean>;
+  filemapWindowReady: (state: Record<string, any>, protocol: TraceState) => boolean;
+  controllerExitCode: (report: Record<string, any>) => number;
+  isolatedCI: (env: NodeJS.ProcessEnv, repository: string) => boolean;
+  forwardBenchmark: (child: unknown, output?: unknown) => void;
+  traceComplete: (state: TraceState) => boolean;
+  traceInventoryComplete: (state: TraceState) => boolean;
+  diagnosticClassifier: (options?: {toolMessages?: boolean}) => ClassifierHandle;
+  runControl: (repository: string, directory: string) => Promise<Record<string, any>>;
+};
+const meta = {
+  dev: '64768',
+  ino: '123456789123',
+  size: '16777216',
+  mtimeNs: '1730000000000000000',
+  ctimeNs: '1730000000000000001',
+  uid: '1001',
+};
+const row = {
+  pid: 1234,
+  birth: '200',
+  parent: 1000,
+  group: 1234,
+  session: 1234,
+  uids: [1001, 1001, 1001, 1001],
+};
+const sender = {pid: 1000, birth: '100', uid: 1001},
+  bracket = {beforeNs: '9000000000', afterNs: '9000000010'};
+const json = {
+  status: 'fixture-read-complete',
+  pid: 1234,
+  birth: '200',
+  group: 1234,
+  session: 1234,
+  owner: 1001,
+  fdmeta: {...meta},
+  mainReads: 16,
+  threadReads: 16,
+  mappedTouches: 16,
+  offsets: 16,
+  pageBytes: 4096,
+  fdPosition: '0',
+  coldstats: {adviceCalls: 1, mincoreCalls: 1, pages: 4096, residentPages: 0},
+};
+const base = () => {
+  const p = traceProtocol();
+  p.add('QFW_TICK 3000000000');
+  p.add('QFW_BIND 1 1234 2000000000 1000 1001 3000000010');
+  p.add('QFW_FILE 1 1 1234 2000000000 253 0 123456789123 0 1 4000000000');
+  p.add('QFW_FILE 1 2 1234 2000000000 253 0 123456789123 0 0 4000000001');
+  return p;
+};
+const terms = () => {
+  const p = base();
+  p.add('QFW_TERM 1 1234 2000000000 9000000005 1000 1000000000 1001 0');
+  p.add('QFW_EXIT 1 1234 2000000000 9000000020');
+  return p;
+};
+const waitBracket = {beforeNs: '5000000000', releaseNs: '5200000000'};
+const addWait = (
+  p: TraceProtocolHandle,
+  header = 'QFW_WAIT 1 1234 2000000000 5000000010 5200000010',
+  frames = ['__schedule+123', 'wait_for_completion_state+0', 'kernel_clone+456'],
+) => {
+  for (const line of [
+    header,
+    '',
+    ...frames.map(v => '        ' + v),
+    'QFW_STACK_END ' + header.split(' ')[1],
+  ])
+    p.add(line);
+  return p;
+};
+await test('vfork wait requires a resolved matching interval across the actual release bracket', () => {
+  const p = addWait(base());
+  assert.equal(fixtureWaitProof(p.state, row, waitBracket), true);
+  assert.deepEqual(
+    p.state.waits[0].symbols.map((r: any) => r.name),
+    ['__schedule', 'wait_for_completion_state', 'kernel_clone'],
+  );
+  assert.equal(p.state.waits[0].schedulerOffCpuOnly, true);
+  assert.equal(p.state.waits[0].pureBlockedTime, false);
+});
+await test('foreign, premature and incomplete vfork intervals cannot qualify', () => {
+  for (const header of [
+    'QFW_WAIT 1 99 2000000000 5000000010 5200000010',
+    'QFW_WAIT 1 1234 2000000001 5000000010 5200000010',
+    'QFW_WAIT 1 1234 2000000000 4999999999 5200000010',
+    'QFW_WAIT 1 1234 2000000000 5200000000 5200000010',
+    'QFW_WAIT 1 1234 2000000000 5000000010 5199999999',
+  ])
+    assert.equal(fixtureWaitProof(addWait(base(), header).state, row, waitBracket), false);
+  for (const frames of [
+    ['__schedule+0', 'filemap_fault+0'],
+    ['__schedule+0', 'kernel_clone+0'],
+  ])
+    assert.equal(
+      fixtureWaitProof(addWait(base(), undefined, frames).state, row, waitBracket),
+      false,
+    );
+  const p = addWait(base());
+  p.state.markers[1].pid = 99;
+  assert.equal(fixtureWaitProof(p.state, row, waitBracket), false);
+});
+await test('kernel pointers, paths, missing frames and depth truncation remain unknown without raw retention', () => {
+  for (const frames of [
+    [],
+    ['0xffffffff81234567'],
+    ['ffffffff81234567+0'],
+    ['/private/canary'],
+    Array(32).fill('__schedule+0'),
+  ]) {
+    const p = addWait(base(), undefined, frames);
+    assert.ok(p.state.invalid > 0);
+    assert.equal(p.state.waits.length, 0);
+    assert.equal(JSON.stringify(p.state).includes('ffffffff81234567'), false);
+    assert.equal(JSON.stringify(p.state).includes('/private'), false);
+  }
+  const p = addWait(base(), undefined, Array(31).fill('__schedule+0'));
+  assert.equal(p.state.invalid, 0);
+});
+await test('scheduler END validates unique cohort identity and logical interval times', () => {
+  const p = addWait(base());
+  p.add('QFW_END 6000000000');
+  assert.equal(traceComplete(p.state), true);
+  for (const edit of [
+    (p: any) => (p.state.waits[0].pid = 9),
+    (p: any) => (p.state.waits[0].birthNs = '2000000001'),
+    (p: any) => (p.state.waits[0].outNs = '2999999999'),
+    (p: any) => (p.state.waits[0].ns = '6000000001'),
+    (p: any) => p.state.waits.push(structuredClone(p.state.waits[0])),
+  ]) {
+    const q = addWait(base());
+    q.add('QFW_END 6000000000');
+    edit(q);
+    assert.equal(traceComplete(q.state), false);
+  }
+  const q = base();
+  q.add('QFW_WAIT 1 1234 2000000000 5000000010 5200000010');
+  q.add('__schedule+0');
+  q.add('QFW_END 6000000000');
+  assert.equal(traceComplete(q.state), false);
+});
+await test('pending scheduler timestamps are censored context and never a completed interval', () => {
+  const p = base();
+  p.add('@wait_out[2]: 5000000000');
+  assert.equal(p.state.maps.at(-1).schedulerOffCpuOnly, true);
+  assert.equal(p.state.maps.at(-1).pureBlockedTime, false);
+  assert.equal(p.state.waits.length, 0);
+  assert.equal(fixtureWaitProof(p.state, row, waitBracket), false);
+  p.add('@wait_stack[2]: 0xffffffff81234567');
+  assert.equal(p.state.invalid, 1);
+  assert.equal(JSON.stringify(p.state).includes('0xffffffff'), false);
+});
+await test('EOF inside a stack after an earlier END cannot qualify', () => {
+  const p = base();
+  p.add('QFW_END 6000000000');
+  p.add('QFW_WAIT 1 1234 2000000000 5000000010 5200000010');
+  p.add('kernel_clone+0');
+  assert.equal(p.state.pendingStack, true);
+  assert.equal(traceComplete(p.state), false);
+  for (const frames of [['kernel_clone'], ['kernel_clone+0x123']])
+    assert.ok(addWait(base(), undefined, frames).state.invalid > 0);
+});
+const inventory = () => {
+  const p = addWait(base());
+  p.add('QFW_BIND 2 2222 2100000000 1002 1001 5300000000');
+  p.add('QFW_WINDOW_CLOSED 27000000000');
+  p.add('QFW_END 27516206298');
+  for (const [c, pid, birth, parent, at] of [
+    ['1', '1234', '2000000000', '1000', '3000000010'],
+    ['2', '2222', '2100000000', '1002', '5300000000'],
+  ])
+    for (const [name, keys, value] of [
+      ['root', c, pid],
+      ['birth', c, birth],
+      ['parent', c, parent],
+      ['bound_ns', c, at],
+      ['cohort', pid, c],
+    ])
+      p.add('@' + name + '[' + keys + ']: ' + value);
+  for (const line of [
+    '@capture_closed: 1',
+    '@window_closed_ns: 27000000000',
+    '@wait_armed: 1',
+    '@wait_fixture_printed: 1',
+    '@wait_count[1]: 1',
+    '@wait_max[1]: 200000000',
+    '@wait_bounds[1]: (5000000010, 5200000010)',
+  ])
+    p.add(line);
+  return p;
+};
+await test('a reaped END without the automatic numeric inventory is incomplete', () => {
+  const p = inventory();
+  assert.equal(traceInventoryComplete(p.state), true);
+  const empty = structuredClone(p.state);
+  empty.maps = [] as unknown as Rows;
+  assert.equal(traceComplete(empty), true);
+  assert.equal(traceInventoryComplete(empty), false);
+  for (const missing of [
+    'root',
+    'birth',
+    'parent',
+    'bound_ns',
+    'cohort',
+    'capture_closed',
+    'window_closed_ns',
+    'wait_armed',
+    'wait_fixture_printed',
+    'wait_count',
+    'wait_max',
+    'wait_bounds',
+  ]) {
+    const q = inventory();
+    q.state.maps = q.state.maps.filter((r: any) => r.name !== missing);
+    assert.equal(traceInventoryComplete(q.state), false, missing);
+  }
+});
+await test('numeric inventory rejects foreign bindings, duplicate keys and a substituted cutoff', () => {
+  for (const name of [
+    'root',
+    'birth',
+    'parent',
+    'bound_ns',
+    'cohort',
+    'capture_closed',
+    'window_closed_ns',
+  ]) {
+    const p = inventory();
+    p.state.maps.find((r: any) => r.name === name).values = ['9'];
+    assert.equal(traceInventoryComplete(p.state), false, name);
+  }
+  const p = inventory();
+  p.state.maps.push(structuredClone(p.state.maps[0]));
+  assert.equal(traceInventoryComplete(p.state), false);
+});
+await test('fixture accounting requires scalar counters and consistent ascending bounds', () => {
+  for (const [name, values] of [
+    ['wait_count', ['1', '2']],
+    ['wait_count', ['0']],
+    ['wait_max', ['200000000', '1']],
+    ['wait_max', ['1']],
+    ['wait_bounds', ['0']],
+    ['wait_bounds', ['5200000010', '5000000010']],
+  ]) {
+    const p = inventory();
+    p.state.maps.find((r: any) => r.name === name).values = values;
+    assert.equal(traceInventoryComplete(p.state), false, name as string);
+  }
+});
+const addPending = (
+  p: TraceProtocolHandle,
+  out = '6000000000',
+  censor = '27000000000',
+  pid = '2222',
+  birth = '2100000000',
+  frames = ['__schedule+1', 'folio_wait_bit_common+2'],
+) => {
+  for (const line of [
+    'QFW_PENDING 2 ' + pid + ' ' + birth + ' ' + out + ' ' + censor,
+    ...frames,
+    'QFW_STACK_END 2',
+  ])
+    p.add(line);
+  return p;
+};
+const pendingInventory = () => {
+  const p = inventory();
+  p.add('@wait_out[2]: 6000000000');
+  return addPending(p);
+};
+await test('an unpaired browser switch-out retains a separately censored stack without completed accounting', () => {
+  const p = pendingInventory();
+  assert.equal(traceInventoryComplete(p.state), true);
+  assert.equal(p.state.waits.length, 1);
+  assert.equal(p.state.pendingWaits.length, 1);
+  const w = p.state.pendingWaits[0];
+  assert.equal(w.censorNs, '27000000000');
+  assert.equal(w.censored, true);
+  assert.equal(w.durationProven, false);
+  assert.equal(w.pureBlockedTime, false);
+  assert.equal('ns' in w, false);
+  assert.equal('duration' in w, false);
+  addWait(p, 'QFW_WAIT 2 2222 2100000000 5400000000 5500000000');
+  assert.equal(traceInventoryComplete(p.state), true);
+});
+await test('pending interpretation stops at the earliest observed TERM, EXIT or capture cutoff', () => {
+  for (const [term, exit, censor] of [
+    ['8000000000', '9000000000', '8000000000'],
+    ['9000000000', '8000000000', '8000000000'],
+    ['28000000000', '29000000000', '27000000000'],
+  ]) {
+    const p = inventory();
+    p.state.markers.find((r: any) => r.kind === 'QFW_END').ns = '30000000000';
+    p.add('@wait_out[2]: 6000000000');
+    p.add('QFW_TERM 2 2222 2100000000 ' + term + ' 1002 2000000000 1001 0');
+    p.add('QFW_EXIT 2 2222 2100000000 ' + exit);
+    p.add('@first_term_ns[2]: ' + term);
+    p.add('@exit_ns[2]: ' + exit);
+    addPending(p, '6000000000', censor);
+    assert.equal(traceInventoryComplete(p.state), true);
+    p.state.pendingWaits[0].censorNs = String(BigInt(censor) + 1n);
+    assert.equal(traceInventoryComplete(p.state), false);
+  }
+});
+await test('foreign identity, pre-binding or post-termination pending records remain unknown', () => {
+  for (const [out, censor, pid, birth] of [
+    ['6000000000', '27000000000', '99', '2100000000'],
+    ['6000000000', '27000000000', '2222', '2100000001'],
+    ['5299999999', '27000000000', '2222', '2100000000'],
+  ]) {
+    const p = inventory();
+    p.add('@wait_out[2]: ' + out);
+    addPending(p, out, censor, pid, birth);
+    assert.equal(traceInventoryComplete(p.state), false);
+  }
+  for (const [kind, name] of [
+    ['QFW_TERM', 'first_term_ns'],
+    ['QFW_EXIT', 'exit_ns'],
+  ])
+    for (const at of ['5999999999', '6000000000']) {
+      const p = pendingInventory();
+      p.add(
+        kind + ' 2 2222 2100000000 ' + at + (kind === 'QFW_TERM' ? ' 1002 2000000000 1001 0' : ''),
+      );
+      p.add('@' + name + '[2]: ' + at);
+      assert.equal(traceInventoryComplete(p.state), false);
+      p.state.pendingWaits = [] as unknown as Rows;
+      assert.equal(traceInventoryComplete(p.state), false);
+    }
+});
+await test('pending censor fences require matching numeric maps and identity-bound markers', () => {
+  for (const [kind, name] of [
+    ['QFW_TERM', 'first_term_ns'],
+    ['QFW_EXIT', 'exit_ns'],
+  ]) {
+    const marker =
+      kind +
+      ' 2 2222 2100000000 8000000000' +
+      (kind === 'QFW_TERM' ? ' 1002 2000000000 1001 0' : '');
+    for (const lines of [
+      [marker],
+      ['@' + name + '[2]: 5000000000'],
+      [marker, '@' + name + '[2]: 8000000001'],
+      [marker, '@' + name + '[2]: (8000000000, 1)'],
+      [marker, '@' + name + '[2]: 8000000000', '@' + name + '[2]: 8000000000'],
+    ]) {
+      const p = inventory();
+      p.add('@wait_out[2]: 6000000000');
+      for (const line of lines) p.add(line);
+      addPending(p, '6000000000', lines.includes(marker) ? '8000000000' : '27000000000');
+      assert.equal(traceInventoryComplete(p.state), false);
+    }
+  }
+});
+await test('an eligible pending timestamp requires exactly its matching bounded stack', () => {
+  const p = pendingInventory();
+  p.state.pendingWaits = [] as unknown as Rows;
+  assert.equal(traceInventoryComplete(p.state), false);
+  const q = pendingInventory();
+  q.state.pendingWaits.push(structuredClone(q.state.pendingWaits[0]));
+  assert.equal(traceInventoryComplete(q.state), false);
+  for (const edit of [
+    (h: TraceProtocolHandle) => {
+      h.state.maps = h.state.maps.filter((r: any) => r.name !== 'wait_out');
+    },
+    (h: TraceProtocolHandle) => {
+      h.state.maps.find((r: any) => r.name === 'wait_out').values = ['6000000001'];
+    },
+  ]) {
+    const p = pendingInventory();
+    edit(p);
+    assert.equal(traceInventoryComplete(p.state), false);
+  }
+});
+await test('a main thread cannot have a pending switch-out before a retained completed switch-in', () => {
+  for (const out of ['6000000000', '7000000000']) {
+    const p = pendingInventory();
+    addWait(p, 'QFW_WAIT 2 2222 2100000000 ' + out + ' 8000000000');
+    assert.equal(traceInventoryComplete(p.state), false);
+  }
+});
+await test('unresolved, truncated or incomplete pending stacks cannot certify the numeric inventory', () => {
+  for (const frames of [[], ['0xffffffff81234567'], Array(32).fill('__schedule+0')]) {
+    const p = inventory();
+    p.add('@wait_out[2]: 6000000000');
+    addPending(p, undefined, undefined, undefined, undefined, frames);
+    assert.equal(traceInventoryComplete(p.state), false);
+    assert.equal(JSON.stringify(p.state).includes('0xffffffff'), false);
+  }
+  const p = inventory();
+  p.add('@wait_out[2]: 6000000000');
+  p.add('QFW_PENDING 2 2222 2100000000 6000000000 27000000000');
+  p.add('__schedule+0');
+  assert.equal(traceInventoryComplete(p.state), false);
+});
+await test('bounded tool tail retains a late verifier reason and removes addresses and private fields', () => {
+  const d = diagnosticClassifier({toolMessages: true});
+  d.add(Buffer.from('prologue\n' + 'ignored\n'.repeat(5000)));
+  d.add(
+    Buffer.from(
+      'Error log:\nR1 invalid mem access 0xffffffff81234567 /private/loader TOKEN=private-canary\nprocessed 123 instructions\n',
+    ),
+  );
+  const r = d.finish();
+  assert.ok(r.toolTailMessages.some((v: string) => v.includes('invalid mem access')));
+  assert.ok(r.toolTailMessages.some((v: string) => v.includes('processed 123')));
+  assert.equal(r.toolTailLimited, true);
+  assert.ok(r.toolTailMessages.length <= 8);
+  assert.equal(JSON.stringify(r).includes('0xffffffff'), false);
+  assert.equal(JSON.stringify(r).includes('/private'), false);
+  assert.equal(JSON.stringify(r).includes('private-canary'), false);
+  const ordinary = diagnosticClassifier();
+  ordinary.add(Buffer.from('verifier private-canary\n'));
+  assert.equal('toolTailMessages' in ordinary.finish(), false);
+});
+await test('GNU dev_t roundtrip, including high device bits', () => {
+  for (const [major, minor] of [
+    [0n, 0n],
+    [253n, 0n],
+    [4095n, 1048575n],
+    [0x12345678n, 0x23456789n],
+  ]) {
+    const dev =
+      ((major & 0xfffn) << 8n) |
+      ((major & ~0xfffn) << 32n) |
+      (minor & 0xffn) |
+      ((minor & ~0xffn) << 12n);
+    assert.deepEqual(deviceNumbers(dev), {major: String(major), minor: String(minor)});
+  }
+});
+await test('exact BigInt file metadata keeps decimal precision', () => {
+  const v = {
+    dev: 64768n,
+    ino: 123456789123456789n,
+    size: 16777216n,
+    mtimeNs: 1730000000000000001n,
+    ctimeNs: 1730000000000000002n,
+    uid: 1001n,
+  };
+  assert.deepEqual(
+    fileIdentity(v),
+    Object.fromEntries(Object.entries(v).map(([k, v]) => [k, String(v)])),
+  );
+});
+await test('both own-file read-ready and fault contexts plus exact fixture JSON qualify', () =>
+  assert.equal(fixtureProof(base().state, json, row, meta, 1000, 1001), true));
+await test('one origin alone does not qualify the fixture', () => {
+  const p = base();
+  p.state.markers.pop();
+  assert.equal(fixtureProof(p.state, json, row, meta, 1000, 1001), false);
+});
+await test('foreign PID, birth, parent, UID, process group and session refuse', () => {
+  for (const change of [
+    {pid: 99},
+    {birth: '201'},
+    {parent: 999},
+    {group: 99},
+    {session: 99},
+    {uids: [1001, 1001, 0, 1001]},
+  ])
+    assert.equal(fixtureProof(base().state, json, {...row, ...change}, meta, 1000, 1001), false);
+});
+await test('file event identity, range and both origins are exact', () => {
+  for (const change of [
+    {inode: '9'},
+    {major: '1'},
+    {minor: '1'},
+    {firstIndex: '4096', lastIndex: '4096'},
+    {origin: 1},
+    {birthNs: '2000000001'},
+    {pid: 99},
+  ]) {
+    const p = base();
+    Object.assign(p.state.markers.at(-1), change);
+    assert.equal(fixtureProof(p.state, json, row, meta, 1000, 1001), false);
+  }
+});
+await test('cold/read counts, descriptor and exact schema refuse contamination', () => {
+  for (const edit of [
+    (v: any) => (v.secret = 'canary-never-save'),
+    (v: any) => (v.fdmeta.path = 'canary-never-save'),
+    (v: any) => (v.coldstats.path = 'canary-never-save'),
+    (v: any) => (v.coldstats.residentPages = 1),
+    (v: any) => (v.threadReads = 15),
+    (v: any) => (v.mappedTouches = 15),
+    (v: any) => delete v.mappedTouches,
+    (v: any) => (v.fdPosition = '4096'),
+    (v: any) => (v.fdmeta.ino = '123'),
+    (v: any) => (v.fdmeta.mtimeNs = Number(v.fdmeta.mtimeNs)),
+  ]) {
+    const v = structuredClone(json);
+    edit(v);
+    assert.equal(fixtureProof(base().state, v, row, meta, 1000, 1001), false);
+  }
+});
+await test('actual sender plus shared clock TERM bracket and exit qualify', () =>
+  assert.equal(fixtureTermProof(terms().state, row, bracket, sender), true));
+await test('TERM generation outside bracket, sender, result or birth refuses', () => {
+  for (const change of [
+    {ns: '8999999999'},
+    {ns: '9000000011'},
+    {senderPid: 999},
+    {senderBirthNs: '1010000000'},
+    {senderUid: 0},
+    {result: 1},
+    {pid: 99},
+    {birthNs: '2000000001'},
+  ]) {
+    const p = terms();
+    Object.assign(p.state.markers.at(-2), change);
+    assert.equal(fixtureTermProof(p.state, row, bracket, sender), false);
+  }
+});
+await test('missing, repeated or premature exit cannot qualify', () => {
+  const p = terms();
+  p.state.markers.pop();
+  assert.equal(fixtureTermProof(p.state, row, bracket, sender), false);
+  const q = terms();
+  q.state.markers.push({...q.state.markers.at(-2)});
+  assert.equal(fixtureTermProof(q.state, row, bracket, sender), false);
+  const r = terms();
+  r.state.markers.at(-1).ns = '9000000004';
+  assert.equal(fixtureTermProof(r.state, row, bracket, sender), false);
+});
+await test('filemap context maps retain numeric counts without pending/duration proof', () => {
+  const p = base();
+  p.add('QFW_WINDOW_CLOSED 25000000000');
+  p.add('@capture_closed: 1');
+  p.add('@count[2, 1, 253, 0, 1234]: 7');
+  p.add('@files_omitted[2, 1]: 5');
+  assert.equal(p.state.ended, false);
+  assert.equal(p.state.maps.at(-1).filemapContextOnly, true);
+  assert.equal(p.state.maps.at(-1).physicalWaitProof, false);
+  assert.equal('censoredLowerBound' in p.state.maps.at(-1), false);
+  assert.equal(p.state.invalid, 0);
+  p.add('QFW_END 25000000001');
+  p.add('@term_sender[1]: (1000, 1000000000, 1001, 0)');
+  assert.equal(traceComplete(p.state), true);
+  for (const line of ['@pending_start[2]: 5', '@sum_ns[2]: 5', '@max_ns[2]: 5']) {
+    const q = traceProtocol();
+    q.add(line);
+    assert.equal(q.state.invalid, 1);
+  }
+});
+await test('raw paths, pointers, diagnostics, unknown names and malformed numbers are discarded', () => {
+  for (const line of [
+    '/home/private-canary',
+    '0xffffffff81234567',
+    'lost 5 events',
+    '@private_map[1]: 2',
+    '@count[0x123]: 2',
+    'QFW_BIND 1 0 1 2 3 4',
+    'QFW_BIND 1 1 0 2 3 4',
+    'QFW_TICK 18446744073709551616',
+    'QFW_TERM 1 1234 2000000000 9000000005',
+    'QFW_FILE 1 3 1234 2000000000 253 0 1 0 0 9',
+  ]) {
+    const p = traceProtocol();
+    p.add(line);
+    assert.equal(p.state.invalid, 1);
+    assert.equal(JSON.stringify(p.state).includes(line), false);
+  }
+});
+await test('markers use logical time after END; row saturation is bounded', () => {
+  const p = traceProtocol();
+  p.add('QFW_END 3');
+  p.add('QFW_TICK 2');
+  assert.equal(p.state.invalid, 0);
+  assert.equal(traceComplete(p.state), true);
+  p.add('QFW_TICK 4');
+  assert.equal(traceComplete(p.state), false);
+  const q = traceProtocol();
+  for (let i = 1; i <= 1600; i++) q.add('QFW_TICK ' + i);
+  assert.equal(q.state.markers.length, 1536);
+  assert.equal(q.state.omitted, 64);
+  assert.equal(fixtureProof(q.state, json, row, meta, 1000, 1001), false);
+});
+await test('actual CLI exit selection propagates original nonzero/signal and unknown', () => {
+  for (const [status, exit, signal, wanted] of [
+    ['observed', 0, null, 0],
+    ['observed', 1, null, 1],
+    ['observed', 7, null, 7],
+    ['observed', null, 'SIGTERM', 1],
+    ['unknown', 0, null, 2],
+    ['unknown', 1, null, 2],
+  ])
+    assert.equal(controllerExitCode({status, benchmark: {exit, signal}}), wanted);
+});
+await test('isolated CI admission requires exact workspace and numeric event identity', () => {
+  const good = {
+    CI: 'true',
+    GITHUB_ACTIONS: 'true',
+    GITHUB_WORKSPACE: '/isolated/repo',
+    GITHUB_RUN_ID: '1234',
+    GITHUB_RUN_ATTEMPT: '1',
+  };
+  assert.equal(isolatedCI(good, '/isolated/repo'), true);
+  for (const edit of [
+    (v: any) => delete v.CI,
+    (v: any) => (v.CI = '1'),
+    (v: any) => delete v.GITHUB_ACTIONS,
+    (v: any) => (v.GITHUB_WORKSPACE = '/other/repo'),
+    (v: any) => (v.GITHUB_WORKSPACE = 'repo'),
+    (v: any) => delete v.GITHUB_RUN_ID,
+    (v: any) => (v.GITHUB_RUN_ID = ''),
+    (v: any) => (v.GITHUB_RUN_ATTEMPT = 'not-number'),
+  ]) {
+    const v = {...good};
+    edit(v);
+    assert.equal(isolatedCI(v, '/isolated/repo'), false);
+  }
+});
+await test('actual runControl refuses local launch before mkdir/proc/helper work', async () => {
+  const before = {CI: process.env.CI, GITHUB_ACTIONS: process.env.GITHUB_ACTIONS},
+    mkdir = fs.mkdirSync;
+  let calls = 0;
+  process.env.CI = 'false';
+  process.env.GITHUB_ACTIONS = 'false';
+  fs.mkdirSync = () => {
+    calls++;
+    throw Error('must-not-run');
+  };
+  try {
+    await assert.rejects(runControl('/isolated/repo', '/isolated/new-out'), /isolated-ci/);
+    assert.equal(calls, 0);
+  } finally {
+    fs.mkdirSync = mkdir;
+    for (const [k, v] of Object.entries(before))
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+  }
+});
+await test('canonical stdout/stderr forwarding is exact and does not cap/end destination', async () => {
+  const child = {stdout: new PassThrough(), stderr: new PassThrough()},
+    output = {stdout: new PassThrough(), stderr: new PassThrough()},
+    out: Buffer[] = [],
+    err: Buffer[] = [];
+  output.stdout.on('data', (v: any) => out.push(v));
+  output.stderr.on('data', (v: any) => err.push(v));
+  forwardBenchmark(child, output);
+  const a = Buffer.alloc(70000, 65),
+    b = Buffer.from('original first failure\n');
+  const ended = Promise.all([once(child.stdout, 'end'), once(child.stderr, 'end')]);
+  child.stdout.end(a);
+  child.stderr.end(b);
+  await ended;
+  assert.deepEqual(Buffer.concat(out), a);
+  assert.deepEqual(Buffer.concat(err), b);
+  assert.equal(output.stdout.writableEnded, false);
+  assert.equal(output.stderr.writableEnded, false);
+  output.stdout.destroy();
+  output.stderr.destroy();
+});
+await test('flat and one balanced tuple key serialize identically; nesting and overflow refuse', () => {
+  const a = traceProtocol(),
+    b = traceProtocol();
+  a.add('@count[1, 1, 253, 0, 99, 0, 0]: 2');
+  b.add('@count[(1, 1, 253, 0, 99, 0, 0)]: 2');
+  assert.deepEqual(a.state, b.state);
+  for (const line of [
+    '@count[((1, 2))]: 2',
+    '@count[(1, 2]: 2',
+    '@count[1, 2)]: 2',
+    '@count[(1, 2), 3]: 2',
+    '@count[(1,2,3,4,5,6,7,8)]: 2',
+    '@count[1]: (1,2,3,4,5,6,7,8)',
+  ]) {
+    const p = traceProtocol();
+    p.add(line);
+    assert.equal(p.state.invalid, 1);
+  }
+});
+await test('after reap logical END permits late earlier markers; duplicate/missing/future END fail', () => {
+  const p = base();
+  p.add('QFW_END 9999999999');
+  p.add('QFW_TERM 1 1234 2000000000 9000000005 1000 1000000000 1001 0');
+  assert.equal(traceComplete(p.state), true);
+  p.add('QFW_FILE 1 1 1234 2000000000 253 0 123456789123 0 0 10000000000');
+  assert.equal(traceComplete(p.state), false);
+  const q = traceProtocol();
+  q.add('QFW_END 4');
+  q.add('QFW_END 5');
+  assert.equal(traceComplete(q.state), false);
+  assert.equal(traceComplete(base().state), false);
+});
+await test('stderr classifier retains only safe categories/known bounded coordinates', () => {
+  const d = diagnosticClassifier();
+  d.add(
+    Buffer.from(
+      '/private/path/startupWaitOwner.bt:12:3-4: ERROR: syntax error; permission denied; BTF unknown struct; failed to attach; verifier invalid mem access; cannot allocate; lost 2 events; secret-canary 0xffffffff81234567\n',
+    ),
+  );
+  d.add(Buffer.from('stdin:1001:4: syntax error\n/private/startupWaitCounters.py:2:1001: other\n'));
+  const result = d.finish();
+  assert.deepEqual(
+    new Set(result.categories),
+    new Set([
+      'syntax',
+      'permission',
+      'BTF',
+      'layout',
+      'attach',
+      'verifier',
+      'resource',
+      'lost-events',
+    ]),
+  );
+  assert.deepEqual(result.locations, [{source: 'bpf-script', line: 12, column: 3}]);
+  assert.equal(result.discardedBytes, result.bytes);
+  assert.equal(JSON.stringify(result).includes('secret-canary'), false);
+  assert.equal(JSON.stringify(result).includes('/private'), false);
+  assert.equal(JSON.stringify(result).includes('0xffffffff'), false);
+  const saved = JSON.stringify(result);
+  d.add(Buffer.from('EPERM'));
+  assert.equal(JSON.stringify(d.finish()), saved);
+});
+await test('stderr classifier cap and chunk boundaries preserve UNKNOWN/other without raw tail', () => {
+  const d = diagnosticClassifier();
+  d.add(Buffer.from('permission den'));
+  d.add(Buffer.from('ied\nstdin:2:3: ERROR\n'));
+  assert.deepEqual(d.finish().categories, ['permission']);
+  const q = diagnosticClassifier();
+  q.add(Buffer.from('x'.repeat(16384)));
+  q.add(Buffer.from('BTF permission denied'));
+  const v = q.finish();
+  assert.deepEqual(v.categories, ['other']);
+  assert.equal(v.scannedBytes, 16384);
+  assert.equal(v.limited, true);
+  assert.equal(v.unscannedBytes, 21);
+  assert.equal(JSON.stringify(v).includes('xxxx'), false);
+});
+await test('old return-pair record is rejected rather than promoted to entry evidence', () => {
+  const p = traceProtocol();
+  p.add('QFW_PAIR 1 1234 2000000000 1 253 0 123456789123 0 0 0 4000000000 4000001000');
+  assert.equal(p.state.invalid, 1);
+});
+await test('actual owned bench handlers stay uncapped; prior reduction cap is negative', () => {
+  const observe = (text: string) => {
+    const begin = text.indexOf('  const owned = ') + '  const owned = '.length,
+      end = text.indexOf('\n  /** @param {any} lease */\n  const anchor =', begin),
+      functionText = text.slice(begin, end).trim().replace(/;$/, ''),
+      child = Object.assign(new EventEmitter(), {
+        pid: 123,
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        stdin: new PassThrough(),
+      }),
+      dest = {stdout: new PassThrough(), stderr: new PassThrough()};
+    dest.stdout.resume();
+    dest.stderr.resume();
+    const context = {
+      browserProcess: () => ({}),
+      diagnosticClassifier,
+      cancel: new AbortController(),
+      report: {},
+      leases: [],
+      forwardBenchmark: (c: any) => forwardBenchmark(c, dest),
+    };
+    const actual = runInNewContext('(' + functionText + ')', context) as (
+        child: unknown,
+        kind: string,
+      ) => {state: {bad: boolean}},
+      lease = actual(child, 'bench');
+    child.stderr.write(Buffer.alloc(20000, 65));
+    const bad = lease.state.bad;
+    for (const stream of [child.stdout, child.stderr, child.stdin, dest.stdout, dest.stderr])
+      stream.destroy();
+    return bad;
+  };
+  const current = fs.readFileSync(new URL('../startupWaitControl.mjs', import.meta.url), 'utf8'),
+    prior = current.replace(
+      "if (\n        (kind === 'trace' && state.stderrBytes > 0) ||\n        (kind === 'fixture' && state.stderrBytes > 16384)\n      )",
+      'if (state.stderrBytes > 16384)',
+    );
+  assert.notEqual(prior, current);
+  assert.equal(observe(prior), true);
+  assert.equal(observe(current), false);
+});
+await test('fault must be singleton, read interval inclusive, bad origins/ranges reject', () => {
+  for (const line of [
+    'QFW_FILE 1 2 1234 2000000000 253 0 123456789123 0 1 4000000000',
+    'QFW_FILE 1 1 1234 2000000000 253 0 123456789123 2 1 4000000000',
+    'QFW_FILE 1 0 1234 2000000000 253 0 123456789123 0 0 4000000000',
+    'QFW_FILE 1 1 0 2000000000 253 0 123456789123 0 0 4000000000',
+  ]) {
+    const p = traceProtocol();
+    p.add(line);
+    assert.equal(p.state.invalid, 1);
+  }
+  const p = base();
+  p.state.markers = p.state.markers.filter((r: any) => r.kind !== 'QFW_FILE' || r.origin !== 1);
+  assert.equal(fixtureProof(p.state, json, row, meta, 1000, 1001), false);
+});
+await test('any tracer stderr remains fatal while safe diagnostic messages are preserved', () => {
+  const text = fs.readFileSync(new URL('../startupWaitControl.mjs', import.meta.url), 'utf8');
+  assert.equal(text.includes('traceExpectedWarning'), false);
+  assert.equal(text.includes('traceWarningFilter'), false);
+  const start = text.indexOf('  const owned = ') + '  const owned = '.length,
+    end = text.indexOf('\n  /** @param {any} lease */\n  const anchor =', start),
+    actual = runInNewContext('(' + text.slice(start, end).trim().replace(/;$/, '') + ')', {
+      browserProcess: () => ({}),
+      diagnosticClassifier,
+      cancel: new AbortController(),
+      report: {},
+      leases: [],
+    }) as (child: unknown, kind: string) => {state: {bad: boolean}; diagnostic: ClassifierHandle},
+    child = Object.assign(new EventEmitter(), {
+      pid: 123,
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      stdin: new PassThrough(),
+    }),
+    lease = actual(child, 'trace');
+  child.stderr.write(Buffer.from('WARNING: safe fixture diagnostic\n'));
+  assert.equal(lease.state.bad, true);
+  assert.deepEqual(Array.from(lease.diagnostic.finish().toolMessages), [
+    'WARNING: safe fixture diagnostic',
+  ]);
+  for (const stream of [child.stdout, child.stderr, child.stdin]) stream.destroy();
+});
+
+await test('isolated tracer errors retain bounded useful text while paths and addresses are removed', () => {
+  const d = diagnosticClassifier({toolMessages: true});
+  d.add(
+    Buffer.from(
+      '/isolated/private/startupWaitOwner.bt:71:43: ERROR: comparison of unsigned int64 and int64\nlibbpf: failed operation at 0xffffffff81234567, deadbeef and https://example.invalid/private TOKEN=secret-value\nC:\\private\\trace.bt: no such option\n',
+    ),
+  );
+  const r = d.finish(),
+    text = JSON.stringify(r.toolMessages);
+  assert.equal(r.toolMessages.length, 3);
+  assert.match(text, /comparison of unsigned int64 and int64/);
+  assert.match(text, /no such option/);
+  for (const value of [
+    '/isolated',
+    'C:\\private',
+    '0xffffffff',
+    'deadbeef',
+    'example.invalid',
+    'secret-value',
+  ])
+    assert.equal(text.includes(value), false);
+  assert.equal(r.toolMessagesLimited, false);
+  assert.match(r.toolMessages[0], /\[path\]:71:43: ERROR:/);
+});
+await test('tool error chunks, EOF and caps preserve diagnosis without changing default retention', () => {
+  const plain = diagnosticClassifier();
+  plain.add(Buffer.from('ERROR: unknown flag'));
+  assert.equal('toolMessages' in plain.finish(), false);
+  const d = diagnosticClassifier({toolMessages: true});
+  d.add(Buffer.from('ERROR: un'));
+  d.add(Buffer.from('known flag'));
+  assert.deepEqual(d.finish().toolMessages, ['ERROR: unknown flag']);
+  const before = d.finish();
+  d.add(Buffer.from('later'));
+  assert.deepEqual(d.finish(), before);
+  const cap = diagnosticClassifier({toolMessages: true});
+  cap.add(Buffer.from(Array.from({length: 10}, () => 'x'.repeat(300)).join('\n')));
+  const r = cap.finish();
+  assert.equal(r.toolMessages.length, 8);
+  assert.equal(
+    r.toolMessages.every((v: string) => v.length <= 256),
+    true,
+  );
+  assert.equal(r.toolMessagesLimited, true);
+});
+
+await test('released observer failure returns control to original E and keeps UNKNOWN/nonzero', async () => {
+  const report = {status: 'unknown', observationIssue: null, benchmark: {exit: 0}},
+    first = Object.assign(new Error('capture'), {controlReason: 'capture-first'});
+  let released = 0,
+    originalCompleted = false;
+  const safe = await observeFilemapPhase(
+    report,
+    async () => {
+      throw first;
+    },
+    async () => {
+      released++;
+      return {released: true, reaped: true, pipesClosed: true, residual: []};
+    },
+  );
+  if (safe) originalCompleted = true;
+  assert.equal(safe, true);
+  assert.equal(originalCompleted, true);
+  assert.equal(released, 1);
+  assert.equal(report.observationIssue, 'capture-first');
+  assert.equal(controllerExitCode(report), 2);
+});
+await test('unreleased observer blocks E continuation and records resource issue', async () => {
+  for (const state of [
+    {released: false, reaped: false, pipesClosed: false, residual: null},
+    {released: true, reaped: true, pipesClosed: true, residual: [{pid: 123}]},
+    {released: true, reaped: false, pipesClosed: true, residual: []},
+  ]) {
+    const report: any = {};
+    const safe = await observeFilemapPhase(
+      report,
+      async () => {},
+      async () => state,
+    );
+    assert.equal(safe, false);
+    assert.equal(report.observationResourceIssue, 'observation-resource-unreleased');
+  }
+});
+await test('first capture issue and original benchmark primary survive later cleanup errors', async () => {
+  const report = {primary: 'benchmark-failed', observationIssue: 'first-original-capture'},
+    primary = new Error('original benchmark'),
+    original = Promise.reject(primary);
+  original.catch(() => {});
+  const safe = await observeFilemapPhase(
+    report,
+    async () => {
+      throw Object.assign(new Error('next'), {controlReason: 'second'});
+    },
+    async () => {
+      throw Object.assign(new Error('release'), {controlReason: 'third'});
+    },
+  );
+  assert.equal(safe, false);
+  assert.equal(report.observationIssue, 'first-original-capture');
+  assert.equal(report.primary, 'benchmark-failed');
+  await assert.rejects(original, (error: any) => error === primary);
+});
+await test('WINDOW/END already reaped is accepted before premature-exit check', () => {
+  const p = base();
+  p.add('QFW_WINDOW_CLOSED 9000000000');
+  p.add('QFW_END 9000000001');
+  assert.equal(filemapWindowReady({reaped: true, bad: false}, p.state), true);
+  assert.throws(
+    () => filemapWindowReady({reaped: true, bad: false}, base().state),
+    (error: any) => error.controlReason === 'trace-capture',
+  );
+  assert.throws(
+    () => filemapWindowReady({reaped: true, bad: true}, p.state),
+    (error: any) => error.controlReason === 'trace-capture',
+  );
+});
+const stopSource = fs.readFileSync(new URL('../startupWaitControl.mjs', import.meta.url), 'utf8'),
+  stopBegin = stopSource.indexOf('  const stop = ') + '  const stop = '.length;
+async function actualStop({
+  natural,
+  timeout = false,
+  residual = [],
+}: {
+  natural: boolean;
+  timeout?: boolean;
+  residual?: unknown[];
+}) {
+  const end = stopSource.indexOf('  try {\n    requireValue(\n      process.platform', stopBegin),
+    body = stopSource.slice(stopBegin, end).trim().replace(/;$/, ''),
+    signal = new AbortController().signal,
+    calls: number[] = [],
+    signals: string[] = [],
+    report = {cleanup: []};
+  let resolve: (() => void) | undefined;
+  const state: Record<string, any> = {
+      kind: 'trace',
+      naturalRequested: natural,
+      reaped: !timeout,
+      pipesClosed: !timeout,
+      exit: timeout ? null : 0,
+      signal: null,
+    },
+    lease = {
+      state,
+      closed: timeout ? new Promise<void>(r => (resolve = r)) : Promise.resolve(),
+      owner: {observe: async () => residual},
+      child: {stdin: {destroy() {}}, stdout: {destroy() {}}, stderr: {destroy() {}}, unref() {}},
+    };
+  const context = {
+    report,
+    deadline: async (ms: number, work: (s: AbortSignal) => unknown, parent?: AbortSignal) => {
+      calls.push(ms);
+      if (ms === 500 && timeout) throw Error('simulated natural timeout');
+      return work(ms === 1000 ? signal : (parent ?? signal));
+    },
+    rootSignal: async (l: any, sig: string, parent: AbortSignal) => {
+      assert.equal(parent, signal);
+      signals.push(sig);
+      l.state[sig === 'SIGKILL' ? 'killRequested' : 'termRequested'] = true;
+      l.state.reaped = true;
+      l.state.pipesClosed = true;
+      l.state.exit = null;
+      l.state.signal = sig;
+      resolve?.();
+    },
+    boundedCurrent: async () => null,
+    uid: 1001,
+  };
+  const stop = runInNewContext('(' + body + ')', context) as (l: unknown) => Promise<void>;
+  await stop(lease);
+  return {state, lease, stop, calls, signals};
+}
+await test('actual stop body natural exit has single1000ms cap, no TERM or KILL', async () => {
+  const r = await actualStop({natural: true});
+  assert.equal(r.state.released, true);
+  assert.equal(r.state.exit, 0);
+  assert.equal(r.state.signal, null);
+  assert.deepEqual(r.signals, []);
+  assert.equal(r.calls.filter((ms: number) => ms === 1000).length, 1);
+  assert.ok(r.calls.includes(500));
+});
+await test('actual stop body forcedKILL release is safe for E but capture remains UNKNOWN', async () => {
+  const r = await actualStop({natural: true, timeout: true}),
+    report: any = {status: 'unknown', benchmark: {exit: 0}};
+  const safe = await observeFilemapPhase(
+    report,
+    async () => {
+      if (r.state.killRequested)
+        throw Object.assign(new Error('capture'), {controlReason: 'trace-release'});
+    },
+    async () => {
+      await r.stop(r.lease);
+      return r.state;
+    },
+  );
+  assert.equal(safe, true);
+  assert.equal(report.observationIssue, 'trace-release');
+  assert.equal(controllerExitCode(report), 2);
+  assert.deepEqual(r.signals, ['SIGKILL']);
+  assert.equal(r.calls.filter((ms: number) => ms === 1000).length, 1);
+});
+await test('actual stop body preWINDOW failure retains TERM path and residual blocks E', async () => {
+  const r = await actualStop({
+    natural: false,
+    timeout: true,
+    residual: [{pid: 123, birth: '1', state: 'S'}],
+  });
+  assert.deepEqual(r.signals, ['SIGTERM']);
+  assert.equal(r.calls.includes(500), false);
+  assert.equal(r.state.released, false);
+  const report: any = {};
+  assert.equal(
+    await observeFilemapPhase(
+      report,
+      async () => {},
+      async () => r.state,
+    ),
+    false,
+  );
+  assert.equal(report.observationResourceIssue, 'observation-resource-unreleased');
+});

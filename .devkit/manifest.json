@@ -2,23 +2,23 @@
   "schemaVersion": 2,
   "version": "0.4.1",
   "releaseIdentity": "0c2f111d8d53cd95aaa9dc7ed6e34e4c764d96ea4f537a7e758ee2f44e5b8a5a",
-  "generation": "8e0072b3-ddc3-4aba-b9fe-4397e9f37a8f",
+  "generation": "4fdc3849-719b-4a4d-aedf-d8814ec77680",
   "packageMode": "registry",
   "managed": {
     ".devkit/compose.apps.yaml": {
-      "sha256": "a378034d8512b21dfee8d0a6919ba57210cbcb337b3e1b9ee912bae8883b3bcb",
+      "sha256": "41a0c3ae3fcec9b88374db3143aa67fda9e0be0e8237e3a7f1c9e8b40711314b",
       "mode": 420
     },
     ".devkit/compose.workspace.json": {
-      "sha256": "f1aa297076ad09a0a1f4ea4c4dfc9a8267bfe41e579ce511bdc1aef0c453d06e",
+      "sha256": "4cbee9dad159b426834ba76fcc486aefb2a3712ed6f68d633b7320d107066971",
       "mode": 420
     },
     ".devkit/project.mk": {
-      "sha256": "19fe9d34fa317b58331a3cb0d84a0396c6154da3e96a7ebf938761003c46eac1",
+      "sha256": "1db07d78fb53c451841063c65bc0e14be060ce8f4692f930682fe8152b80e7f1",
       "mode": 420
     },
     ".devkit/runtime.sha256": {
-      "sha256": "6e73072198eedb0636424a9186b5e645cc9d0dbf1c996d600f863429791b9d41",
+      "sha256": "b60283257a4c13c624b36d9d86541e0e31576ff66f901660dbaa9600a5038834",
       "mode": 420
     },
     ".devkit/runtime/GUIDE.md": {
@@ -66,7 +66,7 @@
       "mode": 420
     },
     ".devkit/tooling-profiles.json": {
-      "sha256": "cc2384f2d9de6de164e5e3f68323883a0b722fb2d486ba283f31e532906a8a17",
+      "sha256": "329f8c3973342b930f93db92036cafe10e464e2a3997d53dbb6e980be77c0d7c",
       "mode": 420
     },
     "apps/agent/rust-toolchain.toml": {
@@ -89,6 +89,28 @@
         "owner": "project",
         "kind": "compose",
         "service": "agent"
+      }
+    },
+    "apps/hub": {
+      "role": "app",
+      "toolchain": "node",
+      "toolingProfile": "node",
+      "origin": {
+        "template": "adopted",
+        "version": "0.4.1"
+      },
+      "toolDependencies": {
+        "@docouno/env": "0.4.1",
+        "@types/node": "24.19.2",
+        "eslint": "10.13.0",
+        "prettier": "3.9.10",
+        "typescript": "6.0.3"
+      },
+      "dependencies": [],
+      "development": {
+        "owner": "managed",
+        "kind": "compose",
+        "service": "hub"
       }
     }
   }
