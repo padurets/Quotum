@@ -1224,10 +1224,13 @@ test('startup observation continues after optional unwind preparation while the 
     'utf8',
   );
   const job = workflow.split('  startup-io-control:\n')[1].split(/\n  [\w-]+:/)[0];
-  const optional =
-    '      - name: Prepare matching renderer unwind tables\n        continue-on-error: true\n        run: bash bench/prepareNativeUnwind.sh';
-  assert.equal(job.split(optional).length, 2);
-  assert.equal(job.replace(optional, '').includes('continue-on-error:'), false);
+  const optional = job
+    .split('\n      - ')
+    .filter(step => step.startsWith('name: Prepare matching renderer unwind tables\n'));
+  assert.equal(optional.length, 1);
+  assert.match(optional[0], /^        continue-on-error: true$/m);
+  assert.match(optional[0], /^        run: bash bench\/prepareNativeUnwind\.sh$/m);
+  assert.equal(job.replace(optional[0], '').includes('continue-on-error:'), false);
   const control = job
     .split(
       '      - name: Qualify file inputs and a known scheduler wait and observe the unchanged history run\n',
@@ -1957,9 +1960,13 @@ test('paired history preinput binding selects only one direct diagnostic history
       assert.equal(selected(name, {}, event, 'refs/tags/v1.0.0'), false, name);
   }
   if (process.platform !== 'win32') {
-    const script = history
-      .split('      - run: |\n')[1]
-      .split('        env:\n')[0]
+    const launch = history
+      .split('\n      - ')
+      .find(step => step.includes('\n          export QUOTUM_CHROME='));
+    assert.ok(launch);
+    const command = launch.match(/(?:^|\n        )run: \|\n((?: {10}[^\n]*\n)+)/)?.[1];
+    assert.ok(command);
+    const script = command
       .split('\n')
       .map(line => line.slice(10))
       .join('\n');

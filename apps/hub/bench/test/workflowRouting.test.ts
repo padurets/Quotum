@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {readFileSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import {runInNewContext} from 'node:vm';
 
@@ -49,6 +51,55 @@ const modes = [
   'startup_io_control',
   'compositor_guard_control',
 ];
+
+test(
+  'diagnostic jobs use the checked-out hub layout for installs and builds',
+  {skip: process.platform === 'win32'},
+  t => {
+    const fixture = mkdtempSync(path.join(tmpdir(), 'quotum-hub-layout-'));
+    t.after(() => rmSync(fixture, {recursive: true, force: true}));
+    const current = path.join(fixture, 'current');
+    const historical = path.join(fixture, 'historical');
+    for (const dir of [path.join(current, 'apps/hub'), path.join(historical, 'hub')]) {
+      mkdirSync(dir, {recursive: true});
+      writeFileSync(path.join(dir, 'package.json'), '{}');
+    }
+    for (const name of [
+      'bench-history',
+      'bench-dashboard',
+      'idle-cpu-control',
+      'native-postmortem-control',
+      'startup-io-control',
+    ]) {
+      const steps = job(name).split('\n      - ');
+      const install = steps.find(step =>
+        /^(?: {8})?name: Install dependencies and select the pinned hub workspace$/m.test(step),
+      );
+      assert.ok(install, name);
+      const script = install.match(/^(?: {8})?run: \|\n((?: {10}[^\n]*\n?)+)/m)?.[1];
+      assert.ok(script, name);
+      const build = steps.find(step => /^(?: {8})?run: npm run build$/m.test(step));
+      assert.ok(build, name);
+      assert.equal(expression(build, 'working-directory'), 'env.QUOTUM_BENCH_HUB_DIR', name);
+      for (const [cwd, hub, args] of [
+        [current, 'apps/hub', 'ci'],
+        [historical, 'hub', '--prefix hub ci'],
+      ]) {
+        const receipt = path.join(cwd, 'github-env');
+        writeFileSync(receipt, '');
+        const run = spawnSync('bash', ['-eu', '-c', 'npm() { printf "%s\\n" "$*"; }\n' + script], {
+          cwd,
+          env: {...process.env, GITHUB_ENV: receipt},
+          encoding: 'utf8',
+        });
+        assert.ifError(run.error);
+        assert.equal(run.status, 0, run.stderr);
+        assert.equal(run.stdout.trim(), args, name);
+        assert.equal(readFileSync(receipt, 'utf8'), `QUOTUM_BENCH_HUB_DIR=${hub}\n`, name);
+      }
+    }
+  },
+);
 
 test(
   'ordinary CI requires all three independent producers, including every unsuccessful result',
