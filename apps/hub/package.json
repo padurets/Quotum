@@ -29,7 +29,7 @@
     "dev": "npm run build && node --import tsx demo/index.ts",
     "start": "node dist/server/index.js",
     "demo": "node --import tsx demo/index.ts",
-    "demo:keys": "vite build --config vite.demo.config.ts && node --import tsx demo/keys-server.ts",
+    "demo:keys": "vite build --configLoader native --config vite.demo.config.ts && node --import tsx demo/keys-server.ts",
     "bench": "node --import tsx bench/index.ts",
     "bundle": "vite build --configLoader native --config vite.bundle.config.ts"
   },
