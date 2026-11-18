@@ -11,22 +11,21 @@ capture. Recorded production results are reported separately. Startup, the windo
 after thirty seconds, available typing phases and post-work tails remain separate.
 Existing classifier errors remain visible; passing does not mean all work is found.
 
-From the repository root, build the explicit Linux probe in the Rust development
-image with the shared Cargo cache (see CONTRIBUTING.md for the development images):
+From the repository root, build the explicit Linux probe in the Devkit Rust
+container with its shared Cargo cache:
 
 ```sh
-docker run --rm --user "$(id -u):$(id -g)" -e CARGO_HOME=/cargo -e CARGO_BUILD_JOBS=4 \
-  -v quotum-cargo:/cargo -v "$PWD":/work -w /work/agent quotum-rust \
+sh .devkit/runtime/devkit.sh exec --component apps/agent --write -- \
   cargo build --release --locked -p quotum-core --features activity-bench --example observed_probe
 ```
 
 The normal build contains neither this executable nor its measurement counters.
-`hub/bench/observed-recovery.ts` runs this queue against a real local HTTP hub and
+`apps/hub/bench/observed-recovery.ts` runs this queue against a real local HTTP hub and
 SQLite, covering delayed work, process death, hub restart, lost acknowledgements,
 duplicate batches, rollback and independent clock anchors:
 
 ```sh
-cd hub
+cd apps/hub
 node --import tsx bench/observed-recovery.ts ../agent/target/release/examples/observed_probe
 ```
 
@@ -43,8 +42,8 @@ builds and other heavy checks. For example, from the repository root:
 
 ```sh
 docker run --rm --network none --user 65534:65534 \
-  -v "$PWD":/work -w /work quotum-rust python3 agent/bench/observed/resources.py \
-  agent/target/release/examples/observed_probe --children 100
+  -v "$PWD":/work -w /work rust:1.99.1-bookworm python3 apps/agent/bench/observed/resources.py \
+  apps/agent/target/release/examples/observed_probe --children 100
 ```
 
 The default is six roots, thirty seconds of warm-up and a five-minute acceptance

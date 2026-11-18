@@ -6,6 +6,7 @@ import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {createInterface} from 'node:readline';
+const rustImage = process.env.DEV_RUST_IMAGE || 'rust:1.99.1-bookworm';
 // Ignore preview configuration before any server module reads its environment.
 for (const key of Object.keys(process.env))
   if (/^(QUOTUM_|DEV_|PUBLIC_DOMAIN$)/.test(key)) delete process.env[key];
@@ -110,7 +111,7 @@ async function scenario(mode: 'baseline' | 'capture' | 'initial') {
       `${binary}:/tested:ro`,
       '-e',
       `OBSERVED_TEST_TOKEN=${secret}`,
-      'quotum-rust',
+      rustImage,
       'python3',
       '/work/apps/agent/bench/observed/storage.py',
       '/tested',

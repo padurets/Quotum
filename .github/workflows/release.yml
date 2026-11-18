@@ -41,17 +41,21 @@ jobs:
       - id: version
         name: One version everywhere, on an annotated tag
         run: |
-          agent=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' agent/Cargo.toml)
-          lock=$(awk '/^name = "quotum"$/ {getline; gsub(/version = |"/, ""); print}' agent/Cargo.lock)
-          hub=$(node -p "require('./hub/package.json').version")
-          hublock=$(node -p "require('./hub/package-lock.json').version")
+          agent=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' apps/agent/Cargo.toml)
+          lock=$(awk '/^name = "quotum"$/ {getline; gsub(/version = |"/, ""); print}' apps/agent/Cargo.lock)
+          agentcorelock=$(awk '/^name = "quotum-core"$/ {getline; gsub(/version = |"/, ""); print}' apps/agent/Cargo.lock)
+          rootpkg=$(node -p "require('./package.json').version")
+          rootlock=$(node -p "require('./package-lock.json').version")
+          rootpkglock=$(node -p "require('./package-lock.json').packages[''].version")
+          hublock=$(node -p "require('./package-lock.json').packages['apps/hub'].version")
+          hub=$(node -p "require('./apps/hub/package.json').version")
           # The desktop app is a workspace of its own, with quotum-core as a path dependency.
           app=$(sed -n '/^\[package\]/,/^\[/s/^version = "\(.*\)"/\1/p' desktop/Cargo.toml)
           applock=$(awk '/^name = "quotum-desktop"$/ {getline; gsub(/version = |"/, ""); print}' desktop/Cargo.lock)
           corelock=$(awk '/^name = "quotum-core"$/ {getline; gsub(/version = |"/, ""); print}' desktop/Cargo.lock)
-          for other in "$lock" "$hub" "$hublock" "$app" "$applock" "$corelock"; do
+          for other in "$lock" "$agentcorelock" "$rootpkg" "$rootlock" "$rootpkglock" "$hublock" "$hub" "$app" "$applock" "$corelock"; do
             if [ "$other" != "$agent" ]; then
-              echo "::error::versions differ: agent/Cargo.toml $agent, agent/Cargo.lock $lock, hub/package.json $hub, hub/package-lock.json $hublock, desktop/Cargo.toml $app, desktop/Cargo.lock $applock (quotum-desktop) and $corelock (quotum-core)"; exit 1
+              echo "::error::versions differ: apps/agent/Cargo.toml $agent, apps/agent/Cargo.lock $lock (quotum) and $agentcorelock (quotum-core), package.json $rootpkg, package-lock.json $rootlock / $rootpkglock (root) / $hublock (apps/hub), apps/hub/package.json $hub, desktop/Cargo.toml $app, desktop/Cargo.lock $applock (quotum-desktop) and $corelock (quotum-core)"; exit 1
             fi
           done
           if [ "$GITHUB_REF_TYPE" = tag ]; then
@@ -88,7 +92,7 @@ jobs:
           tool: cargo-zigbuild
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: agent
+          workspaces: apps/agent
       - run: node npm/build.mjs
       - name: Archives and checksums
         env:
@@ -99,7 +103,7 @@ jobs:
             platform=$(echo "${dir#npm/dist/quotum-}" | sed 's/^darwin/macos/; s/^win32/windows/')
             archive=quotum-cli-$VERSION-$platform
             # The names of the bare binaries carry no version: installers and `quotum update`
-            # build them from the platform alone (see agent/crates/cli/src/update.rs).
+            # build them from the platform alone (see apps/agent/crates/cli/src/update.rs).
             case $platform in
               windows-*)
                 zip -j "release/$archive.zip" "$dir/bin/quotum.exe" LICENSE "$dir/THIRD_PARTY_LICENSES.md"
@@ -221,7 +225,8 @@ jobs:
           DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
       - uses: docker/build-push-action@v7
         with:
-          context: hub
+          context: .
+          file: apps/hub/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ env.PUBLISH == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
