@@ -1,3 +1,4 @@
+import {requiredRow} from './requiredRow';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {runInNewContext} from 'node:vm';
@@ -10,20 +11,6 @@ import {ApiError} from '../../ui/lib/http';
 import {historyPressureScript, saveHistoryPressure} from '../historyPressure';
 import {historyPageScript, historyIdentityScript} from '../historyTrafficBrowser';
 import {safeEvidence} from '../evidence';
-
-type Rows<T = Record<string, any>> = Omit<
-  Array<T>,
-  'find' | 'filter' | 'map' | 'flatMap' | 'some' | 'every' | 'findIndex' | 'at'
-> & {
-  find<V = T>(predicate: (value: V, index: number) => unknown): T;
-  filter<V = T>(predicate: (value: V, index: number) => unknown): Rows<T>;
-  map<U, V = T>(fn: (value: V, index: number) => U): U[];
-  flatMap<U, V = T>(fn: (value: V, index: number) => U | readonly U[]): U[];
-  some<V = T>(predicate: (value: V, index: number) => unknown): boolean;
-  every<V = T>(predicate: (value: V, index: number) => unknown): boolean;
-  findIndex<V = T>(predicate: (value: V, index: number) => unknown): number;
-  at(index: number): T;
-};
 
 test('the complete generated history bootstrap applies preferences, tags fetches and installs its pressure hook', async () => {
   for (const pressure of [false, true])
@@ -237,8 +224,8 @@ function fixture(
     read: () =>
       context.__quotumHistoryPressure.read() as {
         status: string;
-        rows: Rows;
-        members: Rows;
+        rows: Array<Record<string, any>>;
+        members: Array<Record<string, any>>;
         [key: string]: any;
       },
     counters: () => ({getters, json, clocks, wraps, frames, scripts}),
@@ -265,9 +252,9 @@ test('actual trim records numeric removed tile identity and scopes from transpor
   );
   const r = h.read();
   assert.equal(r.status, 'complete');
-  const before = r.rows.find((v: any) => v.kind === 'drop-before'),
-    after = r.rows.find((v: any) => v.kind === 'drop-after'),
-    critical = r.rows.find((v: any) => v.kind === 'reserve-critical');
+  const before = requiredRow(r.rows.find(v => v.kind === 'drop-before')),
+    after = requiredRow(r.rows.find(v => v.kind === 'drop-after')),
+    critical = requiredRow(r.rows.find(v => v.kind === 'reserve-critical'));
   assert.equal(before.owner.operation, 'calendar-projection');
   assert.equal(critical.accepted, true);
   assert.equal(after.removed.length, 1);
@@ -278,7 +265,7 @@ test('actual trim records numeric removed tile identity and scopes from transpor
     'resident native bytes are not necessarily valid through their stored end',
   );
   assert.equal(
-    r.members.find((v: any) => v.memberId === after.memberId).boundScope,
+    requiredRow(r.members.find(v => v.memberId === after.memberId)).boundScope,
     2,
     'first chart is funds, despite the shared budget class',
   );
@@ -297,7 +284,7 @@ test('nested reservation restores the outer pressure identity and standalone tri
     h.pool.reserve({role: 'visible', historyMember: h.period, operation: 'restore'} as any, 40),
     true,
   );
-  const critical = h.read().rows.find((v: any) => v.kind === 'reserve-critical');
+  const critical = requiredRow(h.read().rows.find(v => v.kind === 'reserve-critical'));
   assert.equal(critical.reserveId, 1);
   assert.equal(critical.owner.operation, 'restore');
   const standalone = fixture();
@@ -343,7 +330,7 @@ test('only requests after pressure are retained, with bounded numeric resource m
     }),
   );
   const r = h.read(),
-    row = r.rows.find((v: any) => v.kind === 'read');
+    row = requiredRow(r.rows.find(v => v.kind === 'read'));
   assert.equal(row.attemptId, 'b13:37');
   assert.equal(row.sections[0].scope, 2);
   assert.equal(row.values, 1);
@@ -421,8 +408,8 @@ test('a failing original drop keeps its exception and incomplete pressure booken
     error => error === original,
   );
   const rows = h.read().rows;
-  assert.equal(rows.find((v: any) => v.kind === 'drop-after').complete, false);
-  assert.equal(rows.find((v: any) => v.kind === 'reserve-critical').complete, false);
+  assert.equal(requiredRow(rows.find(v => v.kind === 'drop-after')).complete, false);
+  assert.equal(requiredRow(rows.find(v => v.kind === 'reserve-critical')).complete, false);
 });
 test('postfailure export preserves the primary rejection through reader, writer and owner cancellation failures', async () => {
   const primary = new Error('warm-primary');
@@ -472,7 +459,7 @@ test('critical callers use only the unique own module coordinates, once per rese
   } as unknown as Parameters<typeof h.pool.reserve>[0];
   assert.equal(h.pool.reserve(flight, 40), true);
   const receipt = h.read(),
-    critical = receipt.rows.find((row: any) => row.kind === 'reserve-critical');
+    critical = requiredRow(receipt.rows.find(row => row.kind === 'reserve-critical'));
   assert.equal(receipt.status, 'complete');
   assert.equal(critical.preparing, false);
   assert.equal(critical.attemptId, null);
@@ -528,7 +515,7 @@ test('missing, ambiguous and overflowing caller coordinates remain insufficient 
       );
     assert.equal(h.pool.reserve({role: 'visible'}, 40), true);
     const receipt = h.read(),
-      critical = receipt.rows.find((row: any) => row.kind === 'reserve-critical');
+      critical = requiredRow(receipt.rows.find(row => row.kind === 'reserve-critical'));
     assert.equal(receipt.status, 'insufficient-evidence');
     assert.ok(receipt.callerMissing > 0);
     assert.ok(critical.frames.length <= 16);
@@ -561,7 +548,7 @@ test('send binding preserves synchronous return and throws while rejecting dupli
   assert.equal(calls, 1);
   assert.equal(h.pool.reserve(flight, 101), false);
   const receipt = h.read(),
-    critical = receipt.rows.find((row: any) => row.kind === 'reserve-critical');
+    critical = requiredRow(receipt.rows.find(row => row.kind === 'reserve-critical'));
   assert.equal(receipt.status, 'insufficient-evidence');
   assert.ok(receipt.bindingErrors > 0);
   assert.equal(critical.attemptId, null);
@@ -672,7 +659,7 @@ test('actual transport and native decoder bind the original send signal through 
       ),
     );
     const receipt = h.read(),
-      critical = receipt.rows.find((row: any) => row.kind === 'reserve-critical');
+      critical = requiredRow(receipt.rows.find(row => row.kind === 'reserve-critical'));
     assert.equal(receipt.status, 'complete', JSON.stringify(safeEvidence(receipt)));
     assert.equal(critical.owner.kind, 'transport');
     assert.equal(critical.accepted, false);

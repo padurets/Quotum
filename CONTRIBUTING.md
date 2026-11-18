@@ -539,27 +539,27 @@ actual packaged app. The board benchmark and ordinary package smoke remain requi
 ### Development stands
 
 On Linux with Docker and Docker Compose `5.6.0`, Devkit manages isolated tool images,
-dependency caches and a per-checkout Compose stand for `apps/hub` and `apps/agent`:
+dependency caches and a per-checkout Compose stand for `apps/hub`:
 
 ```sh
 make setup          # pull/build pinned Devkit tool images and populate workspace caches
 make doctor         # verify Docker, Compose, manifest, lockfiles and workspace readiness
-make dev app=hub    # build current code and start the hub demo stand in Compose
+make dev            # build current code and start the hub demo stand in Compose
 make status         # inspect the active stand and its bound 127.0.0.1 host port
 make logs app=hub   # inspect the stand's log and synthetic sign-in credentials
 make down           # stop and clean up this checkout's Compose stand
 ```
 
 Each checkout gets its own Compose project name and publishes container port `8080` on an
-ephemeral `127.0.0.1` host port (`make status` prints the bound port). Optional local
-overrides are documented in [.env.example](.env.example); `.env` stays local and ignored.
+ephemeral `127.0.0.1` host port (`make status` prints the bound port). The stand runs
+the hub with synthetic data. The agent is a command-line program and has no stand.
+For a persistent hub or public access, use the deployment Compose file in `deploy/`.
 `make check`, `make fix`, `make test` and `make build` run across `apps/agent` and
 `apps/hub` inside pinned Devkit containers (pass `app=agent` or `app=hub` to target a
 single component). `make bundle-hub`, `make prepare-desktop` and `make check-desktop`
 prepare and verify the desktop workspace, and `make bench` builds the hub and runs the
-browser benchmark on the host. Use the configured remote browser for visual checks; the
-benchmark still needs Chrome or its supported CDP connection, and a missing browser is
-not a passed benchmark.
+browser benchmark on the host. Use `make bench BENCH_CDP=http://host:port` for a
+running Chrome with a CDP endpoint, or set `QUOTUM_CHROME` to a local Chrome binary.
 
 To open specific demo sets directly on the host (after `npm run build` in `apps/hub/`),
 run `npm run demo -- [set] [--resets <scene>] [--still]` in `apps/hub/`:
@@ -655,7 +655,9 @@ in Manage projects at narrow widths.
 month history comparison, archive the control revision into a separate temporary
 directory, install its hub dependencies, then run
 `node --import tsx bench/month.mjs --control /absolute/control/root` from `apps/hub/`.
-It serializes with the component gates and compares five warmups and 25 alternating
+The comparison waits for other month comparisons in linked worktrees and for
+Devkit gates in the candidate checkout. A Devkit gate started during the comparison
+can report that the checkout is busy. It compares five warmups and 25 alternating
 takes per path, with both median and p95 limited to 1.20 times the control, including
 authenticated HTTP and pure financial controls. The fixture includes 10 owners,
 20 devices, 2,400 contexts, 86,400 work stretches and a second cohort of 1,200 links.

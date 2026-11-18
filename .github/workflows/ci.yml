@@ -102,8 +102,6 @@ jobs:
     if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      DEVKIT_CACHE_DIR: ${{ runner.temp }}/devkit-cache
     steps:
       - uses: actions/checkout@v7
       - name: Require a pinned source for diagnostic modes
@@ -125,6 +123,8 @@ jobs:
           (cd "$compose_dir" && sha256sum --check checksums.txt)
           sudo install -D -m 0755 "$compose_dir/docker-compose" /usr/local/lib/docker/cli-plugins/docker-compose
           test "$(docker compose version --short)" = "$version"
+      - name: Set the Devkit cache directory
+        run: printf 'DEVKIT_CACHE_DIR=%s/devkit-cache\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
@@ -190,9 +190,6 @@ jobs:
         include: ${{ fromJSON(inputs.compositor_guard_control && !inputs.history_preinput_binding && '[{"arm":"OLD1","feature":"disable"},{"arm":"NEW","feature":"enable"},{"arm":"OLD2","feature":"disable"}]' || '[{"arm":"ordinary","feature":""}]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: apps/hub
     steps:
       - name: Require the paired history preinput binding
         if: ${{ inputs.history_preinput_binding }}
@@ -216,11 +213,23 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: package-lock.json
-      - working-directory: .
-        run: npm ci
+          cache-dependency-path: |
+            package-lock.json
+            hub/package-lock.json
+      - name: Install dependencies and select the pinned hub workspace
+        run: |
+          # Diagnostic source pins can predate the apps/ layout.
+          if [[ -f apps/hub/package.json ]]; then
+            npm ci
+            printf 'QUOTUM_BENCH_HUB_DIR=apps/hub\n' >> "$GITHUB_ENV"
+          else
+            npm --prefix hub ci
+            printf 'QUOTUM_BENCH_HUB_DIR=hub\n' >> "$GITHUB_ENV"
+          fi
       - run: npm run build
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
       - name: Require the isolated pinned compositor guard control
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         if: ${{ inputs.compositor_guard_control }}
         env:
           QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
@@ -270,6 +279,7 @@ jobs:
         if: ${{ inputs.history_scroll_control || inputs.compositor_guard_control || inputs.history_pool_control }}
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gdb
       - name: Prepare matching renderer unwind tables
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         if: ${{ inputs.history_scroll_control || inputs.compositor_guard_control || inputs.history_pool_control }}
         env:
           COMPOSITOR_GUARD: ${{ inputs.compositor_guard_control }}
@@ -280,6 +290,7 @@ jobs:
             bash bench/prepareNativeUnwind.sh
           fi
       - name: Prepare optional postfailure native capture
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         if: ${{ !inputs.history_scroll_control && !inputs.compositor_guard_control && !inputs.history_pool_control }}
         timeout-minutes: 2
         continue-on-error: true
@@ -303,7 +314,8 @@ jobs:
           chmod 700 "$control_dir/chrome"
           sha256sum "$vendor" "$beta_image" "$control_dir/chrome" > "$control_dir/pins-first.txt"
           cat "$control_dir/pins-first.txt"
-      - run: |
+      - working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
+        run: |
           export QUOTUM_CHROME="${QUOTUM_C3_CHROME:-$(command -v google-chrome)}"
           if [[ "$FRESH_HISTORY" == 1 ]]; then
             node --import tsx bench/historyFreshControl.mjs
@@ -333,9 +345,6 @@ jobs:
     runs-on: ubuntu-latest
     # Ordinary updates and native panning have independent runners and deadlines.
     timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: apps/hub
     steps:
       - name: Require the isolated pinned combined benchmark
         if: ${{ inputs.combined_benchmark }}
@@ -359,11 +368,23 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: package-lock.json
-      - working-directory: .
-        run: npm ci
+          cache-dependency-path: |
+            package-lock.json
+            hub/package-lock.json
+      - name: Install dependencies and select the pinned hub workspace
+        run: |
+          # Diagnostic source pins can predate the apps/ layout.
+          if [[ -f apps/hub/package.json ]]; then
+            npm ci
+            printf 'QUOTUM_BENCH_HUB_DIR=apps/hub\n' >> "$GITHUB_ENV"
+          else
+            npm --prefix hub ci
+            printf 'QUOTUM_BENCH_HUB_DIR=hub\n' >> "$GITHUB_ENV"
+          fi
       - run: npm run build
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
       - name: Verify the requested source and received-client identity
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         if: ${{ inputs.combined_benchmark || inputs.native_trace || inputs.native_profile || inputs.caption_control }}
         run: |
           node --import tsx --input-type=module <<'JS'
@@ -385,20 +406,17 @@ jobs:
           NATIVE_PROFILE: ${{ inputs.native_profile }}
           CAPTION_CONTROL: ${{ inputs.caption_control }}
       - name: Build the unchanged caption baseline
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         if: ${{ inputs.caption_control }}
         run: |
           git fetch --no-tags --depth=1 origin 9e4b1422961b8a3d5b9e2f9894d3db5584c65a43
           baseline="$RUNNER_TEMP/quotum-caption-baseline"
           mkdir "$baseline"
           git -C "$GITHUB_WORKSPACE" archive 9e4b1422961b8a3d5b9e2f9894d3db5584c65a43 hub | tar -x -C "$baseline"
-          ln -s "$GITHUB_WORKSPACE/node_modules" "$baseline/node_modules"
-          if [ -d "$GITHUB_WORKSPACE/apps/hub/node_modules" ]; then
-            ln -s "$GITHUB_WORKSPACE/apps/hub/node_modules" "$baseline/hub/node_modules"
-          else
-            ln -s "$GITHUB_WORKSPACE/node_modules" "$baseline/hub/node_modules"
-          fi
+          npm ci --prefix "$baseline/hub"
           npm run build --prefix "$baseline/hub"
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope "${BENCH_SCOPE}"
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         env:
           BENCH_SCOPE: ${{ inputs.combined_benchmark && 'all' || inputs.native_trace && inputs.native_target == 'quota/24h' && 'panning' || (inputs.native_trace || inputs.native_profile || inputs.caption_control) && 'dashboard' || 'updates' }}
           QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.native_profile && 'native-profile' || inputs.native_trace && 'native-trace' || '' }}
@@ -448,9 +466,6 @@ jobs:
     if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.history_pool_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: apps/hub
     steps:
       - uses: actions/checkout@v7
         with:
@@ -459,11 +474,23 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: package-lock.json
-      - working-directory: .
-        run: npm ci
+          cache-dependency-path: |
+            package-lock.json
+            hub/package-lock.json
+      - name: Install dependencies and select the pinned hub workspace
+        run: |
+          # Diagnostic source pins can predate the apps/ layout.
+          if [[ -f apps/hub/package.json ]]; then
+            npm ci
+            printf 'QUOTUM_BENCH_HUB_DIR=apps/hub\n' >> "$GITHUB_ENV"
+          else
+            npm --prefix hub ci
+            printf 'QUOTUM_BENCH_HUB_DIR=hub\n' >> "$GITHUB_ENV"
+          fi
       - run: npm run build
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
       - name: Verify the requested source and received-client identity
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         run: |
           node --import tsx --input-type=module <<'JS'
           import {execFileSync} from 'node:child_process';
@@ -481,6 +508,7 @@ jobs:
           ORIGINAL_TIMING: ${{ inputs.original_timing }}
       # Match the canonical dashboard; history traffic has its own independent job.
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope dashboard
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         env:
           QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.trace_only && 'trace' || inputs.original_timing && 'profile' || '' }}
           QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
@@ -492,16 +520,13 @@ jobs:
           path: |
             /tmp/quotum-idle-cpu-diagnostic/
             ${{ runner.temp }}/quotum-idle-control/
-            apps/hub/dist/client/assets/index-*.js
+            ${{ env.QUOTUM_BENCH_HUB_DIR || 'apps/hub' }}/dist/client/assets/index-*.js
           if-no-files-found: warn
 
   native-postmortem-control:
     if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && inputs.native_postmortem_control) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: apps/hub
     steps:
       - uses: actions/checkout@v7
         with:
@@ -510,7 +535,9 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            hub/package-lock.json
       - name: Require the isolated native control
         env:
           TRACE: ${{ inputs.trace_only }}
@@ -521,14 +548,25 @@ jobs:
           HISTORY_SCROLL: ${{ inputs.history_scroll_control }}
           HISTORY_POOL: ${{ inputs.history_pool_control }}
         run: node -e 'if(["TRACE","PROFILE","NATIVE_TRACE","NATIVE_PROFILE","CAPTION","HISTORY_SCROLL","HISTORY_POOL"].some(k=>process.env[k]==="true"))throw Error("Choose only the native postmortem control")'
-      - working-directory: .
-        run: npm ci
+      - name: Install dependencies and select the pinned hub workspace
+        run: |
+          # Diagnostic source pins can predate the apps/ layout.
+          if [[ -f apps/hub/package.json ]]; then
+            npm ci
+            printf 'QUOTUM_BENCH_HUB_DIR=apps/hub\n' >> "$GITHUB_ENV"
+          else
+            npm --prefix hub ci
+            printf 'QUOTUM_BENCH_HUB_DIR=hub\n' >> "$GITHUB_ENV"
+          fi
       - run: npm run build
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
       - name: Prepare the diagnostic native debugger
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gdb
       - name: Prepare matching renderer unwind tables
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         run: bash bench/prepareNativeUnwind.sh
       - name: Run the owned native control under a separate UID
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         env:
           SOURCE_SHA: ${{ inputs.diagnostic_ref }}
           CLIENT_SHA256: ${{ inputs.expected_client_sha256 }}
@@ -546,6 +584,7 @@ jobs:
           set -o pipefail
           sudo -n -- /usr/bin/sudo -n -u nobody -g "$(id -gn)" -- /usr/bin/env HOME="$runtime_home" XDG_CONFIG_HOME="$runtime_home/config" XDG_CACHE_HOME="$runtime_home/cache" "$node_binary" --import tsx bench/nativePostmortemControl.ts "$SOURCE_SHA" "$CLIENT_SHA256" "$chrome_binary" 2>&1 | tee "$receipt/control-first.jsonl"
       - name: Native debugger identity
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         if: always()
         run: |
           receipt="$RUNNER_TEMP/quotum-native-postmortem-control"
@@ -576,9 +615,6 @@ jobs:
     if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && github.event_name == 'workflow_dispatch' && inputs.startup_io_control) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: apps/hub
     env:
       QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
       QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ inputs.expected_client_sha256 }}
@@ -596,10 +632,21 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: package-lock.json
-      - working-directory: .
-        run: npm ci
+          cache-dependency-path: |
+            package-lock.json
+            hub/package-lock.json
+      - name: Install dependencies and select the pinned hub workspace
+        run: |
+          # Diagnostic source pins can predate the apps/ layout.
+          if [[ -f apps/hub/package.json ]]; then
+            npm ci
+            printf 'QUOTUM_BENCH_HUB_DIR=apps/hub\n' >> "$GITHUB_ENV"
+          else
+            npm --prefix hub ci
+            printf 'QUOTUM_BENCH_HUB_DIR=hub\n' >> "$GITHUB_ENV"
+          fi
       - run: npm run build
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
       - name: Prepare the isolated kernel observer
         run: |
           if [[ ! -x /usr/bin/bpftrace || ! -x /usr/bin/gdb ]]; then
@@ -626,14 +673,17 @@ jobs:
           printf 'QUOTUM_CHROME=%s\n' "$(command -v google-chrome)" >> "$GITHUB_ENV"
           printf 'QUOTUM_BENCH_DIAGNOSTICS_DIR=%s\n' "$RUNNER_TEMP/quotum-startup-wait" >> "$GITHUB_ENV"
       - name: Build the isolated scheduler wait fixture
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         run: |
           umask 077
           /usr/bin/cc -shared -fPIC -O2 -Wall -Wextra -Werror bench/startupWaitFixture.c -o "$RUNNER_TEMP/quotum-wait-fixture.so"
           printf 'QUOTUM_BENCH_WAIT_FIXTURE_LIBRARY=%s\n' "$RUNNER_TEMP/quotum-wait-fixture.so" >> "$GITHUB_ENV"
       - name: Prepare matching renderer unwind tables
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         continue-on-error: true
         run: bash bench/prepareNativeUnwind.sh
       - name: Qualify file inputs and a known scheduler wait and observe the unchanged history run
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         run: node --import tsx bench/startupWaitControl.mjs "$GITHUB_WORKSPACE" "$QUOTUM_BENCH_DIAGNOSTICS_DIR"
       - name: Startup observation evidence
         if: always()
@@ -680,10 +730,8 @@ jobs:
         working-directory: apps/agent
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-        with:
-          toolchain: stable
-          components: clippy, rustfmt
+      - name: Install the pinned agent toolchain
+        run: rustup toolchain install --profile minimal --no-self-update
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: apps/agent

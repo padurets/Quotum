@@ -1,3 +1,4 @@
+import {requiredRow} from './requiredRow';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
@@ -6,20 +7,6 @@ import os from 'node:os';
 import path from 'node:path';
 import {clientIdentity, Evidence, safeEvidence} from '../evidence.js';
 import {measuredProblems} from '../budget.js';
-
-type Rows<T = Record<string, any>> = Omit<
-  Array<T>,
-  'find' | 'filter' | 'map' | 'flatMap' | 'some' | 'every' | 'findIndex' | 'at'
-> & {
-  find<V = T>(predicate: (value: V, index: number) => unknown): T;
-  filter<V = T>(predicate: (value: V, index: number) => unknown): Rows<T>;
-  map<U, V = T>(fn: (value: V, index: number) => U): U[];
-  flatMap<U, V = T>(fn: (value: V, index: number) => U | readonly U[]): U[];
-  some<V = T>(predicate: (value: V, index: number) => unknown): boolean;
-  every<V = T>(predicate: (value: V, index: number) => unknown): boolean;
-  findIndex<V = T>(predicate: (value: V, index: number) => unknown): number;
-  at(index: number): T;
-};
 
 test('saved activity drawing mode survives without admitting arbitrary request text', () => {
   assert.deepEqual(
@@ -272,11 +259,15 @@ test('the phase journal retains the first failed checker without blaming success
   type ManifestShape = {
     primaryFailure: unknown;
     status: string;
-    journal: Rows;
+    journal: Array<{phase: string; [key: string]: any}>;
   };
-  const active = (
-    JSON.parse(readFileSync(path.join(dir, evidence.id, 'manifest.json'), 'utf8')) as ManifestShape
-  ).journal.find((row: {phase: string}) => row.phase === 'idle')!;
+  const active = requiredRow(
+    (
+      JSON.parse(
+        readFileSync(path.join(dir, evidence.id, 'manifest.json'), 'utf8'),
+      ) as ManifestShape
+    ).journal.find(row => row.phase === 'idle'),
+  );
   assert.equal(active.outcome, 'failed');
   assert.equal(
     active.endMs,
@@ -291,7 +282,7 @@ test('the phase journal retains the first failed checker without blaming success
     readFileSync(path.join(dir, evidence.id, 'manifest.json'), 'utf8'),
   ) as ManifestShape;
   assert.deepEqual(saved.primaryFailure, {phase: 'idle', classification: 'budget'});
-  const idle = saved.journal.find((row: {phase: string}) => row.phase === 'idle');
+  const idle = requiredRow(saved.journal.find(row => row.phase === 'idle'));
   assert.equal(idle.outcome, 'failed');
   assert.deepEqual(idle.artifactIds, ['idle.json']);
   assert.ok(
@@ -299,11 +290,11 @@ test('the phase journal retains the first failed checker without blaming success
       idle.endMs >= idle.startMs &&
       idle.durationMs === idle.endMs - idle.startMs,
   );
-  const cleanup = saved.journal.find((row: {phase: string}) => row.phase === 'cleanup');
+  const cleanup = requiredRow(saved.journal.find(row => row.phase === 'cleanup'));
   assert.equal(cleanup.outcome, 'passed');
   assert.equal(cleanup.classification, undefined);
   assert.equal(
-    saved.journal.find((row: {phase: string}) => row.phase === 'measurements').outcome,
+    requiredRow(saved.journal.find(row => row.phase === 'measurements')).outcome,
     'unreached',
   );
   assert.equal(saved.status, 'failed');
@@ -324,21 +315,15 @@ test('cancellation keeps completed artifacts and a cancelled current phase throu
   evidence.finish('cancelled', {});
   const saved = JSON.parse(readFileSync(path.join(dir, evidence.id, 'manifest.json'), 'utf8')) as {
     primaryFailure: unknown;
-    journal: Rows;
+    journal: Array<{phase: string; [key: string]: any}>;
   };
   assert.deepEqual(saved.primaryFailure, {phase: 'panning', classification: 'cancelled'});
+  assert.equal(requiredRow(saved.journal.find(row => row.phase === 'work')).outcome, 'passed');
   assert.equal(
-    saved.journal.find((row: {phase: string}) => row.phase === 'work').outcome,
-    'passed',
-  );
-  assert.equal(
-    saved.journal.find((row: {phase: string}) => row.phase === 'panning').outcome,
+    requiredRow(saved.journal.find(row => row.phase === 'panning')).outcome,
     'cancelled',
   );
-  assert.equal(
-    saved.journal.find((row: {phase: string}) => row.phase === 'cleanup').outcome,
-    'passed',
-  );
+  assert.equal(requiredRow(saved.journal.find(row => row.phase === 'cleanup')).outcome, 'passed');
   assert.deepEqual(JSON.parse(readFileSync(path.join(dir, evidence.id, 'work.json'), 'utf8')), {
     count: 3,
   });
@@ -361,7 +346,7 @@ test('a real cleanup failure has its own outcome and preserves an earlier runtim
       readFileSync(path.join(dir, evidence.id, 'manifest.json'), 'utf8'),
     ) as {
       primaryFailure: unknown;
-      journal: Rows;
+      journal: Array<{phase: string; [key: string]: any}>;
     };
     assert.deepEqual(
       saved.primaryFailure,
@@ -369,7 +354,7 @@ test('a real cleanup failure has its own outcome and preserves an earlier runtim
         ? {phase: 'panning', classification: 'runtime'}
         : {phase: 'cleanup', classification: 'cleanup'},
     );
-    const cleanup = saved.journal.find((row: {phase: string}) => row.phase === 'cleanup');
+    const cleanup = requiredRow(saved.journal.find(row => row.phase === 'cleanup'));
     assert.equal(cleanup.outcome, 'failed');
     assert.equal(cleanup.classification, 'cleanup');
   }

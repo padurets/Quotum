@@ -1,3 +1,4 @@
+import {requiredRow} from './requiredRow';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
@@ -835,30 +836,21 @@ for (const scope of ['all', 'updates'])
         readFileSync(path.join(dir, out.journalEvidence!.id, 'manifest.json'), 'utf8'),
       ) as {
         primaryFailure: unknown;
-        journal: Omit<Array<{phase: string; outcome: string; classification?: string}>, 'find'> & {
-          find(p: (row: {phase: string}) => unknown): {
-            phase: string;
-            outcome: string;
-            classification?: string;
-          };
-        };
+        journal: Array<{phase: string; outcome: string; classification?: string}>;
       };
       assert.deepEqual(manifest.primaryFailure, {
         phase: 'fixed-activity',
         classification: 'runtime',
       });
       assert.equal(
-        manifest.journal.find((row: {phase: string}) => row.phase === 'money').outcome,
+        requiredRow(manifest.journal.find(row => row.phase === 'money')).outcome,
         'passed',
       );
-      const activity = manifest.journal.find(
-        (row: {phase: string}) => row.phase === 'fixed-activity',
-      );
+      const activity = requiredRow(manifest.journal.find(row => row.phase === 'fixed-activity'));
       assert.equal(activity.outcome, 'failed');
       assert.equal(activity.classification, 'runtime');
       assert.equal(
-        manifest.journal.find((row: {phase: string}) => row.phase === 'measurement-details')
-          .outcome,
+        requiredRow(manifest.journal.find(row => row.phase === 'measurement-details')).outcome,
         'unreached',
       );
       const cleanup = manifest.journal.filter((row: {phase: string}) => row.phase === 'cleanup');
@@ -2336,22 +2328,15 @@ for (const [fault, variant, primaryPhase, classification, cleanupFailed] of [
       readFileSync(path.join(dir, out.journalEvidence!.id, 'manifest.json'), 'utf8'),
     ) as {
       primaryFailure: unknown;
-      journal: Omit<Array<{phase: string; outcome: string; classification?: string}>, 'find'> & {
-        find(p: (row: {phase: string}) => unknown): {
-          phase: string;
-          outcome: string;
-          classification?: string;
-        };
-      };
+      journal: Array<{phase: string; outcome: string; classification?: string}>;
     };
     assert.deepEqual(manifest.primaryFailure, {phase: primaryPhase, classification});
-    const cleanup = manifest.journal.find((row: {phase: string}) => row.phase === 'cleanup');
+    const cleanup = requiredRow(manifest.journal.find(row => row.phase === 'cleanup'));
     assert.equal(cleanup.outcome, cleanupFailed ? 'failed' : 'passed');
     assert.equal(cleanup.classification, cleanupFailed ? 'cleanup' : undefined);
     if (fault === 'panning' || variant === 'empty-work') {
       assert.equal(
-        manifest.journal.find((row: {phase: string}) => row.phase === 'measurement-details')
-          .outcome,
+        requiredRow(manifest.journal.find(row => row.phase === 'measurement-details')).outcome,
         'passed',
         'earlier failure cannot blame a later successful phase',
       );
@@ -2497,13 +2482,7 @@ for (const scope of ['updates', 'panning'])
       readFileSync(path.join(dir, out.journalEvidence!.id, 'manifest.json'), 'utf8'),
     ) as {
       primaryFailure: unknown;
-      journal: Omit<Array<{phase: string; outcome: string; classification?: string}>, 'find'> & {
-        find(p: (row: {phase: string}) => unknown): {
-          phase: string;
-          outcome: string;
-          classification?: string;
-        };
-      };
+      journal: Array<{phase: string; outcome: string; classification?: string}>;
     };
     assert.ok(
       manifest.journal.every((row: {outcome: string}) => row.outcome === 'passed'),

@@ -1,36 +1,47 @@
 import assert from 'node:assert/strict';
-import {execFileSync, spawn} from 'node:child_process';
+import {execFileSync} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
-import {closeSync, existsSync, mkdirSync, openSync} from 'node:fs';
+import {closeSync, constants, existsSync, fstatSync, mkdirSync, openSync} from 'node:fs';
 import {dirname, resolve, join} from 'node:path';
 import {pathToFileURL, fileURLToPath} from 'node:url';
 
-/** @param {string} root */
-function sharedLockDir(root) {
-  const common = execFileSync('git', ['-C', root, 'rev-parse', '--git-common-dir'], {
-    encoding: 'utf8',
-  }).trim();
-  const dir = join(resolve(root, common), 'quotum-dev');
-  mkdirSync(dir, {recursive: true});
-  return dir;
-}
-
 /**
  * @template T
- * @param {string} file
+ * @param {string} root
  * @param {() => Promise<T>} work
  * @returns {Promise<T>}
  */
-async function locked(file, work) {
-  mkdirSync(dirname(file), {recursive: true});
-  const fd = openSync(file, 'a');
-  const holder = spawn('flock', ['-x', '3', 'cat'], {stdio: ['pipe', 'ignore', 'inherit', fd]});
-  closeSync(fd);
+async function locked(root, work) {
+  const common = execFileSync(
+    'git',
+    ['-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+    {
+      encoding: 'utf8',
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+      ),
+    },
+  ).trim();
+  const files = [join(common, 'quotum-dev/heavy.lock'), join(root, '.devkit/state/task.lock')];
+  const descriptors = [];
   try {
+    for (const file of files) {
+      mkdirSync(dirname(file), {recursive: true, mode: 0o700});
+      const fd = openSync(
+        file,
+        constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+        0o600,
+      );
+      descriptors.push(fd);
+      if (!fstatSync(fd).isFile()) throw new Error(`Expected a regular lock file: ${file}`);
+      // flock(1) locks the inherited open file description. Our fd keeps that lock alive.
+      execFileSync('flock', ['--exclusive', '--timeout', '3600', '3'], {
+        stdio: ['ignore', 'ignore', 'inherit', fd],
+      });
+    }
     return await work();
   } finally {
-    holder.stdin?.end();
-    await new Promise(done => holder.once('close', done));
+    for (const fd of descriptors.reverse()) closeSync(fd);
   }
 }
 
@@ -523,7 +534,7 @@ function semantics(f) {
   };
 }
 try {
-  await locked(join(sharedLockDir(candidate), 'heavy.lock'), async () => {
+  await locked(candidate, async () => {
     const a = await fixture(control),
       b = await fixture(candidate);
     try {

@@ -1,3 +1,4 @@
+import {requiredRow} from './requiredRow';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -8,20 +9,6 @@ import {calendarCells} from '../../server/domain/workCalendar';
 import {calendarProof} from '../../server/domain/calendarWork';
 import {drain} from '../../server/domain/prepare';
 import {historyPoolReceiptScript} from '../historyPoolReceipt';
-
-type Rows<T = Record<string, any>> = Omit<
-  Array<T>,
-  'find' | 'filter' | 'map' | 'flatMap' | 'some' | 'every' | 'findIndex' | 'at'
-> & {
-  find<V = T>(predicate: (value: V, index: number) => unknown): T;
-  filter<V = T>(predicate: (value: V, index: number) => unknown): Rows<T>;
-  map<U, V = T>(fn: (value: V, index: number) => U): U[];
-  flatMap<U, V = T>(fn: (value: V, index: number) => U | readonly U[]): U[];
-  some<V = T>(predicate: (value: V, index: number) => unknown): boolean;
-  every<V = T>(predicate: (value: V, index: number) => unknown): boolean;
-  findIndex<V = T>(predicate: (value: V, index: number) => unknown): number;
-  at(index: number): T;
-};
 
 const H = 3_600_000,
   DAY = 24 * H,
@@ -78,8 +65,8 @@ function fixture(calendar = new WorkCalendar()) {
         errors: number;
         omitted: number;
         snapshotOmitted: number;
-        rows: Rows;
-        final: {entries: Rows};
+        rows: Array<{kind: string; [key: string]: any}>;
+        final: {entries: Array<Record<string, any>>};
         noops: Record<string, Record<string, any>>;
       },
     mark: () => context.__quotumHistoryPoolReceipt.mark(2, 3),
@@ -181,10 +168,10 @@ test('actual calendar producer, cached union and dirty boundaries are observed w
     Array.from(reads, (r: any) => r.result.hit),
     [false, true, true, true, false],
   );
-  const invalidation = receipt.rows.find((r: {kind: string}) => r.kind === 'cache.invalidate')!;
+  const invalidation = requiredRow(receipt.rows.find(r => r.kind === 'cache.invalidate'));
   assert.equal(invalidation.after.entries[0].validBefore, NOW - H / 2);
   assert.equal(invalidation.after.entries[0].cut, NOW - H / 2);
-  const add = receipt.rows.find((r: {kind: string}) => r.kind === 'cache.add')!;
+  const add = requiredRow(receipt.rows.find(r => r.kind === 'cache.add'));
   assert.equal(add.after.entries.length, 1);
   assert.equal(add.reserves.rejected, 0);
   assert.ok(add.reserves.calls > 0);
@@ -214,11 +201,11 @@ test('actual pool pressure journals the calendar entry removed by its original c
   h.mark();
   const receipt = h.read();
   assert.equal(receipt.status, 'complete');
-  const drop = receipt.rows.find((r: {kind: string}) => r.kind === 'cache.drop')!;
+  const drop = requiredRow(receipt.rows.find(r => r.kind === 'cache.drop'));
   assert.equal(drop.before.entries[0].id, before[0].id);
   assert.equal(drop.after.entries.length, 0);
   assert.equal(drop.complete, true);
-  const trim = receipt.rows.find((r: any) => r.kind === 'pool.trim' && r.result === false);
+  const trim = requiredRow(receipt.rows.find(r => r.kind === 'pool.trim' && r.result === false));
   assert.ok(trim);
   assert.ok(trim.drops > 0);
   assert.ok(trim.peakCharge > h.pool.budget);
@@ -314,7 +301,7 @@ test('an original cache exception has no invented hit and unchanged calls are co
   h.mark();
   const receipt = h.read();
   assert.equal(receipt.status, 'complete');
-  const failed = receipt.rows.find((r: any) => r.kind === 'cache.read' && !r.complete);
+  const failed = requiredRow(receipt.rows.find(r => r.kind === 'cache.read' && !r.complete));
   assert.ok(failed);
   assert.equal(failed.result, null);
   assert.equal(receipt.noops['calendar.configure'].calls, 1000);
@@ -336,7 +323,9 @@ test('a real stale receive keeps decimal revision order when range and evidence 
   h.mark();
   const receipt = h.read();
   assert.equal(receipt.status, 'complete');
-  const rejected = receipt.rows.filter((r: any) => r.kind === 'calendar.receive').at(-1)!;
+  const rejected = requiredRow(
+    receipt.rows.filter((r: any) => r.kind === 'calendar.receive').at(-1),
+  );
   assert.equal(rejected.args.basis.revisionValue, '1');
   assert.equal(rejected.before.basis.revisionValue, '2');
   assert.equal(rejected.after.basis.revisionValue, '2');

@@ -1,31 +1,19 @@
+import {requiredRow} from './requiredRow';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {PassThrough} from 'node:stream';
 import {once, EventEmitter} from 'node:events';
 import {runInNewContext} from 'node:vm';
 import {test} from 'node:test';
-type Rows<T = Record<string, any>> = Omit<
-  Array<T>,
-  'find' | 'filter' | 'map' | 'flatMap' | 'some' | 'every' | 'findIndex' | 'at'
-> & {
-  find<V = T>(predicate: (value: V, index: number) => unknown): T;
-  filter<V = T>(predicate: (value: V, index: number) => unknown): Rows<T>;
-  map<U, V = T>(fn: (value: V, index: number) => U): U[];
-  flatMap<U, V = T>(fn: (value: V, index: number) => U | readonly U[]): U[];
-  some<V = T>(predicate: (value: V, index: number) => unknown): boolean;
-  every<V = T>(predicate: (value: V, index: number) => unknown): boolean;
-  findIndex<V = T>(predicate: (value: V, index: number) => unknown): number;
-  at(index: number): T;
-};
 type TraceState = Record<string, any> & {
   invalid: number;
   omitted: number;
   ended: boolean;
   pendingStack: boolean;
-  markers: Rows;
-  maps: Rows;
-  waits: Rows;
-  pendingWaits: Rows;
+  markers: Array<Record<string, any>>;
+  maps: Array<Record<string, any>>;
+  waits: Array<Record<string, any>>;
+  pendingWaits: Array<Record<string, any>>;
 };
 type TraceProtocolHandle = {state: TraceState; add: (line: string) => void};
 type ClassifierHandle = {add: (chunk: Buffer) => void; finish: () => Record<string, any>};
@@ -202,8 +190,8 @@ await test('scheduler END validates unique cohort identity and logical interval 
 await test('pending scheduler timestamps are censored context and never a completed interval', () => {
   const p = base();
   p.add('@wait_out[2]: 5000000000');
-  assert.equal(p.state.maps.at(-1).schedulerOffCpuOnly, true);
-  assert.equal(p.state.maps.at(-1).pureBlockedTime, false);
+  assert.equal(requiredRow(p.state.maps.at(-1)).schedulerOffCpuOnly, true);
+  assert.equal(requiredRow(p.state.maps.at(-1)).pureBlockedTime, false);
   assert.equal(p.state.waits.length, 0);
   assert.equal(fixtureWaitProof(p.state, row, waitBracket), false);
   p.add('@wait_stack[2]: 0xffffffff81234567');
@@ -253,7 +241,7 @@ await test('a reaped END without the automatic numeric inventory is incomplete',
   const p = inventory();
   assert.equal(traceInventoryComplete(p.state), true);
   const empty = structuredClone(p.state);
-  empty.maps = [] as unknown as Rows;
+  empty.maps = [];
   assert.equal(traceComplete(empty), true);
   assert.equal(traceInventoryComplete(empty), false);
   for (const missing of [
@@ -286,7 +274,7 @@ await test('numeric inventory rejects foreign bindings, duplicate keys and a sub
     'window_closed_ns',
   ]) {
     const p = inventory();
-    p.state.maps.find((r: any) => r.name === name).values = ['9'];
+    requiredRow(p.state.maps.find(r => r.name === name)).values = ['9'];
     assert.equal(traceInventoryComplete(p.state), false, name);
   }
   const p = inventory();
@@ -303,7 +291,7 @@ await test('fixture accounting requires scalar counters and consistent ascending
     ['wait_bounds', ['5200000010', '5000000010']],
   ]) {
     const p = inventory();
-    p.state.maps.find((r: any) => r.name === name).values = values;
+    requiredRow(p.state.maps.find(r => r.name === name)).values = values;
     assert.equal(traceInventoryComplete(p.state), false, name as string);
   }
 });
@@ -350,7 +338,7 @@ await test('pending interpretation stops at the earliest observed TERM, EXIT or 
     ['28000000000', '29000000000', '27000000000'],
   ]) {
     const p = inventory();
-    p.state.markers.find((r: any) => r.kind === 'QFW_END').ns = '30000000000';
+    requiredRow(p.state.markers.find(r => r.kind === 'QFW_END')).ns = '30000000000';
     p.add('@wait_out[2]: 6000000000');
     p.add('QFW_TERM 2 2222 2100000000 ' + term + ' 1002 2000000000 1001 0');
     p.add('QFW_EXIT 2 2222 2100000000 ' + exit);
@@ -384,7 +372,7 @@ await test('foreign identity, pre-binding or post-termination pending records re
       );
       p.add('@' + name + '[2]: ' + at);
       assert.equal(traceInventoryComplete(p.state), false);
-      p.state.pendingWaits = [] as unknown as Rows;
+      p.state.pendingWaits = [];
       assert.equal(traceInventoryComplete(p.state), false);
     }
 });
@@ -414,7 +402,7 @@ await test('pending censor fences require matching numeric maps and identity-bou
 });
 await test('an eligible pending timestamp requires exactly its matching bounded stack', () => {
   const p = pendingInventory();
-  p.state.pendingWaits = [] as unknown as Rows;
+  p.state.pendingWaits = [];
   assert.equal(traceInventoryComplete(p.state), false);
   const q = pendingInventory();
   q.state.pendingWaits.push(structuredClone(q.state.pendingWaits[0]));
@@ -424,7 +412,7 @@ await test('an eligible pending timestamp requires exactly its matching bounded 
       h.state.maps = h.state.maps.filter((r: any) => r.name !== 'wait_out');
     },
     (h: TraceProtocolHandle) => {
-      h.state.maps.find((r: any) => r.name === 'wait_out').values = ['6000000001'];
+      requiredRow(h.state.maps.find(r => r.name === 'wait_out')).values = ['6000000001'];
     },
   ]) {
     const p = pendingInventory();
@@ -531,7 +519,7 @@ await test('file event identity, range and both origins are exact', () => {
     {pid: 99},
   ]) {
     const p = base();
-    Object.assign(p.state.markers.at(-1), change);
+    Object.assign(requiredRow(p.state.markers.at(-1)), change);
     assert.equal(fixtureProof(p.state, json, row, meta, 1000, 1001), false);
   }
 });
@@ -567,7 +555,7 @@ await test('TERM generation outside bracket, sender, result or birth refuses', (
     {birthNs: '2000000001'},
   ]) {
     const p = terms();
-    Object.assign(p.state.markers.at(-2), change);
+    Object.assign(requiredRow(p.state.markers.at(-2)), change);
     assert.equal(fixtureTermProof(p.state, row, bracket, sender), false);
   }
 });
@@ -576,10 +564,10 @@ await test('missing, repeated or premature exit cannot qualify', () => {
   p.state.markers.pop();
   assert.equal(fixtureTermProof(p.state, row, bracket, sender), false);
   const q = terms();
-  q.state.markers.push({...q.state.markers.at(-2)});
+  q.state.markers.push({...requiredRow(q.state.markers.at(-2))});
   assert.equal(fixtureTermProof(q.state, row, bracket, sender), false);
   const r = terms();
-  r.state.markers.at(-1).ns = '9000000004';
+  requiredRow(r.state.markers.at(-1)).ns = '9000000004';
   assert.equal(fixtureTermProof(r.state, row, bracket, sender), false);
 });
 await test('filemap context maps retain numeric counts without pending/duration proof', () => {
@@ -589,9 +577,9 @@ await test('filemap context maps retain numeric counts without pending/duration 
   p.add('@count[2, 1, 253, 0, 1234]: 7');
   p.add('@files_omitted[2, 1]: 5');
   assert.equal(p.state.ended, false);
-  assert.equal(p.state.maps.at(-1).filemapContextOnly, true);
-  assert.equal(p.state.maps.at(-1).physicalWaitProof, false);
-  assert.equal('censoredLowerBound' in p.state.maps.at(-1), false);
+  assert.equal(requiredRow(p.state.maps.at(-1)).filemapContextOnly, true);
+  assert.equal(requiredRow(p.state.maps.at(-1)).physicalWaitProof, false);
+  assert.equal('censoredLowerBound' in requiredRow(p.state.maps.at(-1)), false);
   assert.equal(p.state.invalid, 0);
   p.add('QFW_END 25000000001');
   p.add('@term_sender[1]: (1000, 1000000000, 1001, 0)');

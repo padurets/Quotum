@@ -37,14 +37,14 @@ make check-desktop
 Or directly on the host without Devkit containers:
 
 ```sh
-npm ci && cd apps/hub && npm run check && npm test && npm run build
-cd apps/agent && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked
-node desktop/prepare.mjs && cd desktop && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked
+npm ci && (cd apps/hub && npm run check && npm test && npm run build)
+(cd apps/agent && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked)
+node desktop/prepare.mjs && (cd desktop && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked)
 ```
 
-Run the checks of every part you touched; a change is done when they pass. The app's
-come after `prepare.mjs` or `make prepare-desktop` (it builds and bundles the hub and fetches Node, which the app's build
-reads), and on Linux they need the system packages listed in CONTRIBUTING.md. A change
+Run the checks of every part you touched. Run the desktop checks after
+`prepare.mjs` or `make prepare-desktop`, which builds the hub bundle and fetches
+Node for the app. On Linux, install the system packages in CONTRIBUTING.md first. A change
 to `apps/agent/crates/core` or to the hub touches the app too. CI also runs the agent on
 macOS and Windows, and builds the app on Windows and Linux and runs each build
 (`desktop/smoke/`): if you change process handling (`process.rs`, `stop.rs`,
@@ -102,7 +102,7 @@ runs only while its stdin is open.
 
 ## Rules
 
-For an isolated containerized development stand on Linux, use `make dev app=hub`,
+For an isolated containerized development stand on Linux, use `make dev`,
 `make status`, `make logs app=hub` and `make down` at the checkout root (see *Development
 stands* in CONTRIBUTING.md). Devkit publishes container port `8080` on an ephemeral
 `127.0.0.1` host port per checkout (`make status` prints the bound port; `make logs app=hub`

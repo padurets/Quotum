@@ -837,16 +837,20 @@ mod tests {
         let pid = client.wait_for(|v| v["pid"].is_u64()).unwrap()["pid"].as_u64().unwrap() as libc::pid_t;
         client.finish();
         // No /proc on macOS: kill(pid, 0) fails with ESRCH once the process is gone and reaped.
-        // Under a Linux subreaper supervisor (PR_SET_CHILD_SUBREAPER), a killed orphan stays Z
-        // until the supervisor finishes waiting on the test runner.
-        // SAFETY: signal 0 only checks that the process exists.
         let gone = || {
             #[cfg(target_os = "linux")]
-            if std::fs::read_to_string(format!("/proc/{pid}/stat"))
-                .is_ok_and(|s| s.rfind(')').and_then(|close| s.get(close + 2..close + 3)) == Some("Z"))
-            {
+            if std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+                // An orphan may remain visible until its subreaper waits. Require both
+                // zombie state (field 3) and the SIGKILL wait status (field 52).
+                stat.rsplit_once(") ").is_some_and(|(_, tail)| {
+                    let mut fields = tail.split_whitespace();
+                    fields.next() == Some("Z")
+                        && fields.nth(48).and_then(|status| status.parse().ok()) == Some(libc::SIGKILL)
+                })
+            }) {
                 return true;
             }
+            // SAFETY: signal 0 only checks that the process exists.
             let alive = unsafe { libc::kill(pid, 0) } == 0;
             !alive && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
         };

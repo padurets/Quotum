@@ -1,3 +1,4 @@
+import {requiredRow} from './requiredRow';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -13,35 +14,29 @@ import {historyPoolReceiptScript} from '../historyPoolReceipt';
 import {historyIdentityScript} from '../historyTrafficBrowser';
 import {fixedActivityScript} from '../fixedActivity';
 
-type Rows<T = Record<string, any>> = Omit<
-  Array<T>,
-  'find' | 'filter' | 'map' | 'flatMap' | 'some' | 'every' | 'findIndex' | 'at' | 'slice'
-> & {
-  find<V = T>(predicate: (value: V, index: number) => unknown): T;
-  filter<V = T>(predicate: (value: V, index: number) => unknown): Rows<T>;
-  map<U, V = T>(fn: (value: V, index: number) => U): U[];
-  flatMap<U, V = T>(fn: (value: V, index: number) => U | readonly U[]): U[];
-  some<V = T>(predicate: (value: V, index: number) => unknown): boolean;
-  every<V = T>(predicate: (value: V, index: number) => unknown): boolean;
-  findIndex<V = T>(predicate: (value: V, index: number) => unknown): number;
-  at(index: number): T;
-  slice(start?: number, end?: number): Rows<T>;
-};
 type EntryRow = Record<string, any> & {
-  owner: {kind: string; demands: Rows; [key: string]: any};
-  charts: Rows;
+  id: number;
+  kind: string;
+  owner: {kind: string; demands: Array<Record<string, any>>; [key: string]: any};
+  charts: Array<Record<string, any>>;
 };
 type PoolReceiptShape = {
   status: string;
-  entries: Rows<EntryRow>;
-  members: Rows<{id: number; [key: string]: any}>;
-  ordinaryByFlight: Rows;
-  ownershipRows: Rows<{
-    members: Rows<{id: number; current: number; [key: string]: any}>;
-    reservations: Rows<{owner: {kind: string; ownSlot?: boolean}}>;
+  entries: Array<EntryRow>;
+  members: Array<{
+    id: number;
+    transportScope: string | null;
+    transportBound: boolean;
+    bindingMismatch: boolean;
     [key: string]: any;
   }>;
-  ownershipGraphs: Rows<{id: number; [key: string]: any}>;
+  ordinaryByFlight: Array<Record<string, any>>;
+  ownershipRows: Array<{
+    members: Array<{id: number; current: number; [key: string]: any}>;
+    reservations: Array<{owner: {kind: string; ownSlot?: boolean}}>;
+    [key: string]: any;
+  }>;
+  ownershipGraphs: Array<{id: number; [key: string]: any}>;
   [key: string]: any;
 };
 
@@ -257,9 +252,8 @@ test('late cache failures survive a full seed without changing pool or read resu
   assert.equal(h.context.sameFetch, true);
   assert.equal(h.context.budget.badCalls, 1);
   assert.equal(h.context.budget.readCalls, 2);
-  const refused = receipt.entries.find(
-    (entry: {kind: string; accepted?: boolean}) =>
-      entry.kind === 'reserve-critical' && entry.accepted === false,
+  const refused = requiredRow(
+    receipt.entries.find(entry => entry.kind === 'reserve-critical' && entry.accepted === false),
   );
   assert.equal(refused.owner.kind, 'transport');
   assert.deepEqual(JSON.parse(JSON.stringify(refused.period)), {
@@ -272,7 +266,7 @@ test('late cache failures survive a full seed without changing pool or read resu
     retirementFinite: false,
     work: {fixed: false, packed: true, refs: 2, spans: 0},
   });
-  const dropped = receipt.entries.find((entry: {kind: string}) => entry.kind === 'drop-after');
+  const dropped = requiredRow(receipt.entries.find(entry => entry.kind === 'drop-after'));
   assert.equal(dropped.complete, true);
   assert.equal(dropped.removed.length, 1);
   assert.equal(dropped.removed[0][9], 100);
@@ -280,7 +274,7 @@ test('late cache failures survive a full seed without changing pool or read resu
   assert.deepEqual(
     JSON.parse(
       JSON.stringify(
-        receipt.entries.find((entry: {kind: string}) => entry.kind === 'drop-before').target,
+        requiredRow(receipt.entries.find(entry => entry.kind === 'drop-before')).target,
       ),
     ),
     {kind: 'target', cell: 60, from: 60, to: 120},
@@ -290,18 +284,17 @@ test('late cache failures survive a full seed without changing pool or read resu
     4,
   );
   assert.equal(
-    receipt.entries.find((entry: {kind: string}) => entry.kind === 'http').attemptId,
+    requiredRow(receipt.entries.find(entry => entry.kind === 'http')).attemptId,
     'b1:34',
   );
   const saved = safeEvidence(receipt) as typeof receipt;
   assert.equal(saved.status, 'complete');
-  assert.equal(
-    saved.entries.find((entry: {kind: string}) => entry.kind === 'http').attemptId,
-    'b1:34',
-  );
+  assert.equal(requiredRow(saved.entries.find(entry => entry.kind === 'http')).attemptId, 'b1:34');
   assert.deepEqual(
     JSON.parse(
-      JSON.stringify(saved.entries.find((entry: any) => entry.kind === 'reserve-critical').period),
+      JSON.stringify(
+        requiredRow(saved.entries.find(entry => entry.kind === 'reserve-critical')).period,
+      ),
     ),
     JSON.parse(JSON.stringify(refused.period)),
   );
@@ -372,7 +365,7 @@ test('HTTP receipts observe admitted readers after queue changes and pruning', a
   await flush();
   h.run('__quotumHistoryPoolReceipt.mark(2,3);');
   const receipt = h.read(),
-    http = receipt.entries.find((e: any) => e.kind === 'http');
+    http = requiredRow(receipt.entries.find(e => e.kind === 'http'));
   assert.equal(receipt.status, 'complete');
   assert.equal(receipt.sendingUnknown, 0);
   assert.equal(sent.length, 1);
@@ -392,9 +385,9 @@ test('HTTP receipts observe admitted readers after queue changes and pruning', a
     Array.from(http.request.sections, (part: any) => part.scope),
     ['quota', 'funds'],
   );
-  const send = receipt.entries.find((entry: any) => entry.kind === 'transport-send');
+  const send = requiredRow(receipt.entries.find(entry => entry.kind === 'transport-send'));
   assert.equal(send.flightId, http.flightId);
-  const quota = http.charts.find((m: any) => m.memberId === receipt.members[1].id);
+  const quota = requiredRow(http.charts.find(m => m.memberId === receipt.members[1].id));
   assert.deepEqual(
     Array.from(quota.interest),
     [3, 120, -60, 60, 1],
@@ -405,8 +398,8 @@ test('HTTP receipts observe admitted readers after queue changes and pruning', a
   assert.equal(quota.retained[0][8], 30, 'the held prefix is read at sending time');
   assert.equal(h.context.budget.interest.token, 1, 'the pruned owner never starts');
   for (const demand of http.demands) {
-    const submitted = receipt.entries.find(
-      (e: any) => e.kind === 'read' && e.readId === demand.readId,
+    const submitted = requiredRow(
+      receipt.entries.find(e => e.kind === 'read' && e.readId === demand.readId),
     );
     assert.equal(submitted.memberId, demand.memberId);
     assert.equal(submitted.interest[0], 1);
@@ -431,7 +424,7 @@ for (const registered of [false, true])
     await Promise.resolve();
     h.run('__quotumHistoryPoolReceipt.mark(2,3);');
     const receipt = h.read(),
-      http = receipt.entries.find((entry: any) => entry.kind === 'http');
+      http = requiredRow(receipt.entries.find(entry => entry.kind === 'http'));
     assert.match(http.attemptId, /^b\d+:\d+$/);
     assert.ok(http.flightId > 0);
     assert.equal(receipt.status, 'insufficient-evidence');
@@ -453,7 +446,7 @@ test('a retired period coordinator cannot qualify a later transport admission', 
   await Promise.resolve();
   h.run('__quotumHistoryPoolReceipt.mark(2,3);');
   const receipt = h.read(),
-    http = receipt.entries.find((entry: any) => entry.kind === 'http');
+    http = requiredRow(receipt.entries.find(entry => entry.kind === 'http'));
   assert.match(http.attemptId, /^b\d+:\d+$/);
   assert.ok(http.flightId > 0);
   assert.equal(receipt.status, 'insufficient-evidence');
@@ -463,7 +456,7 @@ test('a retired period coordinator cannot qualify a later transport admission', 
   assert.equal(receipt.members.length, 4);
   h.pool.reserve(h.context.flight, h.pool.budget + 1);
   assert.equal(
-    h.read().entries.find((entry: any) => entry.kind === 'reserve-critical').period,
+    requiredRow(h.read().entries.find(entry => entry.kind === 'reserve-critical')).period,
     null,
     'an unregistered period supplies no current preparation state',
   );
@@ -477,7 +470,7 @@ test('HTTP without a known admission remains insufficient evidence', () => {
     "for(const value of [quota,budget,funds])value.env.read('synthetic',60,0,60);fetch('/api/boards/synthetic/period',{headers:{'x-quotum-bench-attempt':'b3:1'}});__quotumHistoryPoolReceipt.mark(2,3);",
   );
   const receipt = h.read(),
-    http = receipt.entries.find((e: any) => e.kind === 'http');
+    http = requiredRow(receipt.entries.find(e => e.kind === 'http'));
   assert.equal(receipt.registrationOrderQualified, true);
   assert.equal(receipt.status, 'insufficient-evidence');
   assert.equal(receipt.sendingUnknown, 1);
@@ -493,7 +486,7 @@ test('an admitted baseline without an HTTP attempt cannot qualify its receipt', 
   await Promise.resolve();
   h.run('__quotumHistoryPoolReceipt.mark(2,3);');
   const receipt = h.read(),
-    http = receipt.entries.find((e: any) => e.kind === 'http');
+    http = requiredRow(receipt.entries.find(e => e.kind === 'http'));
   assert.equal(receipt.registrationOrderQualified, true);
   assert.equal(receipt.status, 'insufficient-evidence');
   assert.equal(receipt.sendingUnknown, 1);
@@ -672,7 +665,7 @@ test('a real owned PeriodTransport flight reports its exact chart demand during 
   assert.equal(h.context.decodeRefused, false);
   let receipt = h.read(),
     critical = receipt.entries.filter((row: {kind: string}) => row.kind === 'reserve-critical');
-  const decode = critical.at(-1);
+  const decode = requiredRow(critical.at(-1));
   assert.equal(decode.owner.kind, 'transport');
   assert.equal(decode.owner.ownSlot, true);
   assert.equal(decode.owner.extras, false);
@@ -696,7 +689,7 @@ test('a real owned PeriodTransport flight reports its exact chart demand during 
   assert.equal(h.context.adoptRefused, false);
   receipt = h.read();
   critical = receipt.entries.filter((row: {kind: string}) => row.kind === 'reserve-critical');
-  const adoption = critical.at(-1);
+  const adoption = requiredRow(critical.at(-1));
   assert.equal(adoption.flightId, decode.flightId);
   assert.equal(adoption.owner.preparing, true);
   assert.equal(adoption.owner.demands[0].queryId, demand.queryId);
@@ -745,7 +738,7 @@ test('critical ownership snapshots distinguish shared current and retained objec
   assert.equal(receipt.status, 'insufficient-evidence');
   const snapshot = receipt.ownershipRows[0],
     member = snapshot.members[0],
-    graph = receipt.ownershipGraphs.find((value: {id: number}) => value.id === member.current);
+    graph = requiredRow(receipt.ownershipGraphs.find(value => value.id === member.current));
   assert.equal(graph.workValue, graph.sourceTape);
   assert.equal(graph.workValue, graph.sourceCurves);
   assert.equal(graph.indexCurves, graph.workValue);
@@ -771,10 +764,10 @@ test('retention captures the old ownership graph before the current graph change
   assert.equal(receipt.ownershipMissing, 0);
   assert.ok(receipt.ownershipRows.length > 0);
   const member = receipt.ownershipRows[0].members[0],
-    captured = receipt.ownershipGraphs.find(
-      (row: {id: number}) => row.id === member.retained[0].captured,
+    captured = requiredRow(
+      receipt.ownershipGraphs.find(row => row.id === member.retained[0].captured),
     ),
-    current = receipt.ownershipGraphs.find((row: {id: number}) => row.id === member.current);
+    current = requiredRow(receipt.ownershipGraphs.find(row => row.id === member.current));
   assert.equal(captured.workValue, captured.sourceTape);
   assert.notEqual(captured.workValue, current.workValue);
   assert.equal(member.retained[0].activityTrace, captured.workValue);
@@ -817,7 +810,7 @@ test('temporary period owners and a removed restoring entry retain their actual 
   assert.equal(receipt.status, 'complete');
   assert.equal(receipt.ownershipMissing, 0);
   assert.equal(h.context.result, false);
-  const event = receipt.entries.find((entry: {kind: string}) => entry.kind === 'reserve-critical');
+  const event = requiredRow(receipt.entries.find(entry => entry.kind === 'reserve-critical'));
   assert.equal(event.owner.kind, 'period-staging');
   assert.equal(event.owner.operation, 'restore');
   assert.equal(event.owner.memberId, receipt.members[0].id);
@@ -826,8 +819,8 @@ test('temporary period owners and a removed restoring entry retain their actual 
   assert.equal(member.restoring.length, 1);
   assert.deepEqual(member.storage, member.restoring[0].storage);
   assert.equal(member.restoring[0].metadata, 30);
-  const captured = receipt.ownershipGraphs.find(
-    (row: {id: number}) => row.id === member.restoring[0].captured,
+  const captured = requiredRow(
+    receipt.ownershipGraphs.find(row => row.id === member.restoring[0].captured),
   );
   assert.equal(captured.workValue, member.storage[0][0]);
 });
