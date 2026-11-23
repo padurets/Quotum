@@ -685,35 +685,81 @@ still: nothing is measured after the start, and no card goes stale for three hou
 agents still work and their credited activity advances.
 
 For the public screenshots, use the synthetic showcase accounts and a seven-day range.
-The work schedule is relative to Friday at 17:30 UTC. For matching calendar labels,
-start the demo, its child hub and the browser at the same Friday afternoon in UTC.
-Let their clocks advance normally while the hub measures and the dashboard settles.
+Anchor the capture clocks to Friday at 17:30 UTC. Compute one wall-clock offset before seeding
+and pass it to the demo and capture window. The demo's child hub inherits the Node
+preload. The window installs the same clock in the renderer before navigating, including
+on reloads. All three continue to advance at normal speed.
+
+From `apps/hub/` after `make setup build-hub prepare-desktop` at the checkout root,
+run these commands in the same shell on a Linux graphical desktop. Set `preset` to
+`showcase-openrouter` for the wallet pair. Wait for the demo's sign-in instructions
+before opening the window. Use the disposable credentials printed there.
+
+```sh
+export TZ=UTC
+export SHOWCASE_OFFSET_MS="$(node -p 'Date.UTC(2026, 10, 20, 17, 30) - Date.now()')"
+preset=showcase
+NODE_OPTIONS="--require=\"$PWD/../../desktop/capture/clock.cjs\"" \
+  node --import tsx demo/index.ts "$preset" --still &
+demo_pid=$!
+```
+
+After the demo prints its ready message, open the board in a fresh capture profile in the same shell.
+
+```sh
+capture_profile=$(mktemp -d)
+../../desktop/resources/electron/electron --user-data-dir="$capture_profile" \
+  ../../desktop/capture/window.cjs --board http://127.0.0.1:8080/
+rm -rf "$capture_profile"
+kill -TERM "$demo_pid"
+wait "$demo_pid"
+```
+
 Capture the README pairs in English and Russian at 2× device scale, with matching
 crops in the existing browser frame and coloured backdrop.
 
-- **Dashboard** (`docs/dashboard{,.ru}.png`). Run `pnpm run demo showcase --still`,
-  sign in as Alex, select **Core team** and show the filters. Open the agent count on
+- **Dashboard** (`docs/dashboard{,.ru}.png`). On the `showcase` preset, sign in as
+  Alex, select **Core team** and show the filters. Open the agent count on
   Alex's Claude card so that both machines and their projects are visible.
 - **Analytics** (`docs/analytics{,.ru}.png`). On the same board choose **Look ahead →
-  1 day**. Capture the four panels from Agent activity through Weekly limit metrics
+  1 day**. In Weekly limit metrics settings, hide only the **Plan** column for this
+  capture in both languages. Keep the source and model names readable in every row.
+  Capture the four panels from Agent activity through Weekly limit metrics
   once the bars, heatmap, weekly curves, forecast labels and table have populated.
-- **OpenRouter** (`docs/openrouter{,.ru}.png`). Run
-  `pnpm run demo showcase-openrouter --still`, hide the filters and capture the
+- **OpenRouter** (`docs/openrouter{,.ru}.png`). On `showcase-openrouter`, hide the
+  filters and capture the
   subscription beside the wallet. All three key limits and reset periods should be visible.
 - **Social preview** (`docs/social-preview.png`, 1280×640). Place the freshly captured
   English dashboard beneath the existing title and subtitle, keeping its tilted crop.
-- **AppImage catalog** (`docs/desktop.png`, 1280×800). From `apps/hub/`, run
-  `node --import tsx demo/desktopCapture.ts` and open the printed loopback URL.
-  It starts the production hub in local mode on the seeded single-workstation database
-  and reports the workstation's demo sessions. Use an English 1280×800 viewport at
-  80% zoom and capture the viewport without a browser frame. Include all three cards
-  and the weekly chart down to its legend.
-  Ctrl+C stops the hub and removes its temporary data.
+- **AppImage catalog** (`docs/desktop.png`, 1280×800). The command below starts
+  `demo/desktopCapture.ts` on its single-workstation database in production local mode.
+  It reports the workstation sessions, captures the three cards and the weekly chart
+  at 80% zoom in an English window without a browser frame, then removes the temporary
+  data. Inspect the preview before replacing the catalog image.
 
-On Linux, `make prepare-desktop` provides the bundled Electron in `desktop/resources/electron/`.
-It can capture the loopback page under Xvfb using the runtime in
-`.devkit/runtime/desktop.Dockerfile`. With CDP, set the device scale via
-`Emulation.setDeviceMetricsOverride`. For analytics, use a 1240×2220 CSS-pixel
+To reproduce the local 1280×800 viewport headlessly, run the following at the
+prepared checkout root. The container owns its own loopback, display and Electron
+profile. Its copy of the Chromium sandbox helper gets the ownership used by an installed
+package. The actual Electron process and the local demo run as the image's ordinary user.
+
+```sh
+docker build -t quotum-showcase-runtime - < .devkit/runtime/desktop.Dockerfile
+docker run --rm --init --network none --shm-size=256m --user root --cap-add SYS_ADMIN \
+  --security-opt seccomp=.devkit/runtime/desktop-seccomp.json \
+  -v "$PWD:/work:ro" quotum-showcase-runtime sh -ec '
+    cp -a /work/desktop/resources/electron /tmp/capture-electron
+    chown root:root /tmp/capture-electron/chrome-sandbox
+    chmod 4755 /tmp/capture-electron/chrome-sandbox
+    offset=$(node -p "Date.UTC(2026,10,20,17,30) - Date.now()")
+    setpriv --reuid=node --regid=node --init-groups --reset-env env \
+      TZ=UTC SHOWCASE_OFFSET_MS="$offset" xvfb-run -a /tmp/capture-electron/electron \
+      /work/desktop/capture/window.cjs /tmp/desktop.png >&2
+    cat /tmp/desktop.png
+  ' > desktop-preview.png
+```
+
+For a scripted README capture, use CDP's `Emulation.setDeviceMetricsOverride`
+to set the device scale to 2. For analytics, use a 1240×2220 CSS-pixel
 viewport and scroll all four panels into view. Wait for the bars, series paths,
 forecast labels and bundled fonts to render. Capture the visible viewport with
 `Page.captureScreenshot({captureBeyondViewport: false})` and crop the panels from
