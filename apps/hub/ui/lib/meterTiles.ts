@@ -78,13 +78,14 @@ const fields = [
 ];
 // Cell headers and interval leaves repeat the same field names thousands of times.
 // Short local keys keep every value and unknown field without retaining those names.
-const compact = (value: object) =>
-  Object.fromEntries(
-    Object.entries(value).map(([key, value]) => {
-      const index = fields.indexOf(key);
-      return [index < 0 ? 'x:' + key : String(index), value];
-    }),
-  );
+const compact = (value: object) => {
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    const index = fields.indexOf(key);
+    result[index < 0 ? 'x:' + key : index] = (value as Record<string, unknown>)[key];
+  }
+  return result;
+};
 const expand = <T>(value: object): T =>
   Object.fromEntries(
     Object.entries(value).map(([key, value]) => [
@@ -133,11 +134,12 @@ function utf8Length(text: string) {
   return bytes;
 }
 
-/** Both passes use the same frames. Only the input response owns the observations. */
-function* frames(
+/** Measure and write the same frames directly from the response's observations. */
+function* pack(
   cell: StoredCell,
   keep: (value: MeterSemantics | null) => SemanticsRef,
-): Generator<string> {
+  frame: (text: string) => void,
+): Preparation<void> {
   const before = keep(cell.before);
   const relative = (value: MeterSemantics | null) => {
     if (value === cell.before) return SAME_BEFORE;
@@ -166,13 +168,21 @@ function* frames(
   if (observations) head.push(steps.length, topupSteps.length, observations.length);
   else if (topupSteps.length) head.push(steps.length, topupSteps.length);
   else if (steps.length) head.push(steps.length);
-  yield JSON.stringify(head);
+  frame(JSON.stringify(head));
+  yield;
   for (const values of [steps, topupSteps])
-    for (const step of values) yield JSON.stringify(compact(step));
-  for (const point of observations ?? [])
-    yield JSON.stringify(
-      compact({...point, ...(point.semantics ? {semantics: relative(point.semantics)} : {})}),
+    for (const step of values) {
+      frame(JSON.stringify(compact(step)));
+      yield;
+    }
+  for (const point of observations ?? []) {
+    frame(
+      JSON.stringify(
+        compact({...point, ...(point.semantics ? {semantics: relative(point.semantics)} : {})}),
+      ),
     );
+    yield;
+  }
 }
 const header = (bytes: Uint8Array) => {
   const [before, semantics, row, steps = 0, topupSteps = 0, observations] = JSON.parse(
@@ -429,7 +439,7 @@ export class MeterTile {
           yield;
           continue;
         }
-        if (!cells[i]) staged.bytes += 256; // The row descriptor and its reference set.
+        if (cells[i] === undefined) staged.bytes += 256; // The row descriptor and its reference set.
         const before = semantics;
         semantics = row[5]?.semantics ?? semantics;
         cells[i] = {row, before, semantics, references: new Set()};
@@ -453,10 +463,9 @@ export class MeterTile {
           staged.bytes += (cell.references.size - count) * 8;
           return ref;
         };
-        for (const text of frames(cell, keep)) {
+        yield* pack(cell, keep, text => {
           byteCount += 4 + utf8Length(text);
-          yield;
-        }
+        });
         refCount += cell.references.size;
       }
     }
@@ -482,7 +491,8 @@ export class MeterTile {
         references: new Uint32Array(refCount),
         data: new Uint8Array(byteCount),
       };
-      const view = new DataView(next.data.buffer);
+      const data = next.data,
+        view = new DataView(data.buffer);
       let at = 0,
         ref = 0;
       for (let i = start; i < cells.length; i++) {
@@ -504,12 +514,11 @@ export class MeterTile {
             const original = value.conversion?.original;
             return original ? [id, original.amount, original.at] : id;
           };
-          for (const text of frames(cell, keep)) {
-            const {written} = encoder.encodeInto(text, next.data.subarray(at + 4));
+          yield* pack(cell, keep, text => {
+            const {written} = encoder.encodeInto(text, data.subarray(at + 4));
             view.setUint32(at, written);
             at += 4 + written;
-            yield;
-          }
+          });
           for (const id of cell.references) {
             next.references[ref++] = id;
             yield;

@@ -398,6 +398,50 @@ test('interned cell metadata preserves openings, observations, exact provenance 
   );
 });
 
+test('overlapping responses encode the winning cells directly into one series buffer', () => {
+  const first = semantics(1, '5'),
+    last = semantics(2, '6', true),
+    replaced = {...first, label: 'Discarded observation'},
+    input = series([
+      [
+        0,
+        '2',
+        null,
+        null,
+        cell,
+        {observations: [{at: 0, value: '2', validUntil: cell, semantics: replaced}]},
+      ],
+      [1, '3', null, null, cell, {semantics: last}],
+    ]),
+    winner = {...series([[0, '4', null, null, cell, {}]]), semantics: first};
+  const expected = {...winner, cells: [winner.cells[0], input.cells[1]]};
+  const tile = new MeterTile(0, cell),
+    allocations: ArrayBufferLike[] = [];
+  const original = Uint8Array;
+  globalThis.Uint8Array = new Proxy(original, {
+    construct(target, args) {
+      const result = Reflect.construct(target, args) as Uint8Array;
+      if (typeof args[0] === 'number') allocations.push(result.buffer);
+      return result;
+    },
+  });
+  try {
+    tile.merge(0, 2 * cell, [input, winner]);
+  } finally {
+    globalThis.Uint8Array = original;
+  }
+  const stored = (tile as unknown as {series: Map<string, {data: Uint8Array}>}).series;
+  assert.equal(allocations.length, 1);
+  assert.equal(allocations[0], [...stored.values()][0].data.buffer);
+  assert.deepEqual(tile.chunk(0, 2 * cell), [expected]);
+  tile.merge(0, 2 * cell, []);
+  assert.equal(
+    tile.bytes,
+    0,
+    'all winning dictionary references belong to the two published cells',
+  );
+});
+
 test('many converted observations share rate provenance while preserving every original anchor', () => {
   const input = series(
     Array.from({length: 60}, (_, i) => [
@@ -437,7 +481,11 @@ test('compact cell headers retain nulls, zero offsets, exclusive bounds and unfa
     knownUntil: cell,
     topupInternal: '0',
     observations: [{at: 0, value: '900719925474099312345', validUntil: cell, semantics: null}],
-    ...{'0': 'numeric key', 'x:open': 'prefixed key', futureField: 'future value'},
+    ...{
+      '0': 'numeric key',
+      'x:open': 'prefixed key',
+      futureField: 'ASCII, é, Ж, 漢, 🧭 and a lone surrogate \ud812',
+    },
   };
   const input = series([[0, '900719925474099312345', null, '0', cell, extra]]),
     tile = new MeterTile(0, cell);

@@ -3466,7 +3466,7 @@ test('every preparation slice accounts for private tile growth, including cancel
 /** Fifteen real balance observations per cell, with a sparse series for unchanged COW ownership. */
 function observedBalances(
   read: {from: number; to: number; cell: number},
-  amount: string,
+  amount: string | ((from: number, index: number) => string),
   split = false,
   sparse = false,
 ) {
@@ -3486,7 +3486,7 @@ function observedBalances(
           id: 'balance',
           kind: 'balance',
           unit: 'USD',
-          amount,
+          amount: typeof amount === 'string' ? amount : amount(from, i),
           at: from + (i * read.cell) / 15,
           staleAfterMs: read.cell,
           previousAt: null,
@@ -3654,40 +3654,100 @@ for (const outcome of ['commit', 'cancel'] as const)
     assert.equal(pool.estimatedBytes, h.store.estimatedBytes);
   });
 
-test('a dense monthly balance fits with its encoded intervals and the transport response still owned', async () => {
-  for (const raw of [false, true]) {
-    const pool = new HistoryPool(raw ? 905_000 : 480_000),
-      h = cooperativeHarness(pool, 'budget');
-    const transport = {role: 'visible' as const};
-    try {
-      h.store.setMeters({unit: 'USD', ids: [['s', 'balance']]});
-      h.store.choose('30d', {from: NOW - 720 * H, to: NOW - 5 * M});
-      await h.start();
-      for (let i = 0; i < h.reads.length; i++) {
-        const read = h.reads[i],
-          chunks = observedBalances(read, '7000000');
-        if (raw) {
-          const body = {
-            run: 'run',
-            now: NOW,
-            historyStart: 0,
-            known: {work: 0, sources: {s: 0}},
-            chunks,
-          };
-          assert.ok(pool.reserve(transport, Buffer.byteLength(JSON.stringify(body)) * 3));
+for (const shift of [0, 56 * H])
+  test(`a dense monthly balance fits with the response still owned at a ${shift / H}h shift`, async () => {
+    for (const raw of [false, true]) {
+      const pool = new HistoryPool(raw ? 905_000 : 480_000),
+        h = cooperativeHarness(pool, 'budget');
+      const transport = {role: 'visible' as const};
+      try {
+        h.correctClock(shift);
+        const now = h.now();
+        h.store.setMeters({unit: 'USD', ids: [['s', 'balance']]});
+        h.store.choose('30d', {from: now - 720 * H, to: now - 5 * M});
+        await h.start();
+        for (let i = 0; i < h.reads.length; i++) {
+          const read = h.reads[i],
+            chunks = observedBalances(
+              read,
+              shift
+                ? (from, i) =>
+                    String(70_000_000 - (from % (60 * read.cell)) / (read.cell / 100) - i * 9)
+                : '7000000',
+            );
+          if (raw) {
+            const body = {
+              run: 'run',
+              now,
+              historyStart: 0,
+              known: {work: 0, sources: {s: 0}},
+              chunks,
+            };
+            assert.ok(pool.reserve(transport, Buffer.byteLength(JSON.stringify(body)) * 3));
+          }
+          await read.answer({chunks});
+          await h.finish();
+          pool.release(transport);
         }
-        await read.answer({chunks});
-        await h.finish();
+        assert.equal(h.store.get().error, undefined);
+        assert.equal(h.reads.length, 7);
+        assert.equal(h.store.get().history?.meterSeries?.[0].end, shift ? '69992044' : '7000000');
+      } finally {
         pool.release(transport);
+        h.store.close();
       }
-      assert.equal(h.store.get().error, undefined);
-      assert.equal(h.reads.length, 7);
-      assert.equal(h.store.get().history?.meterSeries?.[0].end, '7000000');
-    } finally {
-      pool.release(transport);
-      h.store.close();
     }
+  });
+
+test('a late monetary read is rejected before allocating a series that cannot fit', async t => {
+  const pool = new HistoryPool(),
+    h = cooperativeHarness(pool, 'budget'),
+    range = {from: NOW - 120 * H, to: NOW - 5 * M};
+  t.after(() => h.store.close());
+  h.store.setMeters({unit: 'USD', ids: [['s', 'balance']]});
+  h.store.choose('30d', range);
+  await h.start();
+  await h.reads[0].answer({chunks: observedBalances(h.reads[0], '7000000')});
+  await h.finish();
+  assert.ok(h.store.get().history);
+  h.store.news(range.to - H);
+  await h.advance(300);
+  await h.finish();
+  const read = pending(h)[0],
+    body = {
+      run: 'run',
+      now: h.now(),
+      historyStart: 0,
+      known: {work: 0, sources: {s: 0}},
+      chunks: observedBalances(read, '6000000'),
+    };
+  const transport = {role: 'visible' as const};
+  assert.ok(pool.reserve(transport, Buffer.byteLength(JSON.stringify(body)) * 3));
+  t.after(() => pool.release(transport));
+  const available = 15_000,
+    peer = {
+      role: 'visible' as const,
+      data: new Uint8Array(pool.budget - pool.estimatedBytes - available),
+    };
+  assert.ok(pool.reserve(peer, peer.data.byteLength));
+  t.after(() => pool.release(peer));
+
+  const allocations: number[] = [];
+  const original = Uint8Array;
+  globalThis.Uint8Array = new Proxy(original, {
+    construct(target, args) {
+      if (typeof args[0] === 'number' && args[0] > available) allocations.push(args[0]);
+      return Reflect.construct(target, args);
+    },
+  });
+  try {
+    await read.answer(body);
+    await h.finish();
+  } finally {
+    globalThis.Uint8Array = original;
   }
+  assert.equal(h.store.get().error, 'history_limit');
+  assert.deepEqual(allocations, [], 'a rejected series never obtains its backing buffer');
 });
 
 test('an incoming empty tile header is admitted before yielding and discarded if it cannot fit', async () => {
