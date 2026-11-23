@@ -219,10 +219,12 @@ export class HistoryStore {
   private composeCurrent: ((target: Target) => boolean) | null = null;
   private readonly responses = new Map<Flight, ResponseOwner>();
   private readonly reservations = new Map<string, Flight>();
+  private readonly plotTileIds = new WeakMap<HistoryTile, number>();
+  private lastPlotTileId = 0;
   private readonly plotChunks = new Map<
     string,
     {
-      seq: number;
+      version: number;
       from: number;
       to: number;
       chunk: Chunk;
@@ -1100,6 +1102,16 @@ export class HistoryStore {
       : this.target();
   }
 
+  // Plan expiry can advance a tile's write sequence to the next response's number.
+  // Distinguish those published tiles without keeping their packed buffers alive.
+  private plotTileId(tile: HistoryTile) {
+    const existing = this.plotTileIds.get(tile);
+    if (existing !== undefined) return existing;
+    const id = ++this.lastPlotTileId;
+    this.plotTileIds.set(tile, id);
+    return id;
+  }
+
   private publishPlot() {
     if (!this.meta || !this.plotPending || !this.interest) return;
     const visible = this.plotTarget();
@@ -1150,7 +1162,7 @@ export class HistoryStore {
       this.cutTo,
       nativeTiles.map(tile => [tile.from, tile.nativeSeq, tile.nativeFrom, tile.nativeTo]),
     ]);
-    const identity = `${this.epoch}:${this.interest?.token ?? this.plot?.token}:${strip.cell}:${strip.k0}:${strip.k1}:${this.windowsKey}:${this.cutTo}:${JSON.stringify(this.meta.known)}:${tiles.map(tile => `${tile.from},${tile.writeSeq},${tile.readFrom},${tile.readTo}`).join(';')}:${separate ? nativeIdentity : ''}`;
+    const identity = `${this.epoch}:${this.interest?.token ?? this.plot?.token}:${strip.cell}:${strip.k0}:${strip.k1}:${this.windowsKey}:${this.cutTo}:${JSON.stringify(this.meta.known)}:${tiles.map(tile => `${this.plotTileId(tile)},${tile.readFrom},${tile.readTo}`).join(';')}:${separate ? nativeIdentity : ''}`;
     this.plotVersion = this.version;
     if (identity === this.plotIdentity) return;
     this.plotIdentity = identity;
@@ -1189,18 +1201,18 @@ export class HistoryStore {
     ): Preparation<{activity: PlotBuffer | null; native: PlotBuffer}> {
       const chunks: Chunk[] = [];
       if (store.wantsActivity)
-        for (const {tile, seq, from, to} of pins) {
-          const key = `${tile.cell}:${tile.from}`;
+        for (const {tile, from, to} of pins) {
+          const key = `${tile.cell}:${tile.from}`,
+            version = store.plotTileId(tile);
           let saved = store.plotChunks.get(key);
-          if (!saved || saved.seq !== seq || saved.from !== from || saved.to !== to) {
+          if (!saved || saved.version !== version || saved.from !== from || saved.to !== to) {
             const chunk = yield* tile.chunkPrepared(
               meta.known,
               true,
               store.env.now(),
               separate ? 'activity' : 'all',
             );
-            // The write sequence identifies this version without retaining its packed input.
-            saved = {seq, from, to, chunk};
+            saved = {version, from, to, chunk};
             if (valid()) store.plotChunks.set(key, saved);
           }
           chunks.push(saved.chunk);
@@ -1222,13 +1234,13 @@ export class HistoryStore {
         let saved = store.plotChunks.get(key);
         if (
           !saved ||
-          saved.seq !== seq ||
+          saved.version !== seq ||
           saved.from !== from ||
           saved.to !== to ||
           saved.deadline !== tile.planDeadline
         ) {
           const chunk = yield* tile.chunkPrepared(meta.known, true, store.env.now(), 'native');
-          saved = {seq, from, to, chunk, deadline: tile.planDeadline};
+          saved = {version: seq, from, to, chunk, deadline: tile.planDeadline};
           if (valid()) store.plotChunks.set(key, saved);
         }
         nativeChunks.push(saved.chunk);
