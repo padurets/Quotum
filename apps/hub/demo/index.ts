@@ -17,6 +17,7 @@ import {Trackers} from './trackers.js';
 import {seedDeepSeek} from './deepseek.js';
 import {seedQuotas} from './quotas.js';
 import {seedMoney} from './money.js';
+import {seedShowcaseOpenRouter} from './showcaseOpenRouter.js';
 import {seedCodexCredits} from './codexCredits.js';
 import {seedClients} from './clients.js';
 import {seedLinks} from './links.js';
@@ -39,6 +40,8 @@ import {HistoryLimitOutput, type HistoryLimitReport} from './historyLimit.js';
 
 const HUB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SETUP_CODE = 'BCDF-GHJK';
+/** Shared by the demo hub and the local capture that reopens its fixture database. */
+export const DEMO_SECRET_KEY = Buffer.alloc(32, 31).toString('base64url');
 const ADDRESS = [
   'QUOTUM_PORT',
   'QUOTUM_BIND',
@@ -251,7 +254,7 @@ export class Demo {
       QUOTUM_RESETS_CODEX_URL: urls.codex,
       QUOTUM_RESETS_CLAUDE_URL: urls.claude,
       QUOTUM_ALLOWED_HOSTS: address.hosts,
-      QUOTUM_SECRET_KEY: Buffer.alloc(32, 31).toString('base64url'),
+      QUOTUM_SECRET_KEY: DEMO_SECRET_KEY,
       QUOTUM_DEMO_HISTORY_LIMITS: this.options.onHistoryLimit ? '1' : '',
     });
     if (set.id === 'clients' || set.id === 'links' || set.id === 'calendar') {
@@ -315,6 +318,8 @@ export class Demo {
         if (set.id === 'sessions' || set.id === 'filters' || set.id === 'project-colors')
           await seedSessionClients(store, new Directory(store.db), stand);
         if (set.id === 'project-colors') seedProjectColors(store, new Directory(store.db), stand);
+        if (this.options.money !== false && set.id === 'showcase-openrouter')
+          await seedShowcaseOpenRouter(new Directory(store.db), stand);
         if (
           this.options.money !== false &&
           (set.id === 'all' || set.id === 'money' || set.id === 'analytics' || set.id === 'filters')

@@ -1,4 +1,5 @@
 import type {Place} from '../ui/lib/grid.js';
+import type {WidgetId} from '../server/domain/widgets.js';
 import {createHash} from 'node:crypto';
 import {sourceId, type Provider} from '../server/domain/sources.js';
 import {subscriptionKey} from '../server/domain/ingest.js';
@@ -280,10 +281,20 @@ export type Wave = {period: number; on: number; phase: number};
 
 export const ALWAYS: Wave = {period: HOUR, on: HOUR, phase: 0};
 
-export const isOn = (wave: Wave, t: number) => mod(t - wave.phase, wave.period) < wave.on;
+/** Several non-overlapping shifts can describe a whole working week. */
+type Schedule = Wave | Wave[];
+
+export function isOn(wave: Schedule, t: number): boolean {
+  if (Array.isArray(wave)) return wave.some(shift => isOn(shift, t));
+  return mod(t - wave.phase, wave.period) < wave.on;
+}
 
 /** The last millisecond a wave was on, including in the cycle before the demo starts. */
-export function lastOn(wave: Wave, t: number): number | null {
+export function lastOn(wave: Schedule, t: number): number | null {
+  if (Array.isArray(wave)) {
+    const times = wave.map(shift => lastOn(shift, t)).filter(at => at !== null);
+    return times.length ? Math.max(...times) : null;
+  }
   if (wave.on <= 0) return null;
   if (isOn(wave, t)) return t;
   return t - mod(t - wave.phase, wave.period) + wave.on - 1;
@@ -314,7 +325,8 @@ export const agentsWork =
   };
 
 /** How long a wave is on from `from` to `to`. */
-export function busyIn(wave: Wave, from: number, to: number): number {
+export function busyIn(wave: Schedule, from: number, to: number): number {
+  if (Array.isArray(wave)) return wave.reduce((ms, shift) => ms + busyIn(shift, from, to), 0);
   const upTo = (t: number) => {
     const shifted = t - wave.phase;
     return (
@@ -341,7 +353,7 @@ export type Agent = {
   folder?: string;
   since: number;
   until?: number;
-  works?: Wave;
+  works?: Schedule;
 };
 
 /** How a card looks on one board: its name, colour, width, whether it or some of its windows are hidden, its plan. */
@@ -620,17 +632,8 @@ export type Machine = {
 };
 
 /** Where a board's owner put agent activity, the chart and the table, with the heights they chose, where not as they come. */
-export type AnalyticsPlaces = Partial<
-  Record<
-    | 'activity'
-    | 'quota-history'
-    | 'quota-table'
-    | 'subscription-funds'
-    | 'budget-history'
-    | 'budget-table',
-    Place
-  >
->;
+type AnalyticsWidget = Exclude<WidgetId, 'agents'>;
+export type AnalyticsPlaces = Partial<Record<AnalyticsWidget, Place>>;
 
 /**
  * Someone on the hub; their codes are read on their personal board, where `agents` turns the
@@ -647,6 +650,8 @@ export type Person = {
   agentsColumns?: string[];
   forecastWidth?: number;
   places?: AnalyticsPlaces;
+  /** When selected explicitly, only these analytics follow the cards, in this order. */
+  analytics?: AnalyticsWidget[];
   projects?: Record<string, string>;
   expect: (BoardCheck | ProjectCheck)[];
   look?: string[];
@@ -667,6 +672,8 @@ export type Board = {
   agentsColumns?: string[];
   forecastWidth?: number;
   places?: AnalyticsPlaces;
+  /** When selected explicitly, only these analytics follow the cards, in this order. */
+  analytics?: AnalyticsWidget[];
   /** When members joined it, from `start`, where later than it was made: work before is not the board's. */
   joined?: Record<string, number>;
   /** Columns of the table, off by default, that the board turns on. */

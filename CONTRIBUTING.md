@@ -386,8 +386,10 @@ checksum-pinned runtimes, and writes icons and license notices. Run it before th
 checks above. The desktop build requires Rust 1.90 or newer. Linux needs `libssl-dev` and `libgtk-3-dev` for the Rust build, `unzip` for preparation,
 and Chromium's runtime libraries (`libnss3 libgtk-3-0 libgbm1 libasound2` on Debian).
 `cargo run` in `desktop/` starts a prepared debug build. `node desktop/package-linux.mjs`
-builds deb, rpm and AppImage; its packaging tools are `dpkg-deb`, `rpmbuild` and
-`mksquashfs`. On Windows, `npx @tauri-apps/cli@2.12.0 build --target x86_64-pc-windows-msvc`
+builds deb, rpm and AppImage with `dpkg-deb`, `rpmbuild` and `mksquashfs`.
+The packager dates the AppStream release from `SOURCE_DATE_EPOCH` or the current Git
+commit. When building from a source archive, supply `SOURCE_DATE_EPOCH` in Unix seconds.
+On Windows, `npx @tauri-apps/cli@2.12.0 build --target x86_64-pc-windows-msvc`
 makes setup.exe; then `node desktop/package-windows.mjs` packages that build as a portable ZIP.
 CI runs both the installed app and the extracted ZIP, including a path with spaces.
 The release workflow calls the same Desktop workflow and publishes its packages only
@@ -436,7 +438,10 @@ the last published operations; they do not establish a wait dependency or qualif
 the diagnostic's timing overhead. Ordinary app runs do not publish them.
 
 Run `node --test desktop/electron/policy.test.cjs` for the Linux bridge/navigation
-policy. CI runs the installed packages with `--smoke`: the hub starts, a stand-in client
+policy and `node --test desktop/linux-metadata.test.mjs` for the Linux package metadata.
+Both also run on Windows in CI. Linux smoke validates the launcher and AppStream data
+in the extracted AppImage and checks that the deb and rpm ship the same metadata file.
+CI runs the installed packages with `--smoke`: the hub starts, a stand-in client
 is measured, its board appears, the window opens twice and the app quits. Linux checks
 need `xvfb`, `xauth` and Python 3; `desktop/smoke/monitor.py` adopts surviving
 children and audits their exits, alongside Electron's live child-failure reports.
@@ -586,8 +591,10 @@ with a CDP endpoint, or set `QUOTUM_CHROME` to a local Chrome binary.
 To open specific demo sets directly on the host (after `pnpm run build` in `apps/hub/`),
 run `pnpm run demo [set] [--resets <scene>] [--still]` in `apps/hub/`:
 
-`pnpm run demo showcase --still` uses the still showcase; `pnpm run demo activity`
-uses the activity set. `--resets <scene>` selects a scene from `apps/hub/demo/catalogue.ts`.
+`pnpm run demo showcase --still` lets you explore **Core team** in the board switcher.
+`showcase-openrouter` pairs a wallet with a subscription, and `showcase-desktop`
+puts three subscriptions on a single workstation. `pnpm run demo activity` uses the
+activity set. `--resets <scene>` selects a scene from `apps/hub/demo/catalogue.ts`.
 `pnpm run demo money --still` places subscriptions beside the monetary cases on Ana's
 personal board: balance and caps, large key inventory, revoked and expired access, a
 history gap, negative balance, zero cap and an unknown provider.
@@ -660,8 +667,7 @@ started, and keeps it alive: machines measure, agents start, work and stop, a ma
 sleeps. Live devices accept refresh requests from their cards; only the explicit legacy
 scene simulates a device without that support. The reset trackers are stood in for, so
 it needs no network and no account. It prints the address and how to sign in; Ctrl+C
-stops it and leaves nothing behind. `pnpm run demo showcase` opens the clean board
-the README images come from; `--resets <scene>` picks what the reset trackers say (one
+stops it and leaves nothing behind. `--resets <scene>` picks what the reset trackers say (one
 scene a run, the list is printed). Set `QUOTUM_PORT` if 8080 is taken. After changing
 the UI, `pnpm run build` and reload the page; after changing the server, `pnpm run build`
 and start the demo again.
@@ -691,21 +697,86 @@ header instead, with the tests that hold it. `pnpm run demo --still` keeps the b
 still: nothing is measured after the start, and no card goes stale for three hours; running
 agents still work and their credited activity advances.
 
-For README screenshots, use `pnpm run demo showcase --still`. Capture the cards and
-the analytics separately in English and Russian, with the same viewport and preferences.
-Keep a weekly window with its plan, forecast and a forecast label at the chart’s right
-edge in view. Update `docs/dashboard.png`, `docs/dashboard.ru.png`, `docs/analytics.png`
-and `docs/analytics.ru.png`, and refresh `docs/social-preview.png` with the current board.
-Keep the existing presentation: the README images sit in a browser-window frame on
-the coloured backdrop, with one card’s agents panel open; the social preview uses
-the tilted board beneath its title. Preserve the typography, proportions and backdrop
-when replacing the underlying screenshots, and compress the PNGs with pngquant.
-Use only the demo’s synthetic accounts and machines.
+For the public screenshots, use the synthetic showcase accounts and a seven-day range.
+Anchor the capture clocks to Friday at 17:30 UTC. Compute one wall-clock offset before seeding
+and pass it to the demo and capture window. The demo's child hub inherits the Node
+preload. The window installs the same clock in the renderer before navigating, including
+on reloads. All three continue to advance at normal speed.
 
-Refresh `docs/openrouter.png` and `docs/openrouter.ru.png` from
-`pnpm run demo money --still` too. Show a healthy wallet's balance and capped keys
-beside a subscription, with the same viewport, crop and browser-window frame in both
-languages.
+From `apps/hub/` after `make setup build-hub prepare-desktop` at the checkout root,
+run these commands in the same shell on a Linux graphical desktop. Set `preset` to
+`showcase-openrouter` for the wallet pair. Wait for the demo's sign-in instructions
+before opening the window. Use the disposable credentials printed there.
+
+```sh
+export TZ=UTC
+export SHOWCASE_OFFSET_MS="$(node -p 'Date.UTC(2026, 10, 20, 17, 30) - Date.now()')"
+preset=showcase
+NODE_OPTIONS="--require=\"$PWD/../../desktop/capture/clock.cjs\"" \
+  node --import tsx demo/index.ts "$preset" --still &
+demo_pid=$!
+```
+
+After the demo prints its ready message, open the board in a fresh capture profile in the same shell.
+
+```sh
+capture_profile=$(mktemp -d)
+../../desktop/resources/electron/electron --user-data-dir="$capture_profile" \
+  ../../desktop/capture/window.cjs --board http://127.0.0.1:8080/
+rm -rf "$capture_profile"
+kill -TERM "$demo_pid"
+wait "$demo_pid"
+```
+
+Capture the README pairs in English and Russian at 2× device scale, with matching
+crops in the existing browser frame and coloured backdrop.
+
+- **Dashboard** (`docs/dashboard{,.ru}.png`). On the `showcase` preset, sign in as
+  Alex, select **Core team** and show the filters. Open the agent count on
+  Alex's Claude card so that both machines and their projects are visible.
+- **Analytics** (`docs/analytics{,.ru}.png`). On the same board choose **Look ahead →
+  1 day**. In Weekly limit metrics settings, hide only the **Plan** column for this
+  capture in both languages. Keep the source and model names readable in every row.
+  Capture the four panels from Agent activity through Weekly limit metrics
+  once the bars, heatmap, weekly curves, forecast labels and table have populated.
+- **OpenRouter** (`docs/openrouter{,.ru}.png`). On `showcase-openrouter`, hide the
+  filters and capture the
+  subscription beside the wallet. All three key limits and reset periods should be visible.
+- **Social preview** (`docs/social-preview.png`, 1280×640). Place the freshly captured
+  English dashboard beneath the existing title and subtitle, keeping its tilted crop.
+- **AppImage catalog** (`docs/desktop.png`, 1280×800). The command below starts
+  `demo/desktopCapture.ts` on its single-workstation database in production local mode.
+  It reports the workstation sessions, captures the three cards and the weekly chart
+  at 80% zoom in an English window without a browser frame, then removes the temporary
+  data. Inspect the preview before replacing the catalog image.
+
+To reproduce the local 1280×800 viewport headlessly, run the following at the
+prepared checkout root. The container owns its own loopback, display and Electron
+profile. Its copy of the Chromium sandbox helper gets the ownership used by an installed
+package. The actual Electron process and the local demo run as the image's ordinary user.
+
+```sh
+docker build -t quotum-showcase-runtime - < .devkit/runtime/desktop.Dockerfile
+docker run --rm --init --network none --shm-size=256m --user root --cap-add SYS_ADMIN \
+  --security-opt seccomp=.devkit/runtime/desktop-seccomp.json \
+  -v "$PWD:/work:ro" quotum-showcase-runtime sh -ec '
+    cp -a /work/desktop/resources/electron /tmp/capture-electron
+    chown root:root /tmp/capture-electron/chrome-sandbox
+    chmod 4755 /tmp/capture-electron/chrome-sandbox
+    offset=$(node -p "Date.UTC(2026,10,20,17,30) - Date.now()")
+    setpriv --reuid=node --regid=node --init-groups --reset-env env \
+      TZ=UTC SHOWCASE_OFFSET_MS="$offset" xvfb-run -a /tmp/capture-electron/electron \
+      /work/desktop/capture/window.cjs /tmp/desktop.png >&2
+    cat /tmp/desktop.png
+  ' > desktop-preview.png
+```
+
+For a scripted README capture, use CDP's `Emulation.setDeviceMetricsOverride`
+to set the device scale to 2. For analytics, use a 1240×2220 CSS-pixel
+viewport and scroll all four panels into view. Wait for the bars, series paths,
+forecast labels and bundled fonts to render. Capture the visible viewport with
+`Page.captureScreenshot({captureBeyondViewport: false})` and crop the panels from
+that image. Inspect each optimized PNG for legible text and populated plots.
 
 `pnpm run bench` (after `pnpm run build`) uses a still demo whose agents repeat their
 lists without working, opens Ana's board in headless Chrome and checks the budget in

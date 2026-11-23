@@ -1,4 +1,4 @@
-import {AGENT_HOURS_HEATMAP, showWidgets} from '../server/domain/widgets.js';
+import {AGENT_HOURS_HEATMAP, ANALYTICS, showWidgets} from '../server/domain/widgets.js';
 import {migrateUnified} from '../server/domain/unifiedView.js';
 import {defaultFilters} from '../server/domain/dataFilters.js';
 import {migrateFixed} from '../server/domain/fixedView.js';
@@ -340,6 +340,18 @@ export function viewOf(stand: Stand, key: string) {
     version: 5 as const,
     windows: [],
   };
+  if (board?.analytics) {
+    // Apply the owner's selection after the legacy-layout migrations have added their defaults.
+    const selected = board.analytics;
+    const explicit = showWidgets(result, selected);
+    const hidden = ANALYTICS.filter(id => !selected.some(widget => widget === id));
+    explicit.hidden = [...new Set([...explicit.hidden, ...hidden])];
+    explicit.shown = explicit.shown.filter(id => !hidden.includes(id));
+    const first = Math.max(-1, ...Object.values(result.layout.places).map(p => p.y)) + 1;
+    for (const [index, id] of selected.entries())
+      explicit.layout.places[id] = {x: 0, w: COLUMNS, ...board.places?.[id], y: first + index};
+    return explicit;
+  }
   return set.id === 'calendar'
     ? showWidgets(result, [AGENT_HOURS_HEATMAP, 'agents', 'activity'])
     : result;

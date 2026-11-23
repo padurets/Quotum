@@ -5,6 +5,7 @@ import {appendFileSync, chmodSync, copyFileSync, cpSync, mkdirSync, readFileSync
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {appImageRuntime} from './prepare-electron.mjs';
+import {linuxPackageMetadata, releaseDateFromEpoch, rpmFileList, validateLinuxPackageMetadata} from './linux-metadata.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -13,6 +14,13 @@ if (process.platform !== 'linux' || process.arch !== 'x64') throw new Error('Lin
 const version = JSON.parse(readFileSync(path.join(here, '../apps/hub/package.json'))).version;
 const cargo = readFileSync(path.join(here, 'Cargo.toml'), 'utf8');
 if (!cargo.includes(`version = "${version}"`)) throw new Error('desktop and hub versions differ');
+let epoch = process.env.SOURCE_DATE_EPOCH;
+if (epoch === undefined) {
+  try {epoch = execFileSync('git', ['show', '-s', '--format=%ct', 'HEAD'], {cwd: here, encoding: 'utf8'}).trim();}
+  catch (cause) {throw new Error('Set SOURCE_DATE_EPOCH when packaging outside a Git checkout', {cause});}
+}
+const app = JSON.parse(readFileSync(path.join(here, 'tauri.conf.json'), 'utf8'));
+const metadata = linuxPackageMetadata(app, version, releaseDateFromEpoch(epoch));
 const run = (file, argv, cwd = here) => execFileSync(file, argv, {cwd, stdio: 'inherit'});
 const debug = args.includes('--debug');
 const output = path.resolve(process.env.CARGO_TARGET_DIR || path.join(here, 'target'), target, debug ? 'debug' : 'release');
@@ -34,17 +42,21 @@ cpSync(path.join(here, 'static'), path.join(share, 'gui/static'), {recursive: tr
 copyFileSync(path.join(here, 'icons/128x128.png'), path.join(share, 'icon.png'));
 // Never setuid in an AppImage: it uses Chromium's user-namespace sandbox.
 chmodSync(path.join(share, 'electron/chrome-sandbox'), 0o755);
-const desktop = '[Desktop Entry]\nType=Application\nName=Quotum\nComment=How much of your coding-agent subscriptions is left\nExec=quotum-desktop\nIcon=quotum\nTerminal=false\nCategories=Development;\nStartupWMClass=quotum\n';
-mkdirSync(path.join(appdir, 'usr/share/applications'), {recursive: true});
-writeFileSync(path.join(appdir, 'usr/share/applications/quotum.desktop'), desktop);
+for (const [file, content] of [[metadata.desktopPath, metadata.desktop], [metadata.metainfoPath, metadata.metainfo]]) {
+  const destination = path.join(appdir, file);
+  mkdirSync(path.dirname(destination), {recursive: true});
+  writeFileSync(destination, content);
+}
 const iconDir = path.join(appdir, 'usr/share/icons/hicolor/128x128/apps');
 mkdirSync(iconDir, {recursive: true});
 copyFileSync(path.join(share, 'icon.png'), path.join(iconDir, 'quotum.png'));
 writeFileSync(path.join(appdir, 'AppRun'), '#!/bin/sh\nHERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$HERE/usr/bin/quotum-desktop" "$@"\n');
 chmodSync(path.join(appdir, 'AppRun'), 0o755);
-symlinkSync('usr/share/applications/quotum.desktop', path.join(appdir, 'quotum.desktop'));
+symlinkSync(metadata.desktopPath, path.join(appdir, metadata.desktopId));
 symlinkSync('usr/share/quotum/icon.png', path.join(appdir, 'quotum.png'));
 symlinkSync('quotum.png', path.join(appdir, '.DirIcon'));
+const image = path.join(bundle, 'appimage', metadata.appImageName);
+validateLinuxPackageMetadata(metadata, path.basename(image), file => readFileSync(path.join(appdir, file), 'utf8'));
 console.log(`prepared ${appdir}`);
 if (args.includes('--dir-only')) process.exit(0);
 
@@ -72,8 +84,8 @@ function rpmFiles(directory, relative = '') {
     return [`${mode}"${file}"`];
   });
 }
-const ownedFiles = rpmFiles(path.join(stage, 'usr/share/quotum'), '/usr/share/quotum').join('\n');
-writeFileSync(spec, `Name: quotum\nVersion: ${version}\nRelease: 1\nSummary: Coding-agent subscription limits on this machine\nLicense: MIT\nURL: https://github.com/padurets/Quotum\nBuildArch: x86_64\nRequires: glibc >= 2.35, nss, nspr, atk, at-spi2-atk, cups-libs, libdrm, dbus-libs, libX11, libxcb, libXcomposite, libXdamage, libXext, libXfixes, libXrandr, mesa-libgbm, libxkbcommon, alsa-lib, gtk3\nAutoReqProv: no\n%description\nQuotum measures through the clients and shows their limits on its board.\n%files\n%defattr(-,root,root,-)\n/usr/bin/quotum-desktop\n/usr/bin/quotum-node\n/usr/share/applications/quotum.desktop\n/usr/share/icons/hicolor/128x128/apps/quotum.png\n%dir /usr/share/quotum\n${ownedFiles}\n`);
+const ownedFiles = rpmFiles(path.join(stage, 'usr/share/quotum'), '/usr/share/quotum');
+writeFileSync(spec, `Name: quotum\nVersion: ${version}\nRelease: 1\nSummary: Coding-agent subscription limits on this machine\nLicense: MIT\nURL: https://github.com/padurets/Quotum\nBuildArch: x86_64\nRequires: glibc >= 2.35, nss, nspr, atk, at-spi2-atk, cups-libs, libdrm, dbus-libs, libX11, libxcb, libXcomposite, libXdamage, libXext, libXfixes, libXrandr, mesa-libgbm, libxkbcommon, alsa-lib, gtk3\nAutoReqProv: no\n%description\nQuotum measures through the clients and shows their limits on its board.\n${rpmFileList(metadata, ownedFiles)}`);
 const rpmDb = path.join(bundle, 'rpm-db');
 mkdirSync(rpmDb, {recursive: true});
 run('rpm', ['--dbpath', rpmDb, '--initdb']);
@@ -81,12 +93,10 @@ run('rpmbuild', ['-bb', '--buildroot', stage, '--define', `_topdir ${path.join(b
 for (const name of readdirSync(path.join(rpm, 'x86_64'))) {
   if (name.endsWith('.rpm')) copyFileSync(path.join(rpm, 'x86_64', name), path.join(rpm, name));
 }
-const images = path.join(bundle, 'appimage');
-mkdirSync(images, {recursive: true});
+mkdirSync(path.dirname(image), {recursive: true});
 const squash = path.join(bundle, 'quotum.squashfs');
 rmSync(squash, {force: true});
 run('mksquashfs', [appdir, squash, '-root-owned', '-no-xattrs', '-noappend', '-comp', 'zstd', '-processors', '2', '-mem', '256M']);
-const image = path.join(images, `Quotum_${version}_amd64.AppImage`);
 copyFileSync(await appImageRuntime(), image);
 appendFileSync(image, readFileSync(squash));
 chmodSync(image, 0o755);

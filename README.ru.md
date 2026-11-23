@@ -579,7 +579,7 @@ OpenRouter к серверному хабу, настройте отдельны
 | Система | Пакет |
 |---|---|
 | Windows x64 | `quotum-desktop-<version>-windows-x64-setup.exe` или `…-windows-x64-portable.zip` |
-| Linux x64 | `quotum-desktop-<version>-linux-x64.deb`, `.rpm` или `.AppImage` |
+| Linux x64 | `quotum-desktop-<version>-linux-x64.deb`, `quotum-desktop-<version>-linux-x64.rpm` или `Quotum-<version>-x86_64.AppImage` |
 
 Для этих пакетов в релизе тоже есть `SHA256SUMS` и build provenance.
 [Desktop workflow](.github/workflows/desktop.yml) собирает и проверяет те же пакеты
@@ -801,8 +801,11 @@ Caddy, браузер держит живыми до восьми досок с�
 - `pnpm run demo` в `apps/hub/` (после `pnpm run build`) — живая доска на одноразовых данных со
   всеми состояниями, которые знает дашборд и которые держатся на исправном хабе; сеть и
   аккаунты не нужны, Ctrl+C её останавливает и ничего после себя не оставляет.
-  `pnpm run demo showcase` — доска с картинок выше. `pnpm run demo money --still`
-  показывает подписки рядом со всеми денежными кейсами на личной доске Ana.
+  Запустите `pnpm run demo showcase` и выберите **Core team**, чтобы посмотреть
+  общую доску команды и её активность за неделю. `pnpm run demo showcase-openrouter --still`
+  показывает кошелёк и лимиты трёх API-ключей рядом с подпиской Claude.
+  `pnpm run demo showcase-desktop --still` показывает подписки одного разработчика
+  на одной рабочей станции.
 
 Структура проекта:
 
