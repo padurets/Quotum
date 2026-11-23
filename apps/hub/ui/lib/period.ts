@@ -218,6 +218,7 @@ class BoardPeriod {
       to: number;
       validBefore: number;
       bytes: number;
+      copyBytes: number;
       storage: Map<object, number>;
       metadata: number;
       at: number;
@@ -372,11 +373,25 @@ class BoardPeriod {
   private storageBytes(storage: Map<object, number>) {
     return [...storage.values()].reduce((sum, bytes) => sum + bytes, 0);
   }
-  private valueStorage(values: Map<string, Reading<PeriodValues>>) {
-    const storage = new Map<object, number>();
-    for (const reading of values.values())
-      if (reading.value) storage.set(reading.value, JSON.stringify(reading.value).length * 3);
-    return storage;
+  private measureValues(values: Map<string, Reading<PeriodValues>>, storage: Map<object, number>) {
+    const fields = ['windows', 'meters', 'keys', 'creditBalance', 'validFor'] as const;
+    let serialized = 0;
+    for (const {value} of values.values()) {
+      if (!value) continue;
+      const bytes = JSON.stringify(value).length * 3,
+        start = value.states?.start;
+      serialized += bytes;
+      let shared = 0;
+      // Returning to the replay start creates a second wrapper around its original fields.
+      // Keep each reference slot charged. A different replay can own equal, independent copies.
+      if (start && fields.every(field => value[field] === start[field]))
+        for (const field of fields) {
+          const payload = start[field];
+          if (payload) shared += Math.max(0, JSON.stringify(payload).length * 3 - 8);
+        }
+      storage.set(value, bytes - shared);
+    }
+    return serialized;
   }
   private measurementSince(
     data: Extract<import('./board').HubEvent, {type: 'history'}>['data'],
@@ -426,15 +441,17 @@ class BoardPeriod {
       [...this.values.values()].every(v => v.value && !v.loading && !v.error)
     ) {
       const values = new Map(this.values),
-        storage = this.valueStorage(values),
-        bytes = JSON.stringify([...values]).length * 3;
+        storage = new Map<object, number>(),
+        copyBytes = JSON.stringify([...values]).length * 3,
+        metadata = copyBytes - this.measureValues(values, storage);
       this.valueCache.set(periodKey(this.selection), {
         values,
         to: this.selection.to,
         validBefore: this.validBefore,
-        bytes,
+        bytes: metadata + this.storageBytes(storage),
+        copyBytes,
         storage,
-        metadata: bytes - this.storageBytes(storage),
+        metadata,
         at: hubNow(),
       });
     }
@@ -1841,7 +1858,7 @@ class BoardPeriod {
             ),
         );
       const valueStaging = this.staging('values');
-      if (cached && !historyPool.reserve(valueStaging, cached.bytes)) cached = undefined;
+      if (cached && !historyPool.reserve(valueStaging, cached.copyBytes)) cached = undefined;
       if (cached) this.validBefore = cached.validBefore;
       this.valuesNeeded = selection.mode === 'range' && !cached;
       if (selection.mode === 'range')
@@ -1919,17 +1936,17 @@ class BoardPeriod {
         this.restoring.add(saved[1]);
         this.retained.delete(saved[0]);
         // The removed cache entry remains owned until its exact shifted copy is ready.
+        let restored: boolean;
         try {
-          if (
+          restored =
             (saved[0] === cacheKey || historyPool.reserve(staging, saved[1].copyBytes)) &&
             current() &&
-            saved[1].restore(selection)
-          )
-            this.tick(false);
+            saved[1].restore(selection);
         } finally {
           this.restoring.delete(saved[1]);
           historyPool.release(staging);
         }
+        if (restored) this.tick(false);
         if (!current()) return;
       }
       if (!this.workNeeded && this.work.basis) {
@@ -2908,13 +2925,9 @@ class BoardPeriod {
     const storage = new Map<object, number>();
     if (this.sourceTape) storage.set(this.sourceTape, JSON.stringify(this.sourceTape).length * 3);
     if (this.sourceCurves) storage.set(this.sourceCurves, this.sourceCurves.bytes ?? 0);
-    let valuesBytes = JSON.stringify([...this.values.values()]).length * 3;
-    for (const reading of this.values.values())
-      if (reading.value) {
-        const bytes = JSON.stringify(reading.value).length * 3;
-        storage.set(reading.value, bytes);
-        valuesBytes -= bytes;
-      }
+    const valuesBytes =
+      JSON.stringify([...this.values.values()]).length * 3 -
+      this.measureValues(this.values, storage);
     if (this.work.value) {
       const root =
         this.activity?.trace === this.work.value ? this.activity : (this.index ?? this.work.value);
