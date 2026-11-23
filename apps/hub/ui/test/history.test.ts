@@ -3675,7 +3675,8 @@ for (const outcome of ['commit', 'cancel'] as const)
       },
     );
     const reserve = pool.reserve.bind(pool);
-    t.mock.method(pool, 'reserve', (owner: Parameters<typeof reserve>[0], bytes: number) => {
+    t.mock.method(pool, 'reserve', (...args: Parameters<typeof reserve>) => {
+      const [, bytes] = args;
       if (checked < completed) {
         // Compare actual backing identities at each preparation handoff. The previous
         // draft of the same pin is gone; all other unpublished pins are still owned.
@@ -3688,7 +3689,7 @@ for (const outcome of ['commit', 'cancel'] as const)
         );
         checked = completed;
       }
-      return reserve(owner, bytes);
+      return reserve(...args);
     });
     let published = false;
     const stop = h.store.subscribeBoundary(() => {
