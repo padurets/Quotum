@@ -3,7 +3,7 @@ import type {TestContext} from 'node:test';
 import {setImmediate as turn} from 'node:timers/promises';
 import type {Frame} from '../../server/events';
 import type {PeriodRequest} from '../../server/domain/periodRead';
-import type {WorkStamp} from '../../server/domain/workCalendar';
+import {calendarPartition, type WorkStamp} from '../../server/domain/workCalendar';
 import {page, type HubEvent} from '../lib/board';
 import {budgetHistory, followPan, fundsHistory, historyReaders, quotaHistory} from '../lib/history';
 import {historyPool} from '../lib/historyPool';
@@ -353,17 +353,28 @@ export function cycleFixture(
       await runTasks(IDLE_SLICES);
       await turn();
       if (failures.length) throw failures[0];
+      const calendar = boardPeriod.calendar.get();
       if (
         !posted &&
         !historyPool.activeFlights &&
         readers.every(reader => !reader.get().loading) &&
-        !boardPeriod.get().loading
+        !boardPeriod.get().loading &&
+        !calendar.loading
       ) {
         for (const reader of readers) {
           assert.equal(reader.get().error, undefined);
           assert.ok(reader.get().history);
         }
         assert.equal(boardPeriod.get().error, null);
+        // The displayed calendar is part of the monthly working set on every visit.
+        assert.equal(calendar.error, null);
+        assert.ok(calendar.value && calendar.basis, 'the calendar must be populated');
+        const at = calendar.basis.evaluatedAt;
+        const range = timeRange() ?? {from: at - 30 * DAY, to: at};
+        assert.deepEqual(calendar.basis.range, range);
+        const edges = calendarPartition(range);
+        assert.deepEqual(calendar.value.edges, edges);
+        assert.equal(calendar.value.cells.length, edges.length - 1);
         return;
       }
     }
