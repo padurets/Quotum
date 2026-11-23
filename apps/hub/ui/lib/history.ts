@@ -2223,6 +2223,15 @@ export class HistoryStore {
     this.schedule();
   }
 
+  private dropCachedTile(tiles: Map<number, HistoryTile>, cell: number, n: number) {
+    if (!tiles.delete(n)) return;
+    this.plotChunks.delete(`${cell}:${tileStart(n, cell)}`);
+    this.releaseDetachedReaders();
+    this.version++;
+    this.aheadStopped = true;
+    // Another reader can evict this tile while our final projection is yielding.
+    this.schedule();
+  }
   evictionCandidates() {
     const target = this.interest ? this.plotTarget() : this.target();
     const candidates: ReturnType<HistoryMember['evictionCandidates']> = [];
@@ -2287,15 +2296,8 @@ export class HistoryStore {
         candidates.push({
           bytes: tile.bytes,
           shownAt: tile.shownAt,
-          drop: () => {
-            tiles.delete(n);
-            this.plotChunks.delete(`${cell}:${tile.from}`);
-            this.releaseDetachedReaders();
-            this.version++;
-            this.aheadStopped = true;
-            // Another reader can evict this tile while our final projection is yielding.
-            this.schedule();
-          },
+          // A retained eviction callback must not keep the removed tile's buffers alive.
+          drop: this.dropCachedTile.bind(this, tiles, cell, n),
         });
       }
     return candidates;

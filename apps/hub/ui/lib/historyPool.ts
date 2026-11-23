@@ -136,16 +136,33 @@ export class HistoryPool {
   trim(available?: () => number) {
     let bytes = this.estimatedBytes;
     if (bytes <= this.budget) return true;
-    const candidates = [...this.members]
+    // Pop in stable eviction order. Processed callbacks can themselves own removed tiles.
+    const oldest = [...this.members]
       .flatMap(member => member.evictionCandidates())
-      .sort((a, b) => (a.priority ?? 1) - (b.priority ?? 1) || a.shownAt - b.shownAt);
-    for (const candidate of candidates) {
-      candidate.drop(available);
-      // A dropped cache entry can share storage with a frame that still owns it.
+      .sort((a, b) => (a.priority ?? 1) - (b.priority ?? 1) || a.shownAt - b.shownAt)
+      .reverse();
+    const prefixes: Candidate[] = [];
+    while (oldest.at(-1)?.priority === 0) prefixes.push(oldest.pop()!);
+    let tryPrefixes = true;
+    while (bytes > this.budget) {
+      if (tryPrefixes) {
+        const before = bytes;
+        for (const prefix of prefixes) {
+          prefix.drop(available);
+          bytes = this.estimatedBytes;
+          if (bytes <= this.budget) return true;
+        }
+        // A cheap prefix can make enough room for another series' suffix copy.
+        if (bytes < before) continue;
+      }
+      if (!oldest.length) return false;
+      const before = bytes;
+      oldest.pop()!.drop(available);
       bytes = this.estimatedBytes;
-      if (bytes <= this.budget) return true;
+      // A dropped entry may still share all its storage with a published frame.
+      tryPrefixes = bytes < before;
     }
-    return false;
+    return true;
   }
 }
 

@@ -206,8 +206,12 @@ test('reclaiming a dense edge never copies its visible suffix beyond a full pool
   }
 });
 
-for (const available of [15_000, 2_700])
-  test(`a late balance read can reclaim another drawing's panned edge only when its suffix fits (${available} B free)`, async t => {
+for (const [available, sparse] of [
+  [15_000, false],
+  [2_700, false],
+  [2_700, true],
+] as const)
+  test(`a late balance read can reclaim another drawing's panned edge only when its suffix fits (${available} B free, ${sparse ? 'mixed' : 'dense'} series)`, async t => {
     let now = Date.parse('2026-09-26T12:23:00Z') + 58 * 3_600_000,
       amount = '7000000',
       tick = 0;
@@ -220,7 +224,7 @@ for (const available of [15_000, 2_700])
     const env: HistoryEnv = {
       now: () => now,
       preparations,
-      read: async (_board, cell, from, to) => {
+      read: async (_board, cell, from, to, _signal, meters) => {
         const chunks: Chunk[] = [];
         for (let a = from; a < to;) {
           const b = Math.min(to, tileEnd(tileOf(a, cell), cell));
@@ -251,6 +255,16 @@ for (const available of [15_000, 2_700])
             b,
             cell,
           );
+          if (
+            a <= range.from &&
+            b > range.from &&
+            meters?.ids.some(([, meter]) => meter === 'credits')
+          )
+            meterSeries.push({
+              ...meterSeries[0],
+              meter: 'credits',
+              cells: meterSeries[0].cells.slice(0, 1),
+            });
           chunks.push({
             from: a,
             to: b,
@@ -278,9 +292,17 @@ for (const available of [15_000, 2_700])
       clearTimeout: key => timers.delete(key as object),
       dropTimeRange() {},
     };
-    const drawing = (env: HistoryEnv) => {
+    const drawing = (env: HistoryEnv, withCredits = false) => {
       const store = new HistoryStore(env, undefined, 'budget', pool);
-      store.setMeters({unit: 'USD', ids: [['s', 'balance']]});
+      store.setMeters({
+        unit: 'USD',
+        ids: withCredits
+          ? [
+              ['s', 'balance'],
+              ['s', 'credits'],
+            ]
+          : [['s', 'balance']],
+      });
       store.choose('30d', range);
       store.open('b');
       store.hello('run');
@@ -296,7 +318,7 @@ for (const available of [15_000, 2_700])
     await turn();
     assert.equal(store.get().history?.meterSeries?.[0].end, '7000000');
     amount = '5000000';
-    const other = drawing({...env, visibleFrom: () => range.from});
+    const other = drawing({...env, visibleFrom: () => range.from}, sparse);
     other.pan({...range, length: range.to - range.from, token: 1, direction: -1});
     await turn();
     other.endPan(true);
@@ -316,7 +338,7 @@ for (const available of [15_000, 2_700])
     await turn();
     assert.ok(peer.data.byteLength > 0);
     assert.equal(other.get().history, visible);
-    if (available === 15_000) {
+    if (available === 15_000 || sparse) {
       assert.equal(store.get().error, undefined);
       assert.equal(store.get().history?.meterSeries?.[0].end, '6000000');
       assert.ok(before - other.estimatedBytes >= edge.bytes);
@@ -363,6 +385,79 @@ test('copy headroom belongs only to the current preallocation while it reclaims 
     assert.equal(pool.estimatedBytes, cancel ? 80 : 90);
     assert.equal(headroom.read?.(), pool.budget - pool.estimatedBytes);
   }
+});
+
+test('trim retries affordable prefixes across readers after one equal-age victim releases space', () => {
+  const pool = new HistoryPool(100);
+  let dense = new Uint8Array(43),
+    sparse = new Uint8Array(11),
+    visited = new Uint8Array(3);
+  const cached = new Uint8Array(43),
+    drops: string[] = [];
+  const retained = () =>
+    dense.byteLength + sparse.byteLength + visited.byteLength + cached.byteLength;
+  pool.register({
+    get estimatedBytes() {
+      return dense.byteLength + visited.byteLength;
+    },
+    evictionCandidates: () => [
+      {
+        priority: 0,
+        shownAt: 0,
+        bytes: 33,
+        drop(available) {
+          drops.push('dense');
+          if (available!() < 10) return;
+          assert.ok(retained() + 10 <= pool.budget);
+          dense = dense.slice(-10);
+        },
+      },
+      {
+        shownAt: 1,
+        bytes: 3,
+        drop() {
+          drops.push('shared');
+        },
+      }, // Its frame still owns these bytes.
+      {
+        shownAt: 1,
+        bytes: 3,
+        drop() {
+          drops.push('visited');
+          visited = new Uint8Array(0);
+        },
+      },
+    ],
+  });
+  pool.register({
+    get estimatedBytes() {
+      return sparse.byteLength + cached.byteLength;
+    },
+    evictionCandidates: () => [
+      {
+        priority: 0,
+        shownAt: 0,
+        bytes: 8,
+        drop(available) {
+          drops.push('sparse');
+          if (available!() < 3) return;
+          assert.ok(retained() + 3 <= pool.budget);
+          sparse = sparse.slice(-3);
+        },
+      },
+      {
+        shownAt: 1,
+        bytes: 43,
+        drop() {
+          assert.fail('a later victim is unnecessary');
+        },
+      },
+    ],
+  });
+  const flight = {role: 'visible' as const};
+  assert.ok(pool.reserve(flight, 40, 40));
+  assert.deepEqual(drops, ['dense', 'sparse', 'shared', 'visited', 'dense', 'sparse', 'dense']);
+  assert.equal(pool.estimatedBytes, retained() + 40);
 });
 
 test('pressure can evict an older tile when the visible edge has no room to shrink', () => {
