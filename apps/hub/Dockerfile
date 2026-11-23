@@ -4,7 +4,7 @@
 # JavaScript is built once, natively; the image of every platform only copies it (no native modules).
 FROM --platform=$BUILDPLATFORM node:24-alpine AS pnpm-base
 ARG PNPM_VERSION=12.21.0
-RUN npm install -g "pnpm@${PNPM_VERSION}" --no-audit --no-fund
+RUN npm install -g "pnpm@${PNPM_VERSION}" --ignore-scripts --no-audit --no-fund
 
 # Keep the pnpm workspace layout so Node resolves isolated workspace packages cleanly.
 FROM pnpm-base AS prod-deps
@@ -33,7 +33,9 @@ ENV NODE_ENV=production \
     QUOTUM_SECRET_DIR=/keys \
     QUOTUM_MANAGED_CONTAINER=1 \
     QUOTUM_ALLOWED_HOSTS=*
-COPY --from=prod-deps /workspace /workspace
+COPY --from=prod-deps /workspace/node_modules /workspace/node_modules
+COPY --from=prod-deps /workspace/apps/hub/package.json /workspace/apps/hub/package.json
+COPY --from=prod-deps /workspace/apps/hub/node_modules /workspace/apps/hub/node_modules
 WORKDIR /workspace/apps/hub
 COPY --from=build /workspace/apps/hub/dist ./dist
 RUN mkdir -p /data /keys && chmod 700 /keys && chown node:node /data /keys

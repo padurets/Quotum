@@ -1,13 +1,15 @@
 # The agent is a CLI; the hub is the only default development service.
+ifneq ($(wildcard .devkit/project.mk),)
 ifeq ($(strip $(app)$(package)),)
 override devkit_selected_apps := hub
+endif
 endif
 
 include .devkit/runtime/devkit.mk
 
 .PHONY: bench bundle-hub prepare-desktop check-desktop
 
-export BENCH_CDP
+export BENCH_CDP QUOTUM_CHROME QUOTUM_BENCH_DIAGNOSTICS_DIR QUOTUM_BENCH_DIAGNOSE_NATIVE QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL
 
 bench: build-hub
 	cd apps/hub && env -i PATH="$$PATH" HOME="$$HOME" TMPDIR="$${TMPDIR:-/tmp}" \

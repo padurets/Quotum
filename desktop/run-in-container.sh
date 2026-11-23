@@ -1,11 +1,35 @@
 #!/bin/sh
 set -eu
 
+fail() {
+  printf 'desktop: %s\n' "$*" >&2
+  exit 1
+}
+
+require_abs() {
+  case "$2" in
+    /*) ;;
+    *) fail "$1 must be an absolute path: $2" ;;
+  esac
+}
+
+positive_int() {
+  case "$2" in
+    ''|*[!0-9]*) fail "$1 must be a positive integer: $2" ;;
+    *)
+      if [ "$2" -lt 1 ] || [ "$2" -gt 1024 ]; then
+        fail "$1 must be between 1 and 1024: $2"
+      fi
+      printf '%s\n' "$2"
+      ;;
+  esac
+}
+
 network=bridge
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --network)
-      [ "$#" -ge 2 ] || { printf 'desktop: --network requires a value\n' >&2; exit 1; }
+      [ "$#" -ge 2 ] || fail '--network requires a value'
       network=$2
       shift 2
       ;;
@@ -19,11 +43,12 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-[ "$#" -eq 1 ] || { printf 'Usage: sh desktop/run-in-container.sh [--network none|bridge] -- <shell command>\n' >&2; exit 1; }
-[ "$(uname -sm)" = 'Linux x86_64' ] || { printf 'desktop: containerized desktop checks require Linux x86_64\n' >&2; exit 1; }
+[ "$#" -eq 1 ] || fail 'Usage: sh desktop/run-in-container.sh [--network none|bridge] -- <shell command>'
+cmd=$1
+[ "$(uname -sm)" = 'Linux x86_64' ] || fail 'containerized desktop checks require Linux x86_64'
 case "$network" in
   none|bridge) ;;
-  *) printf 'desktop: --network must be none or bridge\n' >&2; exit 1 ;;
+  *) fail '--network must be none or bridge' ;;
 esac
 
 script_dir=${0%/*}
@@ -34,28 +59,60 @@ dockerfile="$root/desktop/Dockerfile.check"
 hash=$(sha256sum -- "$dockerfile" | awk '{print substr($1, 1, 12)}')
 image=${QUOTUM_DESKTOP_CHECK_IMAGE:-"quotum-desktop-check:$hash"}
 if ! docker image inspect "$image" >/dev/null 2>&1; then
-  docker build -t "$image" -f "$dockerfile" "$root/desktop"
+  [ "$network" != none ] || fail "image $image is not built; run make prepare-desktop first"
+  # Dockerfile.check copies nothing from the workspace; stream stdin to keep context 0 bytes.
+  docker build -t "$image" - < "$dockerfile"
 fi
 
-devkit_cache=${DEVKIT_CACHE_DIR:-"${XDG_CACHE_HOME:-${HOME:?HOME or XDG_CACHE_HOME is required}/.cache}/docouno/devkit"}
+home_dir=${HOME:-}
+if [ -n "${XDG_CACHE_HOME:-}" ]; then
+  xdg_cache=$XDG_CACHE_HOME
+elif [ -n "$home_dir" ]; then
+  xdg_cache="$home_dir/.cache"
+else
+  fail 'HOME or XDG_CACHE_HOME is required'
+fi
+require_abs XDG_CACHE_HOME "$xdg_cache"
+
+if [ -n "${DEVKIT_CACHE_DIR:-}" ]; then
+  devkit_cache=$DEVKIT_CACHE_DIR
+else
+  devkit_cache="$xdg_cache/docouno/devkit"
+fi
+require_abs DEVKIT_CACHE_DIR "$devkit_cache"
+
 cargo_cache="$devkit_cache/cargo"
-desktop_home="$devkit_cache/desktop-home"
-xdg_cache=${XDG_CACHE_HOME:-"$HOME/.cache"}
-npm_cache=${npm_config_cache:-"$HOME/.npm"}
-mkdir -p -- "$cargo_cache" "$desktop_home/key-tests" "$xdg_cache" "$npm_cache"
-chmod 700 -- "$desktop_home" "$desktop_home/key-tests"
+quotum_build_cache="$xdg_cache/quotum-build"
+mkdir -p -- "$cargo_cache" "$quotum_build_cache" "$root/desktop/target"
 
 detect_jobs() {
   if [ -n "${DEVKIT_CARGO_BUILD_JOBS:-}" ]; then
-    printf '%s\n' "$DEVKIT_CARGO_BUILD_JOBS"
+    positive_int DEVKIT_CARGO_BUILD_JOBS "$DEVKIT_CARGO_BUILD_JOBS"
+    return
+  fi
+  if [ -n "${DEVKIT_CPUS:-}" ]; then
+    cpus=$(positive_int DEVKIT_CPUS "$DEVKIT_CPUS")
+    [ "$cpus" -gt 4 ] && cpus=4
+    printf '%s\n' "$cpus"
     return
   fi
   if [ -n "${SLOT_CPUS:-}" ]; then
-    printf '%s\n' "$SLOT_CPUS"
+    positive_int SLOT_CPUS "$SLOT_CPUS"
     return
   fi
-  if [ -r /sys/fs/cgroup/cpu.max ]; then
-    read -r quota period < /sys/fs/cgroup/cpu.max || true
+
+  cpu_max=''
+  if [ -r /proc/self/cgroup ]; then
+    cg_rel=$(awk -F: '$1 == "0" && $2 == "" { print $3; exit }' /proc/self/cgroup)
+    if [ -n "$cg_rel" ] && [ -r "/sys/fs/cgroup${cg_rel}/cpu.max" ]; then
+      cpu_max="/sys/fs/cgroup${cg_rel}/cpu.max"
+    fi
+  fi
+  if [ -z "$cpu_max" ] && [ -r /sys/fs/cgroup/cpu.max ]; then
+    cpu_max=/sys/fs/cgroup/cpu.max
+  fi
+  if [ -n "$cpu_max" ]; then
+    read -r quota period < "$cpu_max" || true
     case "$quota:$period" in
       max:*|*:) ;;
       *)
@@ -69,6 +126,7 @@ detect_jobs() {
         ;;
     esac
   fi
+
   cpus=$(nproc 2>/dev/null || printf '2')
   [ "$cpus" -lt 1 ] && cpus=1
   [ "$cpus" -gt 4 ] && cpus=4
@@ -76,22 +134,35 @@ detect_jobs() {
 }
 
 jobs=$(detect_jobs)
+uid=$(id -u)
+gid=$(id -g)
 
-exec docker run --rm --init \
+set -- \
+  --rm --init \
   --network "$network" \
-  --user "$(id -u):$(id -g)" \
+  --user "$uid:$gid" \
+  --tmpfs "/home/quotum:rw,noexec,nosuid,nodev,mode=0700,uid=$uid,gid=$gid" \
   -e HOME=/home/quotum \
   -e QUOTUM_TEST_PRIVATE_DIR=/home/quotum/key-tests \
   -e CARGO_HOME=/cache/cargo \
   -e CARGO_BUILD_JOBS="$jobs" \
   -e XDG_CACHE_HOME=/cache/xdg \
-  -e npm_config_cache=/cache/npm \
+  -e npm_config_cache=/home/quotum/.npm \
   -e RUSTUP_AUTO_INSTALL=0 \
-  -v "$desktop_home:/home/quotum" \
   -v "$cargo_cache:/cache/cargo" \
-  -v "$xdg_cache:/cache/xdg" \
-  -v "$npm_cache:/cache/npm" \
-  -v "$root:/work" \
-  -w /work \
-  "$image" \
-  sh -ceu "$1"
+  -v "$quotum_build_cache:/cache/xdg/quotum-build"
+
+if [ -d "$devkit_cache/electron" ]; then
+  set -- "$@" -v "$devkit_cache/electron:/cache/xdg/electron:ro"
+fi
+
+if [ "$network" = none ]; then
+  set -- "$@" \
+    -v "$root:/work:ro" \
+    -v "$root/desktop/target:/work/desktop/target"
+else
+  set -- "$@" -v "$root:/work"
+fi
+
+exec docker run "$@" -w /work "$image" \
+  sh -ceu 'mkdir -m 700 -p /home/quotum/key-tests /home/quotum/.npm && sh -ceu "$1"' _ "$cmd"

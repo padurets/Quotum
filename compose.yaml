@@ -1,19 +1,18 @@
 services:
   # The agent is a CLI with no long-running stand service. Keeping this
-  # profile-gated entry satisfies Devkit early port reservation for `hub`
+  # profile-gated placeholder satisfies Devkit early port reservation for `hub`
   # while `Makefile` selects only `hub` for `make dev` and `make up`.
   agent:
     image: "${DEVKIT_NODE_IMAGE:?}"
     profiles:
       - cli
-    command:
-      - sh
-      - -c
-      - "printf '%s\n' 'Quotum agent is a CLI; use make check/test/build app=agent.' >&2; exit 1"
   hub:
     environment:
       QUOTUM_BIND: "0.0.0.0"
       QUOTUM_PORT: "8080"
+      # Loopback-only demo stand (.devkit/compose.apps.yaml binds 127.0.0.1);
+      # wildcard host and proxy trust let reverse-proxy preview URLs reach it.
+      # Production deployment uses deploy/compose.yaml instead.
       QUOTUM_ALLOWED_HOSTS: "*"
       QUOTUM_TRUST_PROXY: "true"
     healthcheck:
