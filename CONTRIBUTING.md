@@ -13,12 +13,12 @@ make check-desktop
 Or directly on the host without Devkit containers:
 
 ```sh
-npm ci && (cd apps/hub && npm run check && npm test && npm run build)
+pnpm install --frozen-lockfile && (cd apps/hub && pnpm run check && pnpm test && pnpm run build)
 (cd apps/agent && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked)
 node desktop/prepare.mjs && (cd desktop && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked)
 ```
 
-CI runs the same on every push, the agent on Linux, macOS and Windows. `npm start` in
+CI runs the same on every push, the agent on Linux, macOS and Windows. `pnpm start` in
 `apps/hub/` serves the built dashboard on `127.0.0.1:8080`; `cargo run -p quotum` in
 `apps/agent/` measures this machine once.
 
@@ -40,7 +40,7 @@ one. The check needs Docker and `rust:1.99.1-bookworm` (override with `DEV_RUST_
 real clients or changes a running collector. The separate journal/HTTP recovery
 matrix remains in `bench/observed-recovery.ts`.
 
-After building the hub, `npm run bench -- --ci` in `apps/hub/` (or `make bench` from the root) checks dashboard costs in
+After building the hub, `pnpm run bench -- --ci` in `apps/hub/` (or `make bench` from the root) checks dashboard costs in
 Chrome (`QUOTUM_CHROME`, one on `PATH`, or `--cdp http://host:port`). It includes native
 wheel and Shift-drag starting from each five-hour limit, weekly limit, agent activity,
 budget balance and subscription-funds chart at 24h and 30d, moving
@@ -528,7 +528,7 @@ visible prompt, unlock it and expect recovery with the same target. Repeat with
 marker preserved. The cancelled fixture stays in that disposable backend for
 inspection. Do not run these destructive lock scenarios against a person's keyring.
 
-For settings-only visual checks, `cd apps/hub && npm run demo:keys` serves seven safe app
+For settings-only visual checks, `cd apps/hub && pnpm run demo:keys` serves seven safe app
 states at its printed loopback address. Select `?state=waiting&lang=ru` or the other
 states listed in `apps/hub/demo/key-storage.ts`. Check both languages, a narrow window and
 reset confirmation. This fixture has no native store authority; also inspect the
@@ -538,55 +538,64 @@ actual packaged app. The board benchmark and ordinary package smoke remain requi
 
 ### Development stands
 
-On Linux with Docker and Docker Compose `5.6.0`, Devkit manages isolated tool images,
-dependency caches and a per-checkout Compose stand for `apps/hub`:
+On Linux with Docker and Docker Compose `5.0.0+` (CI pins `5.6.0`), Devkit manages
+isolated tool images, shared caches (`pnpm` hardlinks and Cargo) and a per-checkout
+Compose stand for `apps/hub`:
 
 ```sh
 make setup          # pull/build pinned Devkit tool images and populate workspace caches
 make doctor         # verify Docker, Compose, manifest, lockfiles and workspace readiness
-make dev            # build current code and start the hub demo stand in Compose
-make status         # inspect the active stand and its bound 127.0.0.1 host port
+make dev            # build current code and start the hub demo stand in the foreground
+make up             # start the hub demo stand in the background
+make info           # inspect readiness, leased 127.0.0.1 host port and preview URL (json=1 for JSON)
 make logs app=hub   # inspect the stand's log and synthetic sign-in credentials
-make down           # stop and clean up this checkout's Compose stand
+make down           # stop this checkout's stand while preserving its leased host port
+make down cleanup=1 # stop this checkout's stand and release its leased host port
 ```
 
-Each checkout gets its own Compose project name and publishes container port `8080` on an
-ephemeral `127.0.0.1` host port (`make status` prints the bound port). The stand runs
-the hub with synthetic data. The agent is a command-line program and has no stand.
-For a persistent hub or public access, use the deployment Compose file in `deploy/`.
+Each checkout gets its own Compose project name and leases a sticky `127.0.0.1` host port
+from `DEVKIT_PORT_RANGE` (`make info` prints the bound port and, when
+`DEVKIT_PREVIEW_URL_TEMPLATE` is set in the environment or root `.env`, the corresponding
+preview URL; run `git config --local devkit.previewSourceBranch <branch>` once per clone
+to inherit that template from a base worktree). Worktrunk hooks in `.config/wt.toml`
+reserve ports on `pre-start` and clean up stands on `pre-remove` (pass `--yes` in
+non-interactive sessions). The stand runs the hub with synthetic data; the agent is a
+command-line program and has no stand. For a persistent hub or public access, use the
+deployment Compose file in `deploy/`.
 `make check`, `make fix`, `make test` and `make build` run across `apps/agent` and
 `apps/hub` inside pinned Devkit containers (pass `app=agent` or `app=hub` to target a
 single component). `make bundle-hub`, `make prepare-desktop` and `make check-desktop`
-prepare and verify the desktop workspace, and `make bench` builds the hub and runs the
-browser benchmark on the host. Use `make bench BENCH_CDP=http://host:port` for a
-running Chrome with a CDP endpoint, or set `QUOTUM_CHROME` to a local Chrome binary.
+prepare and verify the desktop workspace inside the pinned Linux container
+(`desktop/Dockerfile.check`), and `make bench` builds the hub and runs the browser
+benchmark on the host. Use `make bench BENCH_CDP=http://host:port` for a running Chrome
+with a CDP endpoint, or set `QUOTUM_CHROME` to a local Chrome binary.
 
-To open specific demo sets directly on the host (after `npm run build` in `apps/hub/`),
-run `npm run demo -- [set] [--resets <scene>] [--still]` in `apps/hub/`:
+To open specific demo sets directly on the host (after `pnpm run build` in `apps/hub/`),
+run `pnpm run demo -- [set] [--resets <scene>] [--still]` in `apps/hub/`:
 
-`npm run demo -- showcase --still` uses the still showcase; `npm run demo -- activity`
+`pnpm run demo -- showcase --still` uses the still showcase; `pnpm run demo -- activity`
 uses the activity set. `--resets <scene>` selects a scene from `apps/hub/demo/catalogue.ts`.
-`npm run demo -- money --still` places subscriptions beside the monetary cases on Ana's
+`pnpm run demo -- money --still` places subscriptions beside the monetary cases on Ana's
 personal board: balance and caps, large key inventory, revoked and expired access, a
 history gap, negative balance, zero cap and an unknown provider.
-`npm run demo -- quotas --still` shows personal z.ai subscription quotas in credits,
+`pnpm run demo -- quotas --still` shows personal z.ai subscription quotas in credits,
 unknown resets, exhausted and closed allowances, partial and unsupported readings, and
 private access failures. The other catalogue cards remain available through Add widget.
-`npm run demo -- analytics --still` shows native quotas, z.ai, OpenRouter and DeepSeek
+`pnpm run demo -- analytics --still` shows native quotas, z.ai, OpenRouter and DeepSeek
 with the quota and budget analytics and the separate subscription-funds chart.
-`npm run demo -- filters --still` opens a populated mixed-resource board and a separate
+`pnpm run demo -- filters --still` opens a populated mixed-resource board and a separate
 board with an empty saved project selection beside retained resource measurements. Sign
 in as Ana to save opening defaults, or Ben to explore current filters and Restore without
 Save.
-`npm run demo -- links --still` shows temporal client links, suggestions with their exact
+`pnpm run demo -- links --still` shows temporal client links, suggestions with their exact
 free intervals, inactive targets, account disagreements, spending per active hour, and
 complete or partial work observation. Its durable codes are in `LINK_SCENES` and checked
 by `apps/hub/demo/test/links.test.ts`.
 
-`npm run demo -- devices --still` shows agent versions, disabled collectors, an epoch
+`pnpm run demo -- devices --still` shows agent versions, disabled collectors, an epoch
 barrier, a preferred device and retained measurement origins in My connections.
-`npm run demo -- onboarding --still` exercises board and account onboarding.
-`npm run demo -- calendar --still` shows 30 days of registered agent-hours without
+`pnpm run demo -- onboarding --still` exercises board and account onboarding.
+`pnpm run demo -- calendar --still` shows 30 days of registered agent-hours without
 subscription cards. Ana has varied weeks, quiet stretches, release peaks, work across
 midnight and sessions in the opening analytical period; Boris's No available work history
 board has no admitted devices. Empty project selection keeps the heatmap visible with zero
@@ -602,7 +611,7 @@ report. Services, encrypted storage, receipts and board events use production co
 external answers and device reports are synthetic. No real provider or client is
 contacted.
 
-`npm run demo -- sessions` opens the session analytics review fixture. Sign in as Ana:
+`pnpm run demo -- sessions` opens the session analytics review fixture. Sign in as Ana:
 the default 24h period has 57 projects, six machines, four subscriptions and 129
 recorded contexts, including OpenCode and another client alongside mapped sessions.
 Agent sessions includes active time and average concurrency,
@@ -629,7 +638,7 @@ A change to the dashboard is looked at on the demo board, with every state it ca
 that lasts on a working hub:
 
 ```sh
-cd apps/hub && npm run build && npm run demo
+cd apps/hub && pnpm run build && pnpm run demo
 ```
 
 It starts the built hub on throwaway data (in the system's temporary folder), fills it
@@ -638,20 +647,20 @@ started, and keeps it alive: machines measure, agents start, work and stop, a ma
 sleeps. Live devices accept refresh requests from their cards; only the explicit legacy
 scene simulates a device without that support. The reset trackers are stood in for, so
 it needs no network and no account. It prints the address and how to sign in; Ctrl+C
-stops it and leaves nothing behind. `npm run demo -- showcase` opens the clean board
+stops it and leaves nothing behind. `pnpm run demo -- showcase` opens the clean board
 the README images come from; `--resets <scene>` picks what the reset trackers say (one
 scene a run, the list is printed). Set `QUOTUM_PORT` if 8080 is taken. After changing
-the UI, `npm run build` and reload the page; after changing the server, `npm run build`
+the UI, `pnpm run build` and reload the page; after changing the server, `pnpm run build`
 and start the demo again.
 
-`npm run demo -- project-colors --still`
+`pnpm run demo -- project-colors --still`
 shows repeated manual project colours, automatic displacement, neutral overflow,
 retained out-of-period pins and merged names. Its capacity and dormant-reset boards
 exercise the 89-assignment bound and the owner's explicit reset without exposing
 unavailable names. Check owner and reader views, both languages and the combined name/colour popup
 in Manage projects at narrow widths.
 
-`npm run demo -- links --still` opens the client-link scenarios. For the synthetic
+`pnpm run demo -- links --still` opens the client-link scenarios. For the synthetic
 month history comparison, archive the control revision into a separate temporary
 directory, install its hub dependencies, then run
 `node --import tsx bench/month.mjs --control /absolute/control/root` from `apps/hub/`.
@@ -663,13 +672,13 @@ authenticated HTTP and pure financial controls. The fixture includes 10 owners,
 20 devices, 2,400 contexts, 86,400 work stretches and a second cohort of 1,200 links.
 
 A new state of the board gets an entry in the catalogue, with the codes it shows in
-`expect` (the file's header explains them): `npm test` then checks it holds, and it is
+`expect` (the file's header explains them): `pnpm test` then checks it holds, and it is
 on the board for the next person. One a working hub never holds for long is named in the
-header instead, with the tests that hold it. `npm run demo -- --still` keeps the board
+header instead, with the tests that hold it. `pnpm run demo -- --still` keeps the board
 still: nothing is measured after the start, and no card goes stale for three hours; running
 agents still work and their credited activity advances.
 
-For README screenshots, use `npm run demo -- showcase --still`. Capture the cards and
+For README screenshots, use `pnpm run demo -- showcase --still`. Capture the cards and
 the analytics separately in English and Russian, with the same viewport and preferences.
 Keep a weekly window with its plan, forecast and a forecast label at the chart’s right
 edge in view. Update `docs/dashboard.png`, `docs/dashboard.ru.png`, `docs/analytics.png`
@@ -681,11 +690,11 @@ when replacing the underlying screenshots, and compress the PNGs with pngquant.
 Use only the demo’s synthetic accounts and machines.
 
 Refresh `docs/openrouter.png` and `docs/openrouter.ru.png` from
-`npm run demo -- money --still` too. Show a healthy wallet's balance and capped keys
+`pnpm run demo -- money --still` too. Show a healthy wallet's balance and capped keys
 beside a subscription, with the same viewport, crop and browser-window frame in both
 languages.
 
-`npm run bench` (after `npm run build`) uses a still demo whose agents repeat their
+`pnpm run bench` (after `pnpm run build`) uses a still demo whose agents repeat their
 lists without working, opens Ana's board in headless Chrome and checks the budget in
 `apps/hub/bench/budget.ts`. During warmup no `history` may arrive. For two minutes (five
 without `--ci`) an idle board with neither measurements nor working agents asks nothing,
@@ -947,7 +956,7 @@ transport policy and two-window registry; native smoke remains necessary.
 
 The demo's `/compact` page uses the same fixtures and store as its dashboard. It is
 also available in a browser for visual inspection; native actions require the app's
-bridge. Check it in English and Russian after `npm run build && npm run demo`.
+bridge. Check it in English and Russian after `pnpm run build && pnpm run demo`.
 
 For an isolated, explicit check of real native delivery, run the packaged executable
 with `--smoke=notifications`. It creates temporary app/config/state directories,

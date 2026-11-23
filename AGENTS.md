@@ -37,21 +37,23 @@ make check-desktop
 Or directly on the host without Devkit containers:
 
 ```sh
-npm ci && (cd apps/hub && npm run check && npm test && npm run build)
+pnpm install --frozen-lockfile && (cd apps/hub && pnpm run check && pnpm test && pnpm run build)
 (cd apps/agent && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked)
 node desktop/prepare.mjs && (cd desktop && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked)
 ```
 
-Run the checks of every part you touched. Run the desktop checks after
-`prepare.mjs` or `make prepare-desktop`, which builds the hub bundle and fetches
-Node for the app. On Linux, install the system packages in CONTRIBUTING.md first. A change
+Run the checks of every part you touched. On Linux, `make prepare-desktop` and
+`make check-desktop` run inside a pinned container (`desktop/Dockerfile.check`) using
+shared caches and the hub bundle built by `make bundle-hub`, so host Rust and GTK
+development packages are not needed. Direct host builds run after `desktop/prepare.mjs`
+and on Linux need the system packages in CONTRIBUTING.md first. A change
 to `apps/agent/crates/core` or to the hub touches the app too. CI also runs the agent on
 macOS and Windows, and builds the app on Windows and Linux and runs each build
 (`desktop/smoke/`): if you change process handling (`process.rs`, `stop.rs`,
 `holder.rs`, `activity.rs`, `desktop/src/hub.rs`) or start at login and can check only
 one system, say so.
 
-`npm run bench` in `apps/hub/` (after `npm run build`, or `make bench` from the root) measures the board in headless Chrome
+`pnpm run bench` in `apps/hub/` (after `pnpm run build`, or `make bench` from the root) measures the board in headless Chrome
 against its budget (`apps/hub/bench/budget.ts`). An idle board has neither measurements nor
 working agents: it asks the hub nothing and renders only what shows time. Exact UTC
 calendar-only card events are checked against the stream baseline and retained in raw
@@ -88,8 +90,8 @@ Captured transaction bounds clamp the expected input position at history and liv
 every event remains measured. A clamped event reaching an already displayed boundary
 adds no movement frame, and a later gesture cannot credit an earlier gesture's input.
 
-`npm start` in `apps/hub/` serves the built dashboard on `127.0.0.1:8080` (a new hub prints
-the setup code of the first account to its log). `npm run demo` in `apps/hub/` serves it on
+`pnpm start` in `apps/hub/` serves the built dashboard on `127.0.0.1:8080` (a new hub prints
+the setup code of the first account to its log). `pnpm run demo` in `apps/hub/` serves it on
 throwaway data with every state the board knows that lasts on a working hub, needing no
 network or account; see *The demo board* in [CONTRIBUTING.md](CONTRIBUTING.md).
 `cargo run -p quotum` in `apps/agent/` measures this machine once through the clients
@@ -102,11 +104,13 @@ runs only while its stdin is open.
 
 ## Rules
 
-For an isolated containerized development stand on Linux, use `make dev`,
-`make status`, `make logs app=hub` and `make down` at the checkout root (see *Development
-stands* in CONTRIBUTING.md). Devkit publishes container port `8080` on an ephemeral
-`127.0.0.1` host port per checkout (`make status` prints the bound port; `make logs app=hub`
-prints the synthetic sign-in). Independent tool calls must pass the worktree's path
+For an isolated containerized development stand on Linux, use `make dev` (or `make up`),
+`make info`, `make logs app=hub` and `make down` at the checkout root (see *Development
+stands* in CONTRIBUTING.md). Devkit leases a per-checkout `127.0.0.1` host port that
+survives ordinary `make down` (`make info` prints the address and any configured preview
+URL; `make logs app=hub` prints the synthetic sign-in; `make down cleanup=1` releases the
+leased port). Worktrunk project hooks live in `.config/wt.toml` (pass `--yes` in
+non-interactive sessions). Independent tool calls must pass the worktree's path
 explicitly as their working directory. Use the configured remote browser for visuals; do
 not provision a second browser. `make doctor`, `make check`, `make test` and `make build`
 run in pinned Devkit Node 24 and Rust containers; canonical CI performance and platform
@@ -163,7 +167,7 @@ smoke checks still apply.
 - **Two languages everywhere.** Every UI string goes into every catalog in
   `apps/hub/ui/i18n`; every change to `README.md` goes into `README.ru.md` too.
 - **One version.** `apps/agent/Cargo.toml`, `apps/agent/Cargo.lock`, `desktop/Cargo.toml`,
-  `desktop/Cargo.lock`, `package.json`, `package-lock.json` and `apps/hub/package.json`
+  `desktop/Cargo.lock`, `package.json` and `apps/hub/package.json`
   always carry the same version; see *Releasing* in the README. `desktop/Cargo.lock` also
   locks `quotum-core`: after a change to its dependencies, `cargo metadata --format-version 1`
   in `desktop/` updates it (no build needed), or `desktop.yml` fails on `--locked`.
@@ -205,9 +209,9 @@ smoke checks still apply.
   height or reduce its plot. Permanent information areas need useful visible content in
   the ordinary view, such as Activity's summary. A blank preview strip is not a solution
   to layout shifts and must not prevent the owner from making a widget shorter.
-- **Look at a change on the demo board** (`npm run build && npm run demo` in `apps/hub/`), in
+- **Look at a change on the demo board** (`pnpm run build && pnpm run demo` in `apps/hub/`), in
   both languages, not only through tests. A state the board did not show before gets an
-  entry in `apps/hub/demo/catalogue.ts` with the codes it shows; `npm test` checks them. One
+  entry in `apps/hub/demo/catalogue.ts` with the codes it shows; `pnpm test` checks them. One
   a working hub never holds for long is named in the catalogue's header instead, with
   the tests that hold it.
 - **Build from the shared pieces.** A menu, dropdown or any panel that opens from a
@@ -268,7 +272,7 @@ smoke checks still apply.
   with a `…ChangesAt` of its own beside the function that words it, tested to read the
   same until then; nothing that shows data or time keeps a timer of its own, only a
   tooltip or a gesture may wait a moment (`apps/hub/ui/test/timers.test.ts` lists where), and
-  what shows time is marked `data-time`, as `npm run bench` counts it.
+  what shows time is marked `data-time`, as `pnpm run bench` counts it.
 - A card tells how its measurements go in the logo's dot and its news in marks on the
   left of its tray, with the details in a tooltip or a panel, never in a line of its own; neither
   changes a card's height.

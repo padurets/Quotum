@@ -798,10 +798,10 @@ Caddy, браузер держит живыми до восьми досок с�
   открытому дашборду.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — как проверить изменение и что учесть (на английском);
   [SECURITY.md](SECURITY.md) — как сообщить об уязвимости, не публикуя её.
-- `npm run demo` в `apps/hub/` (после `npm run build`) — живая доска на одноразовых данных со
+- `pnpm run demo` в `apps/hub/` (после `pnpm run build`) — живая доска на одноразовых данных со
   всеми состояниями, которые знает дашборд и которые держатся на исправном хабе; сеть и
   аккаунты не нужны, Ctrl+C её останавливает и ничего после себя не оставляет.
-  `npm run demo -- showcase` — доска с картинок выше. `npm run demo -- money --still`
+  `pnpm run demo -- showcase` — доска с картинок выше. `pnpm run demo -- money --still`
   показывает подписки рядом со всеми денежными кейсами на личной доске Ana.
 
 Структура проекта:
@@ -825,18 +825,18 @@ apps/hub/demo           демо-доска: каталог всех состо�
 ```
 
 `make setup && make check && make test && make build` проверяет `apps/agent/` и `apps/hub/`
-в закреплённых контейнерах Devkit (или `npm test` и `npm run check` в `apps/hub/`, `cargo test`
-и `cargo clippy` в `apps/agent/`); `make check-desktop` проверяет `desktop/` после
-`node desktop/prepare.mjs`. CI запускает их на каждый push. `node npm/build.mjs` собирает пакеты
-npm (нужны cargo-zigbuild и zig, подробности в самом скрипте),
-`docker build -f apps/hub/Dockerfile .` — образ хаба.
+в закреплённых контейнерах Devkit (или `pnpm test` и `pnpm run check` в `apps/hub/`, `cargo test`
+и `cargo clippy` в `apps/agent/`); `make check-desktop` подготавливает и проверяет `desktop/`
+в закреплённом контейнере (или напрямую на хосте после `node desktop/prepare.mjs`). CI запускает
+их на каждый push. `node npm/build.mjs` собирает пакеты npm (нужны cargo-zigbuild и zig, подробности
+в самом скрипте), `docker build -f apps/hub/Dockerfile .` — образ хаба.
 
 ### Как выпустить релиз
 
 Подготовьте ветку релиза и PR в `main`. Поставьте новую версию в `apps/agent/Cargo.toml`
 (`[workspace.package]`), `desktop/Cargo.toml`, `package.json` и `apps/hub/package.json`,
-затем обновите их lock-файлы (`apps/agent/Cargo.lock`, `desktop/Cargo.lock`,
-`package-lock.json`). Шаблон npm-пакета остаётся на `0.0.0`: `npm/build.mjs` берёт версию
+затем обновите lock-файлы Cargo (`apps/agent/Cargo.lock`, `desktop/Cargo.lock`).
+Шаблон npm-пакета остаётся на `0.0.0`: `npm/build.mjs` берёт версию
 публикуемых пакетов из манифеста агента. Добавьте хеши новых шагов схемы базы в
 `RELEASED` в `apps/hub/server/test/schema.test.ts`: каждый выпущенный шаг после этого
 не меняется. Переснимите картинки README на обоих языках на демо-доске,
@@ -845,7 +845,9 @@ npm (нужны cargo-zigbuild и zig, подробности в самом ск
 Например, для подготовки 0.10.2 в этой ветке:
 
 ```sh
-npm version 0.10.2 --no-git-tag-version --include-workspace-root --workspaces
+make exec write=1 command='pnpm version 0.10.2 --no-git-tag-version'
+make exec app=hub write=1 command='pnpm version 0.10.2 --no-git-tag-version'
+make sync && make setup
 # apps/agent/Cargo.toml и desktop/Cargo.toml: version = "0.10.2"
 (cd apps/agent && cargo metadata --format-version 1 >/dev/null)
 (cd desktop && cargo metadata --format-version 1 >/dev/null)
@@ -865,7 +867,7 @@ git push origin v0.10.2
 ```
 
 [release.yml](.github/workflows/release.yml) не примет тег без аннотации или с версией,
-которая расходится хоть с одним из семи файлов. Сообщение тега становится описанием
+которая расходится хоть с одним из шести файлов. Сообщение тега становится описанием
 релиза. Workflow ещё раз проверит код, соберёт агент под все платформы и проверит
 установку и работу десктопных пакетов. Только когда все бинарники готовы, он опубликует
 образ хаба и пакеты npm, затем создаст релиз на GitHub с CLI, десктопными пакетами,
@@ -880,7 +882,7 @@ npm принимает пакеты только от этого workflow и б�
 
 Тексты дашборда лежат в `apps/hub/ui/i18n`. Скопируйте `ru.ts` в файл с кодом языка
 (`de.ts`), переведите строки, переименуйте экспорт и добавьте его в `LOCALES` в
-`index.ts` (импорт и одна строка). Проверка типов и `npm test` убедятся, что
+`index.ts` (импорт и одна строка). Проверка типов и `pnpm test` убедятся, что
 переведены все ключи, совпадают `{подстановки}` и есть все формы множественного числа,
 которые нужны языку.
 

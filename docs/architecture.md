@@ -1724,7 +1724,7 @@ own (a tooltip or a gesture may wait a moment; `apps/hub/ui/test/timers.test.ts`
 Range validity advances the latest read's hub time by monotonic elapsed time from
 its request's start, including its delivery delay; a range
 wholly beyond its current grid cut returns to the chosen period.
-`npm run bench` checks a board without measurements or working agents asks nothing and
+`pnpm run bench` checks a board without measurements or working agents asks nothing and
 renders only what shows time. It also checks measurements reach the card and chart
 within a second, small reads per measurement, and one small read for a machine report
 crediting work, rendering only that card, agents and analytics.

@@ -784,10 +784,10 @@ over plain HTTP/1.1, about five.
   dashboard.
 - [CONTRIBUTING.md](CONTRIBUTING.md): checking a change and what to keep in mind;
   [SECURITY.md](SECURITY.md): reporting a vulnerability privately.
-- `npm run demo` in `apps/hub/` (after `npm run build`): a live board on throwaway data with
+- `pnpm run demo` in `apps/hub/` (after `pnpm run build`): a live board on throwaway data with
   every state the dashboard knows that lasts on a working hub, no network or account
-  needed; Ctrl+C stops it and leaves nothing behind. `npm run demo -- showcase` is the
-  board of the images above. `npm run demo -- money --still` puts subscriptions beside
+  needed; Ctrl+C stops it and leaves nothing behind. `pnpm run demo -- showcase` is the
+  board of the images above. `pnpm run demo -- money --still` puts subscriptions beside
   every monetary case on Ana's personal board.
 
 Project layout:
@@ -811,18 +811,18 @@ apps/hub/demo           the demo board: a catalogue of every state a working hub
 ```
 
 `make setup && make check && make test && make build` checks `apps/agent/` and `apps/hub/`
-in pinned Devkit containers (or `npm test` and `npm run check` in `apps/hub/`, `cargo test`
-and `cargo clippy` in `apps/agent/`); `make check-desktop` checks `desktop/` after
-`node desktop/prepare.mjs`. CI runs them on every push. `node npm/build.mjs` builds the
-npm packages (it needs cargo-zigbuild and zig; see the script),
-`docker build -f apps/hub/Dockerfile .` the hub's image.
+in pinned Devkit containers (or `pnpm test` and `pnpm run check` in `apps/hub/`, `cargo test`
+and `cargo clippy` in `apps/agent/`); `make check-desktop` prepares and checks `desktop/`
+in a pinned container (or directly on the host after `node desktop/prepare.mjs`). CI runs
+them on every push. `node npm/build.mjs` builds the npm packages (it needs cargo-zigbuild
+and zig; see the script), `docker build -f apps/hub/Dockerfile .` the hub's image.
 
 ### Releasing
 
 Prepare a release branch and a pull request into `main`. Set the new version in
 `apps/agent/Cargo.toml` (`[workspace.package]`), `desktop/Cargo.toml`, `package.json` and
-`apps/hub/package.json`, then update their lock files (`apps/agent/Cargo.lock`,
-`desktop/Cargo.lock`, `package-lock.json`). The npm package template stays at `0.0.0`:
+`apps/hub/package.json`, then update the Cargo lock files (`apps/agent/Cargo.lock`,
+`desktop/Cargo.lock`). The npm package template stays at `0.0.0`:
 `npm/build.mjs` sets the published packages' version from the agent's manifest.
 Add the hashes of any new database layout steps to `RELEASED` in
 `apps/hub/server/test/schema.test.ts`; every step shipped by a release is frozen.
@@ -832,7 +832,9 @@ instructions and prepare the release notes outside the repository.
 For example, to prepare 0.10.2 on that branch:
 
 ```sh
-npm version 0.10.2 --no-git-tag-version --include-workspace-root --workspaces
+make exec write=1 command='pnpm version 0.10.2 --no-git-tag-version'
+make exec app=hub write=1 command='pnpm version 0.10.2 --no-git-tag-version'
+make sync && make setup
 # apps/agent/Cargo.toml and desktop/Cargo.toml: version = "0.10.2"
 (cd apps/agent && cargo metadata --format-version 1 >/dev/null)
 (cd desktop && cargo metadata --format-version 1 >/dev/null)
@@ -852,7 +854,7 @@ git push origin v0.10.2
 ```
 
 [release.yml](.github/workflows/release.yml) refuses a tag that is not annotated or
-whose version differs from any of those seven files. The tag's message becomes the
+whose version differs from any of those six files. The tag's message becomes the
 release notes. The workflow checks the code again, builds the agent for every platform
 and runs the desktop packages through their installation and smoke checks. Only after
 all binaries are ready does it publish the hub's image and npm packages, then create
@@ -868,7 +870,7 @@ again, and it replaces the old trusts.
 
 The dashboard's text lives in `apps/hub/ui/i18n`. Copy `ru.ts` to a file named after the
 language's code (`de.ts`), translate the strings, rename its export, and add it to
-`LOCALES` in `index.ts` (an import and one line). The type checker and `npm test` then
+`LOCALES` in `index.ts` (an import and one line). The type checker and `pnpm test` then
 make sure every key is translated, the `{placeholders}` match and every plural form the
 language has is there.
 

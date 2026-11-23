@@ -1179,7 +1179,7 @@ test('benchmark producers retain their independent deadlines and required checks
       assert.ok(optional.includes('\n        timeout-minutes: 2\n'));
       assert.ok(optional.includes('\n        continue-on-error: true\n'));
       assert.ok(optional.includes('bash bench/prepareNativeUnwind.sh'));
-      assert.ok(!optional.includes('npm run bench'));
+      assert.ok(!optional.includes('run bench'));
       required = job.replace(optional, '');
     }
     assert.ok(
@@ -1855,7 +1855,7 @@ test('the existing history control selects fresh prefixes while required history
     }
   assert.ok(history.includes('if [[ "$FRESH_HISTORY" == 1 ]]'));
   assert.ok(history.includes('node --import tsx bench/historyFreshControl.mjs'));
-  assert.ok(history.includes('npm run bench -- --ci --scope history'));
+  assert.ok(history.includes('"${QUOTUM_BENCH_PM}" run bench -- --ci --scope history'));
   assert.ok(!workflow.includes('QUOTUM_BENCH_HISTORY_FIRST_NATIVE:'));
   assert.ok(!workflow.includes('QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:'));
 });
@@ -1970,11 +1970,12 @@ test('paired history preinput binding selects only one direct diagnostic history
       .split('\n')
       .map(line => line.slice(10))
       .join('\n');
-    const standins = `node(){ printf 'node'; printf ' %s' "$@"; printf '\\n'; }; npm(){ printf 'npm'; printf ' %s' "$@"; printf '\\n'; };\n`;
-    for (const [inputs, expected] of [
-      [paired, 'npm run bench -- --ci --scope history'],
-      [{history_scroll_control: true}, 'node --import tsx bench/historyFreshControl.mjs'],
-      [{}, 'npm run bench -- --ci --scope history'],
+    const standins = `node(){ printf 'node'; printf ' %s' "$@"; printf '\\n'; }; pnpm(){ printf 'pnpm'; printf ' %s' "$@"; printf '\\n'; }; npm(){ printf 'npm'; printf ' %s' "$@"; printf '\\n'; };\n`;
+    for (const [pm, inputs, expected] of [
+      ['pnpm', paired, 'pnpm run bench -- --ci --scope history'],
+      ['pnpm', {history_scroll_control: true}, 'node --import tsx bench/historyFreshControl.mjs'],
+      ['pnpm', {}, 'pnpm run bench -- --ci --scope history'],
+      ['npm', {}, 'npm run bench -- --ci --scope history'],
     ] as const) {
       const result = spawnSync(
         '/bin/bash',
@@ -1983,6 +1984,7 @@ test('paired history preinput binding selects only one direct diagnostic history
           env: {
             PATH: '/no-browser-or-node',
             FRESH_HISTORY: String(evaluate(fresh, inputs)),
+            QUOTUM_BENCH_PM: pm,
             QUOTUM_C3_CHROME: '/owned/chrome',
           },
           encoding: 'utf8',
@@ -1993,7 +1995,7 @@ test('paired history preinput binding selects only one direct diagnostic history
       assert.equal(result.stdout.trim(), expected);
     }
   }
-  assert.ok(history.includes('npm run bench -- --ci --scope history'));
+  assert.ok(history.includes('"${QUOTUM_BENCH_PM}" run bench -- --ci --scope history'));
   assert.equal(history.match(/timeout-minutes: (\d+)/)![1], '20');
 });
 

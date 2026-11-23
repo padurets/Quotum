@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {spawnSync} from 'node:child_process';
+import {spawnSync, type SpawnSyncReturns} from 'node:child_process';
 import {mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
@@ -59,11 +59,17 @@ test(
     const fixture = mkdtempSync(path.join(tmpdir(), 'quotum-hub-layout-'));
     t.after(() => rmSync(fixture, {recursive: true, force: true}));
     const current = path.join(fixture, 'current');
+    const legacyWorkspace = path.join(fixture, 'legacy-workspace');
     const historical = path.join(fixture, 'historical');
-    for (const dir of [path.join(current, 'apps/hub'), path.join(historical, 'hub')]) {
+    for (const dir of [
+      path.join(current, 'apps/hub'),
+      path.join(legacyWorkspace, 'apps/hub'),
+      path.join(historical, 'hub'),
+    ]) {
       mkdirSync(dir, {recursive: true});
       writeFileSync(path.join(dir, 'package.json'), '{}');
     }
+    writeFileSync(path.join(current, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
     for (const name of [
       'bench-history',
       'bench-dashboard',
@@ -78,24 +84,39 @@ test(
       assert.ok(install, name);
       const script = install.match(/^(?: {8})?run: \|\n((?: {10}[^\n]*\n?)+)/m)?.[1];
       assert.ok(script, name);
-      const build = steps.find(step => /^(?: {8})?run: npm run build$/m.test(step));
+      const build = steps.find(step =>
+        /^(?: {8})?run: \$\{\{ env\.QUOTUM_BENCH_PM \}\} run build$/m.test(step),
+      );
       assert.ok(build, name);
       assert.equal(expression(build, 'working-directory'), 'env.QUOTUM_BENCH_HUB_DIR', name);
-      for (const [cwd, hub, args] of [
-        [current, 'apps/hub', 'ci'],
-        [historical, 'hub', '--prefix hub ci'],
+      for (const [cwd, hub, pm, expected] of [
+        [current, 'apps/hub', 'pnpm', 'pnpm install --frozen-lockfile --ignore-scripts'],
+        [legacyWorkspace, 'apps/hub', 'npm', 'npm ci'],
+        [historical, 'hub', 'npm', 'npm --prefix hub ci'],
       ]) {
         const receipt = path.join(cwd, 'github-env');
         writeFileSync(receipt, '');
-        const run = spawnSync('bash', ['-eu', '-c', 'npm() { printf "%s\\n" "$*"; }\n' + script], {
-          cwd,
-          env: {...process.env, GITHUB_ENV: receipt},
-          encoding: 'utf8',
-        });
+        const run: SpawnSyncReturns<string> = spawnSync(
+          'bash',
+          [
+            '-eu',
+            '-c',
+            'pnpm() { printf "pnpm %s\\n" "$*"; }\nnpm() { printf "npm %s\\n" "$*"; }\n' + script,
+          ],
+          {
+            cwd,
+            env: {...process.env, GITHUB_ENV: receipt},
+            encoding: 'utf8',
+          },
+        );
         assert.ifError(run.error);
         assert.equal(run.status, 0, run.stderr);
-        assert.equal(run.stdout.trim(), args, name);
-        assert.equal(readFileSync(receipt, 'utf8'), `QUOTUM_BENCH_HUB_DIR=${hub}\n`, name);
+        assert.equal(run.stdout.trim(), expected, name);
+        assert.equal(
+          readFileSync(receipt, 'utf8'),
+          `QUOTUM_BENCH_PM=${pm}\nQUOTUM_BENCH_HUB_DIR=${hub}\n`,
+          name,
+        );
       }
     }
   },
@@ -147,7 +168,7 @@ test(
       assert.ok(job(name).includes('\n        if: always()\n'));
     }
     const panning = job('bench-panning');
-    assert.ok(panning.includes('npm run bench -- --ci --scope panning'));
+    assert.ok(panning.includes('pnpm run bench -- --ci --scope panning'));
     assert.ok(!panning.includes('continue-on-error:'));
     assert.ok(
       panning.includes(
@@ -318,7 +339,7 @@ test('combined benchmark selects only the existing dashboard job and the full ca
   onlyCombined(combined);
   const dashboard = job('bench-dashboard');
   assert.equal(evaluate(expression(dashboard, 'BENCH_SCOPE'), combined), 'all');
-  assert.ok(dashboard.includes('npm run bench -- --ci --scope "${BENCH_SCOPE}"'));
+  assert.ok(dashboard.includes('"${QUOTUM_BENCH_PM}" run bench -- --ci --scope "${BENCH_SCOPE}"'));
   assert.equal(jobs.length, 12, 'reuse the existing job set');
   assert.match(
     ci.split('  workflow_dispatch:\n')[1],
@@ -462,12 +483,12 @@ test('combined post-build preflight verifies the actual checkout and compiled cl
   const dashboard = job('bench-dashboard'),
     verify = step('Verify the requested source and received-client identity');
   assert.ok(
-    dashboard.indexOf('      - run: npm run build\n') <
+    dashboard.indexOf('      - run: ${{ env.QUOTUM_BENCH_PM }} run build\n') <
       dashboard.indexOf('      - name: Verify the requested source'),
   );
   assert.ok(
     dashboard.indexOf('      - name: Verify the requested source') <
-      dashboard.indexOf('npm run bench -- --ci'),
+      dashboard.indexOf('"${QUOTUM_BENCH_PM}" run bench -- --ci'),
   );
   const source = shell(verify)
     .split("node --import tsx --input-type=module <<'JS'\n")[1]

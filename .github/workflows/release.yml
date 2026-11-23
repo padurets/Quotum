@@ -45,17 +45,14 @@ jobs:
           lock=$(awk '/^name = "quotum"$/ {getline; gsub(/version = |"/, ""); print}' apps/agent/Cargo.lock)
           agentcorelock=$(awk '/^name = "quotum-core"$/ {getline; gsub(/version = |"/, ""); print}' apps/agent/Cargo.lock)
           rootpkg=$(node -p "require('./package.json').version")
-          rootlock=$(node -p "require('./package-lock.json').version")
-          rootpkglock=$(node -p "require('./package-lock.json').packages[''].version")
-          hublock=$(node -p "require('./package-lock.json').packages['apps/hub'].version")
           hub=$(node -p "require('./apps/hub/package.json').version")
           # The desktop app is a workspace of its own, with quotum-core as a path dependency.
           app=$(sed -n '/^\[package\]/,/^\[/s/^version = "\(.*\)"/\1/p' desktop/Cargo.toml)
           applock=$(awk '/^name = "quotum-desktop"$/ {getline; gsub(/version = |"/, ""); print}' desktop/Cargo.lock)
           corelock=$(awk '/^name = "quotum-core"$/ {getline; gsub(/version = |"/, ""); print}' desktop/Cargo.lock)
-          for other in "$lock" "$agentcorelock" "$rootpkg" "$rootlock" "$rootpkglock" "$hublock" "$hub" "$app" "$applock" "$corelock"; do
+          for other in "$lock" "$agentcorelock" "$rootpkg" "$hub" "$app" "$applock" "$corelock"; do
             if [ "$other" != "$agent" ]; then
-              echo "::error::versions differ: apps/agent/Cargo.toml $agent, apps/agent/Cargo.lock $lock (quotum) and $agentcorelock (quotum-core), package.json $rootpkg, package-lock.json $rootlock / $rootpkglock (root) / $hublock (apps/hub), apps/hub/package.json $hub, desktop/Cargo.toml $app, desktop/Cargo.lock $applock (quotum-desktop) and $corelock (quotum-core)"; exit 1
+              echo "::error::versions differ: apps/agent/Cargo.toml $agent, apps/agent/Cargo.lock $lock (quotum) and $agentcorelock (quotum-core), package.json $rootpkg, apps/hub/package.json $hub, desktop/Cargo.toml $app, desktop/Cargo.lock $applock (quotum-desktop) and $corelock (quotum-core)"; exit 1
             fi
           done
           if [ "$GITHUB_REF_TYPE" = tag ]; then
