@@ -1,6 +1,11 @@
 // Interactive admission can differ from the member that owns retained bytes.
 type Flight = {role: 'visible' | 'ahead'; admission?: object; evict?: boolean};
-type Candidate = {bytes: number; shownAt: number; priority?: 0; drop(): void};
+type Candidate = {
+  bytes: number;
+  shownAt: number;
+  priority?: 0;
+  drop(available?: () => number): void;
+};
 export type HistoryMember = {readonly estimatedBytes: number; evictionCandidates(): Candidate[]};
 type Waiting = {owner: HistoryMember; flight: Flight; start(): void; cancel(): void};
 
@@ -109,22 +114,33 @@ export class HistoryPool {
   }
 
   /** Staged growth is reserved before each yield; another family's visible tiles stay pinned. */
-  reserve(flight: Flight, bytes: number) {
+  reserve(flight: Flight, bytes: number, allocation = 0) {
     const previous = this.reservations.get(flight) ?? 0;
     this.reservations.set(flight, bytes);
-    // Optional compaction must not discard useful cache to copy a smaller ledger.
-    if (flight.evict === false ? this.estimatedBytes <= this.budget : this.trim()) return true;
+    // Reserve the entire destination against other readers. Only this synchronous
+    // eviction can use the still-unallocated buffer's space to copy a smaller suffix.
+    const available =
+      allocation > 0
+        ? () =>
+            this.budget -
+            this.estimatedBytes +
+            (this.reservations.get(flight) === bytes ? allocation : 0)
+        : undefined;
+    const fits = flight.evict === false ? this.estimatedBytes <= this.budget : this.trim(available);
+    allocation = 0;
+    if (available && this.reservations.get(flight) !== bytes) return false;
+    if (fits) return true;
     this.reservations.set(flight, previous);
     return false;
   }
-  trim() {
+  trim(available?: () => number) {
     let bytes = this.estimatedBytes;
     if (bytes <= this.budget) return true;
     const candidates = [...this.members]
       .flatMap(member => member.evictionCandidates())
       .sort((a, b) => (a.priority ?? 1) - (b.priority ?? 1) || a.shownAt - b.shownAt);
     for (const candidate of candidates) {
-      candidate.drop();
+      candidate.drop(available);
       // A dropped cache entry can share storage with a frame that still owns it.
       bytes = this.estimatedBytes;
       if (bytes <= this.budget) return true;

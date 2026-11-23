@@ -34,7 +34,7 @@ function removablePrefix(packed: Packed, pos: number, headroom: number) {
 }
 const cellBytes = (packed: Packed, pos: number) =>
   packed.data.subarray(packed.offsets[pos], packed.offsets[pos + 2]);
-type Staging = {metadata: MeterMetadata; bytes: number};
+type Staging = {metadata: MeterMetadata; bytes: number; allocation: number};
 type PendingCell = StoredCell & {references: Set<number>};
 type EncodedExtra = Omit<
   NonNullable<MeterCell[5]>,
@@ -332,6 +332,9 @@ export class MeterTile {
     private readonly from: number,
     private readonly cell: number,
   ) {}
+  get pendingAllocation() {
+    return this.staging?.allocation ?? 0;
+  }
   get bytes() {
     return (
       this.metadata.bytes +
@@ -386,7 +389,7 @@ export class MeterTile {
       yield;
     }
     if (!this.series.size && !incoming.size) return;
-    const staged: Staging = {metadata: new MeterMetadata(), bytes: 0};
+    const staged: Staging = {metadata: new MeterMetadata(), bytes: 0, allocation: 0};
     this.staging = staged;
     try {
       // Copy the reference counts once for this whole write. Cancellation can then
@@ -473,8 +476,10 @@ export class MeterTile {
     if (byteCount) {
       const offsets = (cells.length - start + 1) * 2;
       // Admission runs at the yield, before any of the three backing stores exist.
-      staged.bytes += packedSize(offsets, byteCount, refCount);
+      staged.allocation = packedSize(offsets, byteCount, refCount);
+      staged.bytes += staged.allocation;
       yield;
+      staged.allocation = 0;
       const s = old?.series ?? incoming[0];
       next = {
         series: old?.series ?? {

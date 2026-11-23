@@ -157,14 +157,14 @@ export class HistoryTile {
   staged(
     chunk: Chunk,
     known: HistoryMeta['known'],
-    admit: (bytes: number) => boolean,
+    admit: (bytes: number, allocation: number) => boolean,
     now?: number,
     plane?: Plane,
   ): Preparation<HistoryTile | null>;
   *staged(
     chunk: Chunk,
     known: HistoryMeta['known'],
-    admit?: (bytes: number) => boolean,
+    admit?: (bytes: number, allocation: number) => boolean,
     now = 0,
     plane: Plane = 'all',
   ): Preparation<HistoryTile | null> {
@@ -219,7 +219,7 @@ export class HistoryTile {
         if (!admit) return true;
         const bytes = measure();
         if (bytes <= reserved) return true;
-        if (!admit(bytes)) return false;
+        if (!admit(bytes, copy.meters.pendingAllocation)) return false;
         reserved = bytes;
         return true;
       };

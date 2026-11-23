@@ -94,11 +94,11 @@ function observePool(t: TestContext) {
     max.foreground = Math.max(max.foreground, foreground);
     if (accepted && bytes > max.total) Object.assign(max, {total: bytes, retirement, at});
   };
-  historyPool.reserve = function (owner: Reservation, bytes) {
+  historyPool.reserve = function (owner: Reservation, bytes, ...args) {
     const previous = requesting;
     requesting = owner;
     try {
-      const accepted = reserve.call(this, owner, bytes);
+      const accepted = reserve.call(this, owner, bytes, ...args);
       if (owner.evict === false) {
         if (accepted) sample(this.estimatedBytes, true, 'optional retirement');
         else max.declined++;
@@ -108,7 +108,7 @@ function observePool(t: TestContext) {
       requesting = previous;
     }
   };
-  historyPool.trim = function () {
+  historyPool.trim = function (...args) {
     // This pre-eviction reading includes the requested growth and every concurrent owner.
     const before = this.estimatedBytes;
     const at =
@@ -122,7 +122,7 @@ function observePool(t: TestContext) {
       max.overBudgetTrims++;
       sample(before, false, at);
     }
-    const accepted = trim.call(this);
+    const accepted = trim.call(this, ...args);
     // Below the limit trim is a no-op. After a reclaim only the resulting balance is admitted.
     const after = before <= this.budget ? before : this.estimatedBytes;
     max.reclaimed += before - after;

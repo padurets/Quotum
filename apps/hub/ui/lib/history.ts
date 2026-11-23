@@ -1,7 +1,7 @@
 import type {HistoryReadOwner} from './periodTransport';
 import {onDataFilters, filtersReady, effectiveFilters} from './filterSelection';
 import {executableWorkFilters, workFilter, type WorkFilter} from '../../server/domain/dataFilters';
-import type {HistoryPool} from './historyPool';
+import type {HistoryMember, HistoryPool} from './historyPool';
 import {historyPool} from './historyPool';
 import {boardPeriod, followPeriod, type ActivityFrame} from './period';
 import {workChange} from './workChanges';
@@ -1880,8 +1880,8 @@ export class HistoryStore {
             }
             // Keep every previously prepared version, including this pin's earlier
             // chunk, while its successor allocates alongside it.
-            const admit = (extra: number) =>
-              !store.pool || store.pool.reserve(flight, pinnedBytes + extra);
+            const admit = (extra: number, allocation = 0) =>
+              !store.pool || store.pool.reserve(flight, pinnedBytes + extra, allocation);
             // The new empty tile header already belongs to the grid.
             if (!admit(0)) {
               response.limited = true;
@@ -2213,7 +2213,7 @@ export class HistoryStore {
 
   evictionCandidates() {
     const target = this.interest ? this.plotTarget() : this.target();
-    const candidates: {bytes: number; shownAt: number; priority?: 0; drop: () => void}[] = [];
+    const candidates: ReturnType<HistoryMember['evictionCandidates']> = [];
     for (const [cell, tiles] of this.grids)
       for (const [n, tile] of tiles) {
         if (this.reservations.has(`${cell}:${n}`)) continue;
@@ -2234,15 +2234,18 @@ export class HistoryStore {
               bytes,
               shownAt: 0,
               priority: 0,
-              drop: () => {
+              drop: available => {
                 const current = this.interest ? this.plotTarget() : this.target();
-                const headroom = this.pool
-                  ? this.pool.budget - this.pool.estimatedBytes
-                  : this.budget - this.estimatedBytes;
+                const headroom =
+                  available ??
+                  (() =>
+                    this.pool
+                      ? this.pool.budget - this.pool.estimatedBytes
+                      : this.budget - this.estimatedBytes);
                 if (
                   tiles.get(n) !== tile ||
                   this.reservations.has(`${cell}:${n}`) ||
-                  !tile.prefixBytes(before, headroom) ||
+                  !tile.prefixBytes(before, headroom()) ||
                   cell !== current.cell ||
                   before >
                     Math.min(
@@ -2257,7 +2260,7 @@ export class HistoryStore {
                 this.plotVersion = -1;
                 this.plotChunks.delete(`${cell}:${tile.from}`);
                 this.plotChunks.delete(`native:${cell}:${tile.from}`);
-                const freed = tile.discardPrefix(before, headroom);
+                const freed = tile.discardPrefix(before, headroom());
                 this.schedule();
                 if (!freed) return;
                 this.nativeProof = null;

@@ -91,11 +91,11 @@ export function historyPressureScript() {
       if(attached||!(value.members instanceof Set)||value.members.size)throw Error();
       attached=true;pool=value;
       const originalReserve=pool.reserve;
-      pool.reserve=function(flight,amount){
+      pool.reserve=function(flight,amount,...args){
         const previous=current,previousBytes=currentBytes,previousId=currentId,previousPressure=pressured,previousCritical=critical,previousPreparing=currentPreparing;
         current=flight;currentBytes=amount;currentId=++serial;pressured=false;critical=null;currentPreparing=observe(()=>{const value=flight?.preparing;return typeof value==='boolean'?value:null;});
         let accepted=null,complete=false;
-        try{const result=originalReserve.call(this,flight,amount);accepted=result;complete=true;return result;}
+        try{const result=originalReserve.call(this,flight,amount,...args);accepted=result;complete=true;return result;}
         finally{
           // Pool trimming has unwound, so bounded stacks reach the actual caller.
           if(pressured){if(saturated)omitted++;else observe(()=>{capture();emit('reserve-critical',{reserveId:currentId,flightId:id(flight),owner:owner(flight),bytes:number(amount),accepted,complete,...critical});});}
