@@ -25,20 +25,21 @@ export class Trackers {
 
   static async start(scenes: Scene[], start: number): Promise<Trackers> {
     const at = (t: number) => new Date(start + t).toISOString();
+    const state: {trackers?: Trackers} = {};
     const server = createServer((request, response) => {
       const [, scene, tracker] = request.url?.split('?')[0].split('/') ?? [];
       const found = scenes.find(s => s.id === scene);
       if (!found || (tracker !== 'codex' && tracker !== 'claude'))
         return void response.writeHead(404).end();
-      trackers.asked++;
+      if (state.trackers) state.trackers.asked++;
       answer(found[tracker](at), request.socket, response);
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-    const trackers = new Trackers(
+    state.trackers = new Trackers(
       server,
       `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     );
-    return trackers;
+    return state.trackers;
   }
 
   /** Where the hub reads the trackers for a scene. */

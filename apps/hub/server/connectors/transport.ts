@@ -97,10 +97,11 @@ export class ConnectorTransport {
     const search = new URLSearchParams(query).toString();
     return new Promise((resolve, reject) => {
       let done = false;
+      const timers: {timeout?: ReturnType<typeof setTimeout>} = {};
       const finish = (code: SecretCode | SecretError | null, value?: unknown) => {
         if (done) return;
         done = true;
-        clearTimeout(timer);
+        clearTimeout(timers.timeout);
         signal?.removeEventListener('abort', cancel);
         if (code) reject(code instanceof SecretError ? code : new SecretError(code));
         else resolve(value);
@@ -158,7 +159,7 @@ export class ConnectorTransport {
         },
       );
       req.on('error', () => finish('connector_failed'));
-      const timer = setTimeout(() => {
+      timers.timeout = setTimeout(() => {
         finish('connector_timeout');
         req.destroy();
       }, this.timeoutMs);

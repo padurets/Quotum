@@ -153,7 +153,7 @@ export const SESSION_ACTIVITY_SCENES = [
  * failures).
  *
  * Every entry says in `expect` what it shows, in codes the dashboard's own rules
- * (hub/ui/lib) compute from what the hub answers: `npm test` brings the set up on a hub
+ * (apps/hub/ui/lib) compute from what the hub answers: `pnpm test` brings the set up on a hub
  * and checks each code over its span while time runs (the showcase, at `start`), so an
  * entry that stops showing its state fails the test. What only eyes can tell (an ellipsis, a colour, two cards in one
  * row) is `look`, checked by hand on the running board, in both languages.

@@ -20,7 +20,7 @@ const declaration = file.statements.find(
   node => ts.isFunctionDeclaration(node) && node.name?.text === 'nativePostmortemControl',
 )!;
 const code = ts.transpileModule(
-  declaration.getText(file).replace('import.meta.dirname', "'/fixture/hub/bench'") +
+  declaration.getText(file).replace('import.meta.dirname', "'/fixture/apps/hub/bench'") +
     '\nglobalThis.run=nativePostmortemControl;',
   {
     compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022},

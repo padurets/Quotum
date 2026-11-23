@@ -10,7 +10,7 @@ export type Catalog = Record<Key, Message>;
 
 /**
  * The languages of the dashboard. Adding one takes a catalog file next to `en.ts`
- * and a line here; `npm test` checks that it translates every key with the same
+ * and a line here; `pnpm test` checks that it translates every key with the same
  * placeholders and has the plural forms its language needs.
  */
 export const LOCALES = {
