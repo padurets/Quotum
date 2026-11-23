@@ -129,6 +129,73 @@ test('returning to the value replay start charges its shared fields once in curr
   }
 });
 
+test('value admission covers the decoded and captured wrappers together until handoff', async t => {
+  t.mock.method(Date, 'now', () => NOW);
+  const h = await fixture({personal: true, fixed: true});
+  t.after(() => h.close());
+  const {period, source} = h,
+    last = period.getValue(source),
+    {states: _, ...native} = last.value,
+    start = {...native, validFor: {from: NOW - H, to: NOW + H}},
+    wire = withValueStates(
+      start,
+      [{...start, validFor: {from: NOW - 2 * H, to: NOW - H}}],
+      () => {},
+    ),
+    captured = {...start, states: {...wire.states!, start}},
+    bytes = (value: unknown) => JSON.stringify(value).length * 3,
+    shared = (value: unknown) => (value ? Math.max(0, bytes(value) - 8) : 0),
+    nativeShared = [
+      start.windows,
+      start.meters,
+      start.keys,
+      start.creditBalance,
+      start.validFor,
+    ].reduce<number>((sum, field) => sum + shared(field), 0),
+    reading = [{value: captured, basis: last.basis, loading: false, error: 'history_limit'}],
+    decodedWrapper =
+      bytes(wire) - nativeShared - shared(wire.states!.paths) - shared(wire.states!.pieces),
+    peak = bytes(reading) - nativeShared + decodedWrapper;
+  const rows = [wire];
+  for (const room of [peak - 1, peak]) {
+    const section = {state: 'complete', basis: last.basis, value: rows},
+      charges: number[] = [];
+    await period.applyReply({basis: last.basis, values: section}, period.intent(), (n: number) => {
+      charges.push(n);
+      return n <= room;
+    });
+    assert.equal(charges[0], peak);
+    const current = period.getValue(source);
+    if (room < peak) {
+      assert.equal(current.error, 'history_limit');
+      assert.equal(current.value, last.value);
+      assert.equal(section.value, rows);
+    } else {
+      assert.equal(current.error, null);
+      assert.equal(current.value.windows, wire.windows);
+      assert.equal(current.value.states?.start?.windows, wire.windows);
+      assert.equal(section.value.length, 0);
+      assert.deepEqual(rows, [wire]);
+      assert.equal(wire.states!.start, undefined);
+    }
+  }
+  const current = period.getValue(source).value,
+    serialized = [...period.values],
+    copy = serialized.map(([id, r]) => [id, id === source ? {...r, value: wire} : r]);
+  period.workNeeded = true;
+  h.selectRange({from: NOW - 3 * H, to: NOW - 2 * H});
+  const cached = [...period.valueCache.values()].find(
+    entry => entry.values.get(source)?.value === current,
+  );
+  assert.ok(cached);
+  assert.equal(cached.copyBytes, bytes(copy), 'a new start preserves the original raw copy bound');
+  assert.equal(
+    cached.metadata,
+    bytes(serialized) - serialized.reduce((n, [, r]) => n + bytes(r.value), 0),
+  );
+  await flush();
+});
+
 function measurement(
   h: Awaited<ReturnType<typeof fixture>>,
   at: number,
@@ -306,7 +373,7 @@ for (const pinned of [false, true])
     h.selectRange({from: NOW - 30 * 24 * H, to: NOW + H});
     await flush();
     const before = sources.map(id => period.getValue(id).value);
-    assert.ok(before.every(v => v.states && !v.states.start && !v.windows[0].stale));
+    assert.ok(before.every(v => v.windows === v.states?.start?.windows && !v.windows[0].stale));
     if (pinned) {
       for (const entry of period.evictionCandidates()) entry.drop();
       member.estimatedBytes = pool.budget - pool.estimatedBytes;
@@ -348,11 +415,9 @@ for (const pinned of [false, true])
       } else {
         assert.equal(error, null);
         assert.ok(value.windows.every(w => w.stale));
-        assert.notEqual(value.states, raw.states);
-        assert.equal(value.states!.pieces, raw.states!.pieces);
-        assert.equal(value.states!.paths, raw.states!.paths);
+        assert.equal(value.states, raw.states);
         assert.ok(cached!.storage.has(raw) && cached!.storage.has(raw.states));
-        assert.ok(!period.storage.has(raw) && !period.storage.has(raw.states!));
+        assert.ok(!period.storage.has(raw) && period.storage.has(raw.states!));
       }
     }
     const bytes = pool.estimatedBytes,
@@ -362,6 +427,122 @@ for (const pinned of [false, true])
     assert.equal(pool.estimatedBytes, bytes);
     assert.equal(period.storage.size, roots.size);
     for (const [root, size] of roots) assert.equal(period.storage.get(root), size);
+  });
+
+for (const retained of [false, true])
+  test(`the first 32-window clock update keeps warm history with a ${retained ? 'retained' : 'single'} owner`, async t => {
+    t.mock.method(Date, 'now', () => NOW);
+    const h = await fixture({personal: true, clocked: true, tableOnly: true}),
+      {period, pool} = h;
+    t.after(() => h.close());
+    const iso = (at: number) => new Date(at).toISOString(),
+      account = '1'.padStart(24, '0'),
+      source = h.store.source('codex', account, NOW);
+    const accepted = h.hub.ingest.accept(
+      {kind: 'device', device: h.directory.deviceById(h.device)!},
+      {
+        version: 1,
+        agent: 'quotum/0.7.0',
+        machine: {id: 'machine-0123456789', name: 'Work laptop', os: 'linux', arch: 'x86_64'},
+        sentAt: iso(NOW),
+        snapshots: [
+          {
+            provider: 'codex',
+            account,
+            observedAt: iso(NOW - 30_000),
+            via: 'app-server',
+            staleAfterMs: 60_000,
+            windows: Array.from({length: 32}, (_, i) => ({
+              id: 'win' + i,
+              kind: 'weekly',
+              label: 'q'.repeat(120),
+              minutes: 10080,
+              usedPercent: 17,
+              resetsAt: iso(NOW + H),
+            })),
+          },
+        ],
+      },
+      NOW,
+    );
+    assert.equal(accepted.accepted, 1);
+    h.events.flush();
+    await flush();
+    const send = period.transport.send.bind(period.transport);
+    let raw: PeriodValues | undefined;
+    period.transport.send = async (...args) => {
+      const reply = await send(...args);
+      if (reply.values?.state === 'complete') raw = reply.values.value.find(v => v.id === source);
+      return reply;
+    };
+    h.selectRange({from: NOW - 30 * 24 * H, to: NOW + H});
+    await flush();
+    const wire = raw,
+      prior = period.getValue(source).value;
+    assert.ok(wire?.states && prior.windows.every(w => !w.stale));
+    period.transport.send = send;
+    if (retained) {
+      const view = h.directory.view(h.board);
+      h.directory.saveView(
+        h.board,
+        {
+          ...view,
+          shown: [...view.shown, 'budget-history'],
+          hidden: view.hidden.filter(k => k !== 'budget-history'),
+        },
+        h.alice.id,
+        NOW + 1,
+      );
+      h.events.flush();
+      await flush();
+    }
+    const chart = await drawings(h),
+      away = {from: NOW - 6 * H, to: NOW - 5 * H};
+    const draw = async (range: typeof away) => {
+      chart.loader.choose('1h', range);
+      chart.runScheduled();
+      await flush();
+      chart.runScheduled();
+      await flush();
+    };
+    await draw(away);
+    await draw({from: NOW - H, to: NOW});
+    if (!retained) for (const entry of period.evictionCandidates()) entry.drop();
+    const coOwner = [...period.retained.values()].find(entry => entry.storage.has(prior));
+    assert.equal(!!coOwner, retained);
+    const warm = chart.loader.estimatedBytes,
+      member = {
+        estimatedBytes: pool.budget - pool.estimatedBytes - 64_000,
+        evictionCandidates: () => [],
+      };
+    assert.ok(chart.loader.evictionCandidates().length);
+    pool.register(member);
+    try {
+      h.elapseTo(NOW + 31_000);
+      h.clock.wakeDue();
+      const {value, error} = period.getValue(source);
+      assert.equal(error, null);
+      assert.equal(value.windows.length, 32);
+      assert.ok(value.windows.every(w => w.stale && w.used === 17));
+      assert.equal(chart.loader.estimatedBytes, warm);
+      if (coOwner) assert.ok([...period.retained.values()].includes(coOwner));
+      assert.equal(wire.states.start, undefined, 'the original replay program stays unchanged');
+      assert.equal(prior.windows, wire.windows);
+      assert.equal(value.states, prior.states);
+      assert.equal(value.states!.start!.windows, wire.windows);
+      assert.equal(value.states!.pieces, wire.states.pieces);
+      assert.equal(value.states!.paths, wire.states.paths);
+      const bytes = pool.estimatedBytes;
+      assert.ok(bytes <= pool.budget);
+      period.measureBytes();
+      assert.equal(pool.estimatedBytes, bytes);
+      const requests = h.requests.length;
+      await draw(away);
+      assert.equal(h.requests.length, requests);
+    } finally {
+      pool.unregister(member);
+      chart.close();
+    }
   });
 
 test('a late clock replays beside a retained owner without evicting a warm chart', async t => {

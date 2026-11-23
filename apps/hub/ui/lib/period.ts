@@ -379,6 +379,23 @@ class BoardPeriod {
   private storageBytes(storage: Map<object, number>) {
     return [...storage.values()].reduce((sum, bytes) => sum + bytes, 0);
   }
+  private readonly startFields = [
+    'windows',
+    'meters',
+    'keys',
+    'creditBalance',
+    'validFor',
+  ] as const;
+  private readonly addedStartBytes = new WeakMap<PeriodValues, number>();
+
+  private sharedStartBytes(start: Omit<PeriodValues, 'states'>) {
+    let shared = 0;
+    for (const field of this.startFields) {
+      const payload = start[field];
+      if (payload) shared += Math.max(0, JSON.stringify(payload).length * 3 - 8);
+    }
+    return shared;
+  }
   private valueSizes(value: PeriodValues) {
     const states = value.states,
       // Replays keep the immutable program by reference. Its slot and property still
@@ -387,15 +404,26 @@ class BoardPeriod {
       body =
         JSON.stringify({...value, states: undefined}).length * 3 +
         (states ? ',"states":'.length * 3 + 8 : 0),
-      fields = ['windows', 'meters', 'keys', 'creditBalance', 'validFor'] as const,
-      start = states?.start;
-    let shared = 0;
-    if (start && fields.every(field => value[field] === start[field]))
-      for (const field of fields) {
-        const payload = start[field];
-        if (payload) shared += Math.max(0, JSON.stringify(payload).length * 3 - 8);
-      }
+      start = states?.start,
+      shared =
+        start && this.startFields.every(field => value[field] === start[field])
+          ? this.sharedStartBytes(start)
+          : 0;
     return {owned: body - shared, proof, serialized: body + proof};
+  }
+  private captureValue(wire: PeriodValues, added: number) {
+    if (!added) return wire;
+    const {states, ...start} = wire;
+    const value = {...start, states: {...states!, start}};
+    // The wire representation omits this initial start. Entering another replay
+    // interval materializes a value that can have the same fields and a larger copy bound.
+    this.addedStartBytes.set(value, added);
+    return value;
+  }
+  private valueCopyBytes(values: Map<string, Reading<PeriodValues>>, serialized: number) {
+    for (const {value} of values.values())
+      if (value) serialized -= this.addedStartBytes.get(value) ?? 0;
+    return serialized;
   }
   private measureValues(values: Map<string, Reading<PeriodValues>>, storage: Map<object, number>) {
     let serialized = 0;
@@ -464,14 +492,14 @@ class BoardPeriod {
     ) {
       const values = new Map(this.values),
         storage = new Map<object, number>(),
-        copyBytes = JSON.stringify([...values]).length * 3,
-        metadata = copyBytes - this.measureValues(values, storage);
+        serialized = JSON.stringify([...values]).length * 3,
+        metadata = serialized - this.measureValues(values, storage);
       this.valueCache.set(periodKey(this.selection), {
         values,
         to: this.selection.to,
         validBefore: this.validBefore,
         bytes: metadata + this.storageBytes(storage),
-        copyBytes,
+        copyBytes: this.valueCopyBytes(values, serialized),
         storage,
         metadata,
         at: hubNow(),
@@ -543,7 +571,7 @@ class BoardPeriod {
                 6,
             0,
           ) +
-          JSON.stringify([...values.values()]).length * 3;
+          this.valueCopyBytes(values, JSON.stringify([...values.values()]).length * 3);
     this.valueCache.delete(periodKey(this.selection));
     const valid = (target: PeriodSelection) =>
       target.mode === 'range' ? target.to <= validBefore : validBefore === Infinity;
@@ -2202,11 +2230,32 @@ class BoardPeriod {
     }
     if (reply.sessions && reply.sessions.state !== 'error')
       staged.set('work', workBytes(reply.sessions.value, 0));
-    if (reply.values?.state === 'complete')
+    const addedStarts: number[] = [];
+    if (reply.values?.state === 'complete') {
+      const {value: wires, basis} = reply.values;
+      // The decoded values already own every payload. Pay for the reading and
+      // the extra start wrapper before binding those references for all consumers.
+      const readingBytes =
+        (JSON.stringify({value: null, basis, loading: false, error: 'history_limit'}).length - 4) *
+        3;
+      let wrappers = wires.length * readingBytes;
+      for (const wire of wires) {
+        if (!wire.states || wire.states.start) {
+          addedStarts.push(0);
+          continue;
+        }
+        const startBytes = JSON.stringify({...wire, states: undefined}).length * 3,
+          shell = startBytes - this.sharedStartBytes(wire);
+        addedStarts.push(startBytes + ',"start":'.length * 3);
+        // While the decoded section still owns its raw value and program, capture
+        // adds both value shells and a program sharing the paths and pieces arrays.
+        wrappers += shell * 2 + ',"states":{"paths":,"pieces":,"start":}'.length * 3 + 2 * 8;
+      }
       staged.set(
         'values',
-        JSON.stringify(reply.values.value).length * 3 + reply.values.value.length * 768,
+        JSON.stringify(wires).length * 3 + Math.max(wires.length * 768, wrappers),
       );
+    }
     if (reply.facets?.state === 'complete')
       staged.set('facets', this.facetBytes(reply.facets.value));
     if (reply.sourceWork && reply.sourceWork.state !== 'error')
@@ -2641,13 +2690,16 @@ class BoardPeriod {
           changed.add('quota');
           this.valuesNeeded = false;
           this.valuesProofEpoch = proofEpoch;
-          for (const value of reply.values.value)
-            this.setValue(value.id, {
-              value,
+          for (const [i, wire] of reply.values.value.entries())
+            this.setValue(wire.id, {
+              value: this.captureValue(wire, addedStarts[i]),
               basis: reply.values.basis,
               loading: false,
               error: null,
             });
+          // Only chart sections go back to drawing readers. Hand off the decoded
+          // value section before releasing its reservation or notifying subscribers.
+          reply.values.value = [];
         } else {
           this.valuesNeeded = false;
           for (const id of this.sourceIds)
@@ -3095,16 +3147,10 @@ class BoardPeriod {
         changed = true;
         const size = this.valueSizes(value),
           old = this.storage.get(prior)!;
-        reserve(size.owned + (value.states && !this.storage.has(value.states) ? size.proof : 0));
-        // The first replay captures its start in a new program wrapper. Each
-        // retained snapshot keeps its own owners in a separate storage map.
-        if (prior.states !== value.states) {
-          if (prior.states) this.releaseValueProgram(id, prior.states);
-          if (value.states && !this.storage.has(value.states)) {
-            this.storage.set(value.states, size.proof);
-            this.bytes += size.proof;
-          }
-        }
+        reserve(size.owned);
+        // Expiring a status without entering a replay piece keeps the wire copy bound.
+        const added = value.validFor === prior.validFor && this.addedStartBytes.get(prior);
+        if (added) this.addedStartBytes.set(value, added);
         this.storage.delete(prior);
         this.storage.set(value, size.owned);
         this.bytes += size.owned - old;
@@ -3122,12 +3168,6 @@ class BoardPeriod {
     }
     if (changed || now >= this.nativeDue) this.publishProjection();
     return true;
-  }
-  private releaseValueProgram(id: string, program: NonNullable<PeriodValues['states']>) {
-    for (const [other, reading] of this.values)
-      if (other !== id && reading.value?.states === program) return;
-    this.bytes -= this.storage.get(program)!;
-    this.storage.delete(program);
   }
   private updateWork(now: number, fromClock: boolean) {
     this.evaluatedAt = now;
