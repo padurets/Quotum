@@ -880,9 +880,11 @@ them), kept for 90 days.
   reuse; the page redacts expired facts from tiles and readouts with its shared clock,
   without HTTP or a physical database prune. A first accessible observation means
   first known to this reader. Plan names count towards the existing byte budgets.
-  The page keeps packed buffers within an
-  estimated 15 MiB, protecting the frame on screen and removing dictionaries no retained
-  cell uses after replacement. A fixed frame proven reusable for an incoming selection
+  The page keeps packed buffers within an estimated 15 MiB. Each quota series stores
+  the span from its first to its last occupied cell in a tile. Gaps keep their cell
+  positions, and explicit availability deadlines use the original tile indexes.
+  The pool protects the frame on screen and releases dictionary entries when their
+  last retained cell is replaced. A fixed frame proven reusable for an incoming selection
   becomes recently used before calendar preparation; it remains evictable under the
   same bound. An exact, valid live cache entry receives the same priority.
   Session references are opaque and
@@ -1281,10 +1283,14 @@ authenticated read-only period POST. Their grids remain independent and share a
 bounded work read. Composite drawing cells contain financial data; work estimates
 use the common period tape and curves. Ordinary finance-only history keeps its
 existing path and cache dependencies, and the legacy GET history route remains available.
-Money cells are packed separately, with small header and interval leaves; unchanged
-cells share their byte buffers during private staging. Packing, decoding and composition
-yield between leaves and cells through the shared preparation scheduler. Monetary
-points also enter the progressive plot during a gesture while table totals retain the
+Each monetary series packs its cells into one byte buffer with an index for cell
+boundaries and dictionary references. Cells share rate and unit metadata, and keep
+each original amount and observation time with the reading. Private tile versions
+share unchanged series. Reclaiming an eligible prefix copies the surviving suffix
+into smaller buffers and releases the discarded cells' metadata references.
+Packing, decoding and composition yield between leaves and cells through the shared
+preparation scheduler. Monetary points enter the progressive plot during a gesture
+while table totals retain the
 last complete answer. A monetary visible frame that cannot fit the existing 15 MiB
 tile estimate reports the history limit before publication, without dropping data.
 The plot holds raw monetary cells and the visible period separately. Spending
@@ -2397,6 +2403,9 @@ evicting reusable history. New evidence keeps ordinary admission and eviction.
 Financial and work ledgers share their immutable native observations only when every
 reading agrees. Retention preserves that shared suffix, and the pool charges its storage
 once; differing observations and each ledger's spans retain their own charges.
+Restoring the starting value of a fixed period can reuse its measurement arrays and
+validity bounds. The pool charges those shared fields once and counts the replay
+wrappers and independently copied values separately.
 
 Activity has one numerical cohort, defined by shared work filters. Its baseline and
 bar metrics preserve interval union and distinct-session semantics; a legend preview

@@ -483,9 +483,11 @@ test('selected activity COW refusal retains native buffers and recovers under th
     for (let from = read.from; from < read.to;) {
       const to = Math.min(read.to, tileEnd(tileOf(from, read.cell), read.cell)),
         chunk = empty(from, to);
-      chunk.series = [
-        {source: 's', window: 'w', hold: H, open: null, cells: [[0, remaining, 0, 0]]},
-      ];
+      // The native refresh replaces values within an already occupied span.
+      const last = (to - from) / read.cell - 1;
+      const cells: Chunk['series'][number]['cells'] = [[0, remaining, 0, 0]];
+      if (last > 0) cells.push([last, remaining, 0, 0]);
+      chunk.series = [{source: 's', window: 'w', hold: H, open: null, cells}];
       chunk.activity = {
         sessions: [['a', 's', 'A', 'device']],
         devices: {device: 'Device'},
@@ -1047,7 +1049,8 @@ test('monetary drawing and quantity snapshots retire together across authority a
 });
 
 test('separately bounded monetary responses cannot publish an over-budget assembled frame', async () => {
-  const budget = 50000,
+  // Each wire chunk fits, while the whole visible month exceeds this pool.
+  const budget = 20_000,
     h = harness(budget);
   h.store.setMeters({unit: 'USD', ids: [['s', 'balance']]});
   h.store.choose('30d', null);
@@ -3325,7 +3328,8 @@ test('every preparation slice accounts for private tile growth, including cancel
   };
   const original = prototype.mergePrepared;
   for (const outcome of ['complete', 'limit', 'cancel'] as const) {
-    const pool = new HistoryPool(outcome === 'complete' ? 1_000_000 : 400_000);
+    // The smaller pool fits all quota series and only part of the monetary frame.
+    const pool = new HistoryPool(outcome === 'complete' ? 1_000_000 : 100_000);
     const q = harness(undefined, undefined, 'quota', pool),
       b = cooperativeHarness(pool, 'budget');
     const quotaSources = Array.from({length: 16}, (_, i) => `q${i}`),
