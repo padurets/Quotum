@@ -1032,11 +1032,14 @@ keeps exact decimal integer amounts, historical allowance, unit and conversion e
 An explicitly removed key cap remains absent after its own observation time; later
 partial inventories or malformed limits do not restore an older scale. A subsequent
 valid cap observation restores it. These transitions obey the same exclusive right edge.
-Historical meters and `creditBalance` may carry an exclusive `validUntil`, derived from
-their retained availability spans. When present, it governs freshness instead of
-reapplying the original `staleAfterMs` to `at`: that timestamp remains an actual retained
-observation anchor, even inside compressed heartbeat spans. Without `validUntil`, the
-ordinary observation-time TTL applies. Availability does not prove accounting coverage
+Historical meters, keys and `creditBalance` may carry an exclusive `validUntil` derived
+from their retained availability spans. The observation timestamp `at` remains an actual
+retained anchor, including inside a compressed heartbeat span. A historical key carries
+`validUntil` when the confirmed end of that span gives it a later deadline than
+`at + staleAfterMs + 1`. At the deadline its presence becomes `missing`. A span end at
+or beyond the evidence cut cannot extend the key's availability. With the field omitted,
+the deadline is `at + staleAfterMs + 1`, including for older replies.
+Availability does not prove accounting coverage
 beyond the last confirmed observation, or admit a new observation exactly at `to`.
 The same financial grant and its observation anchor govern cells, tapes, values and
 cursor reuse. Credit coefficients retain their original scale; converted values use

@@ -457,8 +457,11 @@ test('future context endpoints cannot certify key or unlimited-credit freshness,
       assert.deepEqual(cached.creditBalance, expected.creditBalance);
       assert.ok(cached.validFor!.from <= edge && edge < cached.validFor!.to);
     }
-    assert.equal(fresh.find(v => v.id === wallet)!.keys[0].at, at);
-    assert.equal(fresh.find(v => v.id === wallet)!.keys[0].presence, 'missing');
+    const key = fresh.find(v => v.id === wallet)!.keys[0];
+    assert.equal(key.at, at);
+    assert.equal(key.staleAfterMs, 0);
+    assert.equal(Object.hasOwn(key, 'validUntil'), false);
+    assert.equal(key.presence, 'missing');
     assert.equal(fresh.find(v => v.id === funds)!.creditBalance!.at, at);
     assert.equal(fresh.find(v => v.id === funds)!.creditBalance!.validUntil, at + 1);
   }

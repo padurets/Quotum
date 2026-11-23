@@ -1,7 +1,7 @@
 import {ValueChanges, applyValueChanges, type ValuePath, type ValueChange} from './valueChanges.js';
-import type {CreditBalanceState} from './resources.js';
+import {observationDeadline, type CreditBalanceState, type ObservationTiming} from './resources.js';
 import type {Win} from './quota.js';
-import type {KeyPart, Meter} from './meters.js';
+import {keyPresenceAt, type KeyPart, type Meter} from './meters.js';
 import {drain, type Preparation} from './prepare.js';
 
 export type WindowValue = Win & {observedAt: number; validUntil: number; stale: boolean};
@@ -11,7 +11,7 @@ export type PeriodValues = {
   provider: string;
   windows: WindowValue[];
   meters: Meter[];
-  keys: KeyPart[];
+  keys: (KeyPart & ObservationTiming)[];
   creditBalance?: CreditBalanceState;
   validFor?: {from: number; to: number};
   states?: {
@@ -140,16 +140,8 @@ export function periodValueNow(
     return {...item, [key]: next};
   };
   const windows = updateItems(known.windows, w => update(w, 'stale', at >= w.validUntil)),
-    meters = updateItems(known.meters, m =>
-      update(m, 'stale', at >= (m.validUntil ?? m.at + m.staleAfterMs + 1)),
-    ),
-    keys = updateItems(known.keys, k =>
-      update(
-        k,
-        'presence',
-        k.presence === 'missing' || at >= k.at + k.staleAfterMs + 1 ? 'missing' : 'observed',
-      ),
-    );
+    meters = updateItems(known.meters, m => update(m, 'stale', at >= observationDeadline(m))),
+    keys = updateItems(known.keys, k => update(k, 'presence', keyPresenceAt(k, at)));
   return windows === known.windows && meters === known.meters && keys === known.keys
     ? known
     : {...known, windows, meters, keys};
@@ -158,8 +150,8 @@ export function periodValueChangesAt(value: PeriodValues, now: number): number |
   const next = Math.min(
     ...[
       ...value.windows.map(w => w.validUntil),
-      ...value.meters.map(m => m.validUntil ?? m.at + m.staleAfterMs + 1),
-      ...value.keys.map(k => k.at + k.staleAfterMs + 1),
+      ...value.meters.map(observationDeadline),
+      ...value.keys.map(observationDeadline),
       ...(value.states?.pieces.flatMap(([from, to]) => [from, to]) ?? []),
     ].filter(at => at > now),
   );

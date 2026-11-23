@@ -7,7 +7,7 @@ import {
 import {displayMeter, convertedRemaining} from '../../server/domain/currencyPresentation';
 import {monetaryOf, providerOf, supportsBudget} from '../../server/domain/providers';
 import type {Card} from './types';
-import type {Meter, KeyPart} from '../../server/domain/meters';
+import {keyPresenceAt, type Meter, type KeyPart} from '../../server/domain/meters';
 export {compareKeys} from '../../server/domain/meters';
 import type {SourceAccess} from '../../server/secrets/credentials';
 import {observationDeadline} from '../../server/domain/resources';
@@ -252,10 +252,7 @@ export function budgetView(
     ? keys.flatMap(part => {
         const meter = byId.get(`key:${part.id}:cap`);
         const {id, name, disabled, expiresAt, includeByok} = part;
-        const presence =
-          statusAt !== undefined && statusAt >= observationDeadline(part)
-            ? ('missing' as const)
-            : part.presence;
+        const presence = statusAt === undefined ? part.presence : keyPresenceAt(part, statusAt);
         const shown = meter && displayMeter(meter, source.id, context);
         return meter?.kind === 'cap' && meter.limit !== null
           ? [
