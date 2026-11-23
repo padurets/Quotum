@@ -142,6 +142,25 @@ jobs:
       - run: make test
       - run: make build
       - run: shellcheck --shell=sh desktop/run-in-container.sh
+      - name: Verify Dockerfile and workflow toolchain pins match Devkit
+        run: |
+          set -euo pipefail
+          . .devkit/runtime/toolchains.env
+          . .devkit/runtime/pnpm.env
+          rust_image=$(awk '/^FROM / {print $2; exit}' .devkit/runtime/rust.Dockerfile)
+          rust_version=$(awk -F'"' '/^channel = / {print $2; exit}' apps/agent/rust-toolchain.toml)
+          grep -Fq "FROM ${DEVKIT_NODE_IMAGE} AS node" desktop/Dockerfile.check
+          grep -Fq "FROM ${rust_image}" desktop/Dockerfile.check
+          grep -Fq "rustup component add --toolchain ${rust_version} clippy rustfmt" desktop/Dockerfile.check
+          grep -Fq "ARG PNPM_VERSION=${DEVKIT_PNPM_VERSION}" desktop/Dockerfile.check
+          grep -Fq "ARG PNPM_VERSION=${DEVKIT_PNPM_VERSION}" apps/hub/Dockerfile
+          for wf in .github/workflows/ci.yml .github/workflows/desktop.yml; do
+            versions=$(awk '/uses: pnpm\/action-setup@/ {flag=1; next} flag && /version:/ {print $2; flag=0}' "$wf")
+            test -n "$versions"
+            for v in $versions; do
+              test "$v" = "$DEVKIT_PNPM_VERSION"
+            done
+          done
 
   hub:
     if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref) }}
@@ -334,8 +353,10 @@ jobs:
           export QUOTUM_CHROME="${QUOTUM_C3_CHROME:-$(command -v google-chrome)}"
           if [[ "$FRESH_HISTORY" == 1 ]]; then
             node --import tsx bench/historyFreshControl.mjs
+          elif [[ "$QUOTUM_BENCH_PM" == pnpm ]]; then
+            pnpm run bench --ci --scope history
           else
-            "${QUOTUM_BENCH_PM}" run bench -- --ci --scope history
+            npm run bench -- --ci --scope history
           fi
         env:
           FRESH_HISTORY: ${{ inputs.history_scroll_control && !inputs.history_preinput_binding && '1' || '' }}
@@ -438,7 +459,13 @@ jobs:
           git -C "$GITHUB_WORKSPACE" archive 9e4b1422961b8a3d5b9e2f9894d3db5584c65a43 hub | tar -x -C "$baseline"
           npm ci --prefix "$baseline/hub"
           npm run build --prefix "$baseline/hub"
-      - run: QUOTUM_CHROME="$(command -v google-chrome)" "${QUOTUM_BENCH_PM}" run bench -- --ci --scope "${BENCH_SCOPE}"
+      - run: |
+          export QUOTUM_CHROME="$(command -v google-chrome)"
+          if [[ "$QUOTUM_BENCH_PM" == pnpm ]]; then
+            pnpm run bench --ci --scope "${BENCH_SCOPE}"
+          else
+            npm run bench -- --ci --scope "${BENCH_SCOPE}"
+          fi
         working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         env:
           BENCH_SCOPE: ${{ inputs.combined_benchmark && 'all' || inputs.native_trace && inputs.native_target == 'quota/24h' && 'panning' || (inputs.native_trace || inputs.native_profile || inputs.caption_control) && 'dashboard' || 'updates' }}
@@ -477,7 +504,7 @@ jobs:
       - working-directory: .
         run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm run build
-      - run: QUOTUM_CHROME="$(command -v google-chrome)" pnpm run bench -- --ci --scope panning
+      - run: QUOTUM_CHROME="$(command -v google-chrome)" pnpm run bench --ci --scope panning
         env:
           QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-bench-panning
       - name: Benchmark evidence
@@ -541,7 +568,13 @@ jobs:
           TRACE_ONLY: ${{ inputs.trace_only }}
           ORIGINAL_TIMING: ${{ inputs.original_timing }}
       # Match the canonical dashboard; history traffic has its own independent job.
-      - run: QUOTUM_CHROME="$(command -v google-chrome)" "${QUOTUM_BENCH_PM}" run bench -- --ci --scope dashboard
+      - run: |
+          export QUOTUM_CHROME="$(command -v google-chrome)"
+          if [[ "$QUOTUM_BENCH_PM" == pnpm ]]; then
+            pnpm run bench --ci --scope dashboard
+          else
+            npm run bench -- --ci --scope dashboard
+          fi
         working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         env:
           QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.trace_only && 'trace' || inputs.original_timing && 'profile' || '' }}
@@ -784,7 +817,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install the pinned agent toolchain
-        run: rustup toolchain install --profile minimal --no-self-update
+        shell: bash
+        run: |
+          rustup toolchain install --profile minimal --no-self-update
+          read -r tc _ < <(rustup show active-toolchain)
+          rustup default "${tc%$'\r'}"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: apps/agent

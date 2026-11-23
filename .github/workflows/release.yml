@@ -78,9 +78,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install cross-compilation targets for the pinned agent toolchain
+        shell: bash
         working-directory: apps/agent
         run: |
           rustup toolchain install --profile minimal --no-self-update
+          read -r tc _ < <(rustup show active-toolchain)
+          rustup default "${tc%$'\r'}"
           rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-apple-darwin aarch64-apple-darwin x86_64-pc-windows-gnu
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:

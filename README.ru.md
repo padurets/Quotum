@@ -315,7 +315,7 @@ docker logs quotum            # покажет код установки для 
 [deploy/compose.yaml](deploy/compose.yaml) ставит хаб за Caddy, который сам получает
 сертификат: `QUOTUM_DOMAIN=quotum.example.com docker compose up -d`.
 
-Без Docker: склонируйте репозиторий, затем `npm ci && cd apps/hub && npm run build && npm start` (Node.js 24 или новее) —
+Без Docker: склонируйте репозиторий, затем `pnpm install --frozen-lockfile && cd apps/hub && pnpm run build && pnpm start` (Node.js 24 или новее и pnpm) —
 хаб слушает `127.0.0.1:8080` и печатает код установки в терминал.
 
 **2. Поставьте агент и посмотрите лимиты этой машины.**
@@ -801,7 +801,7 @@ Caddy, браузер держит живыми до восьми досок с�
 - `pnpm run demo` в `apps/hub/` (после `pnpm run build`) — живая доска на одноразовых данных со
   всеми состояниями, которые знает дашборд и которые держатся на исправном хабе; сеть и
   аккаунты не нужны, Ctrl+C её останавливает и ничего после себя не оставляет.
-  `pnpm run demo -- showcase` — доска с картинок выше. `pnpm run demo -- money --still`
+  `pnpm run demo showcase` — доска с картинок выше. `pnpm run demo money --still`
   показывает подписки рядом со всеми денежными кейсами на личной доске Ana.
 
 Структура проекта:

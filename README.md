@@ -310,7 +310,7 @@ setting up. For HTTPS on a domain of your own, [deploy/compose.yaml](deploy/comp
 runs the hub behind Caddy, which gets the certificate by itself:
 `QUOTUM_DOMAIN=quotum.example.com docker compose up -d`.
 
-Without Docker: clone the repository, then `npm ci && cd apps/hub && npm run build && npm start` (Node.js 24 or newer),
+Without Docker: clone the repository, then `pnpm install --frozen-lockfile && cd apps/hub && pnpm run build && pnpm start` (Node.js 24 or newer, and pnpm),
 which listens on `127.0.0.1:8080` and prints the setup code to the terminal.
 
 **2. Install the agent and look at this machine's limits.**
@@ -786,8 +786,8 @@ over plain HTTP/1.1, about five.
   [SECURITY.md](SECURITY.md): reporting a vulnerability privately.
 - `pnpm run demo` in `apps/hub/` (after `pnpm run build`): a live board on throwaway data with
   every state the dashboard knows that lasts on a working hub, no network or account
-  needed; Ctrl+C stops it and leaves nothing behind. `pnpm run demo -- showcase` is the
-  board of the images above. `pnpm run demo -- money --still` puts subscriptions beside
+  needed; Ctrl+C stops it and leaves nothing behind. `pnpm run demo showcase` is the
+  board of the images above. `pnpm run demo money --still` puts subscriptions beside
   every monetary case on Ana's personal board.
 
 Project layout:
