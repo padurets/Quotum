@@ -102,6 +102,18 @@ export function historyPressureScript() {
           current=previous;currentBytes=previousBytes;currentId=previousId;pressured=previousPressure;critical=previousCritical;currentPreparing=previousPreparing;
         }
       };
+      // Each callback must let the pool release earlier candidates and their backing stores.
+      function wrapDrop(member,record,candidate){
+        const drop=candidate.drop;
+        candidate.drop=function(...args){
+          if(saturated){omitted++;return drop.apply(this,args);}
+          const before=observe(()=>tiles(member));
+          observe(()=>emit('drop-before',{reserveId:currentId,flightId:id(current),owner:owner(current),bytes:number(currentBytes),candidateBytes:number(candidate.bytes),shownAt:number(candidate.shownAt),budget:number(pool.budget),members:members.map(state),reservations:bounded(pool.reservations).map(([flight,bytes])=>({flightId:id(flight),bytes:number(bytes),owner:owner(flight)}))}));
+          let complete=false;
+          try{const result=drop.apply(this,args);complete=true;return result;}
+          finally{observe(()=>{const after=tiles(member),kept=new Set(after.map(v=>v[0]));emit('drop-after',{reserveId:currentId,memberId:record.id,complete,removed:(before??[]).filter(v=>!kept.has(v[0])),state:state(record)});});}
+        };
+      }
       const originalRegister=pool.register;
       pool.register=function(member){
         const result=originalRegister.call(this,member);
@@ -146,15 +158,7 @@ export function historyPressureScript() {
             let wrapped=0;
             for(const candidate of result){
               if(wrapped++===tileLimit){omitted++;break;}
-              const drop=candidate.drop;
-              candidate.drop=function(...args){
-                if(saturated){omitted++;return drop.apply(this,args);}
-                const before=observe(()=>tiles(member));
-                observe(()=>emit('drop-before',{reserveId:currentId,flightId:id(current),owner:owner(current),bytes:number(currentBytes),candidateBytes:number(candidate.bytes),shownAt:number(candidate.shownAt),budget:number(pool.budget),members:members.map(state),reservations:bounded(pool.reservations).map(([flight,bytes])=>({flightId:id(flight),bytes:number(bytes),owner:owner(flight)}))}));
-                let complete=false;
-                try{const result=drop.apply(this,args);complete=true;return result;}
-                finally{observe(()=>{const after=tiles(member),kept=new Set(after.map(v=>v[0]));emit('drop-after',{reserveId:currentId,memberId:record.id,complete,removed:(before??[]).filter(v=>!kept.has(v[0])),state:state(record)});});}
-              };
+              wrapDrop(member,record,candidate);
             }});
             return result;
           };

@@ -1,6 +1,8 @@
 import {requiredRow} from './requiredRow';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import {runInNewContext} from 'node:vm';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
@@ -11,6 +13,11 @@ import {ApiError} from '../../ui/lib/http';
 import {historyPressureScript, saveHistoryPressure} from '../historyPressure';
 import {historyPageScript, historyIdentityScript} from '../historyTrafficBrowser';
 import {safeEvidence} from '../evidence';
+
+test('pressure diagnostics release an evicted backing buffer before the next drop', () => {
+  const fixture = fileURLToPath(new URL('./historyPressureBuffers.ts', import.meta.url));
+  execFileSync(process.execPath, ['--expose-gc', '--import', 'tsx', fixture]);
+});
 
 test('the complete generated history bootstrap applies preferences, tags fetches and installs its pressure hook', async () => {
   for (const pressure of [false, true])
