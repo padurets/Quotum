@@ -1,0 +1,27 @@
+services:
+  # The agent is a CLI with no long-running stand service. Keeping this
+  # profile-gated placeholder satisfies Devkit early port reservation for `hub`
+  # while `Makefile` selects only `hub` for `make dev` and `make up`.
+  agent:
+    image: "${DEVKIT_NODE_IMAGE:?}"
+    profiles:
+      - cli
+  hub:
+    environment:
+      QUOTUM_BIND: "0.0.0.0"
+      QUOTUM_PORT: "8080"
+      # Loopback-only demo stand (.devkit/compose.apps.yaml binds 127.0.0.1);
+      # wildcard host and proxy trust let reverse-proxy preview URLs reach it.
+      # Production deployment uses deploy/compose.yaml instead.
+      QUOTUM_ALLOWED_HOSTS: "*"
+      QUOTUM_TRUST_PROXY: "true"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8080/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s

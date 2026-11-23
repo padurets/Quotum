@@ -58,21 +58,27 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.COMMIT }}
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12.21.0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: hub/package-lock.json
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-        with:
-          toolchain: stable
-          targets: ${{ matrix.target }}
-          components: clippy, rustfmt
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        working-directory: apps/agent
+        run: |
+          rustup toolchain install --profile minimal --no-self-update
+          read -r tc _ < <(rustup show active-toolchain)
+          rustup default "${tc%$'\r'}"
+          rustup target add "${{ matrix.target }}"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: |
             desktop
-            agent
+            apps/agent
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: System packages
         if: runner.os == 'Linux'
@@ -117,9 +123,9 @@ jobs:
           path: ~/.cache/quotum-build/node
           key: ${{ steps.node-archives.outputs.cache-primary-key }}
       - name: Bundled hub startup diagnostics
-        working-directory: hub
+        working-directory: apps/hub
         env:
-          QUOTUM_TEST_HUB_ENTRY: ${{ github.workspace }}/hub/dist/app/server.mjs
+          QUOTUM_TEST_HUB_ENTRY: ${{ github.workspace }}/apps/hub/dist/app/server.mjs
         run: node --import tsx --test server/test/startup.test.ts
       - if: runner.os == 'Linux'
         working-directory: desktop
@@ -295,7 +301,7 @@ jobs:
 
       # For the live check: `quotum` of this very commit, next to the app.
       - name: Command-line agent
-        working-directory: agent
+        working-directory: apps/agent
         shell: bash
         env:
           # No dependency on the Visual C++ runtime on a clean Windows.
@@ -313,12 +319,12 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then
             cp "$bundle"/nsis/*-setup.exe "$app-setup.exe"
             cp "$bundle"/portable/*.zip "$app-portable.zip"
-            cp agent/target/release/quotum.exe "out/quotum-cli-$QUOTUM_COMMIT-${{ matrix.platform }}.exe"
+            cp apps/agent/target/release/quotum.exe "out/quotum-cli-$QUOTUM_COMMIT-${{ matrix.platform }}.exe"
           else
             cp "$bundle"/deb/*.deb "$app.deb"
             cp "$bundle"/rpm/*.rpm "$app.rpm"
             cp "$bundle"/appimage/*.AppImage "$app.AppImage"
-            tar -czf "out/quotum-cli-$QUOTUM_COMMIT-${{ matrix.platform }}.tar.gz" -C agent/target/release quotum
+            tar -czf "out/quotum-cli-$QUOTUM_COMMIT-${{ matrix.platform }}.tar.gz" -C apps/agent/target/release quotum
           fi
           ls -la out
       - if: runner.os == 'Linux'

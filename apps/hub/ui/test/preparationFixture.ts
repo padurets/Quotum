@@ -1,0 +1,125 @@
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import ts from 'typescript';
+import {prepare, Preparations, type Preparation} from '../lib/prepare';
+
+/** Runs the actual preparation hook with explicit render, DOM commit and task phases. */
+export function preparationFixture() {
+  let index = 0,
+    clock = 0;
+  const slots: unknown[] = [],
+    effects: (() => void)[] = [],
+    tasks: (() => void)[] = [];
+  const scheduler = new Preparations({now: () => clock++, post: run => tasks.push(run)});
+  const useRef = (value: unknown) => slots[index++] ?? (slots[index - 1] = {current: value});
+  const useState = (value: unknown) => {
+    const at = index++;
+    if (!(at in slots)) slots[at] = typeof value === 'function' ? value() : value;
+    return [
+      slots[at],
+      (next: unknown) => {
+        slots[at] = typeof next === 'function' ? next(slots[at]) : next;
+      },
+    ];
+  };
+  const useMemo = <T>(read: () => T, deps: readonly unknown[]): T => {
+    const slot = useRef(null) as {current: {deps: readonly unknown[]; value: T} | null};
+    if (
+      !slot.current ||
+      deps.length !== slot.current.deps.length ||
+      deps.some((value, i) => !Object.is(value, slot.current!.deps[i]))
+    )
+      slot.current = {deps, value: read()};
+    return slot.current.value;
+  };
+  const useLayoutEffect = (effect: () => void | (() => void), deps?: readonly unknown[]) => {
+    const at = index++,
+      old = slots[at] as {deps?: readonly unknown[]; cleanup?: () => void} | undefined;
+    if (
+      deps &&
+      old?.deps &&
+      deps.length === old.deps.length &&
+      deps.every((v, i) => Object.is(v, old.deps![i]))
+    )
+      return;
+    effects.push(() => {
+      old?.cleanup?.();
+      slots[at] = {deps, cleanup: effect()};
+    });
+  };
+  const context = {
+    exports: {} as {
+      usePreparationBasis: (
+        value: {from: number; to: number; end: number},
+        deps: readonly unknown[],
+        captured: boolean,
+        enabled?: boolean,
+        context?: unknown,
+      ) => {from: number; to: number; end: number};
+      usePrepared: <T>(
+        work: () => Preparation<T>,
+        deps: readonly unknown[],
+        context?: unknown,
+        enabled?: boolean,
+      ) => {value: T | null; ready: boolean};
+    },
+    require: (name: string) =>
+      name === 'react'
+        ? {useRef, useState, useLayoutEffect}
+        : {
+            prepare: <T>(
+              owner: object,
+              work: Preparation<T>,
+              valid: () => boolean,
+              ready: (v: T) => void,
+            ) => prepare(owner, work, valid, ready, scheduler),
+            preparations: () => scheduler,
+          },
+  };
+  runInNewContext(
+    ts.transpileModule(
+      readFileSync(new URL('../components/prepared.ts', import.meta.url), 'utf8'),
+      {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS}},
+    ).outputText,
+    context,
+  );
+  return {
+    useRef,
+    useState,
+    useMemo,
+    useLayoutEffect,
+    usePrepared: context.exports.usePrepared,
+    usePreparationBasis: context.exports.usePreparationBasis,
+    begin: () => {
+      index = 0;
+      effects.length = 0;
+    },
+    commit: () => {
+      effects.splice(0).forEach(effect => effect());
+    },
+    unmount: () => {
+      for (const slot of slots) {
+        const cleanup = (slot as {cleanup?: () => void} | null)?.cleanup;
+        cleanup?.();
+      }
+      slots.length = 0;
+    },
+    tick: () => tasks.shift()?.(),
+    finish: () => {
+      for (let i = 0; tasks.length && i < 100_000; i++) tasks.shift()!();
+      if (tasks.length) throw new Error('preparation did not quiesce');
+    },
+    dispose: () => {
+      for (const slot of slots)
+        if (
+          slot &&
+          typeof slot === 'object' &&
+          'cleanup' in slot &&
+          typeof slot.cleanup === 'function'
+        )
+          slot.cleanup();
+      scheduler.dispose();
+    },
+    scheduler,
+  };
+}

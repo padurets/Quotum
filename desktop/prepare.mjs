@@ -13,7 +13,7 @@
  *
  *   node desktop/prepare.mjs                     for this machine
  *   node desktop/prepare.mjs --target <triple>   x86_64-unknown-linux-gnu or x86_64-pc-windows-msvc
- *   node desktop/prepare.mjs --no-build          keep a hub already built in hub/dist
+ *   node desktop/prepare.mjs --no-build          keep a hub already built in apps/hub/dist
  *
  * Node is called quotum-node in the app: a deb puts it in /usr/bin, where `node` belongs
  * to the nodejs package.
@@ -29,7 +29,8 @@ import {prepareNode} from './prepare-node.mjs';
 import {thirdPartyLicenses} from '../npm/licenses.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const hub = path.resolve(here, '../hub');
+const root = path.resolve(here, '..');
+const hub = path.join(root, 'apps/hub');
 
 const NODE_VERSION = 'v24.21.0';
 /** From https://nodejs.org/dist/v24.21.0/SHASUMS256.txt; the archive holds node and its LICENSE. */
@@ -57,14 +58,14 @@ if (!node) throw new Error(`the app is built for ${Object.keys(NODE).join(' and 
 const windows = target.includes('windows');
 
 const run = (command, commandArgs, cwd) =>
-  // npm is a .cmd on Windows, which only a shell starts.
-  execFileSync(command, commandArgs, {cwd, stdio: 'inherit', shell: process.platform === 'win32' && command === 'npm'});
+  // pnpm is a .cmd on Windows, which only a shell starts.
+  execFileSync(command, commandArgs, {cwd, stdio: 'inherit', shell: process.platform === 'win32' && command === 'pnpm'});
 
 // 1. The hub: built, then bundled into one file that runs without node_modules.
 if (!args.includes('--no-build') || !existsSync(path.join(hub, 'dist/app/server.mjs'))) {
-  run('npm', ['ci'], hub);
-  run('npm', ['run', 'build'], hub);
-  run('npm', ['run', 'bundle'], hub);
+  run('pnpm', ['install', '--frozen-lockfile', '--ignore-scripts'], root);
+  run('pnpm', ['run', 'build'], hub);
+  run('pnpm', ['run', 'bundle'], hub);
 }
 const resources = path.join(here, 'resources/hub');
 rmSync(resources, {recursive: true, force: true});

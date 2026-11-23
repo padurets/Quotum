@@ -1,7 +1,7 @@
 # Ingest format v1
 
 How an agent connects to a hub, asks whether to measure, and delivers measurements.
-Anything may implement it; the reference implementation is `agent/` (Rust).
+Anything may implement it; the reference implementation is `apps/agent/` (Rust).
 
 ## Tokens
 

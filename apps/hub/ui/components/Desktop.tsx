@@ -1,0 +1,539 @@
+import {useRef, useState} from 'react';
+import {stamp} from '../lib/format';
+import {PROVIDERS} from '../lib/providers';
+import {errorText} from '../lib/quota';
+import {
+  app,
+  failedTitle,
+  inApp,
+  intervalMenu,
+  onboardingText,
+  takeOverQuestion,
+  takeOverText,
+  takeOverTitle,
+  type AppState,
+  type Patch,
+  type ProviderSettings,
+} from '../lib/app';
+import {useApp} from '../lib/board';
+import {rich, t} from '../i18n';
+import {Brand, Modal} from './Kit';
+import {SwitchRow, Popover} from './Popover';
+
+/** What the desktop app says, under a title of the page's own words: its text is English, for people who look closer. */
+function Detail({text}: {text: string}) {
+  return <code className="app-detail">{text}</code>;
+}
+
+const quotum = <code>quotum</code>;
+
+export function QuitButton({className = 'button'}: {className?: string}) {
+  return (
+    <button type="button" className={className} onClick={() => void app.quit()}>
+      {t('local.quit')}
+    </button>
+  );
+}
+
+/**
+ * The board of the desktop app's hub without the app's session: a browser that found its
+ * port, or the app's window after the hub started again. The window can enter again, or
+ * quit; a browser only learns where the board is.
+ */
+export function OpenInApp({compact = false}: {compact?: boolean}) {
+  return (
+    <div className="auth">
+      <Brand />
+      <div className="auth-card">
+        <h1>{t('local.openApp')}</h1>
+        <p className="auth-note">{t('local.openAppText')}</p>
+        {inApp() && (
+          <div className="button-row is-start">
+            <button type="button" className="button primary" onClick={() => void app.reenter()}>
+              {t('local.reenter')}
+            </button>
+            {compact ? (
+              <button className="button" onClick={() => void app.closePanel()}>
+                {t('common.close')}
+              </button>
+            ) : (
+              <QuitButton />
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * `quotum` on the command line measures this machine: the app asks, once, whether to take
+ * over. The question cannot be closed: the answers are to take over or to quit (closing
+ * the window quits too). After a failed attempt it says why and offers another.
+ */
+export function TakeOver({onState}: {onState: (state: AppState) => void}) {
+  // The question answered, while the app takes over: it stays, saying so, until the app is done.
+  const [answered, setAnswered] = useState<Parameters<typeof takeOverQuestion>[1]>(null);
+  const agent = takeOverQuestion(useApp()?.agent, answered);
+  if (!agent) return null;
+  const busy = answered !== null;
+  const text = takeOverText(agent.holder);
+  const takeOver = async () => {
+    setAnswered(agent);
+    try {
+      onState(await app.takeOver());
+    } catch {
+      // The app keeps asking, with why it failed: the state read next says so.
+      onState(await app.state());
+    } finally {
+      setAnswered(null);
+    }
+  };
+  return (
+    <Modal title={t(takeOverTitle(agent))}>
+      <div className="takeover">
+        {agent.error && <Detail text={agent.error} />}
+        <p>{rich(text.who, {quotum}, {pid: agent.holder.pid ?? ''})}</p>
+        <p>{t('takeover.offer')}</p>
+        {text.hub && <p>{rich(text.hub, {hub: <code>{agent.holder.hub ?? ''}</code>})}</p>}
+        <p>{rich(text.after, {quotum})}</p>
+        <div className="button-row">
+          <QuitButton />
+          <button
+            type="button"
+            className="button primary"
+            disabled={busy}
+            onClick={() => void takeOver()}
+          >
+            {busy ? t('takeover.busy') : agent.error ? t('takeover.retry') : t('takeover.confirm')}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** The agent cannot measure: why, in the page's words, and what to do. */
+export function AgentBanner() {
+  const state = useApp();
+  if (state?.agent.state !== 'failed') return null;
+  const {cause, error} = state.agent;
+  return (
+    <section className="panel app-banner" role="alert">
+      <h2>{t(failedTitle(cause))}</h2>
+      <Detail text={error} />
+      <p>
+        {cause === 'config'
+          ? rich('failed.configText', {path: <code>{state.configPath}</code>})
+          : rich('failed.logText', {path: <code>{state.logPath}</code>})}
+      </p>
+      {cause === 'panic' && <p>{rich('failed.panicText', {quotum})}</p>}
+    </section>
+  );
+}
+
+/** An empty board in the app: whether numbers come soon, and where the settings are. */
+export function LocalOnboarding({
+  onSettings,
+  onConnect,
+}: {
+  onSettings: () => void;
+  onConnect: () => void;
+}) {
+  const agent = useApp()?.agent;
+  return (
+    <section className="panel onboarding">
+      <h2>{t('local.onboardingTitle')}</h2>
+      <p>{t(onboardingText(agent))}</p>
+      <button type="button" className="button primary" onClick={onConnect}>
+        {t('onboarding.connect')}
+      </button>
+      <button type="button" className="button" onClick={onSettings}>
+        {t('local.openSettings')}
+      </button>
+    </section>
+  );
+}
+
+type Saving = {field: string; error: string} | null;
+
+/** A change the app refused, under the field it was made in. */
+function SaveError({saving, field}: {saving: Saving; field: string}) {
+  if (saving?.field !== field) return null;
+  return (
+    <div className="form-error" role="alert">
+      {t('measure.saveFailed')}
+      <Detail text={saving.error} />
+    </div>
+  );
+}
+
+/** What is known of a provider's client here: where it is and how the last measurement went. */
+function Status({provider, configPath}: {provider: ProviderSettings; configPath: string}) {
+  const last = provider.last;
+  const result =
+    provider.latestStatus === 'no_new_data'
+      ? t('refresh.row.no_new_data')
+      : !last
+        ? t('measure.never')
+        : last.ok
+          ? t('measure.measured', {at: stamp(last.at)})
+          : t('measure.failed', {error: errorText(last.error ?? 'failed'), at: stamp(last.at)});
+  // Without a client, how its last try went says nothing more.
+  if (!provider.client && !provider.collector) {
+    return (
+      <>
+        <small className="measure-status">{t('measure.notFound')}</small>
+        <p className="drawer-note">
+          {rich('measure.notFoundHelp', {
+            key: <code className="is-key">{`[providers.${provider.id}] path`}</code>,
+            file: <code>{configPath}</code>,
+          })}
+        </p>
+      </>
+    );
+  }
+  return (
+    <div className="measure-status">
+      <small title={last?.detail}>
+        {provider.collector
+          ? t('measure.localCollector')
+          : rich('measure.client', {path: <code>{provider.client}</code>})}
+      </small>
+      <small>{result}</small>
+      {!!provider.accounts?.length && (
+        <Popover label={t('measure.accountOutcomes')} trigger={t('measure.accountOutcomes')}>
+          {provider.accounts.map((entry, index) => (
+            <div className="popover-row" key={index}>
+              <strong>
+                {entry.account === null
+                  ? t('measure.unknownAccount')
+                  : 'account' in entry.account
+                    ? entry.account.account.slice(0, 8)
+                    : (entry.account.accountName ?? t('measure.defaultAccount'))}
+              </strong>
+              <div>
+                {entry.status === 'no_new_data'
+                  ? t('refresh.row.no_new_data')
+                  : entry.status === 'failed'
+                    ? errorText(entry.error ?? 'failed')
+                    : t('measure.measured', {at: stamp(entry.observedAt ?? entry.completedAt)})}
+              </div>
+              <small>{stamp(entry.completedAt)}</small>
+            </div>
+          ))}
+        </Popover>
+      )}
+    </div>
+  );
+}
+
+/** Antigravity names no account: a name tells two subscriptions apart. Saved on leaving the field or Enter. */
+function AccountName({
+  provider,
+  onSave,
+}: {
+  provider: ProviderSettings;
+  onSave: (account: string) => Promise<boolean>;
+}) {
+  // Only typed text is a draft. An untouched field follows changes made in config.toml.
+  const [draft, setDraft] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
+  const name = draft ?? provider.account ?? '';
+  const save = async () => {
+    if (pending.current || draft === null) return;
+    if (draft.trim() === (provider.account ?? '')) {
+      setDraft(null);
+      return;
+    }
+    pending.current = true;
+    setBusy(true);
+    try {
+      await onSave(draft.trim());
+      // Success shows the accepted value; failure restores the authoritative one.
+      setDraft(null);
+    } finally {
+      pending.current = false;
+      setBusy(false);
+    }
+  };
+  return (
+    <label className="field measure-account">
+      <span>{t('measure.account')}</span>
+      <input
+        value={name}
+        maxLength={120}
+        disabled={busy}
+        onChange={event => setDraft(event.target.value)}
+        onBlur={() => void save()}
+        onKeyDown={event => event.key === 'Enter' && void save()}
+      />
+      <small>{t('measure.accountHint')}</small>
+    </label>
+  );
+}
+
+/**
+ * Which providers are measured and how often, with how each client is doing; and whether
+ * running agents are shown. The settings are `quotum`'s own (config.toml): the app saves
+ * each change at once and measures with it in a moment.
+ */
+export function Measuring({state, onState}: {state: AppState; onState: (state: AppState) => void}) {
+  const [saving, setSaving] = useState<Saving>(null);
+  const save = async (patch: Patch, field: string) => {
+    setSaving(null);
+    try {
+      onState(await app.saveSettings(patch));
+      return true;
+    } catch (error) {
+      // The field shows what the app has: the value falls back by itself.
+      setSaving({field, error: (error as Error).message});
+      return false;
+    }
+  };
+  const idle = state.agent.state === 'idle';
+  return (
+    <section className="drawer-section">
+      <h3>{t('measure.title')}</h3>
+      <p className="drawer-note is-first">{rich('measure.shared', {quotum})}</p>
+      {state.providers.some(p => intervalMenu(p).hint?.key === 'measure.autoHint') && (
+        <p className="drawer-note">{t('measure.autoHint')}</p>
+      )}
+      {state.providers.map(provider => {
+        const name = PROVIDERS[provider.id]?.name ?? provider.id;
+        const menu = intervalMenu(provider);
+        // Said once for the section; where the interval is set is said by the provider it holds for.
+        const where = menu.hint && menu.hint.key !== 'measure.autoHint' ? menu.hint : null;
+        return (
+          <div key={provider.id} className="measure-provider">
+            <div className="measure-head">
+              <SwitchRow
+                on={provider.enabled}
+                onChange={on => void save({providers: {[provider.id]: {enabled: on}}}, provider.id)}
+              >
+                {name}
+              </SwitchRow>
+              <label className="measure-interval">
+                <span className="sr-only">{t('measure.interval')}</span>
+                <select
+                  value={String(menu.selected)}
+                  disabled={!provider.enabled}
+                  onChange={event => {
+                    const choice = event.target.value;
+                    void save(
+                      {
+                        providers: {
+                          [provider.id]: {
+                            intervalS: choice === 'first' ? null : Number(choice) * 60,
+                          },
+                        },
+                      },
+                      provider.id,
+                    );
+                  }}
+                >
+                  <option value="first" disabled={!menu.firstAvailable}>
+                    {menu.first === 'auto'
+                      ? t('measure.auto')
+                      : t('measure.inherited', {count: (provider.inheritedS ?? 0) / 60})}
+                  </option>
+                  {menu.choices.map(minutes => (
+                    <option key={minutes} value={minutes}>
+                      {t('measure.atMost', {count: minutes})}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            {where && <p className="drawer-note">{t(where.key, where.vars)}</p>}
+            <Status provider={provider} configPath={state.configPath} />
+            {provider.id === 'antigravity' && provider.enabled && (
+              <AccountName
+                provider={provider}
+                onSave={account =>
+                  save({providers: {antigravity: {account}}}, `${provider.id}.account`)
+                }
+              />
+            )}
+            <SaveError saving={saving} field={provider.id} />
+            <SaveError saving={saving} field={`${provider.id}.account`} />
+          </div>
+        );
+      })}
+      <div className="drawer-switch">
+        <SwitchRow on={state.sessions} onChange={on => void save({sessions: on}, 'sessions')}>
+          {t('measure.sessions')}
+        </SwitchRow>
+      </div>
+      <SaveError saving={saving} field="sessions" />
+      {(state.clients ?? []).map(client => (
+        <div className="drawer-switch" key={client.id}>
+          <SwitchRow
+            on={client.enabled}
+            onChange={enabled =>
+              void save({clients: {[client.id]: {enabled}}}, `client.${client.id}`)
+            }
+          >
+            {t('measure.trackClient', {
+              name:
+                client.id === 'opencode' ? 'OpenCode' : (PROVIDERS[client.id]?.name ?? client.id),
+            })}
+          </SwitchRow>
+          <SaveError saving={saving} field={`client.${client.id}`} />
+        </div>
+      ))}
+      {idle && <p className="drawer-note">{t('measure.idle')}</p>}
+    </section>
+  );
+}
+
+/** Start at login, which build this is, and quitting. */
+export function AppSection({
+  state,
+  onState,
+}: {
+  state: AppState;
+  onState: (state: AppState) => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const secret = state.secretKey;
+  const reset = async () => {
+    if (resetting || secret?.busy) return;
+    setResetting(true);
+    setError(null);
+    try {
+      onState(await app.resetSecretKey());
+      setConfirmReset(false);
+    } catch {
+      setError(t('trustedKeys.resetFailed'));
+    } finally {
+      setResetting(false);
+    }
+  };
+  const notifications = state.notifications;
+  const notify = async (kind: keyof NonNullable<AppState['notifications']>, on: boolean) => {
+    setError(null);
+    try {
+      onState(await app.saveDesktopSettings({notifications: {[kind]: on}}));
+    } catch (failure) {
+      setError((failure as Error).message);
+    }
+  };
+  const autostart = async (on: boolean) => {
+    setError(null);
+    try {
+      onState(await app.setAutostart(on));
+    } catch (failure) {
+      setError((failure as Error).message);
+    }
+  };
+  return (
+    <section className="drawer-section">
+      <h3>{t('appSection.title')}</h3>
+      {secret && (
+        <>
+          <h4>{t('trustedKeys.title')}</h4>
+          <p className="drawer-note">
+            {t(
+              secret.outcome === 'mismatch'
+                ? 'trustedKeys.mismatch'
+                : `trustedKeys.${secret.state}`,
+            )}
+          </p>
+          {secret.wasFile && secret.state === 'keystore' && (
+            <p className="drawer-note">{t('trustedKeys.wasFile')}</p>
+          )}
+          {secret.retainedFile && <p className="drawer-note">{t('trustedKeys.retainedFile')}</p>}
+          {secret.resetAvailable && (
+            <div className="drawer-actions">
+              <button
+                className="button danger"
+                type="button"
+                disabled={resetting || secret.busy}
+                onClick={() => setConfirmReset(true)}
+              >
+                {t('trustedKeys.reset')}
+              </button>
+            </div>
+          )}
+        </>
+      )}
+      {notifications && (
+        <>
+          <h4>{t('desktop.notifications')}</h4>
+          {(['low', 'critical', 'reset', 'announcement'] as const).map(kind => (
+            <div className="drawer-switch" key={kind}>
+              <SwitchRow on={notifications[kind]} onChange={on => void notify(kind, on)}>
+                {t(`desktop.${kind}`)}
+              </SwitchRow>
+            </div>
+          ))}
+          <p className="drawer-note">
+            {t(
+              state.notificationDelivery === 'available'
+                ? 'desktop.deliveryAvailable'
+                : state.notificationDelivery === 'unavailable'
+                  ? 'desktop.deliveryUnavailable'
+                  : 'desktop.deliveryUnknown',
+            )}
+          </p>
+          <p className="drawer-note">{t('desktop.deliveryHint')}</p>
+        </>
+      )}
+      <div className="drawer-switch">
+        <SwitchRow on={state.autostart} onChange={on => void autostart(on)}>
+          {t('appSection.autostart')}
+        </SwitchRow>
+      </div>
+      {error && (
+        <div className="form-error" role="alert">
+          {t('measure.saveFailed')}
+          <Detail text={error} />
+        </div>
+      )}
+      <div className="drawer-actions is-split">
+        <span className="drawer-note">
+          {t('appSection.version', {version: state.version, commit: state.commit})}
+        </span>
+        <QuitButton />
+      </div>
+      {confirmReset && (
+        <Modal
+          title={t('trustedKeys.reset')}
+          onClose={resetting || secret?.busy ? undefined : () => setConfirmReset(false)}
+        >
+          <p className="drawer-note">{t('trustedKeys.resetConfirm')}</p>
+          {secret?.state === 'waiting' && (
+            <p className="drawer-note">{t('trustedKeys.unlockFirst')}</p>
+          )}
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="button-row is-wrap">
+            <button
+              className="button"
+              type="button"
+              disabled={resetting || secret?.busy}
+              onClick={() => setConfirmReset(false)}
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              className="button danger"
+              type="button"
+              disabled={resetting || secret?.busy || !secret?.resetAvailable}
+              onClick={() => void reset()}
+            >
+              {t('trustedKeys.reset')}
+            </button>
+          </div>
+        </Modal>
+      )}
+    </section>
+  );
+}

@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 2,
+  "version": "0.5.1",
+  "releaseIdentity": "870146c4055749dd0e4555e49605c3dcd697444f481ef197ff043796c33df74c",
+  "generation": "fa591be4-d26e-46df-b2e4-97acb682c50f",
+  "packageMode": "registry",
+  "managed": {
+    ".devkit/compose.apps.yaml": {
+      "sha256": "5ad420d7a89ec96b6dd686ac212bed91477127dd2ad30fc972cd57bc675e2348",
+      "mode": 420
+    },
+    ".devkit/compose.workspace.json": {
+      "sha256": "4cbee9dad159b426834ba76fcc486aefb2a3712ed6f68d633b7320d107066971",
+      "mode": 420
+    },
+    ".devkit/project.mk": {
+      "sha256": "84d74f61b2a40de6e42dcab8a7f7303d69318f977470e6e8fd2c53b89f4d8cd5",
+      "mode": 420
+    },
+    ".devkit/runtime.sha256": {
+      "sha256": "f88c6df0c5eb2e268ad37f3881201cfa96d40579bfa776edc8c9bbaef509fc1b",
+      "mode": 420
+    },
+    ".devkit/runtime/GUIDE.md": {
+      "sha256": "fe431f75c49a6eb9e44ebcb3ba90c0a6b4ac27d95be696634e78d67fee94a7d9",
+      "mode": 420
+    },
+    ".devkit/runtime/LICENSE": {
+      "sha256": "da39312b3c1fd7a483ccb2ef16bf02836ac84ac9ef3b8f9511dc87b7dda929c1",
+      "mode": 420
+    },
+    ".devkit/runtime/api.env": {
+      "sha256": "0906f4ab98e156befc98147438fc775beb1511f0fc91a8a28e070d11decd6897",
+      "mode": 420
+    },
+    ".devkit/runtime/compose.tools.yaml": {
+      "sha256": "67311d5da9dfdbe51ba08c100d648511543e31d7cd2cc94d4a00b071a5cd3b55",
+      "mode": 420
+    },
+    ".devkit/runtime/desktop-seccomp.json": {
+      "sha256": "a2e715a1ca0626e5cab2034686b946ad477c1efd8c19887a0f5b652ebf00d18a",
+      "mode": 420
+    },
+    ".devkit/runtime/desktop.Dockerfile": {
+      "sha256": "52f3561339b0fb7d8154b307bda086c9b5cac8ddffaae422e1ad330380f39429",
+      "mode": 420
+    },
+    ".devkit/runtime/devkit.mk": {
+      "sha256": "ca0068f58df5e15ab3b4ce1206545ba432a20080823bf3c7fbe29212eef3b411",
+      "mode": 420
+    },
+    ".devkit/runtime/devkit.sh": {
+      "sha256": "ddce19c3d76571237d6ae8ec33f00d35cc70bed5a339d5abceedd929d2d7ad1f",
+      "mode": 493
+    },
+    ".devkit/runtime/licenses/Apache-2.0.txt": {
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "mode": 420
+    },
+    ".devkit/runtime/licenses/moby-profiles.NOTICE": {
+      "sha256": "3b102b5f5715e6b3e3f9096e276d77500fa5e0ffeb15c3459e30e0968c8f94c4",
+      "mode": 420
+    },
+    ".devkit/runtime/pnpm.env": {
+      "sha256": "e2f301f10ca990b019e15a4695347b01ea9006d9f4533c2c2436963117cf729a",
+      "mode": 420
+    },
+    ".devkit/runtime/rust.Dockerfile": {
+      "sha256": "88b4dfb67f04eb6639988453a62e3489bc2492aade0e811e32983ceca5abab94",
+      "mode": 420
+    },
+    ".devkit/runtime/toolchains.env": {
+      "sha256": "bcc6b63922060428638081599e50fef3218bd7bce39dd981a137227dc4f0a546",
+      "mode": 420
+    },
+    ".devkit/tooling-profiles.json": {
+      "sha256": "b28181b8dcd72877b3f7ab9be4da2d1f4745529a0007dae677a0d18d218545c0",
+      "mode": 420
+    },
+    "apps/agent/rust-toolchain.toml": {
+      "sha256": "5e7517b95a2b4e810124f84091dd4a6e3f2192523fcac7b6d52abc7fc6aff91d",
+      "mode": 420
+    }
+  },
+  "components": {
+    "apps/agent": {
+      "role": "app",
+      "toolchain": "rust",
+      "toolingProfile": "rust",
+      "origin": {
+        "template": "adopted",
+        "version": "0.4.1"
+      },
+      "toolDependencies": {},
+      "dependencies": [],
+      "development": {
+        "owner": "project",
+        "kind": "compose",
+        "service": "agent"
+      }
+    },
+    "apps/hub": {
+      "role": "app",
+      "toolchain": "node",
+      "toolingProfile": "node",
+      "origin": {
+        "template": "adopted",
+        "version": "0.4.1"
+      },
+      "toolDependencies": {
+        "@docouno/env": "0.5.1",
+        "@types/node": "24.19.2",
+        "eslint": "10.13.0",
+        "prettier": "3.9.10",
+        "typescript": "6.0.3"
+      },
+      "dependencies": [],
+      "development": {
+        "owner": "managed",
+        "kind": "compose",
+        "service": "hub"
+      }
+    }
+  }
+}

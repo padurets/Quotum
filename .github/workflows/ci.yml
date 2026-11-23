@@ -101,27 +101,91 @@ jobs:
   dev-tooling:
     if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
       - name: Require a pinned source for diagnostic modes
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           HAS_DIAGNOSTIC_MODE: ${{ inputs.history_preinput_binding || inputs.trace_only || inputs.original_timing || inputs.native_trace || inputs.native_profile || inputs.caption_control || inputs.native_postmortem_control || inputs.history_scroll_control || inputs.history_pool_control || inputs.compositor_guard_control }}
         run: node -e 'if(process.env.HAS_DIAGNOSTIC_MODE==="true")throw Error("Diagnostic modes require diagnostic_ref")'
-      - run: make dev-test
-        env:
-          QUOTUM_TEST_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-dev-diagnostics
-      - name: Dev fixture evidence
-        if: always()
-        uses: actions/upload-artifact@v7
+      - name: Set up pinned Docker Compose 5.6.0
+        run: |
+          set -euo pipefail
+          version=5.6.0
+          compose_dir=$(mktemp -d "${RUNNER_TEMP:?}/devkit-compose.XXXXXX")
+          trap 'rm -rf "$compose_dir"' EXIT
+          curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            --max-time 180 --max-filesize 32663526 --output "$compose_dir/docker-compose" \
+            "https://github.com/docker/compose/releases/download/v$version/docker-compose-linux-x86_64"
+          test "$(stat -c %s "$compose_dir/docker-compose")" = 32663526
+          printf '%s\n' '40343e21ca777173e69cff5dbafeb37c6f81f3b0d57d9e597f036e95eb63e76a  docker-compose' > "$compose_dir/checksums.txt"
+          (cd "$compose_dir" && sha256sum --check checksums.txt)
+          sudo install -D -m 0755 "$compose_dir/docker-compose" /usr/local/lib/docker/cli-plugins/docker-compose
+          test "$(docker compose version --short)" = "$version"
+      - name: Set the Devkit cache directory
+        run: printf 'DEVKIT_CACHE_DIR=%s/devkit-cache\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          name: dev-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/quotum-dev-diagnostics
-          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/devkit-cache
+            .devkit/cache
+          key: devkit-${{ runner.os }}-${{ hashFiles('.devkit/manifest.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'apps/agent/Cargo.lock') }}
+          restore-keys: |
+            devkit-${{ runner.os }}-
+      - run: sh .devkit/runtime/devkit.sh cli doctor . --json
+      - run: sh .devkit/runtime/devkit.sh cli describe . --json
+      - run: make info json=1
+      - run: make setup
+      - run: make doctor
+      - run: make check
+      - run: make test
+      - run: make build
+      - run: shellcheck --shell=sh desktop/run-in-container.sh
+      - name: Verify Dockerfile and workflow toolchain pins match Devkit
+        run: |
+          set -euo pipefail
+          . .devkit/runtime/toolchains.env
+          . .devkit/runtime/pnpm.env
+          rust_image=$(awk '/^FROM / {print $2; exit}' .devkit/runtime/rust.Dockerfile)
+          rust_version=$(awk -F'"' '/^channel = / {print $2; exit}' apps/agent/rust-toolchain.toml)
+          test "$rust_version" = "$DEVKIT_RUST_VERSION"
+          grep -Fq "FROM ${DEVKIT_NODE_IMAGE} AS node" desktop/Dockerfile.check
+          grep -Fq "FROM ${rust_image}" desktop/Dockerfile.check
+          grep -Fq "rustup component add --toolchain ${rust_version} clippy rustfmt" desktop/Dockerfile.check
+          grep -Fq "ARG PNPM_VERSION=${DEVKIT_PNPM_VERSION}" desktop/Dockerfile.check
+          grep -Fq "ARG PNPM_VERSION=${DEVKIT_PNPM_VERSION}" apps/hub/Dockerfile
+          snapshots=$(awk -F"'" '/URIs: http:\/\/snapshot\.debian\.org\// {print $2}' .devkit/runtime/desktop.Dockerfile)
+          test -n "$snapshots"
+          while IFS= read -r uri; do
+            grep -Fq "$uri" desktop/Dockerfile.check
+          done <<< "$snapshots"
+          for wf in .github/workflows/ci.yml .github/workflows/desktop.yml; do
+            awk -v expected="$DEVKIT_PNPM_VERSION" '
+              /^[[:space:]]*- uses:[[:space:]]*pnpm\/action-setup@/ {
+                if (in_step && !seen) exit 1
+                uses++
+                in_step = 1
+                seen = 0
+                next
+              }
+              in_step && /^[[:space:]]*- / {
+                if (!seen) exit 1
+                in_step = 0
+              }
+              in_step && /^[[:space:]]+version:[[:space:]]*/ {
+                val = $2
+                gsub(/^["'\'']|["'\'']$/, "", val)
+                if (val != expected) exit 1
+                seen = 1
+                matched++
+              }
+              END {
+                if (in_step && !seen) exit 1
+                if (uses == 0 || matched != uses) exit 1
+              }
+            ' "$wf"
+          done
 
   hub:
     if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.diagnostic_ref) }}
@@ -130,22 +194,26 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: hub
+        working-directory: apps/hub
     steps:
       - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12.21.0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: hub/package-lock.json
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - working-directory: .
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm run check
+      - run: pnpm test
       - run: docker pull caddy:2-alpine
       - run: node --import tsx --test server/test/compression.integration.ts
-      - run: npm run build
+      - run: pnpm run build
 
-  # What an open dashboard costs, measured in Chrome on the built hub and page (hub/bench).
+  # What an open dashboard costs, measured in Chrome on the built hub and page (apps/hub/bench).
   # A release does not wait for it: the commit it tags already passed it.
   bench:
     if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && always() && !inputs.diagnostic_ref && !startsWith(github.ref, 'refs/tags/')) }}
@@ -173,9 +241,6 @@ jobs:
         include: ${{ fromJSON(inputs.compositor_guard_control && !inputs.history_preinput_binding && '[{"arm":"OLD1","feature":"disable"},{"arm":"NEW","feature":"enable"},{"arm":"OLD2","feature":"disable"}]' || '[{"arm":"ordinary","feature":""}]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: hub
     steps:
       - name: Require the paired history preinput binding
         if: ${{ inputs.history_preinput_binding }}
@@ -195,14 +260,35 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.diagnostic_ref || github.sha }}
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12.21.0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: hub/package-lock.json
-      - run: npm ci
-      - run: npm run build
+          cache: ${{ hashFiles('pnpm-lock.yaml') != '' && 'pnpm' || 'npm' }}
+          cache-dependency-path: ${{ hashFiles('pnpm-lock.yaml') != '' && 'pnpm-lock.yaml' || hashFiles('package-lock.json') != '' && 'package-lock.json' || 'hub/package-lock.json' }}
+      - name: Install dependencies and select the pinned hub workspace
+        run: |
+          # Diagnostic source pins can predate the apps/ or pnpm layout.
+          if [[ -f apps/hub/package.json ]]; then
+            if [[ -f pnpm-lock.yaml ]]; then
+              pnpm install --frozen-lockfile --ignore-scripts
+              printf 'QUOTUM_BENCH_PM=pnpm\n' >> "$GITHUB_ENV"
+            else
+              npm ci
+              printf 'QUOTUM_BENCH_PM=npm\n' >> "$GITHUB_ENV"
+            fi
+            printf 'QUOTUM_BENCH_HUB_DIR=apps/hub\n' >> "$GITHUB_ENV"
+          else
+            npm --prefix hub ci
+            printf 'QUOTUM_BENCH_PM=npm\n' >> "$GITHUB_ENV"
+            printf 'QUOTUM_BENCH_HUB_DIR=hub\n' >> "$GITHUB_ENV"
+          fi
+      - run: ${{ env.QUOTUM_BENCH_PM }} run build
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
       - name: Require the isolated pinned compositor guard control
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         if: ${{ inputs.compositor_guard_control }}
         env:
           QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
@@ -252,6 +338,7 @@ jobs:
         if: ${{ inputs.history_scroll_control || inputs.compositor_guard_control || inputs.history_pool_control }}
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gdb
       - name: Prepare matching renderer unwind tables
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         if: ${{ inputs.history_scroll_control || inputs.compositor_guard_control || inputs.history_pool_control }}
         env:
           COMPOSITOR_GUARD: ${{ inputs.compositor_guard_control }}
@@ -262,6 +349,7 @@ jobs:
             bash bench/prepareNativeUnwind.sh
           fi
       - name: Prepare optional postfailure native capture
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         if: ${{ !inputs.history_scroll_control && !inputs.compositor_guard_control && !inputs.history_pool_control }}
         timeout-minutes: 2
         continue-on-error: true
@@ -285,10 +373,13 @@ jobs:
           chmod 700 "$control_dir/chrome"
           sha256sum "$vendor" "$beta_image" "$control_dir/chrome" > "$control_dir/pins-first.txt"
           cat "$control_dir/pins-first.txt"
-      - run: |
+      - working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
+        run: |
           export QUOTUM_CHROME="${QUOTUM_C3_CHROME:-$(command -v google-chrome)}"
           if [[ "$FRESH_HISTORY" == 1 ]]; then
             node --import tsx bench/historyFreshControl.mjs
+          elif [[ "$QUOTUM_BENCH_PM" == pnpm ]]; then
+            pnpm run bench --ci --scope history
           else
             npm run bench -- --ci --scope history
           fi
@@ -315,9 +406,6 @@ jobs:
     runs-on: ubuntu-latest
     # Ordinary updates and native panning have independent runners and deadlines.
     timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: hub
     steps:
       - name: Require the isolated pinned combined benchmark
         if: ${{ inputs.combined_benchmark }}
@@ -337,14 +425,35 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.diagnostic_ref || github.sha }}
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12.21.0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: hub/package-lock.json
-      - run: npm ci
-      - run: npm run build
+          cache: ${{ hashFiles('pnpm-lock.yaml') != '' && 'pnpm' || 'npm' }}
+          cache-dependency-path: ${{ hashFiles('pnpm-lock.yaml') != '' && 'pnpm-lock.yaml' || hashFiles('package-lock.json') != '' && 'package-lock.json' || 'hub/package-lock.json' }}
+      - name: Install dependencies and select the pinned hub workspace
+        run: |
+          # Diagnostic source pins can predate the apps/ or pnpm layout.
+          if [[ -f apps/hub/package.json ]]; then
+            if [[ -f pnpm-lock.yaml ]]; then
+              pnpm install --frozen-lockfile --ignore-scripts
+              printf 'QUOTUM_BENCH_PM=pnpm\n' >> "$GITHUB_ENV"
+            else
+              npm ci
+              printf 'QUOTUM_BENCH_PM=npm\n' >> "$GITHUB_ENV"
+            fi
+            printf 'QUOTUM_BENCH_HUB_DIR=apps/hub\n' >> "$GITHUB_ENV"
+          else
+            npm --prefix hub ci
+            printf 'QUOTUM_BENCH_PM=npm\n' >> "$GITHUB_ENV"
+            printf 'QUOTUM_BENCH_HUB_DIR=hub\n' >> "$GITHUB_ENV"
+          fi
+      - run: ${{ env.QUOTUM_BENCH_PM }} run build
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
       - name: Verify the requested source and received-client identity
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         if: ${{ inputs.combined_benchmark || inputs.native_trace || inputs.native_profile || inputs.caption_control }}
         run: |
           node --import tsx --input-type=module <<'JS'
@@ -366,15 +475,23 @@ jobs:
           NATIVE_PROFILE: ${{ inputs.native_profile }}
           CAPTION_CONTROL: ${{ inputs.caption_control }}
       - name: Build the unchanged caption baseline
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         if: ${{ inputs.caption_control }}
         run: |
           git fetch --no-tags --depth=1 origin 9e4b1422961b8a3d5b9e2f9894d3db5584c65a43
           baseline="$RUNNER_TEMP/quotum-caption-baseline"
           mkdir "$baseline"
           git -C "$GITHUB_WORKSPACE" archive 9e4b1422961b8a3d5b9e2f9894d3db5584c65a43 hub | tar -x -C "$baseline"
-          ln -s "$GITHUB_WORKSPACE/hub/node_modules" "$baseline/hub/node_modules"
+          npm ci --prefix "$baseline/hub"
           npm run build --prefix "$baseline/hub"
-      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope "${BENCH_SCOPE}"
+      - run: |
+          export QUOTUM_CHROME="$(command -v google-chrome)"
+          if [[ "$QUOTUM_BENCH_PM" == pnpm ]]; then
+            pnpm run bench --ci --scope "${BENCH_SCOPE}"
+          else
+            npm run bench -- --ci --scope "${BENCH_SCOPE}"
+          fi
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         env:
           BENCH_SCOPE: ${{ inputs.combined_benchmark && 'all' || inputs.native_trace && inputs.native_target == 'quota/24h' && 'panning' || (inputs.native_trace || inputs.native_profile || inputs.caption_control) && 'dashboard' || 'updates' }}
           QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.native_profile && 'native-profile' || inputs.native_trace && 'native-trace' || '' }}
@@ -398,17 +515,21 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: hub
+        working-directory: apps/hub
     steps:
       - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12.21.0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: hub/package-lock.json
-      - run: npm ci
-      - run: npm run build
-      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope panning
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - working-directory: .
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm run build
+      - run: QUOTUM_CHROME="$(command -v google-chrome)" pnpm run bench --ci --scope panning
         env:
           QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-bench-panning
       - name: Benchmark evidence
@@ -423,21 +544,39 @@ jobs:
     if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && !inputs.history_pool_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.native_trace && !inputs.native_profile && !inputs.caption_control && !inputs.native_postmortem_control && !inputs.history_scroll_control) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: hub
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.diagnostic_ref }}
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12.21.0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: hub/package-lock.json
-      - run: npm ci
-      - run: npm run build
+          cache: ${{ hashFiles('pnpm-lock.yaml') != '' && 'pnpm' || 'npm' }}
+          cache-dependency-path: ${{ hashFiles('pnpm-lock.yaml') != '' && 'pnpm-lock.yaml' || hashFiles('package-lock.json') != '' && 'package-lock.json' || 'hub/package-lock.json' }}
+      - name: Install dependencies and select the pinned hub workspace
+        run: |
+          # Diagnostic source pins can predate the apps/ or pnpm layout.
+          if [[ -f apps/hub/package.json ]]; then
+            if [[ -f pnpm-lock.yaml ]]; then
+              pnpm install --frozen-lockfile --ignore-scripts
+              printf 'QUOTUM_BENCH_PM=pnpm\n' >> "$GITHUB_ENV"
+            else
+              npm ci
+              printf 'QUOTUM_BENCH_PM=npm\n' >> "$GITHUB_ENV"
+            fi
+            printf 'QUOTUM_BENCH_HUB_DIR=apps/hub\n' >> "$GITHUB_ENV"
+          else
+            npm --prefix hub ci
+            printf 'QUOTUM_BENCH_PM=npm\n' >> "$GITHUB_ENV"
+            printf 'QUOTUM_BENCH_HUB_DIR=hub\n' >> "$GITHUB_ENV"
+          fi
+      - run: ${{ env.QUOTUM_BENCH_PM }} run build
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
       - name: Verify the requested source and received-client identity
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         run: |
           node --import tsx --input-type=module <<'JS'
           import {execFileSync} from 'node:child_process';
@@ -454,7 +593,14 @@ jobs:
           TRACE_ONLY: ${{ inputs.trace_only }}
           ORIGINAL_TIMING: ${{ inputs.original_timing }}
       # Match the canonical dashboard; history traffic has its own independent job.
-      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope dashboard
+      - run: |
+          export QUOTUM_CHROME="$(command -v google-chrome)"
+          if [[ "$QUOTUM_BENCH_PM" == pnpm ]]; then
+            pnpm run bench --ci --scope dashboard
+          else
+            npm run bench -- --ci --scope dashboard
+          fi
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         env:
           QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.trace_only && 'trace' || inputs.original_timing && 'profile' || '' }}
           QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
@@ -466,25 +612,25 @@ jobs:
           path: |
             /tmp/quotum-idle-cpu-diagnostic/
             ${{ runner.temp }}/quotum-idle-control/
-            hub/dist/client/assets/index-*.js
+            ${{ env.QUOTUM_BENCH_HUB_DIR || 'apps/hub' }}/dist/client/assets/index-*.js
           if-no-files-found: warn
 
   native-postmortem-control:
     if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && !inputs.startup_io_control && github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && inputs.native_postmortem_control) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: hub
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.diagnostic_ref }}
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12.21.0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: hub/package-lock.json
+          cache: ${{ hashFiles('pnpm-lock.yaml') != '' && 'pnpm' || 'npm' }}
+          cache-dependency-path: ${{ hashFiles('pnpm-lock.yaml') != '' && 'pnpm-lock.yaml' || hashFiles('package-lock.json') != '' && 'package-lock.json' || 'hub/package-lock.json' }}
       - name: Require the isolated native control
         env:
           TRACE: ${{ inputs.trace_only }}
@@ -495,13 +641,32 @@ jobs:
           HISTORY_SCROLL: ${{ inputs.history_scroll_control }}
           HISTORY_POOL: ${{ inputs.history_pool_control }}
         run: node -e 'if(["TRACE","PROFILE","NATIVE_TRACE","NATIVE_PROFILE","CAPTION","HISTORY_SCROLL","HISTORY_POOL"].some(k=>process.env[k]==="true"))throw Error("Choose only the native postmortem control")'
-      - run: npm ci
-      - run: npm run build
+      - name: Install dependencies and select the pinned hub workspace
+        run: |
+          # Diagnostic source pins can predate the apps/ or pnpm layout.
+          if [[ -f apps/hub/package.json ]]; then
+            if [[ -f pnpm-lock.yaml ]]; then
+              pnpm install --frozen-lockfile --ignore-scripts
+              printf 'QUOTUM_BENCH_PM=pnpm\n' >> "$GITHUB_ENV"
+            else
+              npm ci
+              printf 'QUOTUM_BENCH_PM=npm\n' >> "$GITHUB_ENV"
+            fi
+            printf 'QUOTUM_BENCH_HUB_DIR=apps/hub\n' >> "$GITHUB_ENV"
+          else
+            npm --prefix hub ci
+            printf 'QUOTUM_BENCH_PM=npm\n' >> "$GITHUB_ENV"
+            printf 'QUOTUM_BENCH_HUB_DIR=hub\n' >> "$GITHUB_ENV"
+          fi
+      - run: ${{ env.QUOTUM_BENCH_PM }} run build
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
       - name: Prepare the diagnostic native debugger
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gdb
       - name: Prepare matching renderer unwind tables
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         run: bash bench/prepareNativeUnwind.sh
       - name: Run the owned native control under a separate UID
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         env:
           SOURCE_SHA: ${{ inputs.diagnostic_ref }}
           CLIENT_SHA256: ${{ inputs.expected_client_sha256 }}
@@ -519,6 +684,7 @@ jobs:
           set -o pipefail
           sudo -n -- /usr/bin/sudo -n -u nobody -g "$(id -gn)" -- /usr/bin/env HOME="$runtime_home" XDG_CONFIG_HOME="$runtime_home/config" XDG_CACHE_HOME="$runtime_home/cache" "$node_binary" --import tsx bench/nativePostmortemControl.ts "$SOURCE_SHA" "$CLIENT_SHA256" "$chrome_binary" 2>&1 | tee "$receipt/control-first.jsonl"
       - name: Native debugger identity
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         if: always()
         run: |
           receipt="$RUNNER_TEMP/quotum-native-postmortem-control"
@@ -549,9 +715,6 @@ jobs:
     if: ${{ !inputs.combined_benchmark && (!inputs.history_preinput_binding && !inputs.compositor_guard_control && github.event_name == 'workflow_dispatch' && inputs.startup_io_control) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: hub
     env:
       QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
       QUOTUM_BENCH_EXPECTED_CLIENT_SHA256: ${{ inputs.expected_client_sha256 }}
@@ -565,13 +728,33 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.diagnostic_ref }}
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12.21.0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: hub/package-lock.json
-      - run: npm ci
-      - run: npm run build
+          cache: ${{ hashFiles('pnpm-lock.yaml') != '' && 'pnpm' || 'npm' }}
+          cache-dependency-path: ${{ hashFiles('pnpm-lock.yaml') != '' && 'pnpm-lock.yaml' || hashFiles('package-lock.json') != '' && 'package-lock.json' || 'hub/package-lock.json' }}
+      - name: Install dependencies and select the pinned hub workspace
+        run: |
+          # Diagnostic source pins can predate the apps/ or pnpm layout.
+          if [[ -f apps/hub/package.json ]]; then
+            if [[ -f pnpm-lock.yaml ]]; then
+              pnpm install --frozen-lockfile --ignore-scripts
+              printf 'QUOTUM_BENCH_PM=pnpm\n' >> "$GITHUB_ENV"
+            else
+              npm ci
+              printf 'QUOTUM_BENCH_PM=npm\n' >> "$GITHUB_ENV"
+            fi
+            printf 'QUOTUM_BENCH_HUB_DIR=apps/hub\n' >> "$GITHUB_ENV"
+          else
+            npm --prefix hub ci
+            printf 'QUOTUM_BENCH_PM=npm\n' >> "$GITHUB_ENV"
+            printf 'QUOTUM_BENCH_HUB_DIR=hub\n' >> "$GITHUB_ENV"
+          fi
+      - run: ${{ env.QUOTUM_BENCH_PM }} run build
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
       - name: Prepare the isolated kernel observer
         run: |
           if [[ ! -x /usr/bin/bpftrace || ! -x /usr/bin/gdb ]]; then
@@ -598,14 +781,17 @@ jobs:
           printf 'QUOTUM_CHROME=%s\n' "$(command -v google-chrome)" >> "$GITHUB_ENV"
           printf 'QUOTUM_BENCH_DIAGNOSTICS_DIR=%s\n' "$RUNNER_TEMP/quotum-startup-wait" >> "$GITHUB_ENV"
       - name: Build the isolated scheduler wait fixture
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         run: |
           umask 077
           /usr/bin/cc -shared -fPIC -O2 -Wall -Wextra -Werror bench/startupWaitFixture.c -o "$RUNNER_TEMP/quotum-wait-fixture.so"
           printf 'QUOTUM_BENCH_WAIT_FIXTURE_LIBRARY=%s\n' "$RUNNER_TEMP/quotum-wait-fixture.so" >> "$GITHUB_ENV"
       - name: Prepare matching renderer unwind tables
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         continue-on-error: true
         run: bash bench/prepareNativeUnwind.sh
       - name: Qualify file inputs and a known scheduler wait and observe the unchanged history run
+        working-directory: ${{ env.QUOTUM_BENCH_HUB_DIR }}
         run: node --import tsx bench/startupWaitControl.mjs "$GITHUB_WORKSPACE" "$QUOTUM_BENCH_DIAGNOSTICS_DIR"
       - name: Startup observation evidence
         if: always()
@@ -625,18 +811,22 @@ jobs:
     timeout-minutes: 10
     defaults:
       run:
-        working-directory: hub
+        working-directory: apps/hub
     steps:
       - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12.21.0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: hub/package-lock.json
-      - run: npm ci
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - working-directory: .
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - if: runner.os == 'Windows'
         run: node server/secrets/build-windows.mjs
-      - run: npx tsx --test server/test/managedKeys.test.ts server/test/windowsKeys.test.ts
+      - run: pnpm exec tsx --test server/test/managedKeys.test.ts server/test/windowsKeys.test.ts
 
   # On every system the agent ships for: its process handling differs between them.
   agent:
@@ -648,16 +838,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     defaults:
       run:
-        working-directory: agent
+        working-directory: apps/agent
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-        with:
-          toolchain: stable
-          components: clippy, rustfmt
+      - name: Install the pinned agent toolchain
+        shell: bash
+        run: |
+          rustup toolchain install --profile minimal --no-self-update
+          read -r tc _ < <(rustup show active-toolchain)
+          rustup default "${tc%$'\r'}"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: agent
+          workspaces: apps/agent
       - if: runner.os == 'Linux'
         run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings

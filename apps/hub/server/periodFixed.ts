@@ -1,0 +1,250 @@
+import type {PeriodRange} from './domain/period.js';
+import {
+  decodeSamples,
+  sampleCount,
+  sampleAt,
+  rateObservations,
+  type PeriodTape,
+} from './domain/periodTape.js';
+import {drain, type Preparation} from './domain/prepare.js';
+import {PeriodCurves, type SourceWorkCurves} from './domain/periodCurves.js';
+import {PeriodAccounting} from './domain/periodAccounting.js';
+import {PeriodIndex} from './domain/periodIndex.js';
+import {PeriodActivity} from './domain/periodActivity.js';
+import {workSpans, workPreparationBytes, type WorkTrace} from './domain/periodWork.js';
+import {prepareShiftBoundaries, withShift, prepareShiftWindow} from './domain/periodShift.js';
+import {HistoryLimit} from './history.js';
+import {barOf} from './domain/work.js';
+import type {History} from './domain/history.js';
+
+/** A fixed interval needs exact totals and boundary geometry, not a rolling ledger. */
+export function fixedTape(
+  tape: PeriodTape,
+  work: WorkTrace | null,
+  range: PeriodRange,
+  cell: number,
+  reserve: (bytes: number) => void,
+  release: (bytes: number) => void = () => {},
+): PeriodTape {
+  return drain(prepareFixedTape(tape, work, range, cell, reserve, release));
+}
+export function* prepareFixedTape(
+  tape: PeriodTape,
+  work: WorkTrace | null,
+  range: PeriodRange,
+  cell: number,
+  reserve: (bytes: number) => void,
+  release: (bytes: number) => void = () => {},
+  sourceWide?: SourceWorkCurves,
+  evaluatedAt = Infinity,
+): Preparation<PeriodTape> {
+  for (const series of tape.quota)
+    if (series.samplesEncoding === 'delta') {
+      reserve(sampleCount(series.samples) * 40);
+      series.samples = decodeSamples(series.samples);
+      delete series.samplesEncoding;
+    }
+  if (work) reserve(workPreparationBytes(work));
+  const curves = work ? yield* PeriodCurves.prepare(work) : undefined;
+  let scratch = 0;
+  const accounting = yield* PeriodAccounting.prepare(
+    tape,
+    work,
+    curves,
+    undefined,
+    undefined,
+    bytes => {
+      if (bytes > scratch) reserve(bytes - scratch);
+      else release(scratch - bytes);
+      scratch = bytes;
+    },
+    sourceWide,
+  );
+  const base = accounting.fixed(range, cell, evaluatedAt);
+  reserve(JSON.stringify(base).length * 6);
+  function* anchors() {
+    for (const series of tape.quota) {
+      yield series.workFrom ?? 0;
+      for (const descriptor of series.descriptors ?? []) yield descriptor.at;
+      for (let i = 0; i < sampleCount(series.samples); i++) {
+        const s = sampleAt(series.samples, i)!;
+        yield s.at;
+        yield s.at + s.staleAfterMs + 1;
+        yield s.resetAt ?? Infinity;
+        yield s.validUntil ?? Infinity;
+      }
+    }
+    for (const group of tape.money)
+      for (const part of [
+        group,
+        ...(group.paired ? [group.paired] : []),
+        ...(group.workCounter ? [group.workCounter] : []),
+      ]) {
+        for (const r of part.readings) {
+          yield r.at;
+          yield r.previousAt ?? Infinity;
+          yield r.resetAt ?? Infinity;
+          yield r.at + r.staleAfterMs + 1;
+        }
+        for (const s of part.spans) {
+          yield s.from;
+          yield s.to;
+          yield s.observedFrom ?? Infinity;
+          yield s.to + s.staleAfterMs + 1;
+          yield s.holdUntil ?? Infinity;
+          yield s.interruptedAt ?? Infinity;
+        }
+      }
+    for (const group of tape.money) {
+      if (group.workCounter) {
+        yield group.workCounter.knownFrom ?? Infinity;
+        yield group.workCounter.workFrom ?? Infinity;
+      }
+      for (const [, at] of rateObservations(group)) yield at;
+    }
+    if (work) yield* workAnchors(work);
+    if (sourceWide)
+      for (const timeline of sourceWide.groups.source.values()) {
+        let at = timeline.next(-Infinity);
+        while (Number.isFinite(at)) {
+          yield at;
+          at = timeline.next(at);
+        }
+      }
+  }
+  const fixed = yield* reusable(
+    base,
+    offset =>
+      accounting.fixed({from: range.from + offset, to: range.to + offset}, cell, evaluatedAt),
+    cell,
+    tape.from,
+    tape.cut,
+    [cell],
+    anchors(),
+    reserve,
+    release,
+  );
+  return {...tape, quota: [], money: [], fixed};
+}
+
+function* workAnchors(trace: WorkTrace) {
+  yield trace.knownFrom;
+  for (const [, from, to] of workSpans(trace)) {
+    yield trace.anchor + from;
+    yield trace.anchor + to;
+  }
+}
+
+export function fixedWork(
+  trace: WorkTrace,
+  range: PeriodRange,
+  cell: number,
+  now: number,
+  reserve: (bytes: number) => void,
+  release: (bytes: number) => void = () => {},
+): WorkTrace {
+  return drain(prepareFixedWork(trace, range, cell, now, reserve, release));
+}
+export function* prepareFixedWork(
+  trace: WorkTrace,
+  range: PeriodRange,
+  cell: number,
+  now: number,
+  reserve: (bytes: number) => void,
+  release: (bytes: number) => void = () => {},
+): Preparation<WorkTrace> {
+  reserve(workPreparationBytes(trace));
+  const index = yield* PeriodIndex.prepare(trace),
+    projection = yield* PeriodActivity.prepare(trace, index.curves);
+  const barMs = barOf(cell, range.to - range.from);
+  const ids = new Map(trace.refs.map((ref, i) => [ref.ref, i]));
+  const project = (range: PeriodRange): NonNullable<WorkTrace['fixed']> => {
+    const admittedRange = {from: Math.max(range.from, trace.anchor), to: range.to};
+    const rows = index.advance(admittedRange, now).rows;
+    projection.update(rows);
+    const blank: History['activity'] = {
+      since: range.from,
+      known: null,
+      barMs,
+      activeMs: 0,
+      agentMs: 0,
+      agents: 0,
+      cells: [],
+      by: {source: [], project: [], device: []},
+    };
+    const activity = projection.project(blank, admittedRange);
+    for (const at of new Set([
+      Math.floor(range.from / barMs) * barMs,
+      Math.floor((range.to - 1) / barMs) * barMs,
+    ])) {
+      const part = {from: Math.max(range.from, at), to: Math.min(range.to, at + barMs)};
+      const agents = new Set(
+        trace.refs
+          .filter((_, i) => index.curves.contexts[i].read(part) > 0)
+          .map(ref => ref.identityRef ?? ref.ref),
+      ).size;
+      activity.cells.push([
+        at,
+        index.curves.all.read(part, true),
+        index.curves.all.read(part),
+        agents,
+      ]);
+      for (const by of ['source', 'project', 'device'] as const)
+        for (const group of activity.by[by])
+          group.cells.push([at, index.curves.groups[by].get(group.key)!.read(part)]);
+    }
+    return {
+      range,
+      totals: rows.map(row => [ids.get(row.ref)!, row.workedMs, row.lastWorkedAt]),
+      activity,
+    };
+  };
+  const base = project(range);
+  reserve(JSON.stringify(base).length * 6);
+  const fixed = yield* reusable(
+    base,
+    offset => project({from: range.from + offset, to: range.to + offset}),
+    cell,
+    trace.anchor,
+    trace.cut ?? range.to,
+    [cell, barMs],
+    workAnchors(trace),
+    reserve,
+    release,
+  );
+  return {...trace, spans: [], packed: undefined, fixed};
+}
+
+function* reusable<T extends {range: PeriodRange}>(
+  base: T,
+  read: (offset: number) => T,
+  cell: number,
+  from: number,
+  to: number,
+  cells: readonly number[],
+  anchors: Iterable<number>,
+  reserve: (bytes: number) => void,
+  release: (bytes: number) => void,
+): Preparation<T> {
+  let bytes = 0,
+    boundaries: number[] = [];
+  const charge = (size: number) => {
+    reserve(size);
+    bytes += size;
+  };
+  try {
+    boundaries = yield* prepareShiftBoundaries(
+      base.range,
+      Math.max(-cell, from - base.range.from),
+      Math.min(cell + 1, to - base.range.to + 1),
+      cells,
+      anchors,
+      charge,
+    );
+    return yield* prepareShiftWindow(base, read, boundaries, charge);
+  } catch (error) {
+    release(bytes);
+    if (!(error instanceof HistoryLimit)) throw error;
+    return withShift(base, read, boundaries.find(offset => offset > 0) ?? 1);
+  }
+}

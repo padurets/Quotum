@@ -1,7 +1,7 @@
 /** Pinned Linux engine and AppImage runtime; no install scripts or global tools. */
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
+import {copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync} from 'node:fs';
 import {homedir} from 'node:os';
 import path from 'node:path';
 
@@ -17,6 +17,16 @@ const RUNTIME = {
 };
 const cacheRoot = () => process.env.XDG_CACHE_HOME || path.join(homedir(), '.cache');
 const sha = file => createHash('sha256').update(readFileSync(file)).digest('hex');
+function commitFile(cache, file, target, write) {
+  const work = mkdtempSync(path.join(cache, 'quotum-electron-'));
+  try {
+    const staged = path.join(work, file);
+    write(staged);
+    renameSync(staged, target);
+  } finally {
+    rmSync(work, {recursive: true, force: true});
+  }
+}
 async function download(file, digest, url) {
   const cache = path.join(cacheRoot(), 'quotum-build');
   mkdirSync(cache, {recursive: true});
@@ -27,7 +37,10 @@ async function download(file, digest, url) {
   if (existsSync(electronCache)) {
     for (const directory of readdirSync(electronCache, {withFileTypes: true}).filter(e => e.isDirectory())) {
       const candidate = path.join(electronCache, directory.name, file);
-      if (existsSync(candidate) && sha(candidate) === digest) { copyFileSync(candidate, target); return target; }
+      if (existsSync(candidate) && sha(candidate) === digest) {
+        commitFile(cache, file, target, staged => copyFileSync(candidate, staged));
+        return target;
+      }
     }
   }
   console.log(`downloading ${url}`);
@@ -35,9 +48,7 @@ async function download(file, digest, url) {
   if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
   const bytes = Buffer.from(await response.arrayBuffer());
   if (createHash('sha256').update(bytes).digest('hex') !== digest) throw new Error(`${file}: SHA-256 mismatch`);
-  writeFileSync(`${target}.new`, bytes);
-  const {renameSync} = await import('node:fs');
-  renameSync(`${target}.new`, target);
+  commitFile(cache, file, target, staged => writeFileSync(staged, bytes));
   return target;
 }
 export async function prepareElectron(resources) {

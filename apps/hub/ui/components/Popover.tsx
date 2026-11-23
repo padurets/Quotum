@@ -1,0 +1,575 @@
+/** @jsxRuntime automatic */
+import {createPortal} from 'react-dom';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ButtonHTMLAttributes,
+  type FocusEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
+import {barsOf, coverOf, crampedOf, roomOf, shiftOf, sideOf} from '../lib/place';
+import {settler} from '../lib/settle';
+import {X} from 'lucide-react';
+import {t} from '../i18n';
+import {returnFocus, returnFocusOutside} from './focusReturn';
+
+/** A button with an anchored panel; closes on outside click, Escape, focus moving out and its button going out of sight. */
+export function Popover({
+  label,
+  icon,
+  trigger,
+  badge,
+  children,
+  open: controlled,
+  onOpenChange,
+  align = 'right',
+  triggerClass,
+  up = false,
+  width,
+  horizontalAnchor,
+  buttonProps,
+  portal,
+}: {
+  label: string;
+  /** Escape an enclosing scroller while keeping the same anchored surface. */
+  portal?: HTMLElement | null;
+  buttonProps?: ButtonHTMLAttributes<HTMLButtonElement> & {
+    [key: `data-${string}`]: string | number | undefined;
+  };
+  icon?: ReactNode;
+  /** A text trigger instead of an icon button. */
+  trigger?: ReactNode;
+  /** How a text trigger looks, when not as plain text; such a trigger is named by `label`, not by what it shows. */
+  triggerClass?: string;
+  /** Opens above the button (from the bottom of a card) rather than below it, where there is room. */
+  up?: boolean;
+  badge?: number;
+  children: ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  align?: 'left' | 'right';
+  /** A content width, still capped to the viewport by the shared panel style. */
+  width?: number;
+  /** Align horizontally with this part of the trigger, leaving its badges outside the anchor. */
+  horizontalAnchor?: RefObject<HTMLElement | null>;
+}) {
+  const [own, setOwn] = useState(false);
+  const open = controlled ?? own;
+  const setOpen = (next: boolean) => (onOpenChange ? onOpenChange(next) : setOwn(next));
+  const box = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const portalAnchor = useRef<HTMLDivElement>(null);
+  const boxRef = useCallback((element: HTMLDivElement | null) => {
+    // A retiring trigger also owns its portaled panel; neither can receive the return.
+    if (
+      !element &&
+      box.current &&
+      (box.current.contains(document.activeElement) ||
+        panel.current?.contains(document.activeElement))
+    )
+      returnFocusOutside(box.current);
+    box.current = element;
+  }, []);
+  const panelRef = useCallback((element: HTMLDivElement | null) => {
+    // A form can close its panel directly. Return focus before its focused control is removed.
+    if (!element && panel.current?.contains(document.activeElement)) returnFocus(button.current);
+    panel.current = element;
+  }, []);
+  // A panel never scrolls the page, lengthens it nor widens it: it opens whole in the window,
+  // under the bars stuck at its top, on the side of its button that `sideOf` picks, cut to the
+  // room there and scrolling inside, and moves sideways as far as keeps it on the screen (from a
+  // card at the edge of a narrow one) or in its dialog. Where it stands is read, not assumed, as
+  // a text trigger is taller than an icon. It is placed again as its content changes, keeping to
+  // the side it is on while it has room there, and as the page is laid out anew: the window or
+  // the page's content changes size, the board lays itself out again after a resize, in as many
+  // passes as it takes, its widgets change size, trade places or slide to new ones. Only ever from
+  // its button in sight: while the page is laid out it follows the button, hidden where that is
+  // out of sight, past the window's edge or under the bars, and once the page is still, a button
+  // out of sight closes it. Not placed again as the page scrolls, it goes along with its button,
+  // and a scroll that takes the button out of sight closes it, as placed from where the button
+  // went it would stand wrong by the time its reader scrolled back. A list of it that scrolls on
+  // its own while the rest stays (`.popover-scroll`) has at least the room it asks for
+  // (`--least`), or the whole panel scrolls, the list with it (`is-cramped`).
+  const [side, setSide] = useState<{up: boolean; cap: number | null; cramped: boolean} | null>(
+    null,
+  );
+  useLayoutEffect(() => {
+    const element = panel.current;
+    const trigger = button.current;
+    const picker = box.current;
+    if (!open || !element || !trigger || !picker) return setSide(null);
+    // The side it stands on, once placed.
+    let upwards: boolean | null = null;
+    // The bars are found again as the page is laid out, not at every scroll.
+    let bars = barsOf();
+    const dialog = trigger.closest<HTMLElement>('.dialog');
+    // A dialog clips its children: fitting the window can still make the dialog scroll.
+    const bounds = () => {
+      if (!dialog)
+        return {top: 0, bottom: innerHeight, left: 0, right: document.documentElement.clientWidth};
+      const rect = dialog.getBoundingClientRect();
+      const top = rect.top + dialog.clientTop,
+        left = rect.left + dialog.clientLeft;
+      return {
+        top: Math.max(0, top),
+        bottom: Math.min(innerHeight, top + dialog.clientHeight),
+        left: Math.max(0, left),
+        right: Math.min(document.documentElement.clientWidth, left + dialog.clientWidth),
+      };
+    };
+    // The panel's size as it was placed, or none while hidden: its observer telling of that is no
+    // news, as a panel cut anew as its button moves would be cut again and again, and a hidden one
+    // placed again at each scroll; only its content changing it is.
+    let size = {width: 0, height: 0};
+    const clips: HTMLElement[] = [];
+    if (portal)
+      for (
+        let parent = trigger.parentElement;
+        parent && parent !== portal;
+        parent = parent.parentElement
+      ) {
+        const style = getComputedStyle(parent);
+        if (/auto|scroll|hidden|clip/.test(style.overflowX + ' ' + style.overflowY))
+          clips.push(parent);
+      }
+    const seen = () => {
+      const at = picker.getBoundingClientRect();
+      const room = bounds();
+      return (
+        at.bottom > Math.max(room.top, coverOf(at.bottom, trigger, bars)) &&
+        at.top < room.bottom &&
+        clips.every(clip => {
+          const box = clip.getBoundingClientRect();
+          return (
+            at.right > box.left && at.left < box.right && at.bottom > box.top && at.top < box.bottom
+          );
+        })
+      );
+    };
+    // Focus in the panel goes back to the button, as on Escape, without scrolling the page to it.
+    const unfocus = () => {
+      if (element.contains(document.activeElement)) returnFocus(trigger);
+    };
+    const close = () => {
+      unfocus();
+      setOpen(false);
+    };
+    const place = () => {
+      element.style.display = '';
+      const room = bounds();
+      if (portal && portalAnchor.current) {
+        const at = picker.getBoundingClientRect(),
+          origin = portal.getBoundingClientRect();
+        Object.assign(portalAnchor.current.style, {
+          left: `${at.left - origin.left - portal.clientLeft}px`,
+          top: `${at.top - origin.top - portal.clientTop}px`,
+          width: `${at.width}px`,
+          height: `${at.height}px`,
+        });
+      }
+      if (dialog)
+        element.style.setProperty(
+          '--popover-room',
+          `${Math.max(0, room.right - room.left - 16)}px`,
+        );
+      const list = element.querySelector<HTMLElement>('.popover-scroll');
+      // Measuring takes the cut off, and what scrolls may change: its reader keeps their place in
+      // the list where there is one (at its top, the panel's top, the title in sight), or its end.
+      const scroller = list && !element.classList.contains('is-cramped') ? list : element;
+      const end =
+        scroller.scrollTop > 0 &&
+        scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1;
+      const read = !list
+        ? element.scrollTop
+        : scroller === element
+          ? element.scrollTop - list.offsetTop
+          : list.scrollTop || -list.offsetTop;
+      element.style.maxHeight = '';
+      element.style.translate = '';
+      const at = picker.getBoundingClientRect();
+      const anchor = horizontalAnchor?.current?.getBoundingClientRect();
+      // Align in layout: a compensating transform can resample text as a badge grows.
+      element.style.left = anchor ? (align === 'left' ? `${anchor.left - at.left}px` : 'auto') : '';
+      element.style.right = anchor
+        ? align === 'right'
+          ? `${at.right - anchor.right}px`
+          : 'auto'
+        : '';
+      element.classList.remove('is-capped', 'is-cramped');
+      // Measured above its button only, where it cannot lengthen the page as it is measured; the
+      // stylesheet sets it as far below its button as above.
+      element.classList.add('is-up');
+      const rect = element.getBoundingClientRect();
+      const {above, below} = roomOf(
+        at,
+        at.top - rect.bottom,
+        Math.max(room.top, coverOf(at.bottom, trigger, bars)),
+        room.bottom,
+      );
+      const {up: next, cap} = sideOf(rect.height, above, below, upwards ?? up, upwards !== null);
+      const least = list ? parseFloat(getComputedStyle(list).getPropertyValue('--least')) || 0 : 0;
+      const cramped =
+        !!list && crampedOf(cap, rect.height - list.getBoundingClientRect().height, least);
+      upwards = next;
+      // Set here as well as through state, so what is measured next is what shows.
+      element.classList.toggle('is-up', next);
+      element.classList.toggle('is-capped', cap !== null);
+      element.classList.toggle('is-cramped', cramped);
+      element.style.maxHeight = cap === null ? '' : `${cap}px`;
+      const scrolls = list && !cramped ? list : element;
+      scrolls.scrollTop = end
+        ? scrolls.scrollHeight
+        : list && scrolls === element
+          ? read + list.offsetTop
+          : read;
+      // Sideways as it now stands, a cut panel wider by its scrollbar, within the width of the page
+      // or of its dialog, either without its own scrollbar.
+      const placed = element.getBoundingClientRect();
+      size = {width: placed.width, height: placed.height};
+      const shift = shiftOf(
+        placed.left - room.left,
+        placed.right - room.left,
+        room.right - room.left,
+      );
+      if (shift) element.style.translate = `${shift}px 0`;
+      setSide(same =>
+        same?.up === next && same.cap === cap && same.cramped === cramped
+          ? same
+          : {up: next, cap, cramped},
+      );
+    };
+    const hide = () => {
+      unfocus();
+      element.style.display = 'none';
+      size = {width: 0, height: 0};
+    };
+    const follow = () => (seen() ? place() : hide());
+    // Opened out of sight, from the keyboard (its focus under the bars, or left on it as its panel
+    // closed), the button comes into sight first, 8 under the bars or above the window's bottom:
+    // its reader asked for the panel. Not to the nearest edge, as a button under the bars is in
+    // the window for the browser; the panel, not placed yet, hidden meanwhile so as not to widen
+    // the page; and again if other bars stick at the top once the page has moved.
+    if (!seen()) {
+      element.style.display = 'none';
+      const block = picker.getBoundingClientRect().top >= bounds().bottom ? 'end' : 'start';
+      let margin = NaN;
+      for (let pass = 0; pass < 3; pass++) {
+        const next = coverOf(Infinity, trigger, bars) + 8;
+        if (next === margin) break;
+        margin = next;
+        trigger.style.scrollMargin = `${margin}px 0 8px`;
+        trigger.scrollIntoView({block});
+      }
+      trigger.style.scrollMargin = '';
+      if (!trigger.getAttribute('style')) trigger.removeAttribute('style');
+    }
+    place();
+    // As the page is laid out anew the panel follows its button, and is settled once the page is
+    // still (`settler`): a frame goes by with nothing laid out anew, nothing around the button
+    // sliding to a new place (a widget moved, or dropped from a finger: the button is measured
+    // where it slides from), an animation that moves it, and no widget held by the reader, dragged
+    // or resized by a finger or the pointer. The panel goes along with its button's own widget
+    // held, and follows the button while another is, placed once all is let go and has slid into
+    // place. Decided at each step the page takes, it would be decided wrong: the board passes
+    // through layouts that take the button out of sight and bring it back, and scrolls the page as
+    // it does (keeping what is focused, or what is in sight, in its place), as the reader would.
+    // Only what comes to an end is waited for.
+    const sliding = () =>
+      document.getAnimations().some(animation => {
+        const effect = animation.effect;
+        if (
+          !(effect instanceof KeyframeEffect) ||
+          animation.playState !== 'running' ||
+          effect.getTiming().iterations === Infinity
+        )
+          return false;
+        return (
+          !!effect.target?.contains(trigger) &&
+          effect.getKeyframes().some(frame => 'transform' in frame || 'translate' in frame)
+        );
+      });
+    const holding = '.widget.is-lifted, .widget.is-resizing';
+    // A widget held: the board marks the page for as long as one is, read at once where looking
+    // for the widget would go through the whole page at each frame of the gesture.
+    const held = () => document.body.matches('.is-dragging, .is-resizing');
+    // Whether something slid around the button a frame ago: slid into place while another widget
+    // is still held, it tells no observer, and nothing settles before that is let go.
+    let slid = false;
+    const page = settler(
+      () => (seen() ? place() : close()),
+      () => {
+        const holds = held();
+        const slides = sliding();
+        if (slid && !slides && holds && !trigger.closest(holding)) follow();
+        slid = slides;
+        return holds || slides;
+      },
+    );
+    const moved = () => {
+      bars = barsOf();
+      if (!trigger.closest(holding)) follow();
+      page.stir();
+    };
+    // What is watched: the panel, as its content changes; the page's content (the body, at least as
+    // tall as the window, would not tell on a short board); the widgets, each of which a new layout
+    // may give another size; the dialog the button is in, whose content may move it; and the
+    // widgets' places (the style that sets them) and their number, as they may trade places keeping
+    // their size, and the style of the button's own widget's body, which a finger drags and drops
+    // and a resize widens.
+    const observer = new ResizeObserver(entries => {
+      const placed = (entry: ResizeObserverEntry) => {
+        const [box] = entry.borderBoxSize;
+        return (
+          entry.target === element &&
+          Math.abs(box.inlineSize - size.width) < 0.5 &&
+          Math.abs(box.blockSize - size.height) < 0.5
+        );
+      };
+      if (!entries.every(placed)) moved();
+    });
+    const shifts = new MutationObserver(moved);
+    const widgets = document.querySelectorAll('.widget');
+    for (const watched of [
+      element,
+      trigger,
+      horizontalAnchor?.current,
+      document.getElementById('root')!,
+      ...widgets,
+      trigger.closest('.dialog'),
+    ]) {
+      if (watched) observer.observe(watched);
+    }
+    for (const moving of [...widgets, trigger.closest('.widget-body')]) {
+      if (moving) shifts.observe(moving, {attributes: true, attributeFilter: ['style']});
+    }
+    const grid = document.querySelector('.widgets');
+    if (grid) shifts.observe(grid, {childList: true});
+    // Any scroll but the panel's own. While the page is laid out, likely one of its own: the panel
+    // hides if its button is out of sight, and is placed as the page settles, not at each scroll.
+    // While a widget is held, nothing is decided before it is let go: the panel hides then too, and
+    // is placed again as its button comes back into sight, as it would wait hidden till then; not
+    // with its own widget held, which it goes along with.
+    const scrolled = (event: Event) => {
+      if (event.target instanceof Node && element.contains(event.target)) return;
+      if (portal && event.target instanceof Element && event.target.contains(trigger))
+        return seen() ? place() : close();
+      if (dialog && event.target === dialog) return seen() ? place() : close();
+      const holds = held();
+      if (seen()) {
+        if (holds && !size.height && !trigger.closest(holding)) place();
+        return;
+      }
+      if (page.moving()) hide();
+      else if (holds) {
+        hide();
+        page.stir();
+      } else close();
+    };
+    addEventListener('resize', moved);
+    addEventListener('scroll', scrolled, {capture: true, passive: true});
+    return () => {
+      page.stop();
+      observer.disconnect();
+      shifts.disconnect();
+      removeEventListener('resize', moved);
+      removeEventListener('scroll', scrolled, {capture: true});
+    };
+  }, [open, up]);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: Event) => {
+      if (!(
+        box.current?.contains(event.target as Node) || panel.current?.contains(event.target as Node)
+      ))
+        setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      // Focus inside the panel would fall to the page's start; it goes back to the button.
+      if (
+        box.current?.contains(document.activeElement) ||
+        panel.current?.contains(document.activeElement)
+      )
+        returnFocus(button.current);
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [open]);
+
+  // Focus moving on to something outside closes the panel as a click there would, so Tab
+  // from one mark of a tray to the next never leaves two panels open. Focus going nowhere
+  // (a click on the panel's text, the focused control gone, another window) leaves it open.
+  const leave = (event: FocusEvent<HTMLDivElement>) => {
+    const next = event.relatedTarget;
+    if (
+      open &&
+      next instanceof Node &&
+      !(box.current?.contains(next) || panel.current?.contains(next))
+    )
+      setOpen(false);
+  };
+
+  const surface = (
+    <div
+      className={`popover glass ${align === 'left' ? 'is-left' : ''} ${(side?.up ?? up) ? 'is-up' : ''} ${side?.cap != null ? 'is-capped' : ''} ${side?.cramped ? 'is-cramped' : ''}`}
+      style={
+        width !== undefined || side?.cap != null
+          ? {
+              ...(width !== undefined
+                ? {
+                    width,
+                    minWidth: 0,
+                    maxWidth: 'min(calc(100vw - 32px), var(--popover-room, 100vw))',
+                  }
+                : {}),
+              ...(side?.cap != null ? {maxHeight: side.cap} : {}),
+            }
+          : undefined
+      }
+      role="dialog"
+      aria-label={label}
+      tabIndex={side?.cap != null ? 0 : undefined}
+      ref={panelRef}
+    >
+      {children}
+    </div>
+  );
+
+  return (
+    <div className="picker" ref={boxRef} onBlur={leave}>
+      <button
+        type="button"
+        className={trigger ? `text-button ${triggerClass ?? ''}` : 'icon-button'}
+        aria-expanded={open}
+        ref={button}
+        aria-label={trigger && !triggerClass ? undefined : label}
+        title={label}
+        {...buttonProps}
+        onClick={() => setOpen(!open)}
+      >
+        {trigger ?? icon}
+        {!!badge && <i className="badge">{badge}</i>}
+      </button>
+      {open &&
+        (portal
+          ? createPortal(
+              <div className="picker popover-anchor" ref={portalAnchor}>
+                {surface}
+              </div>,
+              portal,
+            )
+          : surface)}
+    </div>
+  );
+}
+
+/** Shared heading for menus with a title, optional context and a close action. */
+export function PopoverHeading({
+  children,
+  detail,
+  onClose,
+}: {
+  children: ReactNode;
+  detail?: ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div className="popover-heading">
+      <h3>{children}</h3>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label={t('common.close')}
+        title={t('common.close')}
+        onClick={onClose}
+      >
+        <X size={14} aria-hidden="true" />
+      </button>
+      {detail && <small>{detail}</small>}
+    </div>
+  );
+}
+
+/** A labelled on/off row for popovers. */
+export function SwitchRow({
+  on,
+  onChange,
+  children,
+  value,
+  className = '',
+  disabled,
+}: {
+  on: boolean;
+  onChange: (on: boolean) => void;
+  children: ReactNode;
+  value?: ReactNode;
+  className?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      className={`popover-row ${className}`}
+      role="switch"
+      aria-checked={on}
+      disabled={disabled}
+      onClick={() => onChange(!on)}
+    >
+      <i className={`switch ${on ? 'on' : ''}`} />
+      <span>{children}</span>
+      {value !== undefined && <b>{value}</b>}
+    </button>
+  );
+}
+
+export const SlidersIcon = () => (
+  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+    <path d="M2 4.5h6M11.5 4.5H14M2 11.5h2.5M8 11.5h6" />
+    <circle cx="9.75" cy="4.5" r="1.75" />
+    <circle cx="6.25" cy="11.5" r="1.75" />
+  </svg>
+);
+
+/** The last row of a widget's menu, for the board's owner: hides the widget (its data stays). */
+export function HideRow({
+  children,
+  onHide,
+  section = true,
+}: {
+  children: ReactNode;
+  onHide: () => void;
+  section?: boolean;
+}) {
+  return (
+    <div className={section ? 'popover-section' : undefined}>
+      <button type="button" className="popover-row" onClick={onHide}>
+        <EyeOffIcon />
+        <span>{children}</span>
+      </button>
+    </div>
+  );
+}
+
+/** Taking a shared widget off the board: the data stays with whoever measures it. */
+export const TakeOffIcon = () => (
+  <svg className="row-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+    <path d="M9.5 3H4.5A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13h5M7 8h7M11.5 5.5 14 8l-2.5 2.5" />
+  </svg>
+);
+
+export const EyeOffIcon = () => (
+  <svg className="row-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+    <path d="M2 8s2.2-4 6-4c1 0 1.9.3 2.7.7M14 8s-2.2 4-6 4c-1 0-1.9-.3-2.7-.7M6.6 9.4a2 2 0 0 1 2.8-2.8M2.5 13.5l11-11" />
+  </svg>
+);

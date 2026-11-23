@@ -7,7 +7,7 @@
 //!   tray opens it, and the board asks the app for its state through the bridge (not where
 //!   the runner can show no window: `QUOTUM_SMOKE_WINDOW=off`); on Windows the board
 //!   watches the app's state first and asks only once the app's first message reached it
-//!   (hub/ui/lib/app.ts), so the ask proves the message was delivered.
+//!   (apps/hub/ui/lib/app.ts), so the ask proves the message was delivered.
 //!
 //! Then it quits, exit 0. `--smoke=crash` aborts once the hub is ready: CI then checks the
 //! hub went by itself. Anything else, or no end within two minutes, is exit 1 with the

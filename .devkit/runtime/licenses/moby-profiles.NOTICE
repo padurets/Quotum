@@ -1,0 +1,4 @@
+desktop-seccomp.json derives from Moby profiles, licensed under Apache-2.0.
+Source: https://github.com/moby/profiles/blob/4b8214fc4971e06172938a1f1554ccff6647ee80/seccomp/default.json
+Changes: retain the default deny policy; permit Chromium USER/PID/NET namespace clone flags, unshare(CLONE_NEWUSER), and chroot with kernel capability checks intact.
+The full Apache License 2.0 is in Apache-2.0.txt.

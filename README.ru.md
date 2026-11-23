@@ -315,7 +315,7 @@ docker logs quotum            # покажет код установки для 
 [deploy/compose.yaml](deploy/compose.yaml) ставит хаб за Caddy, который сам получает
 сертификат: `QUOTUM_DOMAIN=quotum.example.com docker compose up -d`.
 
-Без Docker: склонируйте репозиторий, затем `cd hub && npm ci && npm run build && npm start` (Node.js 24 или новее) —
+Без Docker: склонируйте репозиторий, затем `pnpm install --frozen-lockfile && cd apps/hub && pnpm run build && pnpm start` (Node.js 24 или новее и pnpm) —
 хаб слушает `127.0.0.1:8080` и печатает код установки в терминал.
 
 **2. Поставьте агент и посмотрите лимиты этой машины.**
@@ -377,7 +377,7 @@ Linux, macOS и Windows архивом (`quotum-cli-<версия>-<платфо
 контрольными суммами (`SHA256SUMS`) и
 [подтверждением сборки](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
 (`gh attestation verify <файл> -R padurets/quotum`). **Из исходников:**
-`cd agent && cargo build --release` (Rust 1.85 или новее) даёт `target/release/quotum`.
+`cd apps/agent && cargo build --release` (Rust 1.85 или новее) даёт `target/release/quotum`.
 
 ## Подключение DeepSeek
 
@@ -769,7 +769,7 @@ account = "work"        # различает две подписки Antigravity
 | `QUOTUM_ALLOWED_HOSTS` | `127.0.0.1,localhost` (в образе `*`) | Имена хостов, на которые хаб отвечает, или `*` — любые; остальным — 403. Заданное значение заменяет умолчание |
 | `QUOTUM_PUBLIC_URL` | берётся из запроса | Адрес, который видят агенты и который попадает в приглашения |
 | `QUOTUM_TRUST_PROXY` | — | Верить прокси насчёт адреса и протокола клиента: `true`, число прокси или адреса и диапазоны CIDR |
-| `QUOTUM_DATA_DIR` | `hub/data` (в образе `/data`) | Где лежит база SQLite |
+| `QUOTUM_DATA_DIR` | `apps/hub/data` (в образе `/data`) | Где лежит база SQLite |
 | `QUOTUM_SECRET_KEY`, `QUOTUM_SECRET_KEY_FILE` | автоматическое отдельное хранилище | Необязательный явный ключ шифрования: 32 случайных байта в unpadded base64url или защищённый файл вне каталога данных. Задайте только один вход; явный ключ имеет приоритет над автоматическим. См. [развёртывание сервера](deploy/README.md) |
 | `QUOTUM_SECRET_DIR` | POSIX: соседний каталог реального dataDir с суффиксом `.keys`; образ: `/keys` | Необязательный отдельный постоянный каталог ключа вне данных. При явном ключе не используется. Windows standalone использует приватную ветку HKCU и отклоняет этот параметр в автоматическом режиме |
 | `QUOTUM_SECRET_KEY_PREVIOUS`, `QUOTUM_SECRET_KEY_PREVIOUS_FILE` | — | Совпадающий прежний ключ при ротации. Задайте только один прежний вход; резервные копии ключей храните отдельно, а старый ключ сохраните для соответствующих ему бэкапов |
@@ -798,53 +798,58 @@ Caddy, браузер держит живыми до восьми досок с�
   открытому дашборду.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — как проверить изменение и что учесть (на английском);
   [SECURITY.md](SECURITY.md) — как сообщить об уязвимости, не публикуя её.
-- `npm run demo` в `hub/` (после `npm run build`) — живая доска на одноразовых данных со
+- `pnpm run demo` в `apps/hub/` (после `pnpm run build`) — живая доска на одноразовых данных со
   всеми состояниями, которые знает дашборд и которые держатся на исправном хабе; сеть и
   аккаунты не нужны, Ctrl+C её останавливает и ничего после себя не оставляет.
-  `npm run demo -- showcase` — доска с картинок выше. `npm run demo -- money --still`
+  `pnpm run demo showcase` — доска с картинок выше. `pnpm run demo money --still`
   показывает подписки рядом со всеми денежными кейсами на личной доске Ana.
 
 Структура проекта:
 
 ```
-agent/crates/core     адаптеры клиентов, расписание, настройки, доставка в хаб
-agent/crates/cli      команда `quotum`
-npm/                  пакеты npm: запускалка и готовый бинарник под каждую платформу
-install/              установщики для `curl … | sh` и PowerShell
-deploy/               запуск хаба через Docker Compose за Caddy (HTTPS)
-desktop/              десктопное приложение (Rust, Electron на Linux, Tauri на Windows): агент, свой хаб и доска в окне
-.github/workflows     тесты на каждый push; весь релиз по тегу версии
-spec/                 протоколы: агент — хабу, хаб — дашборду
-hub/server/domain     правила: окна, расход, сбросы, формат замеров
-hub/server/store      SQLite: схема, замеры, люди и устройства
-hub/server/routes     HTTP-маршруты для людей и для агентов
-hub/server/*.ts       приём замеров, дежурство, подключение устройств, сессии, трекеры сбросов
-hub/ui                дашборд (React), переводы в hub/ui/i18n
-hub/demo              демо-доска: каталог всех состояний исправного хаба, живой
+apps/agent/crates/core  адаптеры клиентов, расписание, настройки, доставка в хаб
+apps/agent/crates/cli   команда `quotum`
+npm/                    пакеты npm: запускалка и готовый бинарник под каждую платформу
+install/                установщики для `curl … | sh` и PowerShell
+deploy/                 запуск хаба через Docker Compose за Caddy (HTTPS)
+desktop/                десктопное приложение (Rust, Electron на Linux, Tauri на Windows): агент, свой хаб и доска в окне
+.devkit/                закреплённый контейнерный контур Devkit для `apps/agent` и `apps/hub`
+.github/workflows       тесты на каждый push; весь релиз по тегу версии
+spec/                   протоколы: агент — хабу, хаб — дашборду
+apps/hub/server/domain  правила: окна, расход, сбросы, формат замеров
+apps/hub/server/store   SQLite: схема, замеры, люди и устройства
+apps/hub/server/routes  HTTP-маршруты для людей и для агентов
+apps/hub/server/*.ts    приём замеров, дежурство, подключение устройств, сессии, трекеры сбросов
+apps/hub/ui             дашборд (React), переводы в apps/hub/ui/i18n
+apps/hub/demo           демо-доска: каталог всех состояний исправного хаба, живой
 ```
 
-`npm test` и `npm run typecheck` в `hub/`, `cargo test` и `cargo clippy` в `agent/` и
-`desktop/` проверяют всё (приложение — после `node desktop/prepare.mjs`); CI запускает их
-на каждый push. `node npm/build.mjs` собирает пакеты
-npm (нужны cargo-zigbuild и zig, подробности в самом скрипте), `docker build hub` —
-образ хаба.
+`make setup && make check && make test && make build` проверяет `apps/agent/` и `apps/hub/`
+в закреплённых контейнерах Devkit (или `pnpm test` и `pnpm run check` в `apps/hub/`, `cargo test`
+и `cargo clippy` в `apps/agent/`); `make check-desktop` подготавливает и проверяет `desktop/`
+в закреплённом контейнере (или напрямую на хосте после `node desktop/prepare.mjs`). CI запускает
+их на каждый push. `node npm/build.mjs` собирает пакеты npm (нужны cargo-zigbuild и zig, подробности
+в самом скрипте), `docker build -f apps/hub/Dockerfile .` — образ хаба.
 
 ### Как выпустить релиз
 
-Подготовьте ветку релиза и PR в `main`. Поставьте новую версию в `agent/Cargo.toml`
-(`[workspace.package]`), `desktop/Cargo.toml` и `hub/package.json`, затем обновите их
-lock-файлы. Шаблон npm-пакета остаётся на `0.0.0`: `npm/build.mjs` берёт версию
+Подготовьте ветку релиза и PR в `main`. Поставьте новую версию в `apps/agent/Cargo.toml`
+(`[workspace.package]`), `desktop/Cargo.toml`, `package.json` и `apps/hub/package.json`,
+затем обновите lock-файлы Cargo (`apps/agent/Cargo.lock`, `desktop/Cargo.lock`).
+Шаблон npm-пакета остаётся на `0.0.0`: `npm/build.mjs` берёт версию
 публикуемых пакетов из манифеста агента. Добавьте хеши новых шагов схемы базы в
-`RELEASED` в `hub/server/test/schema.test.ts`: каждый выпущенный шаг после этого
+`RELEASED` в `apps/hub/server/test/schema.test.ts`: каждый выпущенный шаг после этого
 не меняется. Переснимите картинки README на обоих языках на демо-доске,
 проверьте инструкцию обновления и подготовьте описание релиза вне репозитория.
 
 Например, для подготовки 0.10.2 в этой ветке:
 
 ```sh
-(cd hub && npm version 0.10.2 --no-git-tag-version)
-# agent/Cargo.toml и desktop/Cargo.toml: version = "0.10.2"
-(cd agent && cargo metadata --format-version 1 >/dev/null)
+make exec write=1 command='pnpm version 0.10.2 --no-git-tag-version'
+make exec app=hub write=1 command='pnpm version 0.10.2 --no-git-tag-version'
+make sync && make setup
+# apps/agent/Cargo.toml и desktop/Cargo.toml: version = "0.10.2"
+(cd apps/agent && cargo metadata --format-version 1 >/dev/null)
 (cd desktop && cargo metadata --format-version 1 >/dev/null)
 ```
 
@@ -875,9 +880,9 @@ npm принимает пакеты только от этого workflow и б�
 
 ### Как добавить язык
 
-Тексты дашборда лежат в `hub/ui/i18n`. Скопируйте `ru.ts` в файл с кодом языка
+Тексты дашборда лежат в `apps/hub/ui/i18n`. Скопируйте `ru.ts` в файл с кодом языка
 (`de.ts`), переведите строки, переименуйте экспорт и добавьте его в `LOCALES` в
-`index.ts` (импорт и одна строка). Проверка типов и `npm test` убедятся, что
+`index.ts` (импорт и одна строка). Проверка типов и `pnpm test` убедятся, что
 переведены все ключи, совпадают `{подстановки}` и есть все формы множественного числа,
 которые нужны языку.
 
