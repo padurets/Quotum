@@ -81,6 +81,36 @@ test('personal credit tuples keep independent exact amounts, supplied resets and
   assert.equal(precise.measurement!.meters[0].amount, '100001');
 });
 
+test('a clamped five-hour overrun and rounded weekly remaining preserve both credit readings', () => {
+  const result = mapped([
+    {...five, currentValue: 2017, remaining: 0, percentage: 100},
+    {...week, currentValue: 4038, remaining: 5961, percentage: 40},
+  ]);
+  assert.equal(result.quotaObservation!.quota.issue, null);
+  assert.equal(result.quotaObservation!.quota.complete, true);
+  assert.deepEqual(
+    result.measurement!.meters.map(m => [m.id, m.amount, m.limit]),
+    [
+      ['quota:credit:5h', '2017000000', '2000000000'],
+      ['quota:credit:week', '4038000000', '10000000000'],
+    ],
+  );
+});
+
+test('remaining may differ from the signed balance by one credit or be zero on overrun', () => {
+  const weekly = {...week, currentValue: 4038, percentage: 40};
+  for (const remaining of [5961, 5963])
+    assert.equal(mapped([five, {...weekly, remaining}]).quotaObservation!.quota.issue, null);
+  for (const remaining of [5960, 5960.999999, 5963.000001, 5964])
+    assert.equal(mapped([five, {...weekly, remaining}]).quotaObservation!.quota.issue, 'invalid');
+
+  const overrun = {...five, currentValue: 2017, percentage: 100};
+  for (const remaining of [-18, -17, -16])
+    assert.equal(mapped([{...overrun, remaining}, week]).quotaObservation!.quota.issue, null);
+  for (const remaining of [-18.000001, -15.999999, -5, -1, 1, 5])
+    assert.equal(mapped([{...overrun, remaining}, week]).quotaObservation!.quota.issue, 'invalid');
+});
+
 test('empty, unsupported, invalid and mixed readings preserve quota truth', () => {
   assert.equal(mapped([]).quotaObservation!.quota.issue, 'empty');
   for (const raw of [{type: 'TOKENS_LIMIT'}, {type: 'TIME_LIMIT'}, {...five, unit: 6, number: 5}]) {
@@ -94,6 +124,7 @@ test('empty, unsupported, invalid and mixed readings preserve quota truth', () =
     {usage: 1e30},
     {currentValue: '0'},
     {remaining: '1200'},
+    {remaining: null},
     {remaining: 1300},
     {percentage: 90},
   ]) {

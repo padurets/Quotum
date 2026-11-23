@@ -32,6 +32,16 @@ export function decodeZai(json: string): unknown {
 
 const numeric = (value: unknown): value is string =>
   typeof value === 'string' && /^-?(?:0|[1-9][0-9]*)$/.test(value);
+
+function validRemaining(value: unknown, expected: bigint): boolean {
+  if (!numeric(value)) return false;
+  const reported = BigInt(value);
+  // z.ai can clamp an overrun to zero. Independently rounded amounts can differ by one credit.
+  if (expected < 0n && reported === 0n) return true;
+  const difference = reported - expected;
+  return difference >= -1_000_000n && difference <= 1_000_000n;
+}
+
 const quotaId = (raw: Obj) =>
   raw.type !== 'CREDIT_LIMIT'
     ? null
@@ -89,12 +99,7 @@ export function mapZai(answer: unknown, observedAt: number): ConnectorIdentity {
       invalid = true;
       continue;
     }
-    if (
-      Object.hasOwn(raw, 'remaining') &&
-      (!numeric(raw.remaining) ||
-        BigInt(raw.remaining) - remaining > 1n ||
-        remaining - BigInt(raw.remaining) > 1n)
-    ) {
+    if (Object.hasOwn(raw, 'remaining') && !validRemaining(raw.remaining, remaining)) {
       invalid = true;
       continue;
     }
