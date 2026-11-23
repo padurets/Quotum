@@ -713,10 +713,11 @@ crops in the existing browser frame and coloured backdrop.
 On Linux, `make prepare-desktop` provides the bundled Electron in `desktop/resources/electron/`.
 It can capture the loopback page under Xvfb using the runtime in
 `.devkit/runtime/desktop.Dockerfile`. With CDP, set the device scale via
-`Emulation.setDeviceMetricsOverride` and use `Page.captureScreenshot` with a clip.
-Capture beyond the viewport for the tall analytics panels. Wait for the chart data
-and the bundled fonts before capturing either language. Optimize the PNGs and check
-the final dimensions, text and colour gradients at their published size.
+`Emulation.setDeviceMetricsOverride`. For analytics, use a 1240×2220 CSS-pixel
+viewport and scroll all four panels into view. Wait for the bars, series paths,
+forecast labels and bundled fonts to render. Capture the visible viewport with
+`Page.captureScreenshot({captureBeyondViewport: false})` and crop the panels from
+that image. Inspect each optimized PNG for legible text and populated plots.
 
 `pnpm run bench` (after `pnpm run build`) uses a still demo whose agents repeat their
 lists without working, opens Ana's board in headless Chrome and checks the budget in
