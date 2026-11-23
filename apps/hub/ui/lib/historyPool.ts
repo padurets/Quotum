@@ -58,10 +58,14 @@ export class HistoryPool {
     const held = this.retained.get(flight);
     if (held) held.released = true;
     else this.active.delete(flight);
-    this.reservations.delete(flight);
+    this.releaseBytes(flight);
     const index = this.waiting.findIndex(item => item.flight === flight);
     if (index !== -1) this.waiting.splice(index, 1);
     this.schedule();
+  }
+  /** Published buffers can belong to a member before its transport slot is released. */
+  releaseBytes(flight: Flight) {
+    this.reservations.delete(flight);
   }
   private schedule() {
     if (this.scheduled || !this.waiting.length) return;

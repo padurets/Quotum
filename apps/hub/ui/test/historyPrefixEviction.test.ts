@@ -223,24 +223,28 @@ test('pressure can evict an older tile when the visible edge has no room to shri
   }
 });
 
-test('releasing an unseen series makes room to copy the visible suffix under pressure', () => {
-  const h = fixture();
-  try {
-    const chunk = input(LEFT);
-    chunk.meterSeries![0].cells.pop();
-    const edge = tile(LEFT, chunk),
-      grid = h.state.grids.get(CELL)!;
-    grid.set(tileOf(LEFT, CELL), edge);
-    const held = h.pool.budget - h.pool.estimatedBytes;
-    h.pool.register({estimatedBytes: held, evictionCandidates: () => []});
-    const flight = {role: 'visible' as const};
-    assert.equal(h.pool.reserve(flight, 1), true);
-    assert.equal(edge.nativeFrom, CUT);
-    assert.equal(grid.get(tileOf(RETURN, CELL)), h.returned);
-    assert.ok(h.pool.estimatedBytes <= h.pool.budget);
-    h.pool.release(flight);
-  } finally {
-    h.close();
+test('a full pool can release a wholly unseen series in either order and preserve the return tile', () => {
+  for (const last of [false, true]) {
+    const h = fixture();
+    try {
+      const chunk = input(LEFT);
+      chunk.meterSeries!.at(last ? -1 : 0)!.cells.pop();
+      const edge = tile(LEFT, chunk),
+        grid = h.state.grids.get(CELL)!,
+        shown = composeMeters([{from: LEFT, meterSeries: chunk.meterSeries}], CELL, CUT, END);
+      grid.set(tileOf(LEFT, CELL), edge);
+      const held = h.pool.budget - h.pool.estimatedBytes;
+      h.pool.register({estimatedBytes: held, evictionCandidates: () => []});
+      const flight = {role: 'visible' as const};
+      assert.equal(h.pool.reserve(flight, 1), true);
+      assert.equal(edge.nativeFrom, CUT);
+      assert.equal(grid.get(tileOf(RETURN, CELL)), h.returned);
+      assert.deepEqual(composeMeters([edge.chunk(known)], CELL, CUT, END), shown);
+      assert.ok(h.pool.estimatedBytes <= h.pool.budget);
+      h.pool.release(flight);
+    } finally {
+      h.close();
+    }
   }
 });
 

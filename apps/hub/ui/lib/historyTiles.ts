@@ -113,9 +113,9 @@ export class HistoryTile {
       ? this.meters.prefixBytes(before, headroom)
       : 0;
   }
-  discardPrefix(before: number) {
-    if (this.readers || !this.prefixBytes(before)) return 0;
-    const bytes = this.meters.discardPrefix(before);
+  discardPrefix(before: number, headroom = Infinity) {
+    if (this.readers || !this.prefixBytes(before, headroom)) return 0;
+    const bytes = this.meters.discardPrefix(before, headroom);
     if (!bytes) return 0;
     this.readFrom = Math.max(this.readFrom, before);
     this.validTo = Math.max(this.readFrom, this.validTo);

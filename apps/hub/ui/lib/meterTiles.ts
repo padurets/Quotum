@@ -19,14 +19,23 @@ type Packed = {
   data: Uint8Array;
   references: Uint32Array;
 };
+const packedSize = (offsets: number, data: number, references: number) =>
+  256 + 3 * 128 + (offsets + references) * Uint32Array.BYTES_PER_ELEMENT + data;
 const packedBytes = (packed: Packed) =>
-  256 + 3 * 128 + packed.offsets.byteLength + packed.data.byteLength + packed.references.byteLength;
+  packedSize(packed.offsets.length, packed.data.length, packed.references.length);
 const boundary = (packed: Packed, cell: number) =>
   Math.max(0, Math.min(packed.offsets.length / 2 - 1, Math.ceil(cell) - packed.first)) * 2;
+function removablePrefix(packed: Packed, pos: number, headroom: number) {
+  const end = packed.offsets[pos],
+    removed = end + packed.offsets[pos + 1] * 4 + pos * 4;
+  // Whole unseen series need no copy. Keep any larger overlapping series charged
+  // and let the tile's read boundary exclude its unvisited cells.
+  return end === packed.data.length || packedBytes(packed) - removed <= headroom ? removed : 0;
+}
 const cellBytes = (packed: Packed, pos: number) =>
   packed.data.subarray(packed.offsets[pos], packed.offsets[pos + 2]);
 type Staging = {metadata: MeterMetadata; bytes: number};
-type PendingCell = {data: Uint8Array; references: Set<number>; bytes: number};
+type PendingCell = StoredCell & {references: Set<number>};
 type EncodedExtra = Omit<
   NonNullable<MeterCell[5]>,
   'semantics' | 'openSemantics' | 'observations'
@@ -109,31 +118,31 @@ function readSemantics(metadata: MeterMetadata) {
   };
 }
 
-/** Keep individual interval leaves only while encoding their own cell. */
-function* pack(cell: StoredCell, staging: Staging): Preparation<PendingCell> {
-  const earlierBytes = staging.bytes,
-    leaves: Uint8Array[] = [],
-    references = new Set<number>();
-  let length = 0;
-  staging.bytes += 128;
-  const keep = (value: MeterSemantics | null) => {
-    const count = references.size;
-    const ref = staging.metadata.retainSemantics(value, references);
-    const growth = (references.size - count) * 8;
-    staging.bytes += growth;
-    return ref;
-  };
+// JSON.stringify escapes lone surrogates, so every high surrogate here starts a pair.
+function utf8Length(text: string) {
+  let bytes = text.length;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 0x80) continue;
+    if (code < 0x800) bytes++;
+    else {
+      bytes += 2;
+      if (code >= 0xd800 && code <= 0xdbff) i++;
+    }
+  }
+  return bytes;
+}
+
+/** Both passes use the same frames. Only the input response owns the observations. */
+function* frames(
+  cell: StoredCell,
+  keep: (value: MeterSemantics | null) => SemanticsRef,
+): Generator<string> {
   const before = keep(cell.before);
   const relative = (value: MeterSemantics | null) => {
     if (value === cell.before) return SAME_BEFORE;
     const ref = keep(value);
     return sameSemantics(ref, before) ? SAME_BEFORE : ref;
-  };
-  const add = (value: unknown) => {
-    const bytes = encoder.encode(JSON.stringify(value));
-    leaves.push(bytes);
-    length += 4 + bytes.byteLength;
-    staging.bytes += 128 + bytes.byteLength;
   };
   const {
     steps = [],
@@ -157,30 +166,13 @@ function* pack(cell: StoredCell, staging: Staging): Preparation<PendingCell> {
   if (observations) head.push(steps.length, topupSteps.length, observations.length);
   else if (topupSteps.length) head.push(steps.length, topupSteps.length);
   else if (steps.length) head.push(steps.length);
-  add(head);
-  yield;
+  yield JSON.stringify(head);
   for (const values of [steps, topupSteps])
-    for (const step of values) {
-      add(compact(step));
-      yield;
-    }
-  for (const point of observations ?? []) {
-    add(compact({...point, ...(point.semantics ? {semantics: relative(point.semantics)} : {})}));
-    yield;
-  }
-  const data = new Uint8Array(length),
-    view = new DataView(data.buffer);
-  staging.bytes += 128 + length;
-  let at = 0;
-  for (const bytes of leaves) {
-    view.setUint32(at, bytes.length);
-    data.set(bytes, at + 4);
-    at += 4 + bytes.length;
-    yield;
-  }
-  const bytes = 256 + length + references.size * 8;
-  staging.bytes = earlierBytes + bytes;
-  return {data, references, bytes};
+    for (const step of values) yield JSON.stringify(compact(step));
+  for (const point of observations ?? [])
+    yield JSON.stringify(
+      compact({...point, ...(point.semantics ? {semantics: relative(point.semantics)} : {})}),
+    );
 }
 const header = (bytes: Uint8Array) => {
   const [before, semantics, row, steps = 0, topupSteps = 0, observations] = JSON.parse(
@@ -289,26 +281,17 @@ export class MeterTile {
     let bytes = 0;
     for (const packed of this.series.values()) {
       const pos = boundary(packed, (before - this.from) / this.cell);
-      if (!pos) continue;
-      const removed = packed.offsets[pos] + packed.offsets[pos + 1] * 4 + pos * 4;
-      // The whole old series is live until the smaller buffers replace it.
-      // Earlier series in the same pass have already released their storage.
-      if (
-        packed.offsets[pos] < packed.data.length &&
-        packedBytes(packed) - removed > headroom + bytes
-      )
-        return 0;
-      bytes += removed;
+      bytes += removablePrefix(packed, pos, headroom);
     }
     return bytes;
   }
   /** Eviction releases only exclusively owned packed cells, never a published reading. */
-  discardPrefix(before: number) {
+  discardPrefix(before: number, headroom = Infinity) {
     if (this.shared || this.readers || this.staging) return 0;
     const initial = this.bytes;
     for (const [key, packed] of this.series) {
       const pos = boundary(packed, (before - this.from) / this.cell);
-      if (!pos) continue;
+      if (!removablePrefix(packed, pos, headroom)) continue;
       const byteEnd = packed.offsets[pos],
         refsEnd = packed.offsets[pos + 1];
       if (byteEnd === packed.data.length) {
@@ -428,6 +411,9 @@ export class MeterTile {
       right = old ? boundary(old, last) : 0;
     if (old && !incoming.length && old.offsets[left] === old.offsets[right]) return old;
     const earlierBytes = staged.bytes;
+    // At most one input row per tile cell. Superseded rows still advance the
+    // opening semantics of their successor, but never acquire dictionary references.
+    staged.bytes += 128 + TILE_CELLS * 8;
     if (old) {
       for (let pos = 0; pos + 2 < old.offsets.length; pos += 2) {
         if ((pos < left || pos >= right) && old.offsets[pos] !== old.offsets[pos + 2])
@@ -443,18 +429,11 @@ export class MeterTile {
           yield;
           continue;
         }
-        const previous = cells[i];
-        if (previous !== undefined && typeof previous !== 'number') {
-          for (const ref of previous.references) {
-            staged.metadata.release(ref);
-            yield;
-          }
-          cells[i] = undefined;
-          staged.bytes -= previous.bytes;
-        }
+        if (!cells[i]) staged.bytes += 256; // The row descriptor and its reference set.
         const before = semantics;
         semantics = row[5]?.semantics ?? semantics;
-        cells[i] = yield* pack({row, before, semantics}, staged);
+        cells[i] = {row, before, semantics, references: new Set()};
+        yield;
       }
     }
     let start = cells.length,
@@ -468,12 +447,25 @@ export class MeterTile {
         byteCount += offsets[cell + 2] - offsets[cell];
         refCount += offsets[cell + 3] - offsets[cell + 1];
       } else {
-        byteCount += cell.data.length;
+        const keep = (value: MeterSemantics | null) => {
+          const count = cell.references.size;
+          const ref = staged.metadata.retainSemantics(value, cell.references);
+          staged.bytes += (cell.references.size - count) * 8;
+          return ref;
+        };
+        for (const text of frames(cell, keep)) {
+          byteCount += 4 + utf8Length(text);
+          yield;
+        }
         refCount += cell.references.size;
       }
     }
     let next: Packed | undefined;
     if (byteCount) {
+      const offsets = (cells.length - start + 1) * 2;
+      // Admission runs at the yield, before any of the three backing stores exist.
+      staged.bytes += packedSize(offsets, byteCount, refCount);
+      yield;
       const s = old?.series ?? incoming[0];
       next = {
         series: old?.series ?? {
@@ -486,11 +478,11 @@ export class MeterTile {
           pointMode: s.pointMode,
         },
         first: start,
-        offsets: new Uint32Array((cells.length - start + 1) * 2),
+        offsets: new Uint32Array(offsets),
         references: new Uint32Array(refCount),
         data: new Uint8Array(byteCount),
       };
-      staged.bytes += packedBytes(next);
+      const view = new DataView(next.data.buffer);
       let at = 0,
         ref = 0;
       for (let i = start; i < cells.length; i++) {
@@ -503,8 +495,21 @@ export class MeterTile {
           at += bytes.length;
           ref += refs.length;
         } else if (cell) {
-          yield* copyPrepared(next.data, at, cell.data);
-          at += cell.data.length;
+          // A single template ID covers every non-null slot, including different
+          // FX anchors. For mixed cells the same set keeps repeated lookups balanced.
+          const id = cell.references.size === 1 ? cell.references.values().next().value : undefined;
+          const keep = (value: MeterSemantics | null): SemanticsRef => {
+            if (!value) return null;
+            if (id === undefined) return staged.metadata.retainSemantics(value, cell.references);
+            const original = value.conversion?.original;
+            return original ? [id, original.amount, original.at] : id;
+          };
+          for (const text of frames(cell, keep)) {
+            const {written} = encoder.encodeInto(text, next.data.subarray(at + 4));
+            view.setUint32(at, written);
+            at += 4 + written;
+            yield;
+          }
           for (const id of cell.references) {
             next.references[ref++] = id;
             yield;

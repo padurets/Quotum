@@ -2019,6 +2019,7 @@ export class HistoryStore {
           }
           // Drop superseded packed versions before boundary or transport callbacks can admit more work.
           pins.clear();
+          this.pool?.releaseBytes(flight);
           if (flight.seq > this.metaSeq && !flight.activityOnly) {
             this.metaSeq = flight.seq;
             this.meta = {
@@ -2250,7 +2251,7 @@ export class HistoryStore {
                 this.plotVersion = -1;
                 this.plotChunks.delete(`${cell}:${tile.from}`);
                 this.plotChunks.delete(`native:${cell}:${tile.from}`);
-                const freed = tile.discardPrefix(before);
+                const freed = tile.discardPrefix(before, headroom);
                 this.schedule();
                 if (!freed) return;
                 this.nativeProof = null;

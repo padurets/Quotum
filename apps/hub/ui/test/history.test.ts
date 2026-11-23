@@ -3614,6 +3614,13 @@ for (const outcome of ['commit', 'cancel'] as const)
       }
       return reserve(owner, bytes);
     });
+    let published = false;
+    const stop = h.store.subscribeBoundary(() => {
+      if (!h.store.getBoundary()) return;
+      published = true;
+      assert.equal(pool.estimatedBytes, h.store.estimatedBytes, 'the grid now owns the buffers');
+    });
+    t.after(stop);
     await read.answer({chunks: parts});
     let overlapping = false;
     while (h.tasks.length) {
@@ -3635,6 +3642,7 @@ for (const outcome of ['commit', 'cancel'] as const)
     }
     assert.ok(overlapping);
     await h.finish();
+    assert.equal(published, outcome === 'commit');
     if (outcome === 'commit') {
       assert.equal(checked, parts.length);
       assert.notEqual(h.store.get().history, shown);

@@ -1288,7 +1288,9 @@ boundaries and dictionary references. Cells share rate and unit metadata, and ke
 each original amount and observation time with the reading. Private tile versions
 share unchanged series. Reclaiming an eligible prefix releases whole series directly.
 A surviving suffix moves to smaller buffers only when its copy fits alongside the
-original. Otherwise the pool continues with its ordinary nonvisible eviction candidates.
+original. A series that cannot shrink keeps its full charge. The tile's read boundary
+protects its visible cells, and the pool can still release other wholly unseen series
+before considering an older, nonvisible tile.
 Packing, decoding and composition yield between leaves and cells through the shared
 preparation scheduler. Monetary points enter the progressive plot during a gesture
 while table totals retain the
