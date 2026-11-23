@@ -3510,6 +3510,82 @@ function observedBalances(
   return chunks;
 }
 
+test('publishing a panned monetary edge releases the replaced tile before admitting another reader', async t => {
+  const pool = new HistoryPool(),
+    h = cooperativeHarness(pool, 'budget'),
+    cell = 2 * H,
+    from = NOW - (58 + 30 * 24) * H,
+    range = {from, to: NOW - 58 * H - 5 * M};
+  t.after(() => h.store.close());
+  h.store.setMeters({unit: 'USD', ids: [['s', 'balance']]});
+  h.store.choose('30d', range);
+  await h.start();
+  for (let i = 0; i < h.reads.length; i++) {
+    const read = h.reads[i];
+    await read.answer({chunks: observedBalances(read, '7000000')});
+    await h.finish();
+  }
+  const cold = h.reads.length;
+  const gesture = {
+    token: 1,
+    length: range.to - from,
+    direction: -1 as const,
+    from: from - cell,
+    to: range.to - cell,
+  };
+  h.store.pan(gesture);
+  await h.finish();
+  const read = h.reads[cold],
+    {plotChunks: cache, plotOwner} = h.store as unknown as {
+      plotChunks: Map<string, object>;
+      plotOwner: object;
+    },
+    {jobs} = h.preparations as unknown as {jobs: Map<object, {valid(): boolean}>};
+  assert.equal(read.to - read.from, cell);
+  assert.ok(cache.size >= 2, 'the moving chart holds decoded monthly tiles');
+  const stage = HistoryTile.prototype.staged;
+  let overlapping = false;
+  t.mock.method(
+    HistoryTile.prototype,
+    'staged',
+    function* (this: HistoryTile, ...args: Parameters<typeof stage>) {
+      const tile = yield* stage.apply(this, args);
+      // A new gesture starts preparing the old grid just before the answer commits.
+      h.store.pan({...gesture, token: 2});
+      yield 16;
+      overlapping = jobs.get(plotOwner)?.valid() === true;
+      return tile;
+    },
+  );
+  let notifications = 0;
+  const stop = h.store.subscribeBoundary(() => {
+    notifications++;
+    const current = new Set(h.internals.grids.get(cell)!.values());
+    assert.notEqual(
+      jobs.get(plotOwner)?.valid(),
+      false,
+      'superseded drawing still holds its inputs',
+    );
+    for (const entry of cache.values())
+      for (const value of Object.values(entry))
+        if (value instanceof HistoryTile)
+          assert.ok(current.has(value), 'a decoded chunk still owns the superseded packed tile');
+  });
+  try {
+    await read.answer({chunks: observedBalances(read, '6000000')});
+    while (h.tasks.length) {
+      h.tick();
+      await flush();
+    }
+    assert.ok(overlapping);
+    assert.equal(notifications, 1);
+    assert.equal(h.store.get().error, undefined);
+    assert.equal(h.reads.length, cold + 1);
+  } finally {
+    stop();
+  }
+});
+
 for (const outcome of ['commit', 'cancel'] as const)
   test(`prepared monetary buffers stay reserved through overlapping chunks and tiles until ${outcome}`, async t => {
     type PackedBuffers = {data: Uint8Array; offsets: Uint32Array; references: Uint32Array};

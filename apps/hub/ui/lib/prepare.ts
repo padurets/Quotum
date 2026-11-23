@@ -35,6 +35,11 @@ export class Preparations {
     job.work.return(undefined);
   }
 
+  cancelInvalid(owner: object) {
+    const job = this.jobs.get(owner);
+    if (job && !job.valid()) this.cancel(owner);
+  }
+
   private post() {
     if (this.pending || !this.jobs.size || this.disposed) return;
     this.pending = true;

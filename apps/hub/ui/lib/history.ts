@@ -222,7 +222,6 @@ export class HistoryStore {
   private readonly plotChunks = new Map<
     string,
     {
-      tile: HistoryTile | null;
       seq: number;
       from: number;
       to: number;
@@ -294,6 +293,17 @@ export class HistoryStore {
     this.preparations?.cancel(this.composeOwner);
     this.plotIdentity = this.composeIdentity = '';
     this.composeCurrent = null;
+  }
+
+  /** Release jobs that still borrow a tile after the grid replaces or evicts it. */
+  private releaseDetachedReaders() {
+    const scheduler = this.preparations;
+    scheduler?.cancelInvalid(this.plotOwner);
+    if (this.composeCurrent && !this.composeCurrent(this.target())) {
+      scheduler?.cancel(this.composeOwner);
+      this.composeCurrent = null;
+      this.composeIdentity = '';
+    }
   }
 
   close() {
@@ -1182,20 +1192,15 @@ export class HistoryStore {
         for (const {tile, seq, from, to} of pins) {
           const key = `${tile.cell}:${tile.from}`;
           let saved = store.plotChunks.get(key);
-          if (
-            !saved ||
-            saved.tile !== tile ||
-            saved.seq !== seq ||
-            saved.from !== from ||
-            saved.to !== to
-          ) {
+          if (!saved || saved.seq !== seq || saved.from !== from || saved.to !== to) {
             const chunk = yield* tile.chunkPrepared(
               meta.known,
               true,
               store.env.now(),
               separate ? 'activity' : 'all',
             );
-            saved = {tile, seq, from, to, chunk};
+            // The write sequence identifies this version without retaining its packed input.
+            saved = {seq, from, to, chunk};
             if (valid()) store.plotChunks.set(key, saved);
           }
           chunks.push(saved.chunk);
@@ -1223,7 +1228,7 @@ export class HistoryStore {
           saved.deadline !== tile.planDeadline
         ) {
           const chunk = yield* tile.chunkPrepared(meta.known, true, store.env.now(), 'native');
-          saved = {tile: null, seq, from, to, chunk, deadline: tile.planDeadline};
+          saved = {seq, from, to, chunk, deadline: tile.planDeadline};
           if (valid()) store.plotChunks.set(key, saved);
         }
         nativeChunks.push(saved.chunk);
@@ -2019,6 +2024,7 @@ export class HistoryStore {
           }
           // Drop superseded packed versions before boundary or transport callbacks can admit more work.
           pins.clear();
+          this.releaseDetachedReaders();
           this.pool?.releaseBytes(flight);
           if (flight.seq > this.metaSeq && !flight.activityOnly) {
             this.metaSeq = flight.seq;
@@ -2269,6 +2275,7 @@ export class HistoryStore {
           drop: () => {
             tiles.delete(n);
             this.plotChunks.delete(`${cell}:${tile.from}`);
+            this.releaseDetachedReaders();
             this.version++;
             this.aheadStopped = true;
             // Another reader can evict this tile while our final projection is yielding.
@@ -2314,6 +2321,7 @@ export class HistoryStore {
     for (const {cell, n, tile} of candidates.sort((a, b) => a.tile.shownAt - b.tile.shownAt)) {
       if (bytes <= this.budget) break;
       this.grids.get(cell)!.delete(n);
+      this.releaseDetachedReaders();
       this.version++;
       bytes -= tile.bytes;
       // This interest cannot retain its speculative coverage. Another response
