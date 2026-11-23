@@ -397,10 +397,11 @@ class BoardPeriod {
     return serialized;
   }
   private valueStatusRoom({value, loading, error}: Reading<PeriodValues>) {
+    if (!value) return 0;
     // A pinned pool must still be able to report history_limit on its last reading.
     // JSON's true is one character shorter than false; errors are strings or null.
     const length = error === null ? 4 : JSON.stringify(error).length;
-    return value ? Math.max(0, '"history_limit"'.length + Number(loading) - length) * 3 : 0;
+    return Math.max(0, '"history_limit"'.length + Number(loading) - length) * 3;
   }
   private measurementSince(
     data: Extract<import('./board').HubEvent, {type: 'history'}>['data'],
