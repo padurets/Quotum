@@ -149,17 +149,42 @@ jobs:
           . .devkit/runtime/pnpm.env
           rust_image=$(awk '/^FROM / {print $2; exit}' .devkit/runtime/rust.Dockerfile)
           rust_version=$(awk -F'"' '/^channel = / {print $2; exit}' apps/agent/rust-toolchain.toml)
+          test "$rust_version" = "$DEVKIT_RUST_VERSION"
           grep -Fq "FROM ${DEVKIT_NODE_IMAGE} AS node" desktop/Dockerfile.check
           grep -Fq "FROM ${rust_image}" desktop/Dockerfile.check
           grep -Fq "rustup component add --toolchain ${rust_version} clippy rustfmt" desktop/Dockerfile.check
           grep -Fq "ARG PNPM_VERSION=${DEVKIT_PNPM_VERSION}" desktop/Dockerfile.check
           grep -Fq "ARG PNPM_VERSION=${DEVKIT_PNPM_VERSION}" apps/hub/Dockerfile
+          snapshots=$(awk -F"'" '/URIs: http:\/\/snapshot\.debian\.org\// {print $2}' .devkit/runtime/desktop.Dockerfile)
+          test -n "$snapshots"
+          while IFS= read -r uri; do
+            grep -Fq "$uri" desktop/Dockerfile.check
+          done <<< "$snapshots"
           for wf in .github/workflows/ci.yml .github/workflows/desktop.yml; do
-            versions=$(awk '/uses: pnpm\/action-setup@/ {flag=1; next} flag && /version:/ {print $2; flag=0}' "$wf")
-            test -n "$versions"
-            for v in $versions; do
-              test "$v" = "$DEVKIT_PNPM_VERSION"
-            done
+            awk -v expected="$DEVKIT_PNPM_VERSION" '
+              /^[[:space:]]*- uses:[[:space:]]*pnpm\/action-setup@/ {
+                if (in_step && !seen) exit 1
+                uses++
+                in_step = 1
+                seen = 0
+                next
+              }
+              in_step && /^[[:space:]]*- / {
+                if (!seen) exit 1
+                in_step = 0
+              }
+              in_step && /^[[:space:]]+version:[[:space:]]*/ {
+                val = $2
+                gsub(/^["'\'']|["'\'']$/, "", val)
+                if (val != expected) exit 1
+                seen = 1
+                matched++
+              }
+              END {
+                if (in_step && !seen) exit 1
+                if (uses == 0 || matched != uses) exit 1
+              }
+            ' "$wf"
           done
 
   hub:

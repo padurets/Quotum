@@ -4,7 +4,10 @@
 # JavaScript is built once, natively; the image of every platform only copies it (no native modules).
 FROM --platform=$BUILDPLATFORM node:24-alpine AS pnpm-base
 ARG PNPM_VERSION=12.21.0
-RUN npm install -g "pnpm@${PNPM_VERSION}" --ignore-scripts --no-audit --no-fund
+RUN npm install -g "pnpm@${PNPM_VERSION}" --ignore-scripts --no-audit --no-fund \
+  && set -- /usr/local/lib/node_modules/pnpm/node_modules/@pnpm/exe.*/pnpm \
+  && test "$#" -eq 1 && test -x "$1" \
+  && ln -sf "$1" /usr/local/bin/pnpm
 
 # Keep the pnpm workspace layout so Node resolves isolated workspace packages cleanly.
 FROM pnpm-base AS prod-deps

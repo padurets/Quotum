@@ -147,10 +147,8 @@ set -- \
   -e CARGO_HOME=/cache/cargo \
   -e CARGO_BUILD_JOBS="$jobs" \
   -e XDG_CACHE_HOME=/cache/xdg \
-  -e npm_config_cache=/home/quotum/.npm \
   -e RUSTUP_AUTO_INSTALL=0 \
-  -v "$cargo_cache:/cache/cargo" \
-  -v "$quotum_build_cache:/cache/xdg/quotum-build"
+  -v "$cargo_cache:/cache/cargo"
 
 if [ -d "$devkit_cache/electron" ]; then
   set -- "$@" -v "$devkit_cache/electron:/cache/xdg/electron:ro"
@@ -158,11 +156,18 @@ fi
 
 if [ "$network" = none ]; then
   set -- "$@" \
+    -e npm_config_cache=/home/quotum/.npm \
+    -v "$quotum_build_cache:/cache/xdg/quotum-build:ro" \
     -v "$root:/work:ro" \
     -v "$root/desktop/target:/work/desktop/target"
 else
-  set -- "$@" -v "$root:/work"
+  # prepare.mjs invokes `npx @tauri-apps/cli`, whose binaries and native .node addons execute from npm_config_cache.
+  set -- "$@" \
+    --tmpfs "/tmp/quotum-npm:rw,exec,nosuid,nodev,mode=0700,uid=$uid,gid=$gid" \
+    -e npm_config_cache=/tmp/quotum-npm \
+    -v "$quotum_build_cache:/cache/xdg/quotum-build" \
+    -v "$root:/work"
 fi
 
 exec docker run "$@" -w /work "$image" \
-  sh -ceu 'mkdir -m 700 -p /home/quotum/key-tests /home/quotum/.npm && sh -ceu "$1"' _ "$cmd"
+  sh -ceu 'mkdir -m 700 -p /home/quotum/key-tests "$npm_config_cache" && sh -ceu "$1"' _ "$cmd"

@@ -40,6 +40,9 @@ COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
   && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
   && npm install -g "pnpm@${PNPM_VERSION}" --ignore-scripts --no-audit --no-fund \
+  && set -- /usr/local/lib/node_modules/pnpm/node_modules/@pnpm/exe.*/pnpm \
+  && test "$#" -eq 1 && test -x "$1" \
+  && ln -sf "$1" /usr/local/bin/pnpm \
   && rm -rf /root/.npm
 
 ENV RUSTUP_AUTO_INSTALL=0
