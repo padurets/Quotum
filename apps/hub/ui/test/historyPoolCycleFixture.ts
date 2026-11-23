@@ -174,6 +174,15 @@ export function cycleFixture(
   });
   const env = cycleSeed(seed, now);
   t.mock.timers.enable({apis: ['setTimeout']});
+  // Node's native abort deadline otherwise advances while the fixture clock is stopped.
+  t.mock.method(AbortSignal, 'timeout', (ms: number) => {
+    const controller = new AbortController();
+    setTimeout(() => {
+      const reason = new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      controller.abort(reason);
+    }, ms);
+    return controller.signal;
+  });
   const requests: PeriodRequest[] = [];
   let latency = 0,
     frames = 0,
