@@ -31,21 +31,20 @@ type EncodedExtra = Omit<
   NonNullable<MeterCell[5]>,
   'semantics' | 'openSemantics' | 'observations'
 > & {openSemantics?: SemanticsRef};
-type Header = {
-  row: [number, string, string | null, string | null, number, EncodedExtra];
-  before: SemanticsRef;
-  semantics: SemanticsRef;
-  steps: number;
-  topupSteps: number;
-  observations?: number;
-};
+type PackedRow = [
+  value: string,
+  coveredMs: number,
+  extra: Record<string, unknown>,
+  spentInternal?: string | null,
+  spentExceptional?: string,
+];
 type PackedHeader = [
-  Header['before'],
-  Header['semantics'],
-  [number, string, string | null, string | null, number, Record<string, unknown>],
-  number,
-  number,
-  number?,
+  before: SemanticsRef,
+  semantics: SemanticsRef,
+  row: PackedRow,
+  steps?: number,
+  topupSteps?: number,
+  observations?: number,
 ];
 const encoder = new TextEncoder(),
   decoder = new TextDecoder();
@@ -142,18 +141,20 @@ function* pack(cell: StoredCell, pending: PendingCell, staging: Staging): Prepar
     openSemantics,
     ...extra
   } = cell.row[5] ?? {};
-  const row = [
-    ...cell.row.slice(0, 5),
+  // The series offsets locate the cell. Only write optional trailing fields through
+  // their last supplied value, preserving unavailable spending and empty observations.
+  const [, value, spentInternal, spentExceptional, coveredMs] = cell.row;
+  const row: PackedRow = [
+    value,
+    coveredMs,
     compact({...extra, ...(openSemantics ? {openSemantics: relative(openSemantics)} : {})}),
-  ] as PackedHeader[2];
-  const head: PackedHeader = [
-    before,
-    relative(cell.semantics),
-    row,
-    steps.length,
-    topupSteps.length,
   ];
-  if (observations) head[5] = observations.length;
+  if (spentExceptional !== null) row.push(spentInternal, spentExceptional);
+  else if (spentInternal !== null) row.push(spentInternal);
+  const head: PackedHeader = [before, relative(cell.semantics), row];
+  if (observations) head.push(steps.length, topupSteps.length, observations.length);
+  else if (topupSteps.length) head.push(steps.length, topupSteps.length);
+  else if (steps.length) head.push(steps.length);
   add(head);
   yield;
   for (const values of [steps, topupSteps])
@@ -166,8 +167,8 @@ function* pack(cell: StoredCell, pending: PendingCell, staging: Staging): Prepar
     yield;
   }
 }
-const header = (bytes: Uint8Array): Header => {
-  const [before, semantics, row, steps, topupSteps, observations] = JSON.parse(
+const header = (bytes: Uint8Array) => {
+  const [before, semantics, row, steps = 0, topupSteps = 0, observations] = JSON.parse(
     decoder.decode(
       bytes.subarray(
         4,
@@ -178,21 +179,23 @@ const header = (bytes: Uint8Array): Header => {
   return {
     before,
     semantics: semantics === SAME_BEFORE ? before : semantics,
-    row: [row[0], row[1], row[2], row[3], row[4], expand(row[5])],
+    row,
     steps,
     topupSteps,
-    ...(observations === undefined ? {} : {observations}),
+    observations,
   };
 };
 function* unpack(
   bytes: Uint8Array,
+  index: number,
   read: ReturnType<typeof readSemantics>,
 ): Preparation<UnpackedCell> {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength),
     head = header(bytes);
   let at = 4 + view.getUint32(0);
   yield;
-  const {openSemantics, ...rest} = head.row[5];
+  const [value, coveredMs, fields, spentInternal = null, spentExceptional = null] = head.row;
+  const {openSemantics, ...rest} = expand<EncodedExtra>(fields);
   const extra: NonNullable<MeterCell[5]> = {
     ...rest,
     ...(openSemantics === undefined
@@ -235,7 +238,7 @@ function* unpack(
     extra.observations = observations;
   }
   return {
-    row: [head.row[0], head.row[1], head.row[2], head.row[3], head.row[4], extra],
+    row: [index, value, spentInternal, spentExceptional, coveredMs, extra],
     before: head.before,
     semantics: head.semantics,
   };
@@ -412,7 +415,7 @@ export class MeterTile {
         staged.bytes += pending.bytes;
         const before = semantics;
         semantics = row[5]?.semantics ?? semantics;
-        yield* pack({row: [i, ...row.slice(1)] as MeterCell, before, semantics}, pending, staged);
+        yield* pack({row, before, semantics}, pending, staged);
       }
     }
     let start = cells.length,
@@ -514,7 +517,7 @@ export class MeterTile {
         for (let pos = left; pos < right; pos += 2) {
           const bytes = cellBytes(packed, pos);
           if (!bytes.length) continue;
-          const c = yield* unpack(bytes, read),
+          const c = yield* unpack(bytes, packed.first + pos / 2 - first, read),
             extra = c.row[5]!;
           if (!cells.length) {
             beforeRef ??= c.before;
@@ -525,14 +528,7 @@ export class MeterTile {
             if (next) extra.semantics = next;
             semantics = c.semantics;
           }
-          cells.push([
-            packed.first + pos / 2 - first,
-            c.row[1],
-            c.row[2],
-            c.row[3],
-            c.row[4],
-            extra,
-          ]);
+          cells.push(c.row);
         }
         result.push({...packed.series, semantics: read(beforeRef), cells});
       }

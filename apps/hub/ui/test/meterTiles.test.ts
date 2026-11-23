@@ -445,6 +445,23 @@ test('compact cell headers retain nulls, zero offsets, exclusive bounds and unfa
   assert.deepEqual(tile.chunk(0, cell)[0].cells[0][5], extra);
 });
 
+test('sparse monetary headers round-trip all spending slots and an explicitly empty observation list', () => {
+  const topup = {from: cell, to: cell + 1, amount: '1', evidence: 'continuous' as const};
+  const input = series([
+    [1, '3', null, null, cell, {}],
+    [3, '4', '0', null, cell, {observations: []}],
+    [4, '5', null, '0', cell, {topupSteps: [topup]}],
+    [8, '6', '-0001', '9007199254740993', cell, {steps: [topup], observations: []}],
+  ]);
+  const tile = new MeterTile(0, cell);
+  tile.merge(2 * cell, 12 * cell, [input]);
+  assert.deepEqual(tile.chunk(2 * cell, 12 * cell), [input]);
+  assert.deepEqual(
+    tile.chunk(6 * cell, 12 * cell)[0].cells,
+    input.cells.slice(2).map(([i, ...values]) => [i - 4, ...values]),
+  );
+});
+
 test('opening and observation slots share one decoded template and retain their distinct anchors', () => {
   const a = semantics(0, '007'),
     b = semantics(0, '009'),
