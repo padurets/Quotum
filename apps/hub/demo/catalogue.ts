@@ -1,3 +1,4 @@
+import {SHOWCASE, SHOWCASE_DESKTOP, SHOWCASE_OPENROUTER} from './showcaseData.js';
 import {ONBOARDING} from './onboarding.js';
 import {SESSION_ANALYTICS} from './sessionAnalytics.js';
 import {PROJECT_COLORS} from './projectColors.js';
@@ -564,7 +565,7 @@ export const SCENES: Scene[] = [
           reset_type: 'regular',
           announced_at: at(-5 * HOUR),
           scheduled_for: at(2 * DAY + 3 * HOUR),
-          text: 'Rate limits reset for all plans on Friday.',
+          text: 'Rate limits reset for all plans.',
         },
       }),
     claude: quiet,
@@ -2187,160 +2188,6 @@ const all: DemoSet = {
   ],
 };
 
-// ---------- the README images ----------
-
-const PLATFORM_AGENTS: Agent[] = [
-  ...agents('laptop', [
-    ['editor', 'mobile-app', -5 * HOUR],
-    ['terminal', 'api-gateway', -3 * HOUR, ALWAYS],
-    ['terminal', 'billing', -HOUR, ALWAYS],
-  ]),
-  ...agents('ws-2631-linux', [
-    ['terminal', 'infra', -2 * HOUR, ALWAYS],
-    ['terminal', 'docs-site', -25 * MIN],
-  ]),
-];
-const RESEARCH_AGENTS = agents('ws-2631-linux', [['terminal', 'eval-harness', -40 * MIN]]);
-const WORK_AGENTS = agents('laptop', [['terminal', 'checkout', -3 * HOUR, ALWAYS]]);
-const CI_AGENTS = agents('ws-2631-linux', [
-  ['terminal', 'ci-flaky-tests', -3 * HOUR, ALWAYS],
-  ['terminal', 'ci-release', -2 * HOUR, ALWAYS],
-  ['terminal', 'ci-lint', -2 * HOUR, ALWAYS],
-]);
-const ANNA_AGENTS = agents('ws-2631-linux', [
-  ['terminal', 'thesis', -3 * HOUR, ALWAYS],
-  ['terminal', 'notes', -HOUR],
-]);
-const PERSONAL_AGENTS = agents('laptop', [['terminal', 'dotfiles', -5 * HOUR, ALWAYS]]);
-
-const showcase: DemoSet = {
-  id: 'showcase',
-  about: 'a clean board for the README images',
-  scene: 'showcase',
-  entries: [
-    {kind: 'person', id: 'demo', name: 'Demo', expect: [{state: 'widgets'}]},
-    {kind: 'machine', id: 'laptop', expect: [{via: 'token'}]},
-    {kind: 'machine', id: 'ws-2631-linux', expect: [{os: 'linux'}]},
-    {
-      kind: 'card',
-      id: 'platform',
-      provider: 'claude',
-      plan: 'max',
-      machines: ['laptop'],
-      history: 7 * DAY,
-      windows: [
-        fiveHours(-3 * HOUR - 54 * MIN, 20, agentsWork(PLATFORM_AGENTS, shifts(0))),
-        weekly({since: -(3 * DAY + 21 * HOUR), use: through([0, 0], [3, 40], [4, 44])}),
-        weekly({
-          id: 'weekly:fable',
-          label: 'Fable',
-          since: -(3 * DAY + 21 * HOUR),
-          use: through([0, 0], [3, 42], [4, 45]),
-        }),
-      ],
-      agents: PLATFORM_AGENTS,
-      on: {demo: {name: 'Platform team', width: 4}},
-      expect: [{title: 'Platform team'}, {agents: 5, drawn: true}, {error: null}],
-    },
-    {
-      kind: 'card',
-      id: 'research',
-      provider: 'antigravity',
-      plan: 'ultra',
-      machines: ['ws-2631-linux'],
-      history: 7 * DAY,
-      windows: [
-        fiveHours(-3 * HOUR - 8 * MIN, 5, agentsWork(RESEARCH_AGENTS, shifts(7)), 'Gemini Pro'),
-        weekly({
-          id: 'gemini:weekly',
-          label: 'Gemini',
-          since: -(3 * DAY + HOUR),
-          use: through([0, 0], [3, 53], [4, 60]),
-        }),
-        weekly({
-          id: 'claude:weekly',
-          label: 'Claude',
-          since: -(3 * DAY + HOUR),
-          use: through([0, 0], [3, 62], [4, 70]),
-        }),
-      ],
-      agents: RESEARCH_AGENTS,
-      on: {demo: {name: 'Research', width: 2, plan: 'off'}},
-      expect: [{title: 'Research'}, {agents: 1, drawn: true}],
-    },
-    {
-      kind: 'card',
-      id: 'work',
-      provider: 'codex',
-      plan: 'pro',
-      machines: ['laptop'],
-      history: 7 * DAY,
-      windows: [
-        fiveHours(-3 * HOUR - 34 * MIN, 15, agentsWork(WORK_AGENTS, ALWAYS)),
-        weekly({since: -(DAY + 3 * HOUR), use: steady(0, 31)}),
-      ],
-      resets: t =>
-        t < -6 * HOUR
-          ? {available: 0, expiring: []}
-          : {
-              available: 2,
-              expiring: [
-                {count: 1, expiresAt: 11 * DAY},
-                {count: 1, expiresAt: 18 * DAY},
-              ],
-            },
-      agents: WORK_AGENTS,
-      on: {demo: {name: 'Work'}},
-      expect: [{title: 'Work'}, {agents: 1, drawn: true}],
-    },
-    {
-      kind: 'card',
-      id: 'ci',
-      provider: 'codex',
-      plan: 'team',
-      machines: ['ws-2631-linux'],
-      history: 7 * DAY,
-      windows: [
-        fiveHours(-2 * HOUR - 14 * MIN, 12, agentsWork(CI_AGENTS, ALWAYS)),
-        weekly({since: -(5 * DAY + HOUR), use: through([0, 0], [4, 55], [5, 61])}),
-      ],
-      agents: CI_AGENTS,
-      on: {demo: {name: 'CI runners'}},
-      expect: [{title: 'CI runners'}, {agents: 3, drawn: true}],
-    },
-    {
-      kind: 'card',
-      id: 'anna',
-      provider: 'claude',
-      plan: 'Claude Pro',
-      machines: ['ws-2631-linux'],
-      history: 7 * DAY,
-      windows: [
-        fiveHours(-2 * HOUR - 44 * MIN, 8, agentsWork(ANNA_AGENTS, ALWAYS)),
-        weekly({since: -(2 * DAY + HOUR), use: through([0, 0], [1, 12], [2, 20])}),
-      ],
-      agents: ANNA_AGENTS,
-      on: {demo: {name: 'Anna', width: 3}},
-      expect: [{title: 'Anna'}, {agents: 2, drawn: true}],
-    },
-    {
-      kind: 'card',
-      id: 'personal',
-      provider: 'codex',
-      plan: 'plus',
-      machines: ['laptop'],
-      history: 7 * DAY,
-      windows: [
-        fiveHours(-4 * HOUR - 14 * MIN, 8, agentsWork(PERSONAL_AGENTS, ALWAYS)),
-        weekly({since: -(5 * DAY + 15 * HOUR), use: through([0, 0], [4.6, 80], [5.6, 88])}),
-      ],
-      agents: PERSONAL_AGENTS,
-      on: {demo: {name: 'Personal', width: 4}},
-      expect: [{title: 'Personal'}, {agents: 1, drawn: true}],
-    },
-  ],
-};
-
 /** The issue's example: recent work rises above a newer idle session, across three machines. */
 const SORT_AGENTS: Agent[] = [
   ...agents('workstation', [
@@ -2714,7 +2561,9 @@ const calendar: DemoSet = {
 };
 export const SETS: DemoSet[] = [
   all,
-  showcase,
+  SHOWCASE,
+  SHOWCASE_OPENROUTER,
+  SHOWCASE_DESKTOP,
   activity,
   dataFilters,
   SESSION_ANALYTICS,
