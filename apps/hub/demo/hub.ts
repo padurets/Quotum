@@ -4,6 +4,7 @@ import path from 'node:path';
 import {DEEPSEEK_SCENES, DEEPSEEK_KEY, deepSeekPayload, demoRates} from './deepseek.js';
 import {QUOTA_KEY, QUOTA_SCENES, quotaFixture} from './quotas.js';
 import {MONEY_KEY} from './money.js';
+import {SHOWCASE_OPENROUTER_KEY, showcaseOpenRouterReply} from './showcaseOpenRouter.js';
 import {readFileSync} from 'node:fs';
 import {demoAdditionControls} from './additions.js';
 import {observeHistoryLimits} from './historyLimit.js';
@@ -38,6 +39,12 @@ let observed = Date.now();
 const transport = new ConnectorTransport({host: '127.0.0.1', port: 443, operations: {}});
 const identified = new Map<number, number>();
 transport.send = async (operation, secret, query = {}) => {
+  if (secret.toString('ascii') === SHOWCASE_OPENROUTER_KEY) {
+    observed = Date.now();
+    return decodeOpenRouter(
+      JSON.stringify(showcaseOpenRouterReply(operation, distantExpiry, query)),
+    );
+  }
   const index = Array.from({length: 11}, (_, i) => MONEY_KEY(i)).indexOf(secret.toString('ascii'));
   if (index < 0 || index === 10) throw new SecretError('credential_invalid');
   if (index === 9) throw new SecretError('connector_timeout');

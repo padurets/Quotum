@@ -12,7 +12,7 @@ import {seedProjectColors, PROJECT_COLOR_SCENES} from '../projectColors.js';
 import type {ProjectColorEnvelope} from '../../server/domain/projectColors.js';
 import {readProjectColors} from '../../server/store/projectColors.js';
 import {CATEGORY_COLORS} from '../../server/domain/categoryColors.js';
-import {widgetVisible} from '../../server/domain/widgets.js';
+import {WIDGETS, widgetVisible} from '../../server/domain/widgets.js';
 import {resolveProjectColors, OTHER_COLOR} from '../../ui/lib/projectColors.js';
 import type {PeriodReply} from '../../server/domain/periodRead.js';
 import {expandPeriod, type PeriodWireReply} from '../../server/domain/periodWire.js';
@@ -33,6 +33,7 @@ import {ResetFeed} from '../../server/resets.js';
 import {Setup} from '../../server/setup.js';
 import {Directory} from '../../server/store/directory.js';
 import {Store} from '../../server/store/store.js';
+import {bootstrapLocal} from '../../server/local.js';
 import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
 import {agentRows, byActivity, drawn, folderOf, groupsOf, machinesOf} from '../../ui/lib/agents.js';
@@ -923,6 +924,7 @@ test('the demo is the same whenever it starts: everything is timed from the star
   for (const file of [
     'model.ts',
     'catalogue.ts',
+    'showcaseData.ts',
     'sessionAnalytics.ts',
     'setup.ts',
     'trackers.ts',
@@ -1355,9 +1357,9 @@ for (const first of [0, 59 * SECOND])
     },
   );
 
-test('the showcase comes up clean', {timeout: 60_000}, async t => {
-  const set = setOf('showcase');
-  const start = Math.floor(Date.now() / MIN) * MIN;
+async function readShowcase(t: TestContext, id: string, board: string) {
+  const set = setOf(id);
+  const start = Date.UTC(2026, 10, 20, 17, 30);
   const {stand, hub} = await bringUp(t, set, start);
   const live = new Live(stand, cadence);
   t.mock.timers.setTime(start - TICK);
@@ -1367,12 +1369,115 @@ test('the showcase comes up clean', {timeout: 60_000}, async t => {
   const reading = new Reading(stand, start, new Map([[set.scene, await hub.told()]]));
   const scene = SCENES.find(s => s.id === set.scene)!;
   assert.deepEqual(await checkAll(stand, [...set.entries, scene], reading, null, new Set()), []);
-  const board = people(set)[0].id;
   const first = start + earliest(set);
+  const overview = await reading.overview(board);
+  const history = await reading.history(board, '7d');
   assert.deepEqual(
-    [(await reading.overview(board)).historyStart, (await reading.history(board)).historyStart],
+    [overview.historyStart, history.historyStart],
     [first, first],
     'history starts at the first seeded measurement',
+  );
+  const widgets = WIDGETS.filter(id =>
+    widgetVisible(overview.view, id, overview.sources.length),
+  ).sort((a, b) => overview.view.layout.places[a].y - overview.view.layout.places[b].y);
+  return {stand, hub, start, overview, history, widgets};
+}
+
+test('the team showcase has a week of funded work and stepped weekly trends on its shared board', async t => {
+  const {stand, hub, start, overview, history, widgets} = await readShowcase(t, 'showcase', 'core');
+  const directory = new Directory(hub.store.db);
+  const board = stand.boards.get('core')!;
+  assert.equal(directory.board(board)?.name, 'Core team');
+  assert.deepEqual(
+    directory
+      .members(board)
+      .map(person => person.name)
+      .sort(),
+    ['Alex', 'Daniel', 'Elena', 'Maya', 'Sam'],
+  );
+  assert.equal(overview.sources.length, 6);
+  const alex = overview.sources.find(s => s.provider === 'claude' && s.title.includes('Alex'))!;
+  assert.deepEqual(
+    new Set(alex.sessions.map(s => s.device.name)),
+    new Set(['dev-linux', 'macbook-pro']),
+  );
+  assert.deepEqual(
+    new Set(alex.sessions.map(s => s.project)),
+    new Set(['api', 'web-app', 'infra']),
+  );
+  assert.deepEqual(widgets, ['activity', 'agent-hours-heatmap', 'quota-history', 'quota-table']);
+  const day = 24 * HOUR;
+  const activeDays = new Set(
+    history.activity.cells
+      .filter(([, active]) => active > 0)
+      .map(([at]) => Math.floor((at - start) / day)),
+  );
+  for (let offset = -7; offset < 0; offset++)
+    assert.ok(activeDays.has(offset), 'work missing on day ' + offset);
+
+  const weekly = linesOf(history, overview.sources, overview.view, 'weekly');
+  assert.equal(new Set(weekly.map(series => series.sourceId)).size, 6);
+  let runsOut = 0;
+  for (const line of weekly) {
+    const source = overview.sources.find(s => s.id === line.sourceId)!;
+    const window = source.windows.find(w => w.id === line.windowId)!;
+    const work = lineWork(line, false, window.resetAt, start);
+    assert.ok(
+      work && 'value' in work.work && 'value' in work.perwork && !('none' in work.workleft),
+      line.name,
+    );
+    const forecast = source.forecast[window.id];
+    assert.ok(['lasts', 'runsOut'].includes(forecast.state), line.name + ': ' + forecast.state);
+    if (forecast.state === 'runsOut') runsOut++;
+    const readings = line.points;
+    const overnight = readings.filter(([at]) => at >= start - 16 * HOUR && at <= start - 12 * HOUR);
+    assert.ok(overnight.length >= 2, line.name + ' covers the quiet hours');
+    assert.equal(
+      new Set(overnight.map(([, remaining]) => remaining)).size,
+      1,
+      line.name + ' is flat overnight',
+    );
+    assert.ok(
+      readings.some((p, i) => i > 0 && p[1] < readings[i - 1][1]),
+      line.name + ' has spending',
+    );
+  }
+  assert.ok(runsOut >= 2 && runsOut <= 3, runsOut + ' weekly forecasts run out before reset');
+});
+
+test('the desktop showcase fits three subscriptions and their weekly history on the local board', async t => {
+  const {stand, hub, start, overview, widgets} = await readShowcase(t, 'showcase-desktop', 'alex');
+  const directory = new Directory(hub.store.db);
+  const owner = bootstrapLocal(directory, 'qt_m_desktop_fixture', start);
+  assert.equal(owner.id, stand.people.get('alex')!.id);
+  assert.equal(directory.userCount(), 1);
+  assert.deepEqual(
+    directory.boards(owner.id).map(b => b.personal),
+    [true],
+  );
+  assert.deepEqual(
+    directory.devices(owner.id).map(d => d.name),
+    ['workstation'],
+  );
+  assert.deepEqual(widgets, ['quota-history']);
+  assert.ok(overview.view.layout.places['quota-history'].h);
+  assert.deepEqual(overview.sources.map(s => s.provider).sort(), [
+    'antigravity',
+    'claude',
+    'codex',
+  ]);
+  assert.deepEqual(
+    overview.sources
+      .map(s => {
+        const {x, w} = overview.view.layout.places['source:' + s.id];
+        return [x, w];
+      })
+      .sort(),
+    [
+      [0, 2],
+      [2, 2],
+      [4, 2],
+    ],
   );
 });
 
