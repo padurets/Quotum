@@ -46,4 +46,37 @@ test('test runner applies DEVKIT_TEST_WORKERS and preserves default globs for fl
 
   const invalid = evalBuildTestArgs([], {DEVKIT_TEST_WORKERS: '0'});
   assert.ok(!invalid.some(arg => arg.startsWith('--test-concurrency=')));
+
+  const customReporterEq = evalBuildTestArgs(['--test-reporter=spec', 'server/test/api.test.ts'], {
+    DEVKIT_TEST_WORKERS: '4',
+  });
+  assert.ok(!customReporterEq.includes('--test-reporter=@docouno/env/node-test-reporter'));
+  assert.ok(customReporterEq.includes('--test-reporter=spec'));
+  assert.ok(!customReporterEq.includes('bench/test/*.test.ts'));
+
+  const customReporterSpace = evalBuildTestArgs(['--test-reporter', 'spec'], {});
+  assert.ok(!customReporterSpace.includes('--test-reporter=@docouno/env/node-test-reporter'));
+  const reporterIdx = customReporterSpace.indexOf('--test-reporter');
+  assert.deepEqual(customReporterSpace.slice(reporterIdx, reporterIdx + 2), [
+    '--test-reporter',
+    'spec',
+  ]);
+  assert.ok(customReporterSpace.includes('server/test/*.test.ts'));
+
+  const isolation = evalBuildTestArgs(
+    ['--test-isolation', 'none', '--test-name-pattern', 'foo'],
+    {},
+  );
+  const isolationIdx = isolation.indexOf('--test-isolation');
+  assert.deepEqual(isolation.slice(isolationIdx, isolationIdx + 4), [
+    '--test-isolation',
+    'none',
+    '--test-name-pattern',
+    'foo',
+  ]);
+  assert.ok(isolation.includes('server/test/*.test.ts'));
+
+  const dashTarget = evalBuildTestArgs(['--test-only', '--', '-foo.test.ts'], {});
+  assert.deepEqual(dashTarget.slice(-3), ['--test-only', '--', '-foo.test.ts']);
+  assert.ok(!dashTarget.includes('server/test/*.test.ts'));
 });

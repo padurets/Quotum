@@ -19,6 +19,14 @@ const VALUE_FLAGS = new Set([
   '--test-timeout',
   '--test-shard',
   '--test-rerun-failures',
+  '--test-isolation',
+  '--experimental-test-isolation',
+  '--test-global-setup',
+  '--test-coverage-include',
+  '--test-coverage-exclude',
+  '--test-coverage-lines',
+  '--test-coverage-branches',
+  '--test-coverage-functions',
   '-C',
   '--conditions',
   '--import',
@@ -37,17 +45,15 @@ const VALUE_FLAGS = new Set([
  */
 export function buildTestArgs(argv, env) {
   const forwarded = argv[0] === '--' ? argv.slice(1) : [...argv];
-  /** @type {string[]} */
-  const flags = [];
-  /** @type {string[]} */
-  const positional = [];
   let hasConcurrency = false;
+  let hasReporter = false;
+  let hasTarget = false;
   let afterSeparator = false;
 
   for (let i = 0; i < forwarded.length; i++) {
     const arg = forwarded[i];
     if (afterSeparator) {
-      positional.push(arg);
+      hasTarget = true;
       continue;
     }
     if (arg === '--') {
@@ -55,15 +61,17 @@ export function buildTestArgs(argv, env) {
       continue;
     }
     if (arg.startsWith('-')) {
-      flags.push(arg);
       if (arg === '--test-concurrency' || arg.startsWith('--test-concurrency=')) {
         hasConcurrency = true;
       }
+      if (arg === '--test-reporter' || arg.startsWith('--test-reporter=')) {
+        hasReporter = true;
+      }
       if (VALUE_FLAGS.has(arg) && i + 1 < forwarded.length) {
-        flags.push(forwarded[++i]);
+        i++;
       }
     } else {
-      positional.push(arg);
+      hasTarget = true;
     }
   }
 
@@ -72,16 +80,16 @@ export function buildTestArgs(argv, env) {
     !hasConcurrency && /^[1-9]\d*$/.test(env.DEVKIT_TEST_WORKERS ?? '')
       ? [`--test-concurrency=${env.DEVKIT_TEST_WORKERS}`]
       : [];
+  const reporter = hasReporter ? [] : ['--test-reporter=@docouno/env/node-test-reporter'];
 
-  const targets = positional.length > 0 ? positional : DEFAULT_GLOBS;
   return [
     '--import',
     'tsx',
     '--test',
     ...concurrency,
-    '--test-reporter=@docouno/env/node-test-reporter',
-    ...flags,
-    ...targets,
+    ...reporter,
+    ...forwarded,
+    ...(hasTarget ? [] : DEFAULT_GLOBS),
   ];
 }
 

@@ -32,7 +32,7 @@ import {
   type Wave,
   type Work,
 } from './model.js';
-/** Durable app settings, in `npm run demo:keys`; checking and reset busy are transient and tested. */
+/** Durable app settings, in `pnpm run demo:keys`; checking and reset busy are transient and tested. */
 export {KEY_STORAGE} from './key-storage.js';
 export {DEEPSEEK_SCENES} from './deepseek.js';
 export {QUOTA_SCENES} from './quotas.js';
