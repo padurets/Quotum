@@ -151,7 +151,7 @@ test('a slice decodes unchanged interned semantics once and preserves exact cell
   assert.equal(reads, 1, 'one immutable dictionary entry needs only one decoding');
 });
 
-test('a slice decodes each changed semantics once and retains the predecessor and every anchor', () => {
+test('a slice restores the predecessor and every changed conversion anchor from one template', () => {
   const cell = 60_000;
   const semantics = (i: number): MeterSemantics => ({
     limit: null,
@@ -214,10 +214,13 @@ test('a slice decodes each changed semantics once and retains the predecessor an
       cells: input.cells.slice(8, 24).map(row => [row[0] - 8, ...row.slice(1)]),
     },
   ]);
+  assert.equal(reads, 1);
+  const single = new MeterTile(0, cell);
+  single.merge(0, cell, [{...input, cells: input.cells.slice(0, 1)}]);
   assert.equal(
-    reads,
-    17,
-    'decode the predecessor and sixteen changed entries, without unused per-cell predecessors',
+    metadata.bytes,
+    (single as unknown as {metadata: MeterMetadata}).metadata.bytes,
+    'new amounts and observation times add no entries to the shared dictionary',
   );
 });
 
@@ -440,4 +443,86 @@ test('compact cell headers retain nulls, zero offsets, exclusive bounds and unfa
     tile = new MeterTile(0, cell);
   tile.merge(0, cell, [input]);
   assert.deepEqual(tile.chunk(0, cell)[0].cells[0][5], extra);
+});
+
+test('opening and observation slots share one decoded template and retain their distinct anchors', () => {
+  const a = semantics(0, '007'),
+    b = semantics(0, '009'),
+    c = semantics(100, '009');
+  const observations = [
+    {at: 0, value: '1', validUntil: 100, semantics: a},
+    {at: 100, value: '2', validUntil: 200, semantics: c},
+    {at: 200, value: '3', validUntil: 300, semantics: null},
+    {at: 300, value: '4', validUntil: cell},
+  ];
+  const input: MeterSeriesCells = {
+    ...series([
+      [0, '4', null, null, cell, {openSemantics: a, semantics: b, observations}],
+      [1, '4', null, null, cell, {openSemantics: c, semantics: c}],
+    ]),
+    semantics: a,
+  };
+  const tile = new MeterTile(0, cell);
+  tile.merge(0, 2 * cell, [input]);
+  const metadata = (tile as unknown as {metadata: MeterMetadata}).metadata,
+    decode = metadata.semantics.bind(metadata);
+  let reads = 0;
+  metadata.semantics = id => {
+    reads++;
+    return decode(id);
+  };
+  assert.deepEqual(tile.chunk(0, 2 * cell), [input]);
+  assert.equal(reads, 1);
+});
+
+test('an exclusive monetary prefix releases all three backing buffers and rebases its sparse suffix', () => {
+  const tile = new MeterTile(0, cell);
+  const input = series(
+    [1, 4, 5, 9].map(i => [
+      i,
+      String(i),
+      null,
+      null,
+      cell,
+      {semantics: semantics(i * cell, String(i))},
+    ]),
+  );
+  tile.merge(0, 10 * cell, [input]);
+  type Storage = {data: Uint8Array; offsets: Uint32Array; references: Uint32Array};
+  const stored = (tile as unknown as {series: Map<string, Storage>}).series;
+  const old = [...stored.values()][0],
+    kept = tile.chunk(3 * cell, 10 * cell);
+  assert.ok(tile.discardPrefix(3 * cell) > 0);
+  const next = [...stored.values()][0];
+  for (const key of ['data', 'offsets', 'references'] as const) {
+    assert.notEqual(next[key].buffer, old[key].buffer, key);
+    assert.equal(next[key].buffer.byteLength, next[key].byteLength, key);
+    assert.ok(next[key].byteLength < old[key].byteLength, key);
+  }
+  assert.deepEqual(tile.chunk(3 * cell, 10 * cell), kept);
+  assert.deepEqual(tile.chunk(0, 3 * cell), []);
+  tile.discardPrefix(10 * cell);
+  assert.equal(tile.bytes, 0);
+});
+
+test('a partially assembled series charges both versions and cancellation releases its staging', () => {
+  const initial = series([[0, '10', null, null, cell, {semantics: semantics(0, '7')}]]);
+  const updated = series([[0, '11', null, null, cell, {semantics: semantics(cell, '8', true)}]]);
+  const tile = new MeterTile(0, cell);
+  tile.merge(0, cell, [initial]);
+  const original = tile.chunk(0, cell),
+    baseline = tile.bytes;
+  const fresh = new MeterTile(0, cell);
+  fresh.merge(0, cell, [updated]);
+  const packedBytes = (fresh as unknown as {seriesBytes: number}).seriesBytes;
+  const state = tile as unknown as {staging?: {bytes: number}};
+  const work = tile.mergePrepared(0, cell, [updated]);
+  while ((state.staging?.bytes ?? 0) < packedBytes) assert.equal(work.next().done, false);
+  assert.ok(tile.bytes >= baseline + packedBytes);
+  work.return();
+  assert.equal(tile.bytes, baseline);
+  assert.deepEqual(tile.chunk(0, cell), original);
+  tile.merge(0, cell, [updated]);
+  assert.equal(tile.bytes, fresh.bytes);
+  assert.deepEqual(tile.chunk(0, cell), fresh.chunk(0, cell));
 });
