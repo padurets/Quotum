@@ -176,3 +176,49 @@ test('a sessions-only preparation crossing a card deadline publishes the expired
     await h.close();
   }
 });
+
+test('a pending fixed selection ages the displayed values only as far as their own endpoint', async t => {
+  t.mock.method(Date, 'now', () => NOW);
+  const h = await fixture({personal: true, clocked: true});
+  t.after(() => h.close());
+  h.store.record(h.source, {
+    observedAt: NOW - M,
+    plan: '',
+    resets: null,
+    staleAfterMs: H,
+    windows: [
+      {
+        id: 'w',
+        kind: 'weekly',
+        label: null,
+        minutes: 10080,
+        used: 22,
+        remaining: 78,
+        resetAt: NOW + 10000,
+      },
+    ],
+  });
+  h.events.flush();
+  await flush();
+  const shown = {from: NOW - H, to: NOW + 5000};
+  h.selectRange(shown);
+  await flush();
+  const held = h.hold();
+  try {
+    h.event({type: 'history', data: {sources: [h.source], since: NOW - M}});
+    h.selectRange({from: NOW - 2 * H, to: NOW + 30000});
+    await flush();
+    assert.ok(held.reply);
+    h.elapseTo(NOW + 15000);
+    h.clock.wakeDue();
+    h.page.dispatch({type: 'connection', status: 'retrying', lostAt: NOW + 15000});
+    const reading = h.period.getValue(h.source);
+    assert.equal(reading.loading, true);
+    assert.deepEqual(reading.basis.range, shown);
+    assert.equal(reading.value.windows[0].validUntil, NOW + 10000);
+    assert.equal(reading.value.windows[0].stale, false);
+  } finally {
+    held.release();
+    await flush();
+  }
+});

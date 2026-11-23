@@ -37,6 +37,7 @@ export function hasPeriodValue(value: PeriodValues | null | undefined, to: numbe
 export function periodValueAt(
   value: PeriodValues | null | undefined,
   to: number,
+  reserve?: (bytes: number) => void,
 ): PeriodValues | undefined {
   if (!value || !hasPeriodValue(value, to)) return;
   if (contains(value.validFor, to)) return value;
@@ -44,8 +45,24 @@ export function periodValueAt(
     start = sequence!.start ?? base,
     states = sequence!.start ? sequence! : {...sequence!, start};
   if (contains(start.validFor, to)) return {...start, states};
+  if (reserve) reserve(JSON.stringify(start).length * 3 + 48);
   const copy = structuredClone(start);
   for (const [from, until, changes] of states.pieces) {
+    if (reserve && changes.length) {
+      // The preceding piece may have discarded a large array. Only this native
+      // snapshot and the payload that this piece can add are needed together.
+      let growth = 0;
+      for (const change of changes) {
+        if (change.length === 4) growth += JSON.stringify(change[3]).length;
+        else if (change.length === 3) growth += String(change[1]).length + 1;
+        else if (change.length === 2)
+          growth +=
+            JSON.stringify(change[1]).length +
+            JSON.stringify(states.paths[change[0]].at(-1)).length +
+            2;
+      }
+      reserve((JSON.stringify(copy).length + growth) * 3 + 48);
+    }
     applyValueChanges(copy, states.paths, changes);
     if (from <= to && to < until) return {...copy, states};
   }
@@ -93,21 +110,46 @@ function updateItems<T>(items: T[], update: (item: T) => T): T[] {
 }
 
 /** A captured value can expire with the shared clock without admitting a future observation. */
-export function periodValueNow(value: PeriodValues, at: number): PeriodValues {
-  const known = periodValueAt(value, at) ?? value,
-    windows = updateItems(known.windows, w => {
-      const stale = at >= w.validUntil;
-      return w.stale === stale ? w : {...w, stale};
-    }),
-    meters = updateItems(known.meters, m => {
-      const stale = at >= (m.validUntil ?? m.at + m.staleAfterMs + 1);
-      return m.stale === stale ? m : {...m, stale};
-    }),
-    keys = updateItems<KeyPart>(known.keys, k => {
-      const presence =
-        k.presence === 'missing' || at >= k.at + k.staleAfterMs + 1 ? 'missing' : 'observed';
-      return k.presence === presence ? k : {...k, presence};
-    });
+export function periodValueNow(
+  value: PeriodValues,
+  at: number,
+  reserve?: (bytes: number) => void,
+): PeriodValues {
+  const known = periodValueAt(value, at, reserve) ?? value,
+    // A patched replay owns its mutable snapshot. Returning to the start shares it.
+    copied = known !== value && !contains(known.states?.start?.validFor, at);
+  let reserved = !reserve;
+  const update = <T, K extends keyof T>(item: T, key: K, next: T[K]): T => {
+    if (item[key] === next) return item;
+    if (!reserved) {
+      reserved = true;
+      // A reversed clock can spell each status one character longer.
+      reserve!(
+        (JSON.stringify({...known, states: undefined}).length +
+          known.windows.length +
+          known.keys.length +
+          known.meters.length) *
+          3 +
+          48,
+      );
+    }
+    if (copied) {
+      item[key] = next;
+      return item;
+    }
+    return {...item, [key]: next};
+  };
+  const windows = updateItems(known.windows, w => update(w, 'stale', at >= w.validUntil)),
+    meters = updateItems(known.meters, m =>
+      update(m, 'stale', at >= (m.validUntil ?? m.at + m.staleAfterMs + 1)),
+    ),
+    keys = updateItems(known.keys, k =>
+      update(
+        k,
+        'presence',
+        k.presence === 'missing' || at >= k.at + k.staleAfterMs + 1 ? 'missing' : 'observed',
+      ),
+    );
   return windows === known.windows && meters === known.meters && keys === known.keys
     ? known
     : {...known, windows, meters, keys};

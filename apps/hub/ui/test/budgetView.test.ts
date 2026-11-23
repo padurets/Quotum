@@ -154,6 +154,27 @@ runInNewContext(
 );
 const {MoneyCard} = fixture.exports;
 
+test('retained wallet amounts and held keys expire at their own exclusive deadlines', () => {
+  const total = meter('balance', '1000000'),
+    cap = {...meter('key:k:cap', '2000000'), kind: 'cap' as const, limit: '3000000'},
+    source = card('openrouter', [total, cap]),
+    part = key('k'),
+    deadline = part.at + part.staleAfterMs + 1;
+  for (const [at, stale] of [
+    [deadline - 1, false],
+    [deadline, true],
+  ] as const) {
+    const view = budgetView(source, [part], source.meters, defaultCurrencyContext, at);
+    assert.equal(view.remaining.values[0].total.stale, stale);
+    assert.equal(view.remaining.values[0].total.amount, total.amount);
+    assert.equal(view.limits[0].meter.stale, stale);
+    assert.equal(view.limits[0].part.presence, stale ? 'missing' : 'observed');
+  }
+  assert.equal(total.stale, false);
+  assert.equal(cap.stale, false);
+  assert.equal(part.presence, 'observed');
+});
+
 test('subscription footer keeps the last known balance in its warning tone, like free resets', () => {
   const source = {
     ...card('codex', [{...meter('balance:credits', '0', 'credits:codex'), scale: 0}]),

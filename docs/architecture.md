@@ -1283,8 +1283,9 @@ authenticated read-only period POST. Their grids remain independent and share a
 bounded work read. Composite drawing cells contain financial data; work estimates
 use the common period tape and curves. Ordinary finance-only history keeps its
 existing path and cache dependencies, and the legacy GET history route remains available.
-Each monetary series packs its cells into one byte buffer with an index for cell
-boundaries and dictionary references. Cells share rate and unit metadata, and keep
+Each monetary series measures the encoded cells in the received answer, reserves its
+byte buffer and indexes, then writes the cells directly into that storage. The indexes
+locate cell boundaries and dictionary references. Cells share rate and unit metadata, and keep
 each original amount and observation time with the reading. Private tile versions
 share unchanged series. Reclaiming an eligible prefix releases whole series directly.
 A surviving suffix moves to smaller buffers only when its copy fits alongside the
@@ -2407,8 +2408,10 @@ Financial and work ledgers share their immutable native observations only when e
 reading agrees. Retention preserves that shared suffix, and the pool charges its storage
 once; differing observations and each ledger's spans retain their own charges.
 Restoring the starting value of a fixed period can reuse its measurement arrays and
-validity bounds. The pool charges those shared fields once and counts the replay
-wrappers and independently copied values separately.
+validity bounds. Readings that reference the same replay program share its charge.
+The pool charges the reading wrappers and their independently materialized values
+separately. A clock update uses the displayed reading's time range and reserves
+space before making a private replay copy.
 
 Activity has one numerical cohort, defined by shared work filters. Its baseline and
 bar metrics preserve interval union and distinct-session semantics; a legend preview

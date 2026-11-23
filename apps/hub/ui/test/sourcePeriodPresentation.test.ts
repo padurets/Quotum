@@ -1,4 +1,6 @@
 import {windowName} from '../lib/quota';
+import {num, stamp} from '../lib/format';
+import {measurementTimeAt} from '../lib/measurementClock';
 import {selectedAllowanceIds} from '../lib/moneySelection';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -417,6 +419,106 @@ test('card measurements distinguish a failed first read from a successful absenc
     render().some(node => node.props.children === t('period.noEvidence')),
     false,
   );
+});
+
+test('a pinned replay keeps its measured amount and shows expiry on the card at the exact deadline', async ctx => {
+  ctx.mock.method(Date, 'now', () => NOW);
+  const h = await fixture({personal: true, clocked: true});
+  const deadline = NOW + 10000;
+  h.store.record(h.source, {
+    observedAt: NOW - M,
+    plan: '',
+    resets: null,
+    staleAfterMs: H,
+    windows: [
+      {
+        id: 'w',
+        kind: 'weekly',
+        label: null,
+        minutes: 10080,
+        used: 22,
+        remaining: 78,
+        resetAt: deadline,
+      },
+    ],
+  });
+  h.events.flush();
+  await flush();
+  const shown = {from: NOW - H, to: deadline + 20000};
+  h.selectRange(shown);
+  await flush();
+  const {period, pool} = h,
+    before = period.getValue(h.source);
+  for (const e of period.evictionCandidates()) e.drop();
+  const pin = new Uint8Array(pool.budget - pool.estimatedBytes),
+    member = {estimatedBytes: pin.byteLength, evictionCandidates: () => []};
+  pool.register(member);
+  ctx.after(async () => {
+    pool.unregister(member);
+    await h.close();
+  });
+  const usePeriodValues = component(
+    '../lib/period.ts',
+    'usePeriodValues',
+    'export function usePeriodValues(',
+    'const roster',
+    {
+      boardPeriod: period,
+      hubNow: () => h.clock.hubNow(),
+      measurementTimeAt,
+      useSyncExternalStore: (_subscribe: unknown, read: () => unknown) => read(),
+    },
+  );
+  const Limit = component('../components/SourceCard.tsx', 'Limit', 'function Limit(', '/**', {
+    windowName,
+    num,
+    stamp,
+    PercentLimit: 'percent',
+    ResetLine: 'reset',
+    PlanNote: 'note',
+    PlanMark: 'mark',
+  });
+  const draw = component(
+    '../components/SourceCard.tsx',
+    'CardMeasurements',
+    'function CardMeasurements(',
+    '/** Historical funds',
+    {
+      usePeriodValues,
+      useTimeRange: () => shown,
+      quotaPeriods,
+      isWindowHidden: () => false,
+      planOf: () => null,
+      hasSubscriptionCaps,
+      providerOf,
+      MeasurementClock: {Provider: 'clock'},
+      Limit,
+      PercentLimit: 'unavailable',
+    },
+  );
+  const render = () =>
+    nodes(
+      draw({
+        source: h.page.get().board!.cards[h.source],
+        arrange: {view: EMPTY_VIEW},
+        boardId: h.board,
+      }),
+    ).find(n => n.type === 'percent')!;
+  h.elapseTo(deadline - 1);
+  h.clock.wakeDue();
+  assert.equal((render().props.status as Node).props['aria-hidden'], true);
+  h.elapseTo(deadline);
+  h.clock.wakeDue();
+  const retained = period.getValue(h.source),
+    limit = render();
+  assert.equal(retained.error, 'history_limit');
+  assert.equal(retained.value, before.value);
+  assert.equal(retained.basis, before.basis);
+  assert.equal(retained.value.windows[0].validUntil, deadline);
+  assert.equal(limit.props.remaining, 78);
+  assert.equal((limit.props.status as Node).props['aria-hidden'], false);
+  assert.ok(String(limit.props.valueTitle).includes(t('money.stale')));
+  assert.ok(pool.estimatedBytes <= pool.budget);
 });
 
 test('historical card consumers accept the recorded Codex conversion through the shared renderer', async t => {
