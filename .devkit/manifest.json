@@ -1,12 +1,12 @@
 {
   "schemaVersion": 2,
-  "version": "0.4.1",
-  "releaseIdentity": "0c2f111d8d53cd95aaa9dc7ed6e34e4c764d96ea4f537a7e758ee2f44e5b8a5a",
-  "generation": "c80faa70-f2e0-42eb-a46b-1349de44cd08",
+  "version": "0.5.1",
+  "releaseIdentity": "870146c4055749dd0e4555e49605c3dcd697444f481ef197ff043796c33df74c",
+  "generation": "fa591be4-d26e-46df-b2e4-97acb682c50f",
   "packageMode": "registry",
   "managed": {
     ".devkit/compose.apps.yaml": {
-      "sha256": "41a0c3ae3fcec9b88374db3143aa67fda9e0be0e8237e3a7f1c9e8b40711314b",
+      "sha256": "5ad420d7a89ec96b6dd686ac212bed91477127dd2ad30fc972cd57bc675e2348",
       "mode": 420
     },
     ".devkit/compose.workspace.json": {
@@ -14,23 +14,27 @@
       "mode": 420
     },
     ".devkit/project.mk": {
-      "sha256": "1db07d78fb53c451841063c65bc0e14be060ce8f4692f930682fe8152b80e7f1",
+      "sha256": "84d74f61b2a40de6e42dcab8a7f7303d69318f977470e6e8fd2c53b89f4d8cd5",
       "mode": 420
     },
     ".devkit/runtime.sha256": {
-      "sha256": "b60283257a4c13c624b36d9d86541e0e31576ff66f901660dbaa9600a5038834",
+      "sha256": "f88c6df0c5eb2e268ad37f3881201cfa96d40579bfa776edc8c9bbaef509fc1b",
       "mode": 420
     },
     ".devkit/runtime/GUIDE.md": {
-      "sha256": "91ccaebd845aa00cd8ab615d27ecb45b992a404f9e0b97effac96d3920cd17f7",
+      "sha256": "fe431f75c49a6eb9e44ebcb3ba90c0a6b4ac27d95be696634e78d67fee94a7d9",
       "mode": 420
     },
     ".devkit/runtime/LICENSE": {
       "sha256": "da39312b3c1fd7a483ccb2ef16bf02836ac84ac9ef3b8f9511dc87b7dda929c1",
       "mode": 420
     },
+    ".devkit/runtime/api.env": {
+      "sha256": "0906f4ab98e156befc98147438fc775beb1511f0fc91a8a28e070d11decd6897",
+      "mode": 420
+    },
     ".devkit/runtime/compose.tools.yaml": {
-      "sha256": "2b990ca69b475c44c2e3f564ccf3b4bd262adb740b1c06e4e09b3fd0711ca9ac",
+      "sha256": "67311d5da9dfdbe51ba08c100d648511543e31d7cd2cc94d4a00b071a5cd3b55",
       "mode": 420
     },
     ".devkit/runtime/desktop-seccomp.json": {
@@ -42,11 +46,11 @@
       "mode": 420
     },
     ".devkit/runtime/devkit.mk": {
-      "sha256": "c94d1ee12fa917dae5342a9917210d1206efc50579e2d5afe2964d3cf046c795",
+      "sha256": "ca0068f58df5e15ab3b4ce1206545ba432a20080823bf3c7fbe29212eef3b411",
       "mode": 420
     },
     ".devkit/runtime/devkit.sh": {
-      "sha256": "93cf98b41b40070e472a82a97b2565c3f451f8d65bfb18d0b203c77ac35d3724",
+      "sha256": "ddce19c3d76571237d6ae8ec33f00d35cc70bed5a339d5abceedd929d2d7ad1f",
       "mode": 493
     },
     ".devkit/runtime/licenses/Apache-2.0.txt": {
@@ -57,16 +61,20 @@
       "sha256": "3b102b5f5715e6b3e3f9096e276d77500fa5e0ffeb15c3459e30e0968c8f94c4",
       "mode": 420
     },
+    ".devkit/runtime/pnpm.env": {
+      "sha256": "e2f301f10ca990b019e15a4695347b01ea9006d9f4533c2c2436963117cf729a",
+      "mode": 420
+    },
     ".devkit/runtime/rust.Dockerfile": {
       "sha256": "88b4dfb67f04eb6639988453a62e3489bc2492aade0e811e32983ceca5abab94",
       "mode": 420
     },
     ".devkit/runtime/toolchains.env": {
-      "sha256": "f495ddcf6078e26b3347445312ba0a7473a189aa77d7d71f1523c97636350272",
+      "sha256": "bcc6b63922060428638081599e50fef3218bd7bce39dd981a137227dc4f0a546",
       "mode": 420
     },
     ".devkit/tooling-profiles.json": {
-      "sha256": "329f8c3973342b930f93db92036cafe10e464e2a3997d53dbb6e980be77c0d7c",
+      "sha256": "b28181b8dcd72877b3f7ab9be4da2d1f4745529a0007dae677a0d18d218545c0",
       "mode": 420
     },
     "apps/agent/rust-toolchain.toml": {
@@ -100,7 +108,7 @@
         "version": "0.4.1"
       },
       "toolDependencies": {
-        "@docouno/env": "0.4.1",
+        "@docouno/env": "0.5.1",
         "@types/node": "24.19.2",
         "eslint": "10.13.0",
         "prettier": "3.9.10",
