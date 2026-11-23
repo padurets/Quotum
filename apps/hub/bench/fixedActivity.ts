@@ -50,6 +50,22 @@ type Sample = {
 };
 type PoolReceipt = {status: string; members: {kind: string}[]; [key: string]: unknown};
 
+export function assertCleanActivityTiles(
+  baseline: Sample['tiles'],
+  current: Sample['tiles'],
+  from: number,
+  dirty: number,
+) {
+  const clean = baseline.filter(([, to]) => to > from && to <= dirty);
+  assert.ok(clean.length, 'the selected interval must contain a clean baseline tile');
+  for (const tile of clean)
+    assert.deepEqual(
+      current.find(([start, end]) => start === tile[0] && end === tile[1]),
+      tile,
+      'visible clean Activity tile at ' + tile[0] + ' must retain its identity',
+    );
+}
+
 /** Each update owns one shared work attempt; only a cells-only drawing follow-up may overlap it. */
 export function assertActivityOverlap(requests: readonly PeriodRequest[], updates: number) {
   const work = requests.filter(body => body.sessions),
@@ -1042,13 +1058,7 @@ export async function fixedActivity(
           'a combined drawing read fetches only dirty native cells',
         );
       assert.deepEqual(request.selection, selection);
-      const clean = baseline.tiles.filter(([, to]) => to <= dirty);
-      assert.ok(clean.length);
-      for (const row of clean)
-        assert.deepEqual(
-          isolated.current.tiles.find(([from, to]) => from === row[0] && to === row[1]),
-          row,
-        );
+      assertCleanActivityTiles(baseline.tiles, isolated.current.tiles, selection.from, dirty);
       assert.equal(isolated.current.activity.barMs, baseline.activity.barMs);
       await phase(
         'burst before dispatch',

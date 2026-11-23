@@ -56,10 +56,17 @@ function observePool(t: TestContext) {
     .reservations;
   const reserve = historyPool.reserve,
     trim = historyPool.trim;
-  const state = () => ({total: 0, foreground: 0, retirement: 0, at: '', reclaimed: 0, declined: 0});
+  const state = () => ({
+    total: 0,
+    foreground: 0,
+    retirement: 0,
+    at: '',
+    overBudgetTrims: 0,
+    reclaimed: 0,
+    declined: 0,
+  });
   let max = state(),
-    requesting: Reservation | undefined,
-    requestedPeak = 0;
+    requesting: Reservation | undefined;
   const sample = (bytes: number, accepted: boolean, at: string) => {
     let retirement = 0;
     for (const [owner, size] of reservations) if (owner.evict === false) retirement += size;
@@ -86,7 +93,6 @@ function observePool(t: TestContext) {
   historyPool.trim = function () {
     // This pre-eviction reading includes the requested growth and every concurrent owner.
     const before = this.estimatedBytes;
-    requestedPeak = Math.max(requestedPeak, before);
     const at =
       requesting?.operation ??
       (requesting?.intent
@@ -94,7 +100,10 @@ function observePool(t: TestContext) {
         : requesting
           ? 'drawing reservation'
           : 'drawing trim');
-    if (before > this.budget) sample(before, false, at);
+    if (before > this.budget) {
+      max.overBudgetTrims++;
+      sample(before, false, at);
+    }
     const accepted = trim.call(this);
     // Below the limit trim is a no-op. After a reclaim only the resulting balance is admitted.
     const after = before <= this.budget ? before : this.estimatedBytes;
@@ -109,10 +118,16 @@ function observePool(t: TestContext) {
   return {
     resetPeak() {
       max = state();
-      requestedPeak = historyPool.estimatedBytes;
-      sample(requestedPeak, true, 'settled');
+      sample(historyPool.estimatedBytes, true, 'settled');
     },
-    peak: () => requestedPeak,
+    assertHeadroom() {
+      assert.equal(max.overBudgetTrims, 0, 'the monthly path never entered eviction');
+      assert.ok(max.total <= historyPool.budget, `admitted ${max.total} B`);
+      assert.ok(
+        historyPool.budget - max.foreground >= 1.5 * 1024 ** 2,
+        `foreground ${max.foreground} B`,
+      );
+    },
     usage: () => ({...max}),
   };
 }
@@ -254,7 +269,6 @@ export function cycleFixture(
 
   return {
     ...env,
-    pool: historyPool,
     period: boardPeriod,
     quota: quotaHistory,
     budget: budgetHistory,

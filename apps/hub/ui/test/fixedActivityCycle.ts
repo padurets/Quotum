@@ -61,22 +61,21 @@ export async function fixedActivityCycle(t: TestContext, now: number, seed: Cycl
   fixture.events.flush();
   await fixture.settle();
   const reads = fixture.requests.slice(beforeRead),
-    exact = reads.find(body => body.sessions),
+    work = reads.filter(body => body.sessions),
     current = cycleTiles(fixture.quota, cell),
     clean = baseline.filter(tile => tile.to <= cellStart(dirtyAt, cell));
-  assert.ok(exact, 'the observed work refreshed the exact period');
-  assert.deepEqual(exact.selection, {mode: 'range', ...range});
+  assert.equal(work.length, 1, 'the observed work refreshes the exact period once');
+  assert.deepEqual(work[0].selection, {mode: 'range', ...range});
   assert.equal(
     fixture.period.project(fixture.quota.get().history!, 'quota', now, true).activity.agentMs,
     beforeWork + 100,
   );
-  const peak = fixture.peak();
-  t.diagnostic(JSON.stringify({retained, peak, cleanTiles: clean.length}));
+  t.diagnostic(JSON.stringify({retained, usage: fixture.usage(), cleanTiles: clean.length}));
   assert.ok(clean.length);
   for (const tile of clean)
     assert.ok(
       current.some(held => held === tile.ref.deref()),
       'clean monthly tile at ' + tile.from + ' must stay reusable',
     );
-  assert.ok(peak <= fixture.pool.budget - 1.5 * 1024 ** 2, 'fixed Activity pool peak ' + peak);
+  fixture.assertHeadroom();
 }

@@ -1,5 +1,5 @@
 import {after, before, test, type TestContext} from 'node:test';
-import {CLOCK_TOLERANCE_MS} from '../../server/domain/history';
+import {cellStart, CLOCK_TOLERANCE_MS, TILE_CELLS} from '../../server/domain/history';
 import assert from 'node:assert/strict';
 import {setImmediate as turn} from 'node:timers/promises';
 import type {TimeRange} from '../lib/timeRange';
@@ -79,6 +79,18 @@ async function drawingCycle(t: TestContext, now: number, latency: number, seed: 
   assert.ok(cold);
   assert.equal(cold.to, Date.now() - (length + future) / 2);
   assert.ok(c.requests.length > from);
+  const span = cell * TILE_CELLS,
+    first = cellStart(cold.from, span),
+    last = Math.ceil(liveEnd / span) * span;
+  const expectedTiles = Array.from({length: (last - first) / span}, (_, i) => first + i * span);
+  for (const reader of [c.quota, c.budget, c.funds])
+    assert.deepEqual(
+      cycleTiles(reader, cell)
+        .map(tile => tile.from)
+        .sort((a, b) => a - b),
+      expectedTiles,
+      'the live and shifted windows retain the entire drawing strip',
+    );
   const retained = {
     period: c.period.estimatedBytes,
     quota: c.quota.estimatedBytes,
@@ -90,15 +102,9 @@ async function drawingCycle(t: TestContext, now: number, latency: number, seed: 
   assert.equal(await scroll((width * (Date.now() - cold.to)) / length), null);
   c.advance(1000);
   assert.ok(await scroll(-width / 2));
-  const usage = c.usage();
-  t.diagnostic(JSON.stringify({retained, usage, warmReads: c.requests.length - warm}));
+  t.diagnostic(JSON.stringify({retained, usage: c.usage(), warmReads: c.requests.length - warm}));
   assert.equal(c.requests.length, warm, 'cached return and repeat must start no requests');
-  assert.equal(usage.reclaimed, 0, 'the monthly path did not need to evict any history');
-  assert.ok(usage.total <= c.pool.budget, `admitted ${usage.total} B`);
-  assert.ok(
-    c.pool.budget - usage.foreground >= 1.5 * 1024 ** 2,
-    `foreground ${usage.foreground} B`,
-  );
+  c.assertHeadroom();
 }
 
 // A displayed calendar participates in the shared pool, including its civil-day edges.
