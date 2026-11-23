@@ -118,7 +118,7 @@ function fixture({
   const context: any = {
     path,
     fileURLToPath,
-    Buffer,
+    DEMO_SECRET_KEY: 'synthetic-demo-key',
     HistoryLimitOutput,
     process: {
       execPath: '/synthetic/node',
@@ -233,6 +233,7 @@ test('no-argument Demo.run preserves the ordinary preparation and reporting trac
     assert.equal(args[1], 'tsx');
     assert.equal(path.basename(args[2]), 'hub.ts');
     assert.equal(options.env.KEEP, 'fixture');
+    assert.equal(options.env.QUOTUM_SECRET_KEY, 'synthetic-demo-key');
     assert.equal(options.env.QUOTUM_PRIVATE, undefined);
   } finally {
     await h.dispose();

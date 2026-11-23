@@ -1,6 +1,19 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {execFile} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {promisify} from 'node:util';
 import {addressOf, parseArgs} from '../index.js';
+
+test('desktop capture isolates hub configuration and only inherits the requested port', async () => {
+  const capture = fileURLToPath(new URL('../desktopCapture.ts', import.meta.url));
+  await assert.rejects(
+    promisify(execFile)(process.execPath, ['--import', 'tsx', capture], {
+      env: {...process.env, QUOTUM_LOCAL_KEY: '', QUOTUM_PUBLIC_URL: 'invalid', QUOTUM_PORT: 'bad'},
+    }),
+    /QUOTUM_PORT must be a port number/,
+  );
+});
 
 test('the command takes a set and a reset scene, and refuses anything else with the lists', () => {
   assert.deepEqual([parseArgs([]).set.id, parseArgs([]).scene], ['all', 'announced']);

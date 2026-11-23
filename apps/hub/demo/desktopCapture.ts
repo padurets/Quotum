@@ -4,15 +4,16 @@ import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {createInterface} from 'node:readline';
-import {newSecret} from '../server/domain/auth.js';
-import {Agent} from './client.js';
-import {addressOf, Demo, DEMO_SECRET_KEY, prepare} from './index.js';
-import {machineInfo, machines, sessionsAt} from './model.js';
-import {SHOWCASE_DESKTOP as set} from './showcaseData.js';
 
 const port = process.env.QUOTUM_PORT;
 // This disposable stand only listens on loopback and uses its own database and secrets.
 for (const key of Object.keys(process.env)) if (key.startsWith('QUOTUM_')) delete process.env[key];
+// Hub modules read their configuration at import time.
+const {addressOf, Demo, DEMO_SECRET_KEY, prepare} = await import('./index.js');
+const {newSecret} = await import('../server/domain/auth.js');
+const {Agent} = await import('./client.js');
+const {machineInfo, machines, sessionsAt} = await import('./model.js');
+const {SHOWCASE_DESKTOP: set} = await import('./showcaseData.js');
 const address = addressOf({QUOTUM_PORT: port});
 await prepare(address);
 const dataDir = mkdtempSync(path.join(tmpdir(), 'quotum-desktop-capture-'));
