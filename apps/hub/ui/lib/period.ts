@@ -373,25 +373,34 @@ class BoardPeriod {
   private storageBytes(storage: Map<object, number>) {
     return [...storage.values()].reduce((sum, bytes) => sum + bytes, 0);
   }
+  private valueBytes(value: PeriodValues, serialized = JSON.stringify(value).length * 3) {
+    const fields = ['windows', 'meters', 'keys', 'creditBalance', 'validFor'] as const,
+      start = value.states?.start;
+    let shared = 0;
+    // Returning to the replay start creates a second wrapper around its original fields.
+    // Keep each reference slot charged. A different replay can own equal, independent copies.
+    if (start && fields.every(field => value[field] === start[field]))
+      for (const field of fields) {
+        const payload = start[field];
+        if (payload) shared += Math.max(0, JSON.stringify(payload).length * 3 - 8);
+      }
+    return serialized - shared;
+  }
   private measureValues(values: Map<string, Reading<PeriodValues>>, storage: Map<object, number>) {
-    const fields = ['windows', 'meters', 'keys', 'creditBalance', 'validFor'] as const;
     let serialized = 0;
     for (const {value} of values.values()) {
       if (!value) continue;
-      const bytes = JSON.stringify(value).length * 3,
-        start = value.states?.start;
+      const bytes = JSON.stringify(value).length * 3;
       serialized += bytes;
-      let shared = 0;
-      // Returning to the replay start creates a second wrapper around its original fields.
-      // Keep each reference slot charged. A different replay can own equal, independent copies.
-      if (start && fields.every(field => value[field] === start[field]))
-        for (const field of fields) {
-          const payload = start[field];
-          if (payload) shared += Math.max(0, JSON.stringify(payload).length * 3 - 8);
-        }
-      storage.set(value, bytes - shared);
+      storage.set(value, this.valueBytes(value, bytes));
     }
     return serialized;
+  }
+  private valueStatusRoom({value, loading, error}: Reading<PeriodValues>) {
+    // A pinned pool must still be able to report history_limit on its last reading.
+    // JSON's true is one character shorter than false; errors are strings or null.
+    const length = error === null ? 4 : JSON.stringify(error).length;
+    return value ? Math.max(0, '"history_limit"'.length + Number(loading) - length) * 3 : 0;
   }
   private measurementSince(
     data: Extract<import('./board').HubEvent, {type: 'history'}>['data'],
@@ -1486,6 +1495,9 @@ class BoardPeriod {
         ...value,
         value: periodValueNow(value.value, Math.min(value.basis.range.to, hubNow())),
       };
+    this.publishValue(id, value);
+  }
+  private publishValue(id: string, value: Reading<PeriodValues>) {
     this.forgetProjection();
     this.values.set(id, value);
     this.notify(this.valueListeners.get(id));
@@ -2656,13 +2668,16 @@ class BoardPeriod {
           this.index = prepared.index;
           this.activity = prepared.activity;
           this.activityRetained = null;
-          const now = hubNow();
-          this.advanceValues(now);
-          this.updateWork(now, false);
+          this.updateWork(hubNow(), false);
         }
       }
       this.measureBytes();
       release();
+      if (
+        !current() ||
+        (reply.sessions && reply.sessions.state !== 'error' && !this.advanceValues(hubNow()))
+      )
+        return;
       this.publishProjection([...changed]);
       this.retirementAt =
         intent.request.selection.mode === 'live'
@@ -2927,7 +2942,11 @@ class BoardPeriod {
     if (this.sourceCurves) storage.set(this.sourceCurves, this.sourceCurves.bytes ?? 0);
     const valuesBytes =
       JSON.stringify([...this.values.values()]).length * 3 -
-      this.measureValues(this.values, storage);
+      this.measureValues(this.values, storage) +
+      [...this.values.values()].reduce(
+        (total, reading) => total + this.valueStatusRoom(reading),
+        0,
+      );
     if (this.work.value) {
       const root =
         this.activity?.trace === this.work.value ? this.activity : (this.index ?? this.work.value);
@@ -2997,7 +3016,7 @@ class BoardPeriod {
     if (!this.active) return;
     const now = hubNow();
     this.tickCalendar(now);
-    this.advanceValues(now);
+    if (!this.advanceValues(now)) return;
     if (this.selection.mode === 'live') {
       const range = evaluatedRange(this.selection, now),
         workGap = !!this.index && range.from < this.index.trace.anchor;
@@ -3035,11 +3054,61 @@ class BoardPeriod {
     this.scheduleClock();
   }
   private advanceValues(now: number) {
-    if (now < this.nativeDue || this.selection.mode !== 'range') return;
-    const at = Math.min(this.selection.to, now);
-    for (const [id, reading] of this.values)
-      if (reading.value) this.setValue(id, {...reading, value: periodValueNow(reading.value, at)});
+    if (now < this.nativeDue || this.selection.mode !== 'range') return true;
+    const at = Math.min(this.selection.to, now),
+      generation = this.generation,
+      revision = this.revision;
+    for (const [id, reading] of this.values) {
+      const prior = reading.value;
+      if (!prior) continue;
+      const value = periodValueNow(prior, at);
+      if (value === prior) continue;
+      const old = this.storage.get(prior)!,
+        bytes = this.valueBytes(value),
+        staging = this.staging('values');
+      // An evicted co-owner can make the same atomic replacement cheaper.
+      const reclaimed = () =>
+        [...this.retained.values(), ...this.restoring, ...this.valueCache.values()].some(entry =>
+          entry.storage.has(prior),
+        )
+          ? 0
+          : old;
+      const growth = bytes - reclaimed();
+      try {
+        const accepted = growth <= 0 || historyPool.reserve(staging, growth);
+        if (
+          this.generation !== generation ||
+          this.revision !== revision ||
+          this.values.get(id) !== reading
+        )
+          return false;
+        const available = accepted
+          ? Infinity
+          : historyPool.budget - historyPool.estimatedBytes + reclaimed();
+        if (bytes <= available) {
+          this.storage.delete(prior);
+          this.storage.set(value, bytes);
+          this.bytes += bytes - old;
+          this.publishValue(id, {...reading, value});
+        } else {
+          // Keep the last accepted measurements at their own deadlines. The failed
+          // replay proof can be discarded; explicit Retry will request a new baseline.
+          const facts = prior.states ? {...prior, states: undefined} : prior,
+            retained = periodValueNow(facts, at);
+          this.publishValue(id, {
+            ...reading,
+            value: this.valueBytes(retained) <= available ? retained : prior,
+            loading: false,
+            error: 'history_limit',
+          });
+          this.measureBytes();
+        }
+      } finally {
+        historyPool.release(staging);
+      }
+    }
     this.publishProjection();
+    return true;
   }
   private updateWork(now: number, fromClock: boolean) {
     this.evaluatedAt = now;
@@ -3178,7 +3247,7 @@ class BoardPeriod {
       if (this.selection.mode === 'range' && [...this.values.values()].some(value => value.error)) {
         needed = this.valuesNeeded = true;
         for (const id of this.sourceIds)
-          this.setValue(id, {...this.getValue(id), loading: true, error: null});
+          this.publishValue(id, {...this.getValue(id), loading: true, error: null});
       }
       if (needed) {
         this.revision++;

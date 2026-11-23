@@ -119,3 +119,133 @@ test('returning to the value replay start charges its shared fields once in curr
     await h.close();
   }
 });
+
+async function replayAcrossMeasurement(h: Awaited<ReturnType<typeof fixture>>) {
+  h.store.record(h.source, {
+    observedAt: NOW - 1000,
+    plan: '',
+    resets: null,
+    staleAfterMs: H,
+    windows: [
+      {
+        id: 'w',
+        kind: 'weekly',
+        label: null,
+        minutes: 10080,
+        used: 40,
+        remaining: 60,
+        resetAt: NOW + H,
+      },
+    ],
+  });
+  h.events.flush();
+  await flush();
+  const initial = h.selectedRange()!;
+  for (const offset of [-1002, -995, -1001]) {
+    h.selectRange({from: initial.from + offset, to: initial.to + offset});
+    await flush();
+  }
+  const before = h.period.getValue(h.source).value;
+  assert.equal(before.windows, before.states!.start!.windows);
+  assert.ok(h.period.storage.has(before));
+  return initial;
+}
+
+test('a clock correction preserves a shared replay start while its facts remain current', async t => {
+  t.mock.method(Date, 'now', () => NOW);
+  const h = await fixture({personal: true, fixed: true, clocked: true});
+  t.after(() => h.close());
+  await replayAcrossMeasurement(h);
+  const before = h.period.getValue(h.source).value,
+    bytes = h.period.estimatedBytes;
+  h.clock.heard(NOW - 5000, NOW);
+  h.clock.heard(NOW, NOW);
+  assert.equal(h.period.getValue(h.source).value, before);
+  assert.ok(h.period.storage.has(before));
+  assert.equal(h.period.estimatedBytes, bytes);
+});
+
+for (const pressure of ['cache', 'pinned', 'close'] as const)
+  test(`a late clock replay respects ${pressure} admission and publishes its storage atomically`, async t => {
+    t.mock.method(Date, 'now', () => NOW);
+    const h = await fixture({personal: true, fixed: true, clocked: true});
+    t.after(() => h.close());
+    const initial = await replayAcrossMeasurement(h),
+      {pool, period, source} = h;
+    h.clock.heard(NOW - 5000, NOW);
+    h.selectRange({from: initial.from - 994, to: initial.to - 994});
+    await flush();
+    const previous = period.getValue(source);
+    assert.equal(previous.value.windows[0].used, 17);
+    assert.ok(previous.value.states?.start);
+    for (const candidate of period.evictionCandidates()) candidate.drop();
+    const pinned = new Uint8Array(
+      pool.budget - pool.estimatedBytes - (pressure === 'pinned' ? 0 : 4096),
+    );
+    let cache = pressure === 'pinned' ? null : new Uint8Array(4096),
+      drops = 0;
+    const other = {
+      get estimatedBytes() {
+        return pinned.byteLength + (cache?.byteLength ?? 0);
+      },
+      evictionCandidates: () =>
+        cache
+          ? [
+              {
+                bytes: cache.byteLength,
+                shownAt: 0,
+                drop: () => {
+                  cache = null;
+                  drops++;
+                  // Admission can synchronously retire the entire view before it commits.
+                  if (pressure === 'close') h.page.dispatch({type: 'board-close'});
+                },
+              },
+            ]
+          : [],
+    };
+    pool.register(other);
+    assert.equal(pool.estimatedBytes, pool.budget);
+    const values: number[] = [];
+    const stop = period.subscribeValue(source, () => {
+      const reading = period.getValue(source);
+      if (!reading.value) return;
+      values.push(reading.value.windows[0].used);
+      assert.ok(period.storage.has(reading.value));
+      assert.ok(pool.estimatedBytes <= pool.budget);
+      const bytes = period.estimatedBytes;
+      period.measureBytes();
+      assert.equal(period.estimatedBytes, bytes);
+    });
+    try {
+      h.elapseTo(NOW + 5000);
+      h.clock.wakeDue();
+      if (pressure === 'close') {
+        assert.equal(drops, 1);
+        assert.deepEqual(values, []);
+        assert.equal(period.values.size, 0);
+        assert.equal(period.estimatedBytes, 0);
+      } else if (pressure === 'cache') {
+        assert.equal(drops, 1);
+        assert.deepEqual(values, [40]);
+        assert.equal(period.getValue(source).error, null);
+        assert.ok(!period.storage.has(previous.value));
+      } else {
+        const limited = period.getValue(source);
+        assert.equal(drops, 0);
+        assert.deepEqual(values, [17]);
+        assert.equal(limited.error, 'history_limit');
+        assert.equal(limited.basis, previous.basis);
+        assert.equal(limited.value.windows[0].validUntil, previous.value.windows[0].validUntil);
+        assert.ok(pool.estimatedBytes <= pool.budget);
+        pool.unregister(other);
+        period.retry();
+        await flush();
+        assert.equal(period.getValue(source).error, null);
+        assert.equal(period.getValue(source).value.windows[0].used, 40);
+      }
+    } finally {
+      stop();
+      pool.unregister(other);
+    }
+  });

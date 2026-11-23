@@ -81,22 +81,36 @@ export function* prepareValueStates(
   return states ? {...base, states} : base;
 }
 
+function updateItems<T>(items: T[], update: (item: T) => T): T[] {
+  let result = items;
+  for (let i = 0; i < items.length; i++) {
+    const item = update(items[i]);
+    if (item === items[i]) continue;
+    if (result === items) result = items.slice();
+    result[i] = item;
+  }
+  return result;
+}
+
 /** A captured value can expire with the shared clock without admitting a future observation. */
 export function periodValueNow(value: PeriodValues, at: number): PeriodValues {
-  const known = periodValueAt(value, at) ?? value;
-  return {
-    ...known,
-    windows: known.windows.map(w => ({...w, stale: at >= w.validUntil})),
-    meters: known.meters.map(m => ({
-      ...m,
-      stale: at >= (m.validUntil ?? m.at + m.staleAfterMs + 1),
-    })),
-    keys: known.keys.map(k => ({
-      ...k,
-      presence:
-        k.presence === 'missing' || at >= k.at + k.staleAfterMs + 1 ? 'missing' : 'observed',
-    })),
-  };
+  const known = periodValueAt(value, at) ?? value,
+    windows = updateItems(known.windows, w => {
+      const stale = at >= w.validUntil;
+      return w.stale === stale ? w : {...w, stale};
+    }),
+    meters = updateItems(known.meters, m => {
+      const stale = at >= (m.validUntil ?? m.at + m.staleAfterMs + 1);
+      return m.stale === stale ? m : {...m, stale};
+    }),
+    keys = updateItems<KeyPart>(known.keys, k => {
+      const presence =
+        k.presence === 'missing' || at >= k.at + k.staleAfterMs + 1 ? 'missing' : 'observed';
+      return k.presence === presence ? k : {...k, presence};
+    });
+  return windows === known.windows && meters === known.meters && keys === known.keys
+    ? known
+    : {...known, windows, meters, keys};
 }
 export function periodValueChangesAt(value: PeriodValues, now: number): number | null {
   const next = Math.min(
