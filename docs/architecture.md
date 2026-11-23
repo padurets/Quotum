@@ -2798,7 +2798,9 @@ inside the viewport without changing the card's height.
 The engine version and archive checksum are pinned in `desktop/prepare-electron.mjs`;
 updating Chromium means rebuilding the Linux packages. `desktop/package-linux.mjs`
 packages the controller, Node, hub, GUI code and Electron's license notices into deb,
-rpm and AppImage. Native packages install Chromium's root-owned sandbox helper; the
+rpm and AppImage. All three ship the same AppStream metadata for `com.padurets.quotum`.
+It names `quotum.desktop` as the launcher and points software catalogs to the desktop
+screenshot in `docs/desktop.png`. Native packages install Chromium's root-owned sandbox helper; the
 AppImage uses user namespaces. Neither disables Chromium's sandbox. Child failures
 are reported over the private channel, including during teardown, and the controller
 waits for GUI termination when quitting.

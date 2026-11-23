@@ -28,4 +28,4 @@ prepare-desktop: bundle-hub
 
 check-desktop: prepare-desktop
 	@sh desktop/run-in-container.sh --network none -- \
-		'node --test desktop/prepare-node.test.mjs && node --test desktop/electron/policy.test.cjs && cd desktop && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked'
+		'node --test desktop/prepare-node.test.mjs desktop/linux-metadata.test.mjs desktop/electron/policy.test.cjs && cd desktop && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked'

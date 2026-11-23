@@ -156,16 +156,18 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           cd release
-          for package in linux-x64.deb linux-x64.rpm linux-x64.AppImage windows-x64-setup.exe windows-x64-portable.zip; do
+          for package in linux-x64.deb linux-x64.rpm windows-x64-setup.exe windows-x64-portable.zip; do
             test -s "quotum-desktop-$VERSION-$package"
           done
-          sha256sum -- quotum-cli-* install.sh install.ps1 quotum-desktop-* > SHA256SUMS
+          test -s "Quotum-$VERSION-x86_64.AppImage"
+          sha256sum -- quotum-cli-* install.sh install.ps1 quotum-desktop-* Quotum-*.AppImage > SHA256SUMS
           sha256sum --check SHA256SUMS
       - if: github.ref_type == 'tag'
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             release/quotum-desktop-*
+            release/Quotum-*.AppImage
             release/SHA256SUMS
       - uses: actions/upload-artifact@v7
         with:
