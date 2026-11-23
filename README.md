@@ -570,7 +570,7 @@ no server. Download it from [Releases](https://github.com/padurets/quotum/releas
 | System | Package |
 |---|---|
 | Windows x64 | `quotum-desktop-<version>-windows-x64-setup.exe` or `…-windows-x64-portable.zip` |
-| Linux x64 | `quotum-desktop-<version>-linux-x64.deb`, `.rpm` or `.AppImage` |
+| Linux x64 | `quotum-desktop-<version>-linux-x64.deb`, `quotum-desktop-<version>-linux-x64.rpm` or `Quotum-<version>-x86_64.AppImage` |
 
 The release includes `SHA256SUMS` and build provenance for these packages too.
 The [Desktop workflow](.github/workflows/desktop.yml) builds and smoke-tests the same
@@ -786,9 +786,11 @@ over plain HTTP/1.1, about five.
   [SECURITY.md](SECURITY.md): reporting a vulnerability privately.
 - `pnpm run demo` in `apps/hub/` (after `pnpm run build`): a live board on throwaway data with
   every state the dashboard knows that lasts on a working hub, no network or account
-  needed; Ctrl+C stops it and leaves nothing behind. `pnpm run demo showcase` is the
-  board of the images above. `pnpm run demo money --still` puts subscriptions beside
-  every monetary case on Ana's personal board.
+  needed; Ctrl+C stops it and leaves nothing behind. Run `pnpm run demo showcase` and
+  select **Core team** to explore the shared board and its week of activity.
+  `pnpm run demo showcase-openrouter --still` shows a wallet and its three capped API
+  keys beside a Claude subscription. `pnpm run demo showcase-desktop --still` shows
+  one developer's subscriptions on a single workstation.
 
 Project layout:
 

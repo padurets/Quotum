@@ -373,8 +373,10 @@ checksum-pinned runtimes, and writes icons and license notices. Run it before th
 checks above. The desktop build requires Rust 1.90 or newer. Linux needs `libssl-dev` and `libgtk-3-dev` for the Rust build, `unzip` for preparation,
 and Chromium's runtime libraries (`libnss3 libgtk-3-0 libgbm1 libasound2` on Debian).
 `cargo run` in `desktop/` starts a prepared debug build. `node desktop/package-linux.mjs`
-builds deb, rpm and AppImage; its packaging tools are `dpkg-deb`, `rpmbuild` and
-`mksquashfs`. On Windows, `npx @tauri-apps/cli@2.12.0 build --target x86_64-pc-windows-msvc`
+builds deb, rpm and AppImage with `dpkg-deb`, `rpmbuild` and `mksquashfs`.
+The packager dates the AppStream release from `SOURCE_DATE_EPOCH` or the current Git
+commit. When building from a source archive, supply `SOURCE_DATE_EPOCH` in Unix seconds.
+On Windows, `npx @tauri-apps/cli@2.12.0 build --target x86_64-pc-windows-msvc`
 makes setup.exe; then `node desktop/package-windows.mjs` packages that build as a portable ZIP.
 CI runs both the installed app and the extracted ZIP, including a path with spaces.
 The release workflow calls the same Desktop workflow and publishes its packages only
@@ -423,7 +425,10 @@ the last published operations; they do not establish a wait dependency or qualif
 the diagnostic's timing overhead. Ordinary app runs do not publish them.
 
 Run `node --test desktop/electron/policy.test.cjs` for the Linux bridge/navigation
-policy. CI runs the installed packages with `--smoke`: the hub starts, a stand-in client
+policy and `node --test desktop/linux-metadata.test.mjs` for the Linux package metadata.
+Both also run on Windows in CI. Linux smoke validates the launcher and AppStream data
+in the extracted AppImage and checks that the deb and rpm ship the same metadata file.
+CI runs the installed packages with `--smoke`: the hub starts, a stand-in client
 is measured, its board appears, the window opens twice and the app quits. Linux checks
 need `xvfb`, `xauth` and Python 3; `desktop/smoke/monitor.py` adopts surviving
 children and audits their exits, alongside Electron's live child-failure reports.
@@ -573,8 +578,10 @@ with a CDP endpoint, or set `QUOTUM_CHROME` to a local Chrome binary.
 To open specific demo sets directly on the host (after `pnpm run build` in `apps/hub/`),
 run `pnpm run demo [set] [--resets <scene>] [--still]` in `apps/hub/`:
 
-`pnpm run demo showcase --still` uses the still showcase; `pnpm run demo activity`
-uses the activity set. `--resets <scene>` selects a scene from `apps/hub/demo/catalogue.ts`.
+`pnpm run demo showcase --still` lets you explore **Core team** in the board switcher.
+`showcase-openrouter` pairs a wallet with a subscription, and `showcase-desktop`
+puts three subscriptions on a single workstation. `pnpm run demo activity` uses the
+activity set. `--resets <scene>` selects a scene from `apps/hub/demo/catalogue.ts`.
 `pnpm run demo money --still` places subscriptions beside the monetary cases on Ana's
 personal board: balance and caps, large key inventory, revoked and expired access, a
 history gap, negative balance, zero cap and an unknown provider.
@@ -647,8 +654,7 @@ started, and keeps it alive: machines measure, agents start, work and stop, a ma
 sleeps. Live devices accept refresh requests from their cards; only the explicit legacy
 scene simulates a device without that support. The reset trackers are stood in for, so
 it needs no network and no account. It prints the address and how to sign in; Ctrl+C
-stops it and leaves nothing behind. `pnpm run demo showcase` opens the clean board
-the README images come from; `--resets <scene>` picks what the reset trackers say (one
+stops it and leaves nothing behind. `--resets <scene>` picks what the reset trackers say (one
 scene a run, the list is printed). Set `QUOTUM_PORT` if 8080 is taken. After changing
 the UI, `pnpm run build` and reload the page; after changing the server, `pnpm run build`
 and start the demo again.
@@ -678,21 +684,39 @@ header instead, with the tests that hold it. `pnpm run demo --still` keeps the b
 still: nothing is measured after the start, and no card goes stale for three hours; running
 agents still work and their credited activity advances.
 
-For README screenshots, use `pnpm run demo showcase --still`. Capture the cards and
-the analytics separately in English and Russian, with the same viewport and preferences.
-Keep a weekly window with its plan, forecast and a forecast label at the chart’s right
-edge in view. Update `docs/dashboard.png`, `docs/dashboard.ru.png`, `docs/analytics.png`
-and `docs/analytics.ru.png`, and refresh `docs/social-preview.png` with the current board.
-Keep the existing presentation: the README images sit in a browser-window frame on
-the coloured backdrop, with one card’s agents panel open; the social preview uses
-the tilted board beneath its title. Preserve the typography, proportions and backdrop
-when replacing the underlying screenshots, and compress the PNGs with pngquant.
-Use only the demo’s synthetic accounts and machines.
+For the public screenshots, use the synthetic showcase accounts and a seven-day range.
+The work schedule is relative to Friday at 17:30 UTC. For matching calendar labels,
+start the demo, its child hub and the browser at the same Friday afternoon in UTC.
+Let their clocks advance normally while the hub measures and the dashboard settles.
+Capture the README pairs in English and Russian at 2× device scale, with matching
+crops in the existing browser frame and coloured backdrop.
 
-Refresh `docs/openrouter.png` and `docs/openrouter.ru.png` from
-`pnpm run demo money --still` too. Show a healthy wallet's balance and capped keys
-beside a subscription, with the same viewport, crop and browser-window frame in both
-languages.
+- **Dashboard** (`docs/dashboard{,.ru}.png`). Run `pnpm run demo showcase --still`,
+  sign in as Alex, select **Core team** and show the filters. Open the agent count on
+  Alex's Claude card so that both machines and their projects are visible.
+- **Analytics** (`docs/analytics{,.ru}.png`). On the same board choose **Look ahead →
+  1 day**. Capture the four panels from Agent activity through Weekly limit metrics
+  once the bars, heatmap, weekly curves, forecast labels and table have populated.
+- **OpenRouter** (`docs/openrouter{,.ru}.png`). Run
+  `pnpm run demo showcase-openrouter --still`, hide the filters and capture the
+  subscription beside the wallet. All three key limits and reset periods should be visible.
+- **Social preview** (`docs/social-preview.png`, 1280×640). Place the freshly captured
+  English dashboard beneath the existing title and subtitle, keeping its tilted crop.
+- **AppImage catalog** (`docs/desktop.png`, 1280×800). From `apps/hub/`, run
+  `node --import tsx demo/desktopCapture.ts` and open the printed loopback URL.
+  It starts the production hub in local mode on the seeded single-workstation database
+  and reports the workstation's demo sessions. Use an English 1280×800 viewport at
+  80% zoom and capture the viewport without a browser frame. Include all three cards
+  and the weekly chart down to its legend.
+  Ctrl+C stops the hub and removes its temporary data.
+
+On Linux, `make prepare-desktop` provides the bundled Electron in `desktop/resources/electron/`.
+It can capture the loopback page under Xvfb using the runtime in
+`.devkit/runtime/desktop.Dockerfile`. With CDP, set the device scale via
+`Emulation.setDeviceMetricsOverride` and use `Page.captureScreenshot` with a clip.
+Capture beyond the viewport for the tall analytics panels. Wait for the chart data
+and the bundled fonts before capturing either language. Optimize the PNGs and check
+the final dimensions, text and colour gradients at their published size.
 
 `pnpm run bench` (after `pnpm run build`) uses a still demo whose agents repeat their
 lists without working, opens Ana's board in headless Chrome and checks the budget in
