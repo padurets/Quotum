@@ -45,6 +45,9 @@ export async function fixedActivityCycle(t: TestContext, now: number, seed: Cycl
     device = fixture.directory.devices(fixture.user).find(d => d.name === 'win-desktop'),
     source = fixture.store.sources(fixture.board).find(s => s.provider === 'antigravity');
   assert.ok(device && source);
+  // The heatmap keeps the displayed calendar while the late update is prepared.
+  const releaseCalendar = fixture.period.calendar.retain(fixture.period.calendar.get());
+  t.after(releaseCalendar);
   const beforeRead = fixture.requests.length;
   fixture.store.creditWork(device.id, dirtyAt, dirtyAt + 100, [
     {

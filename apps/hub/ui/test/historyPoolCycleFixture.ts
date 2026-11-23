@@ -10,13 +10,17 @@ import {historyPool} from '../lib/historyPool';
 import type {HistoryStore} from '../lib/history';
 import type {HistoryTile} from '../lib/historyTiles';
 import {boardPeriod} from '../lib/period';
+import type {fetchPeriod} from '../lib/periodTransport';
 import {onDataFilters, publishDataFilters} from '../lib/filterSelection';
 import {pan} from '../lib/pan';
+import {preparations, type PreparationEnv} from '../lib/prepare';
 import {setPrefs} from '../lib/prefs';
 import {setTimeRange, timeRange, type TimeRange} from '../lib/timeRange';
 import {cycleSeed, type CycleSeed} from './historyPoolCycleSeed';
 
 export const DAY = 86_400_000;
+const FRAME_MS = 16;
+const IDLE_SLICES = 4096;
 const boundary = 4156 * 5 * DAY;
 const phase = (name: string, hours: number, minutes = 0, seconds = 0) => ({
   name,
@@ -46,9 +50,23 @@ export function cycleTiles(store: HistoryStore, cell: number) {
   return [...grids.get(cell)!.values()];
 }
 
+// The browser scheduler posts one message at a time. The fixture dispatches those
+// messages between gesture frames and runs microtasks between consecutive slices.
+let posted: (() => void) | null = null;
+class PreparationChannel {
+  readonly port1 = {onmessage: null as (() => void) | null};
+  readonly port2 = {
+    postMessage: () => {
+      posted = this.port1.onmessage;
+    },
+  };
+}
+
 type Reservation = Parameters<typeof historyPool.reserve>[0] & {
   operation?: string;
   intent?: object;
+  controller?: AbortController;
+  demands?: {signal?: AbortSignal}[];
 };
 
 function observePool(t: TestContext) {
@@ -116,6 +134,17 @@ function observePool(t: TestContext) {
     historyPool.trim = trim;
   });
   return {
+    drawingResponse(delivered: WeakSet<AbortSignal>) {
+      for (const [flight, bytes] of reservations) {
+        const signal = flight.controller?.signal;
+        if (bytes <= 0 || !signal || !delivered.has(signal)) continue;
+        for (const [drawing, growth] of reservations) {
+          const recipient = drawing.controller?.signal;
+          if (growth > 0 && recipient && flight.demands?.some(d => d.signal === recipient))
+            return signal;
+        }
+      }
+    },
     resetPeak() {
       max = state();
       sample(historyPool.estimatedBytes, true, 'settled');
@@ -146,7 +175,19 @@ export function cycleFixture(
   const env = cycleSeed(seed, now);
   t.mock.timers.enable({apis: ['setTimeout']});
   const requests: PeriodRequest[] = [];
-  let latency = 0;
+  let latency = 0,
+    frames = 0,
+    elapsed = 0,
+    waitedMs = 0,
+    waitedFrames = 0,
+    overlappingTasks = 0;
+  let previousResponse: AbortSignal | undefined;
+  const delivered = new WeakSet<AbortSignal>();
+  const tick = (ms: number) => {
+    elapsed += ms;
+    t.mock.timers.tick(ms);
+  };
+  t.mock.method(performance, 'now', () => elapsed);
   const failures: unknown[] = [];
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init: RequestInit) => {
     try {
@@ -164,10 +205,36 @@ export function cycleFixture(
     }
   });
 
+  // fetchPeriod adds a timeout signal before calling fetch. Observe its decoded
+  // reply here to identify the transport flight that owns these bytes.
+  const transport = boardPeriod.transport as unknown as {send: typeof fetchPeriod};
+  const send = transport.send;
+  transport.send = async (board, body, signal, reserve) => {
+    const started = frames,
+      sent = elapsed;
+    const reply = await send(board, body, signal, reserve);
+    if (latency && pan.active()) {
+      const ms = elapsed - sent,
+        moves = frames - started;
+      // A send after the first frame's movement still experiences that frame's timer tick.
+      if (ms >= latency && moves >= Math.ceil(latency / FRAME_MS) - 1) {
+        waitedMs = ms;
+        waitedFrames = moves;
+        delivered.add(signal);
+      }
+    }
+    return reply;
+  };
+  t.after(() => {
+    transport.send = send;
+  });
+
   const readers = [quotaHistory, budgetHistory, fundsHistory];
   const pressure = observePool(t);
   let frame: FrameRequestCallback | null = null;
   const bindings = {
+    window: globalThis,
+    MessageChannel: PreparationChannel,
     location: address,
     history,
     requestAnimationFrame: (run: FrameRequestCallback) => {
@@ -181,6 +248,31 @@ export function cycleFixture(
   const previous = Object.getOwnPropertyDescriptors(globalThis);
   for (const [key, value] of Object.entries(bindings))
     Object.defineProperty(globalThis, key, {configurable: true, value});
+
+  // Spend one deterministic quantum per posted task. Gesture and network time
+  // advance independently of how fast Node executes the generator on this host.
+  const clock = (preparations() as unknown as {env: PreparationEnv} | null)?.env;
+  if (clock) {
+    const previousNow = clock.now;
+    let step = 0;
+    clock.now = () => ++step;
+    t.after(() => {
+      clock.now = previousNow;
+    });
+  }
+  const runTasks = async (limit: number) => {
+    for (let i = 0; i < limit && posted; i++) {
+      const run = posted;
+      posted = null;
+      run();
+      await turn();
+      if (latency && pan.active()) {
+        const response = pressure.drawingResponse(delivered);
+        if (response && response === previousResponse) overlappingTasks++;
+        previousResponse = response;
+      }
+    }
+  };
 
   const syncSelection = () => {
     boardPeriod.changed();
@@ -248,10 +340,12 @@ export function cycleFixture(
   const settle = async () => {
     for (let n = 0; n < 300; n++) {
       await turn();
-      t.mock.timers.tick(200);
+      tick(200);
+      await runTasks(IDLE_SLICES);
       await turn();
       if (failures.length) throw failures[0];
       if (
+        !posted &&
         !historyPool.activeFlights &&
         readers.every(reader => !reader.get().loading) &&
         !boardPeriod.get().loading
@@ -280,17 +374,22 @@ export function cycleFixture(
     advance(ms: number) {
       now += ms;
     },
-    frame() {
+    async frame() {
+      frames++;
       const run = frame;
       frame = null;
       run?.(now);
+      await turn();
+      tick(FRAME_MS);
+      // Immediate replies can finish their drawing before the next input. Under
+      // latency the response is prepared alongside a continuing 16 ms gesture.
+      await runTasks(latency ? FRAME_MS : IDLE_SLICES);
+      await turn();
     },
     ...pressure,
     setLatency(ms: number) {
       latency = ms;
     },
-    tick(ms: number) {
-      t.mock.timers.tick(ms);
-    },
+    timing: () => ({waitedMs, waitedFrames, overlappingTasks}),
   };
 }

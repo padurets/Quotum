@@ -1,7 +1,6 @@
 import {after, before, test, type TestContext} from 'node:test';
 import {cellStart, CLOCK_TOLERANCE_MS, TILE_CELLS} from '../../server/domain/history';
 import assert from 'node:assert/strict';
-import {setImmediate as turn} from 'node:timers/promises';
 import type {TimeRange} from '../lib/timeRange';
 import {cycleFixture, cycleTiles, DAY, PHASES} from './historyPoolCycleFixture';
 import {fixedActivityCycle} from './fixedActivityCycle';
@@ -51,10 +50,7 @@ async function drawingCycle(t: TestContext, now: number, latency: number, seed: 
       assert.notEqual(token, null);
       for (let i = 0; i < 46; i++) {
         c.pan.move(token!, pixels / 46);
-        c.frame();
-        await turn();
-        c.tick(16);
-        await turn();
+        await c.frame();
       }
       const result = c.pan.finish(token!);
       assert.ok(result);
@@ -76,6 +72,15 @@ async function drawingCycle(t: TestContext, now: number, latency: number, seed: 
   c.setLatency(latency);
   const cold = await scroll(-width / 2);
   c.setLatency(0);
+  if (latency) {
+    const timing = c.timing();
+    t.diagnostic(JSON.stringify(timing));
+    assert.ok(timing.waitedMs >= latency, 'a delayed response spans moving gesture frames');
+    assert.ok(
+      timing.overlappingTasks > 0,
+      'the arrived response and its drawing hold bytes between preparation tasks',
+    );
+  }
   assert.ok(cold);
   assert.equal(cold.to, Date.now() - (length + future) / 2);
   assert.ok(c.requests.length > from);
