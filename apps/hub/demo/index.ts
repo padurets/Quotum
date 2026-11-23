@@ -26,13 +26,13 @@ import {Directory} from '../server/store/directory.js';
 import {HistoryLimitOutput, type HistoryLimitReport} from './historyLimit.js';
 
 /**
- * `npm run demo -- [set] [--resets <scene>] [--still]`: a hub on throwaway data, filled with
+ * `pnpm run demo [set] [--resets <scene>] [--still]`: a hub on throwaway data, filled with
  * the catalogue (demo/catalogue.ts) through its public requests and kept alive: machines
  * measure, agents start, work and stop, one machine sleeps; with `--still`, measurements stop
  * while running agents still work (see `Demo`). The reset trackers are stood in for, so nothing goes to the
  * network. Ctrl+C stops it and leaves nothing behind.
  *
- * It runs the built hub (`npm run build` first), as `npm start` does, with the
+ * It runs the built hub (`pnpm run build` first), as `pnpm start` does, with the
  * developer's address settings (QUOTUM_PORT, QUOTUM_BIND, QUOTUM_ALLOWED_HOSTS,
  * QUOTUM_PUBLIC_URL, QUOTUM_TRUST_PROXY, QUOTUM_FRAME_ANCESTORS) and nothing else of theirs.
  */
@@ -60,7 +60,7 @@ export class Stop extends Error {}
 
 const usage = () =>
   [
-    'Usage: npm run demo -- [set] [--resets <scene>] [--still]',
+    'Usage: pnpm run demo [set] [--resets <scene>] [--still]',
     `  sets:   ${SETS.map(set => `${set.id} (${set.about})`).join(', ')}`,
     `  scenes: ${SCENES.map(scene => scene.id).join(', ')}`,
   ].join('\n');
@@ -69,7 +69,7 @@ export function parseArgs(argv: string[]): {set: DemoSet; scene: string; still: 
   let set: DemoSet | undefined;
   let scene: string | undefined;
   let still = false;
-  for (let i = 0; i < argv.length; i++) {
+  for (let i = argv[0] === '--' ? 1 : 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--still') still = true;
     else if (arg === '--resets') {
@@ -451,7 +451,7 @@ export class Demo {
 export async function prepare(address: ReturnType<typeof addressOf>, hubRoot = HUB) {
   for (const built of ['dist/server/index.js', 'dist/client/index.html']) {
     if (!existsSync(path.join(hubRoot, built)))
-      throw new Stop(`The hub is not built (no ${built}): run npm run build first.`);
+      throw new Stop(`The hub is not built (no ${built}): run pnpm run build first.`);
   }
   await portFree(address.bind, address.port);
 }
@@ -516,7 +516,7 @@ async function selfCheck(stand: Stand, trackers: Trackers) {
     await new Promise(resolve => setTimeout(resolve, 100));
   if (!trackers.asked)
     throw new Stop(
-      `The hub did not ask the stand-in reset trackers: dist is out of date, run npm run build.`,
+      `The hub did not ask the stand-in reset trackers: dist is out of date, run pnpm run build.`,
     );
   const first = people(stand.set)[0].id;
   const overview = await stand.people
@@ -527,7 +527,7 @@ async function selfCheck(stand: Stand, trackers: Trackers) {
   const expected = stand.start + earliest(stand.set);
   if (overview.historyStart !== expected) {
     throw new Stop(
-      `The hub's history starts at ${new Date(overview.historyStart).toISOString()}, not at the first seeded measurement (${new Date(expected).toISOString()}): dist is out of date, run npm run build.`,
+      `The hub's history starts at ${new Date(overview.historyStart).toISOString()}, not at the first seeded measurement (${new Date(expected).toISOString()}): dist is out of date, run pnpm run build.`,
     );
   }
 }
@@ -557,7 +557,7 @@ function greet(
       ...access.accounts.map(p => `    ${p.email.padEnd(20)} ${p.name}`),
       '',
       `  Other sets: ${others.join(', ')}; reset scenes: ${SCENES.map(s => s.id).join(', ')}`,
-      `  npm run demo -- ${others[0] ?? stand.set.id} --resets <scene>`,
+      `  pnpm run demo ${others[0] ?? stand.set.id} --resets <scene>`,
       '',
       '  Stop with Ctrl+C: the hub and its data go away.',
       '',

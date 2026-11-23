@@ -1156,10 +1156,19 @@ for (const fault of [
   });
 test('actual parser rejects unknown, missing and repeated scope', async () => {
   const {parse} = await run(['--scope', 'history']);
+  assert.deepEqual(
+    {...(parse(['--', '--ci', '--scope', 'history']) as Record<string, unknown>)},
+    {
+      ci: true,
+      cdp: null,
+      scope: 'history',
+    },
+  );
   for (const args of [
     ['--scope', 'other'],
     ['--scope'],
     ['--scope', 'history', '--scope', 'history'],
+    ['--', '--', '--scope', 'history'],
   ])
     assert.throws(() => parse(args));
 });
@@ -1855,7 +1864,9 @@ test('the existing history control selects fresh prefixes while required history
     }
   assert.ok(history.includes('if [[ "$FRESH_HISTORY" == 1 ]]'));
   assert.ok(history.includes('node --import tsx bench/historyFreshControl.mjs'));
-  assert.ok(history.includes('"${QUOTUM_BENCH_PM}" run bench -- --ci --scope history'));
+  assert.ok(history.includes('pnpm run bench --ci --scope history'));
+  assert.ok(history.includes('npm run bench -- --ci --scope history'));
+  assert.ok(!history.includes('pnpm run bench -- '));
   assert.ok(!workflow.includes('QUOTUM_BENCH_HISTORY_FIRST_NATIVE:'));
   assert.ok(!workflow.includes('QUOTUM_BENCH_HISTORY_SCROLL_SUFFIX:'));
 });
@@ -1972,9 +1983,9 @@ test('paired history preinput binding selects only one direct diagnostic history
       .join('\n');
     const standins = `node(){ printf 'node'; printf ' %s' "$@"; printf '\\n'; }; pnpm(){ printf 'pnpm'; printf ' %s' "$@"; printf '\\n'; }; npm(){ printf 'npm'; printf ' %s' "$@"; printf '\\n'; };\n`;
     for (const [pm, inputs, expected] of [
-      ['pnpm', paired, 'pnpm run bench -- --ci --scope history'],
+      ['pnpm', paired, 'pnpm run bench --ci --scope history'],
       ['pnpm', {history_scroll_control: true}, 'node --import tsx bench/historyFreshControl.mjs'],
-      ['pnpm', {}, 'pnpm run bench -- --ci --scope history'],
+      ['pnpm', {}, 'pnpm run bench --ci --scope history'],
       ['npm', {}, 'npm run bench -- --ci --scope history'],
     ] as const) {
       const result = spawnSync(
@@ -1995,7 +2006,8 @@ test('paired history preinput binding selects only one direct diagnostic history
       assert.equal(result.stdout.trim(), expected);
     }
   }
-  assert.ok(history.includes('"${QUOTUM_BENCH_PM}" run bench -- --ci --scope history'));
+  assert.ok(history.includes('pnpm run bench --ci --scope history'));
+  assert.ok(history.includes('npm run bench -- --ci --scope history'));
   assert.equal(history.match(/timeout-minutes: (\d+)/)![1], '20');
 });
 

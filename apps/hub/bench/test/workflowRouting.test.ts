@@ -168,7 +168,8 @@ test(
       assert.ok(job(name).includes('\n        if: always()\n'));
     }
     const panning = job('bench-panning');
-    assert.ok(panning.includes('pnpm run bench -- --ci --scope panning'));
+    assert.ok(panning.includes('pnpm run bench --ci --scope panning'));
+    assert.ok(!panning.includes('pnpm run bench -- '));
     assert.ok(!panning.includes('continue-on-error:'));
     assert.ok(
       panning.includes(
@@ -339,7 +340,9 @@ test('combined benchmark selects only the existing dashboard job and the full ca
   onlyCombined(combined);
   const dashboard = job('bench-dashboard');
   assert.equal(evaluate(expression(dashboard, 'BENCH_SCOPE'), combined), 'all');
-  assert.ok(dashboard.includes('"${QUOTUM_BENCH_PM}" run bench -- --ci --scope "${BENCH_SCOPE}"'));
+  assert.ok(dashboard.includes('pnpm run bench --ci --scope "${BENCH_SCOPE}"'));
+  assert.ok(dashboard.includes('npm run bench -- --ci --scope "${BENCH_SCOPE}"'));
+  assert.ok(!dashboard.includes('pnpm run bench -- '));
   assert.equal(jobs.length, 12, 'reuse the existing job set');
   assert.match(
     ci.split('  workflow_dispatch:\n')[1],
@@ -488,7 +491,7 @@ test('combined post-build preflight verifies the actual checkout and compiled cl
   );
   assert.ok(
     dashboard.indexOf('      - name: Verify the requested source') <
-      dashboard.indexOf('"${QUOTUM_BENCH_PM}" run bench -- --ci'),
+      dashboard.indexOf('pnpm run bench --ci --scope "${BENCH_SCOPE}"'),
   );
   const source = shell(verify)
     .split("node --import tsx --input-type=module <<'JS'\n")[1]

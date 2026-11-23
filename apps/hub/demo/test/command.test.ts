@@ -24,6 +24,15 @@ test('the command takes a set and a reset scene, and refuses anything else with 
   );
   assert.throws(() => parseArgs(['--resets']), /Unknown reset scene/);
   assert.throws(() => parseArgs(['all', 'showcase']), /Unknown argument "showcase"/);
+  assert.throws(() => parseArgs(['--', '--']), /Unknown argument "--"/);
+  assert.deepEqual(
+    [
+      parseArgs(['--', 'showcase', '--still']).set.id,
+      parseArgs(['--', 'showcase', '--still']).still,
+    ],
+    ['showcase', true],
+    'a leading -- separator is ignored for package-manager forwarding',
+  );
   assert.deepEqual(
     [parseArgs([]).still, parseArgs(['showcase', '--still']).still],
     [false, true],

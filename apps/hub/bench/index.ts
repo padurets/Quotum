@@ -87,8 +87,8 @@ import {
 import {BENCH_SCOPES, Coverage, type BenchScope} from './coverage.js';
 
 /**
- * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
- * measured in a real browser on the built hub and page (`npm run build` first). A hub of
+ * `pnpm run bench [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
+ * measured in a real browser on the built hub and page (`pnpm run build` first). A hub of
  * the demo's catalogue stands still, its agents not working; Ana's personal board is opened in
  * headless Chrome (QUOTUM_CHROME, else the first Chrome on PATH, or one already running,
  * with `--cdp`), and the page is watched while nothing but the clock changes: what it
@@ -100,7 +100,7 @@ import {BENCH_SCOPES, Coverage, type BenchScope} from './coverage.js';
  */
 
 const USAGE =
-  'Usage: npm run bench -- [--ci] [--scope all|history|dashboard|updates|panning] [--cdp <http://host:port>]';
+  'Usage: pnpm run bench [--ci] [--scope all|history|dashboard|updates|panning] [--cdp <http://host:port>]';
 /** How long the idle page is watched, in seconds. */
 const IDLE = {full: 300, ci: 120};
 /** How long the board may take to show its cards. */
@@ -119,7 +119,7 @@ export function parseArgs(argv: string[]): {ci: boolean; cdp: string | null; sco
   let cdp: string | null = null;
   let scope: Scope = 'all',
     scoped = false;
-  for (let i = 0; i < argv.length; i++) {
+  for (let i = argv[0] === '--' ? 1 : 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--ci') ci = true;
     else if (arg === '--scope') {
