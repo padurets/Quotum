@@ -1290,8 +1290,8 @@ each original amount and observation time with the reading. Private tile version
 share unchanged series. Reclaiming an eligible prefix releases whole series directly.
 A surviving suffix moves to smaller buffers only when its copy fits alongside the
 original. A series that cannot shrink keeps its full charge. The tile's read boundary
-protects its visible cells, and the pool can still release other wholly unseen series
-before considering an older, nonvisible tile.
+protects its visible cells. When another series or an older, nonvisible tile frees
+space, the pool rechecks eligible prefixes before evicting the next tile.
 Packing, decoding and composition yield between leaves and cells through the shared
 preparation scheduler. Monetary points enter the progressive plot during a gesture
 while table totals retain the
@@ -2407,8 +2407,9 @@ evicting reusable history. New evidence keeps ordinary admission and eviction.
 Financial and work ledgers share their immutable native observations only when every
 reading agrees. Retention preserves that shared suffix, and the pool charges its storage
 once; differing observations and each ledger's spans retain their own charges.
-Restoring the starting value of a fixed period can reuse its measurement arrays and
-validity bounds. Readings that reference the same replay program share its charge.
+A fixed reading captures its starting fields when it receives the replay program.
+Restoring that starting value can reuse its measurement arrays and validity bounds.
+Readings that reference the same replay program share its charge.
 The pool charges the reading wrappers and their independently materialized values
 separately. A clock update uses the displayed reading's time range and reserves
 space before making a private replay copy.
