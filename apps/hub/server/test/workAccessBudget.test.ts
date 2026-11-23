@@ -51,7 +51,8 @@ test('captured holdings and route policies reserve their retained maps before al
 });
 
 test('the default history ceiling admits context rows before materializing a dense month', t => {
-  const start = Math.floor(Date.now() / (2 * H)) * 2 * H - 28 * 24 * H,
+  const end = at,
+    start = end - 28 * 24 * H,
     store = new Store(':memory:', start),
     directory = new Directory(store.db);
   try {
@@ -149,7 +150,7 @@ test('the default history ceiling admits context rows before materializing a den
           2 * H,
           start,
           start + 40080 * M,
-          Date.now(),
+          end,
           store.authorizedSources(board),
           undefined,
           'quota',
@@ -172,8 +173,9 @@ test('the default history ceiling admits context rows before materializing a den
 
 for (const links of [64, 128])
   test(`the default history ceiling bounds ${links} temporal cuts and releases a refused read`, t => {
-    const start = Math.floor(Date.now() / (12 * H)) * 12 * H - 28 * 24 * H,
-      end = start + 28 * 24 * H,
+    // This 28-day window crosses a tile boundary at the 12-hour resolution.
+    const end = at,
+      start = end - 28 * 24 * H,
       store = new Store(':memory:', start),
       directory = new Directory(store.db);
     try {
@@ -261,7 +263,7 @@ for (const links of [64, 128])
             12 * H,
             start,
             end,
-            Date.now(),
+            end,
             store.authorizedSources(board),
             undefined,
             'quota',
@@ -277,7 +279,7 @@ for (const links of [64, 128])
           12 * H,
           start,
           end,
-          Date.now(),
+          end,
           store.authorizedSources(board),
           undefined,
           'quota',
