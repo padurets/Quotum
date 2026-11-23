@@ -1,21 +1,25 @@
 # The hub uses separate named data and key volumes; see the README's Docker command.
 # The first account needs the setup code the hub prints to its log (`docker logs`).
 
-# Keep npm's workspace layout so Node resolves both hoisted and workspace-local packages.
-FROM --platform=$BUILDPLATFORM node:24-alpine AS prod-deps
-WORKDIR /workspace
-COPY package.json package-lock.json ./
-COPY apps/hub/package.json ./apps/hub/package.json
-RUN npm ci --omit=dev --workspace=apps/hub --ignore-scripts --no-audit --no-fund
-
 # JavaScript is built once, natively; the image of every platform only copies it (no native modules).
-FROM --platform=$BUILDPLATFORM node:24-alpine AS build
+FROM --platform=$BUILDPLATFORM node:24-alpine AS pnpm-base
+ARG PNPM_VERSION=12.21.0
+RUN npm install -g "pnpm@${PNPM_VERSION}" --no-audit --no-fund
+
+# Keep the pnpm workspace layout so Node resolves isolated workspace packages cleanly.
+FROM pnpm-base AS prod-deps
 WORKDIR /workspace
-COPY package.json package-lock.json ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/hub/package.json ./apps/hub/package.json
-RUN npm ci --ignore-scripts --no-audit --no-fund
+RUN pnpm install --prod --frozen-lockfile --ignore-scripts --filter quotum-hub
+
+FROM pnpm-base AS build
+WORKDIR /workspace
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/hub/package.json ./apps/hub/package.json
+RUN pnpm install --frozen-lockfile --ignore-scripts --filter quotum-hub
 COPY apps/hub ./apps/hub
-RUN npm --workspace=apps/hub run build
+RUN pnpm --filter quotum-hub run build
 
 FROM node:24-alpine
 LABEL org.opencontainers.image.title="Quotum hub" \

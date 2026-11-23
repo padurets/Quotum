@@ -15,13 +15,15 @@ bench: build-hub
 		QUOTUM_BENCH_DIAGNOSTICS_DIR="$$QUOTUM_BENCH_DIAGNOSTICS_DIR" \
 		QUOTUM_BENCH_DIAGNOSE_NATIVE="$$QUOTUM_BENCH_DIAGNOSE_NATIVE" \
 		QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL="$$QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL" \
-		sh -c 'if [ -n "$$BENCH_CDP" ]; then set -- --cdp "$$BENCH_CDP"; fi; exec npm run bench -- --ci "$$@"'
+		sh -c 'if [ -n "$$BENCH_CDP" ]; then set -- --cdp "$$BENCH_CDP"; fi; exec node --import tsx bench/index.ts --ci "$$@"'
 
 bundle-hub: build-hub
-	@sh $(devkit_loader) exec --component apps/hub -- npm run bundle
+	@sh $(devkit_loader) exec --component apps/hub -- pnpm run bundle
 
 prepare-desktop: bundle-hub
-	node desktop/prepare.mjs --no-build
+	@sh desktop/run-in-container.sh --network bridge -- \
+		'node desktop/prepare.mjs --no-build && cargo fetch --locked --manifest-path desktop/Cargo.toml'
 
 check-desktop: prepare-desktop
-	cd desktop && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked
+	@sh desktop/run-in-container.sh --network none -- \
+		'node --test desktop/prepare-node.test.mjs && node --test desktop/electron/policy.test.cjs && cd desktop && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked'

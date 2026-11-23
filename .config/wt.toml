@@ -1,0 +1,11 @@
+# Worktrunk runs approved project hooks in the target checkout.
+# Pass --yes in non-interactive sessions or run wt config approvals add --yes.
+# Enable the optional start with DEVKIT_WT_AUTOSTART=1.
+[pre-start]
+devkit-reserve = "sh .devkit/runtime/devkit.sh worktree-hook reserve"
+
+[post-start]
+devkit-start = "sh .devkit/runtime/devkit.sh worktree-hook start"
+
+[pre-remove]
+devkit-remove = "sh .devkit/runtime/devkit.sh worktree-hook remove"

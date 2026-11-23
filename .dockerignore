@@ -1,6 +1,7 @@
 .git
 .github
 .devkit
+.worktrees
 **/node_modules
 **/target
 **/dist

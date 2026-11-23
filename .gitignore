@@ -18,6 +18,7 @@ coverage/
 # Devkit local caches and transient state
 .devkit/cache/
 .devkit/state/
+/.worktrees/
 
 # Data and logs of a running hub or agent
 data/
