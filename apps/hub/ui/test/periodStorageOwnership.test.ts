@@ -270,6 +270,100 @@ for (const pressure of ['cache', 'pinned', 'close'] as const)
     }
   });
 
+for (const pinned of [false, true])
+  test(`a multi-source first clock replay updates only changed owners with ${pinned ? 'pinned' : 'available'} storage`, async t => {
+    t.mock.method(Date, 'now', () => NOW);
+    const h = await fixture({personal: true, clocked: true, tableOnly: true});
+    const {period, pool} = h,
+      sources: string[] = [];
+    const member = {estimatedBytes: 0, evictionCandidates: () => []};
+    t.after(async () => {
+      pool.unregister(member);
+      await h.close();
+    });
+    for (let i = 1; i <= 16; i++) {
+      const source = h.store.source('codex', i.toString(16).padStart(24, '0'), NOW - H);
+      sources.push(source);
+      h.store.hold(source, h.alice.id, NOW - H);
+      h.store.record(source, {
+        observedAt: NOW - 30_000,
+        plan: '',
+        resets: null,
+        staleAfterMs: 60_000,
+        windows: ['a', 'b'].map(id => ({
+          id,
+          kind: 'weekly',
+          label: null,
+          minutes: 10080,
+          used: 17,
+          remaining: 83,
+          resetAt: NOW + H,
+        })),
+      });
+    }
+    h.events.flush();
+    await flush();
+    h.selectRange({from: NOW - 30 * 24 * H, to: NOW + H});
+    await flush();
+    const before = sources.map(id => period.getValue(id).value);
+    assert.ok(before.every(v => v.states && !v.states.start && !v.windows[0].stale));
+    if (pinned) {
+      for (const entry of period.evictionCandidates()) entry.drop();
+      member.estimatedBytes = pool.budget - pool.estimatedBytes;
+      pool.register(member);
+    } else {
+      const view = h.directory.view(h.board);
+      h.directory.saveView(
+        h.board,
+        {
+          ...view,
+          shown: [...view.shown, 'budget-history'],
+          hidden: view.hidden.filter(k => k !== 'budget-history'),
+        },
+        h.alice.id,
+        NOW + 1,
+      );
+      h.events.flush();
+      await flush();
+    }
+    const cached = [...period.retained.values()].find(e => e.storage.has(before[0]));
+    if (!pinned) assert.ok(cached);
+    const full = period.measureBytes.bind(period),
+      measure = t.mock.method(period, 'measureBytes');
+    h.elapseTo(NOW + 31_000);
+    h.clock.wakeDue();
+    assert.equal(
+      measure.mock.callCount(),
+      0,
+      'a value deadline must not measure every source and tape',
+    );
+    for (const [i, id] of sources.entries()) {
+      const {value, error} = period.getValue(id),
+        raw = before[i];
+      assert.ok(period.storage.has(value));
+      assert.equal(period.storage.get(value.states!), JSON.stringify(value.states).length * 3 - 8);
+      if (pinned) {
+        assert.equal(error, 'history_limit');
+        assert.equal(value, raw);
+      } else {
+        assert.equal(error, null);
+        assert.ok(value.windows.every(w => w.stale));
+        assert.notEqual(value.states, raw.states);
+        assert.equal(value.states!.pieces, raw.states!.pieces);
+        assert.equal(value.states!.paths, raw.states!.paths);
+        assert.ok(cached!.storage.has(raw) && cached!.storage.has(raw.states));
+        assert.ok(!period.storage.has(raw) && !period.storage.has(raw.states!));
+      }
+    }
+    const bytes = pool.estimatedBytes,
+      roots = new Map(period.storage);
+    assert.ok(bytes <= pool.budget);
+    full();
+    assert.equal(pool.estimatedBytes, bytes);
+    assert.equal(period.storage.size, roots.size);
+    for (const [root, size] of roots) assert.equal(period.storage.get(root), size);
+  });
+
 test('a late clock replays beside a retained owner without evicting a warm chart', async t => {
   t.mock.method(Date, 'now', () => NOW);
   const h = await fixture({personal: true, fixed: true, clocked: true}),

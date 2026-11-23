@@ -354,22 +354,27 @@ class BoardPeriod {
     }
   }
   get estimatedBytes() {
-    let bytes = this.bytes - this.storageBytes(this.storage) + this.calendar.bytes;
-    const storage = new Map(this.storage);
-    // Scope changes can retain the exact tapes and indexes still used on screen.
-    // Metadata belongs to each owner; identical numerical roots belong to their union.
+    let bytes = this.bytes + this.calendar.bytes;
+    // The current roots are already paid. Only keep the marginal charges added
+    // by other owners, including a larger estimate for a root shared by both.
+    const extra = new Map<object, number>();
+    const include = (root: object, size: number) => {
+      const previous = extra.get(root) ?? this.storage.get(root) ?? 0;
+      if (size > previous) {
+        bytes += size - previous;
+        extra.set(root, size);
+      }
+    };
     for (const entry of [
       ...this.retained.values(),
       ...this.restoring,
       ...this.valueCache.values(),
     ]) {
       bytes += entry.metadata;
-      for (const [root, size] of entry.storage)
-        storage.set(root, Math.max(storage.get(root) ?? 0, size));
+      for (const [root, size] of entry.storage) include(root, size);
     }
-    for (const [projector, lease] of this.activityLeases)
-      storage.set(projector, Math.max(storage.get(projector) ?? 0, lease.bytes));
-    return bytes + this.storageBytes(storage);
+    for (const [projector, lease] of this.activityLeases) include(projector, lease.bytes);
+    return bytes;
   }
   private storageBytes(storage: Map<object, number>) {
     return [...storage.values()].reduce((sum, bytes) => sum + bytes, 0);
@@ -403,12 +408,12 @@ class BoardPeriod {
     }
     return serialized;
   }
-  private valueStatusRoom({value, loading, error}: Reading<PeriodValues>) {
+  private limitStatusDelta({value, loading, error}: Reading<PeriodValues>) {
     if (!value) return 0;
     // A pinned pool must still be able to report history_limit on its last reading.
     // JSON's true is one character shorter than false; errors are strings or null.
     const length = error === null ? 4 : JSON.stringify(error).length;
-    return Math.max(0, '"history_limit"'.length + Number(loading) - length) * 3;
+    return ('"history_limit"'.length + Number(loading) - length) * 3;
   }
   private measurementSince(
     data: Extract<import('./board').HubEvent, {type: 'history'}>['data'],
@@ -2947,7 +2952,7 @@ class BoardPeriod {
       JSON.stringify([...this.values.values()]).length * 3 -
       this.measureValues(this.values, storage) +
       [...this.values.values()].reduce(
-        (total, reading) => total + this.valueStatusRoom(reading),
+        (total, reading) => total + Math.max(0, this.limitStatusDelta(reading)),
         0,
       );
     if (this.work.value) {
@@ -3091,24 +3096,38 @@ class BoardPeriod {
         const size = this.valueSizes(value),
           old = this.storage.get(prior)!;
         reserve(size.owned + (value.states && !this.storage.has(value.states) ? size.proof : 0));
+        // The first replay captures its start in a new program wrapper. Each
+        // retained snapshot keeps its own owners in a separate storage map.
+        if (prior.states !== value.states) {
+          if (prior.states) this.releaseValueProgram(id, prior.states);
+          if (value.states && !this.storage.has(value.states)) {
+            this.storage.set(value.states, size.proof);
+            this.bytes += size.proof;
+          }
+        }
+        this.storage.delete(prior);
+        this.storage.set(value, size.owned);
+        this.bytes += size.owned - old;
         this.setValue(id, {...reading, value});
-        if (value.states === prior.states) {
-          this.storage.delete(prior);
-          this.storage.set(value, size.owned);
-          this.bytes += size.owned - old;
-        } else this.measureBytes();
       } catch (error) {
         if (error !== limited) throw error;
         if (!valid()) return false;
         changed = true;
+        // Positive growth was prepaid. A longer prior error releases its excess.
+        this.bytes += Math.min(0, this.limitStatusDelta(reading));
         this.setValue(id, {...reading, loading: false, error: 'history_limit'});
-        this.measureBytes();
       } finally {
         historyPool.release(staging);
       }
     }
     if (changed || now >= this.nativeDue) this.publishProjection();
     return true;
+  }
+  private releaseValueProgram(id: string, program: NonNullable<PeriodValues['states']>) {
+    for (const [other, reading] of this.values)
+      if (other !== id && reading.value?.states === program) return;
+    this.bytes -= this.storage.get(program)!;
+    this.storage.delete(program);
   }
   private updateWork(now: number, fromClock: boolean) {
     this.evaluatedAt = now;
