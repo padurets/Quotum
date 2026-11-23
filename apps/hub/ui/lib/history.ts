@@ -1828,6 +1828,7 @@ export class HistoryStore {
           from: number;
           to: number;
           staged: HistoryTile;
+          reserved: number;
           chunks: {chunk: Chunk; plane: 'all' | 'native' | 'activity'}[];
         }
       >();
@@ -1854,7 +1855,8 @@ export class HistoryStore {
         );
       };
       const work = function* (store: HistoryStore): Preparation<void> {
-        let completed = false;
+        let completed = false,
+          pinnedBytes = 0;
         try {
           for (const chunk of response.answer.chunks) {
             const base = store.tile(chunk.from, flight.cell);
@@ -1866,20 +1868,17 @@ export class HistoryStore {
                 from: base.readFrom,
                 to: base.readTo,
                 staged: base,
+                reserved: 0,
                 chunks: [],
               };
               pins.set(base, pin);
             }
-            const otherGrowth = [...pins].reduce(
-              (sum, [other, value]) =>
-                sum + (other === base ? 0 : Math.max(0, value.staged.bytes - other.bytes)),
-              0,
-            );
-            const admit = (bytes: number) =>
-              !store.pool ||
-              store.pool.reserve(flight, otherGrowth + Math.max(0, bytes - base.bytes));
-            // Include new empty tile headers before preparation can yield, too.
-            if (!admit(pin.staged.bytes)) {
+            // Keep every previously prepared version, including this pin's earlier
+            // chunk, while its successor allocates alongside it.
+            const admit = (extra: number) =>
+              !store.pool || store.pool.reserve(flight, pinnedBytes + extra);
+            // The new empty tile header already belongs to the grid.
+            if (!admit(0)) {
               response.limited = true;
               completed = true;
               return;
@@ -1901,18 +1900,13 @@ export class HistoryStore {
               completed = true;
               return;
             }
+            const measure = staged.measureBeside(base);
+            const reserved = measure();
+            pinnedBytes += reserved - pin.reserved;
+            pin.reserved = reserved;
             pin.staged = staged;
             pin.chunks.push({chunk, plane});
-            if (
-              store.pool &&
-              !store.pool.reserve(
-                flight,
-                [...pins].reduce(
-                  (sum, [base, pin]) => sum + Math.max(0, pin.staged.bytes - base.bytes),
-                  0,
-                ),
-              )
-            ) {
+            if (!admit(0)) {
               response.limited = true;
               completed = true;
               return;
@@ -1921,6 +1915,7 @@ export class HistoryStore {
           }
           completed = true;
         } finally {
+          if (!completed || response.limited) pins.clear();
           if (!completed && store.responses.get(flight) === response) {
             store.releaseResponse(flight);
             store.schedule();
@@ -2022,6 +2017,8 @@ export class HistoryStore {
                   }
                 : null;
           }
+          // Drop superseded packed versions before boundary or transport callbacks can admit more work.
+          pins.clear();
           if (flight.seq > this.metaSeq && !flight.activityOnly) {
             this.metaSeq = flight.seq;
             this.meta = {
@@ -2232,9 +2229,13 @@ export class HistoryStore {
               priority: 0,
               drop: () => {
                 const current = this.interest ? this.plotTarget() : this.target();
+                const headroom = this.pool
+                  ? this.pool.budget - this.pool.estimatedBytes
+                  : this.budget - this.estimatedBytes;
                 if (
                   tiles.get(n) !== tile ||
                   this.reservations.has(`${cell}:${n}`) ||
+                  !tile.prefixBytes(before, headroom) ||
                   cell !== current.cell ||
                   before >
                     Math.min(

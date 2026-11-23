@@ -79,9 +79,11 @@ export class HistoryTile {
   }
 
   get bytes() {
+    return this.meters.bytes + this.nonMeterBytes;
+  }
+  private get nonMeterBytes() {
     return (
       this.activity.byteLength +
-      this.meters.bytes +
       this.moneyBytes +
       this.seriesBytes +
       this.sessions.length * 320 +
@@ -92,17 +94,23 @@ export class HistoryTile {
       1024
     );
   }
+  /** A published tile keeps its packed money even when the replacement has the same size. */
+  measureBeside(held: HistoryTile): () => number {
+    const money = this.meters.measureBeside(held.meters);
+    const retained = held.nonMeterBytes;
+    return () => Math.max(0, this.nonMeterBytes - retained) + money();
+  }
   get planDeadline() {
     return this.plansUntil;
   }
-  prefixBytes(before: number) {
+  prefixBytes(before: number, headroom = Infinity) {
     return !this.series.size &&
       Number.isSafeInteger(before) &&
       before > this.from &&
       before < this.readTo &&
       before < this.nativeTo &&
       (before - this.from) % this.cell === 0
-      ? this.meters.prefixBytes(before)
+      ? this.meters.prefixBytes(before, headroom)
       : 0;
   }
   discardPrefix(before: number) {
@@ -205,11 +213,11 @@ export class HistoryTile {
       copy.planBytes = this.planBytes;
       copy.plansUntil = this.plansUntil;
       copy.sourceWork = this.sourceWork;
-      // Earlier chunks of this response remain owned while their replacement is copied.
-      let reserved = this.bytes;
+      const measure = copy.measureBeside(this);
+      let reserved = 0;
       const fits = () => {
         if (!admit) return true;
-        const bytes = copy.bytes;
+        const bytes = measure();
         if (bytes <= reserved) return true;
         if (!admit(bytes)) return false;
         reserved = bytes;

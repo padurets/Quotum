@@ -26,7 +26,7 @@ const boundary = (packed: Packed, cell: number) =>
 const cellBytes = (packed: Packed, pos: number) =>
   packed.data.subarray(packed.offsets[pos], packed.offsets[pos + 2]);
 type Staging = {metadata: MeterMetadata; bytes: number};
-type PendingCell = {leaves: Uint8Array[]; references: Set<number>; length: number; bytes: number};
+type PendingCell = {data: Uint8Array; references: Set<number>; bytes: number};
 type EncodedExtra = Omit<
   NonNullable<MeterCell[5]>,
   'semantics' | 'openSemantics' | 'observations'
@@ -109,13 +109,17 @@ function readSemantics(metadata: MeterMetadata) {
   };
 }
 
-/** Interval leaves stay independent until they are copied into the final series buffer. */
-function* pack(cell: StoredCell, pending: PendingCell, staging: Staging): Preparation<void> {
+/** Keep individual interval leaves only while encoding their own cell. */
+function* pack(cell: StoredCell, staging: Staging): Preparation<PendingCell> {
+  const earlierBytes = staging.bytes,
+    leaves: Uint8Array[] = [],
+    references = new Set<number>();
+  let length = 0;
+  staging.bytes += 128;
   const keep = (value: MeterSemantics | null) => {
-    const count = pending.references.size;
-    const ref = staging.metadata.retainSemantics(value, pending.references);
-    const growth = (pending.references.size - count) * 8;
-    pending.bytes += growth;
+    const count = references.size;
+    const ref = staging.metadata.retainSemantics(value, references);
+    const growth = (references.size - count) * 8;
     staging.bytes += growth;
     return ref;
   };
@@ -127,11 +131,9 @@ function* pack(cell: StoredCell, pending: PendingCell, staging: Staging): Prepar
   };
   const add = (value: unknown) => {
     const bytes = encoder.encode(JSON.stringify(value));
-    pending.leaves.push(bytes);
-    pending.length += 4 + bytes.byteLength;
-    const size = 128 + bytes.byteLength;
-    pending.bytes += size;
-    staging.bytes += size;
+    leaves.push(bytes);
+    length += 4 + bytes.byteLength;
+    staging.bytes += 128 + bytes.byteLength;
   };
   const {
     steps = [],
@@ -166,6 +168,19 @@ function* pack(cell: StoredCell, pending: PendingCell, staging: Staging): Prepar
     add(compact({...point, ...(point.semantics ? {semantics: relative(point.semantics)} : {})}));
     yield;
   }
+  const data = new Uint8Array(length),
+    view = new DataView(data.buffer);
+  staging.bytes += 128 + length;
+  let at = 0;
+  for (const bytes of leaves) {
+    view.setUint32(at, bytes.length);
+    data.set(bytes, at + 4);
+    at += 4 + bytes.length;
+    yield;
+  }
+  const bytes = 256 + length + references.size * 8;
+  staging.bytes = earlierBytes + bytes;
+  return {data, references, bytes};
 }
 const header = (bytes: Uint8Array) => {
   const [before, semantics, row, steps = 0, topupSteps = 0, observations] = JSON.parse(
@@ -269,12 +284,21 @@ export class MeterTile {
     this.shared = true;
     return this;
   }
-  prefixBytes(before: number) {
+  prefixBytes(before: number, headroom = Infinity) {
     if (this.shared) return 0;
     let bytes = 0;
     for (const packed of this.series.values()) {
       const pos = boundary(packed, (before - this.from) / this.cell);
-      bytes += packed.offsets[pos] + packed.offsets[pos + 1] * 4 + pos * 4;
+      if (!pos) continue;
+      const removed = packed.offsets[pos] + packed.offsets[pos + 1] * 4 + pos * 4;
+      // The whole old series is live until the smaller buffers replace it.
+      // Earlier series in the same pass have already released their storage.
+      if (
+        packed.offsets[pos] < packed.data.length &&
+        packedBytes(packed) - removed > headroom + bytes
+      )
+        return 0;
+      bytes += removed;
     }
     return bytes;
   }
@@ -287,27 +311,27 @@ export class MeterTile {
       if (!pos) continue;
       const byteEnd = packed.offsets[pos],
         refsEnd = packed.offsets[pos + 1];
-      for (let i = 0; i < refsEnd; i++) this.metadata.release(packed.references[i]);
-      this.seriesBytes -= packedBytes(packed);
       if (byteEnd === packed.data.length) {
         this.series.delete(key);
-        continue;
+      } else {
+        // Suffix views would still own the entire old buffers.
+        const offsets = packed.offsets.slice(pos);
+        for (let i = 0; i < offsets.length; i += 2) {
+          offsets[i] -= byteEnd;
+          offsets[i + 1] -= refsEnd;
+        }
+        const kept = {
+          ...packed,
+          first: packed.first + pos / 2,
+          data: packed.data.slice(byteEnd),
+          references: packed.references.slice(refsEnd),
+          offsets,
+        };
+        this.series.set(key, kept);
+        this.seriesBytes += packedBytes(kept);
       }
-      // Suffix views would still own the entire old buffers.
-      const offsets = packed.offsets.slice(pos);
-      for (let i = 0; i < offsets.length; i += 2) {
-        offsets[i] -= byteEnd;
-        offsets[i + 1] -= refsEnd;
-      }
-      const kept = {
-        ...packed,
-        first: packed.first + pos / 2,
-        data: packed.data.slice(byteEnd),
-        references: packed.references.slice(refsEnd),
-        offsets,
-      };
-      this.series.set(key, kept);
-      this.seriesBytes += packedBytes(kept);
+      for (let i = 0; i < refsEnd; i++) this.metadata.release(packed.references[i]);
+      this.seriesBytes -= packedBytes(packed);
     }
     return initial - this.bytes;
   }
@@ -322,6 +346,26 @@ export class MeterTile {
       (this.staging ? this.staging.bytes + this.staging.metadata.bytes : 0)
     );
   }
+  /** Charge private backing buffers and dictionary storage beside a pinned version. */
+  measureBeside(held: MeterTile): () => number {
+    if (this === held) return () => 0;
+    let version: Map<string, Packed> | undefined,
+      shared = 0;
+    return () => {
+      // A write publishes its map and dictionary together. During preparation only
+      // scratch changes, so each slice can reuse the previous identity comparison.
+      if (this.series !== version) {
+        version = this.series;
+        shared = this.metadata === held.metadata ? this.metadata.bytes : 0;
+        if (this.series === held.series) shared += this.seriesBytes;
+        else
+          for (const [key, packed] of this.series)
+            if (held.series.get(key) === packed) shared += packedBytes(packed);
+      }
+      return this.bytes - shared;
+    };
+  }
+
   *clonePrepared(): Preparation<MeterTile> {
     const copy = new MeterTile(this.from, this.cell);
     // Shared series and their dictionary remain immutable until the writer commits.
@@ -330,11 +374,8 @@ export class MeterTile {
       copy.shared = true;
     }
     copy.metadata = this.metadata;
-    for (const [key, packed] of this.series) {
-      copy.series.set(key, packed);
-      copy.seriesBytes += packedBytes(packed);
-      yield;
-    }
+    copy.series = this.series;
+    copy.seriesBytes = this.seriesBytes;
     return copy;
   }
   merge(from: number, to: number, series: readonly MeterSeriesCells[]) {
@@ -408,14 +449,12 @@ export class MeterTile {
             staged.metadata.release(ref);
             yield;
           }
+          cells[i] = undefined;
           staged.bytes -= previous.bytes;
         }
-        const pending: PendingCell = {leaves: [], references: new Set(), length: 0, bytes: 128};
-        cells[i] = pending;
-        staged.bytes += pending.bytes;
         const before = semantics;
         semantics = row[5]?.semantics ?? semantics;
-        yield* pack({row, before, semantics}, pending, staged);
+        cells[i] = yield* pack({row, before, semantics}, staged);
       }
     }
     let start = cells.length,
@@ -429,7 +468,7 @@ export class MeterTile {
         byteCount += offsets[cell + 2] - offsets[cell];
         refCount += offsets[cell + 3] - offsets[cell + 1];
       } else {
-        byteCount += cell.length;
+        byteCount += cell.data.length;
         refCount += cell.references.size;
       }
     }
@@ -452,7 +491,6 @@ export class MeterTile {
         data: new Uint8Array(byteCount),
       };
       staged.bytes += packedBytes(next);
-      const view = new DataView(next.data.buffer);
       let at = 0,
         ref = 0;
       for (let i = start; i < cells.length; i++) {
@@ -465,12 +503,8 @@ export class MeterTile {
           at += bytes.length;
           ref += refs.length;
         } else if (cell) {
-          for (const bytes of cell.leaves) {
-            view.setUint32(at, bytes.length);
-            next.data.set(bytes, at + 4);
-            at += 4 + bytes.length;
-            yield;
-          }
+          yield* copyPrepared(next.data, at, cell.data);
+          at += cell.data.length;
           for (const id of cell.references) {
             next.references[ref++] = id;
             yield;

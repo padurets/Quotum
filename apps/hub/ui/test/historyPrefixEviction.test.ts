@@ -44,8 +44,8 @@ function input(from: number): Chunk {
     })),
   };
 }
-function tile(from: number) {
-  const value = drain(new HistoryTile(from, CELL).staged(input(from), known));
+function tile(from: number, chunk = input(from)) {
+  const value = drain(new HistoryTile(from, CELL).staged(chunk, known));
   value.readFrom = value.nativeFrom = from;
   value.readTo = value.validTo = value.nativeTo = value.nativeValidTo = from + 60 * CELL;
   return value;
@@ -143,6 +143,102 @@ test('a visible monetary edge can release its never-requested prefix and retain 
     assert.deepEqual(published, copy, 'already decoded data remains unchanged');
     assert.deepEqual(h.returned.chunk(known), returned);
     assert.equal(h.state.grids.get(CELL)!.get(tileOf(RETURN, CELL)), h.returned);
+  } finally {
+    h.close();
+  }
+});
+
+test('reclaiming a dense edge never copies its visible suffix beyond a full pool', t => {
+  const h = fixture();
+  try {
+    const chunk = input(LEFT);
+    const series = chunk.meterSeries![0];
+    series.pointMode = 'observation';
+    series.cells = Array.from({length: 60}, (_, i) => [
+      i,
+      '1000000',
+      null,
+      null,
+      CELL,
+      {
+        observations: Array.from({length: 15}, (_, j) => ({
+          at: LEFT + i * CELL + (j * CELL) / 15,
+          value: '1000000',
+          validUntil: LEFT + (i + 1) * CELL,
+        })),
+      },
+    ]);
+    chunk.meterSeries = [series];
+    const edge = tile(LEFT, chunk);
+    h.state.grids.set(CELL, new Map([[tileOf(LEFT, CELL), edge]]));
+    h.latest(LEFT + 3 * CELL);
+    assert.ok(h.store.evictionCandidates().some(candidate => candidate.priority === 0));
+    const pinned = new Uint8Array(h.pool.budget - h.pool.estimatedBytes);
+    h.pool.register({
+      get estimatedBytes() {
+        return pinned.byteLength;
+      },
+      evictionCandidates: () => [],
+    });
+    assert.equal(h.pool.estimatedBytes, h.pool.budget);
+
+    // These three arrays are simultaneously reachable inside the copy, before
+    // the new suffix can replace its source. They are a lower bound on live bytes.
+    const slice = Uint8Array.prototype.slice;
+    let peak = pinned.byteLength;
+    t.mock.method(
+      Uint8Array.prototype,
+      'slice',
+      function (this: Uint8Array, start?: number, end?: number) {
+        const copy = slice.call(this, start, end);
+        peak = Math.max(peak, pinned.byteLength + this.buffer.byteLength + copy.buffer.byteLength);
+        return copy;
+      },
+    );
+    const flight = {role: 'visible' as const};
+    assert.equal(h.pool.reserve(flight, 1), false, 'the visible tile is the only candidate');
+    assert.equal(edge.readFrom, LEFT);
+    assert.deepEqual(edge.chunk(known).meterSeries, chunk.meterSeries);
+    assert.ok(peak <= h.pool.budget, `live buffers occupied at least ${peak} B`);
+  } finally {
+    h.close();
+  }
+});
+
+test('pressure can evict an older tile when the visible edge has no room to shrink', () => {
+  const h = fixture();
+  try {
+    const grid = h.state.grids.get(CELL)!;
+    const held = h.pool.budget - h.pool.estimatedBytes;
+    h.pool.register({estimatedBytes: held, evictionCandidates: () => []});
+    const flight = {role: 'visible' as const};
+    assert.equal(h.pool.reserve(flight, 1), true);
+    assert.equal(grid.get(tileOf(LEFT, CELL)), h.edge);
+    assert.equal(h.edge.nativeFrom, LEFT);
+    assert.equal(grid.has(tileOf(RETURN, CELL)), false);
+    assert.ok(h.pool.estimatedBytes <= h.pool.budget);
+    h.pool.release(flight);
+  } finally {
+    h.close();
+  }
+});
+
+test('releasing an unseen series makes room to copy the visible suffix under pressure', () => {
+  const h = fixture();
+  try {
+    const chunk = input(LEFT);
+    chunk.meterSeries![0].cells.pop();
+    const edge = tile(LEFT, chunk),
+      grid = h.state.grids.get(CELL)!;
+    grid.set(tileOf(LEFT, CELL), edge);
+    const held = h.pool.budget - h.pool.estimatedBytes;
+    h.pool.register({estimatedBytes: held, evictionCandidates: () => []});
+    const flight = {role: 'visible' as const};
+    assert.equal(h.pool.reserve(flight, 1), true);
+    assert.equal(edge.nativeFrom, CUT);
+    assert.equal(grid.get(tileOf(RETURN, CELL)), h.returned);
+    assert.ok(h.pool.estimatedBytes <= h.pool.budget);
+    h.pool.release(flight);
   } finally {
     h.close();
   }

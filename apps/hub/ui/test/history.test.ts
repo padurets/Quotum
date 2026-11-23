@@ -11,7 +11,7 @@ import {covered} from '../lib/historyPlot';
 import {HistoryTile} from '../lib/historyTiles';
 import {Preparations} from '../lib/prepare';
 import {ApiError} from '../lib/http';
-import {composeMeters, type MeterSelection} from '../../server/domain/meterHistory';
+import {composeMeters, meterCells, type MeterSelection} from '../../server/domain/meterHistory';
 import {
   CLOCK_TOLERANCE_MS,
   READ_CELLS,
@@ -3459,6 +3459,225 @@ test('every preparation slice accounts for private tile growth, including cancel
       prototype.mergePrepared = original;
       q.store.close();
       b.store.close();
+    }
+  }
+});
+
+/** Fifteen real balance observations per cell, with a sparse series for unchanged COW ownership. */
+function observedBalances(
+  read: {from: number; to: number; cell: number},
+  amount: string,
+  split = false,
+  sparse = false,
+) {
+  const chunks: Chunk[] = [];
+  for (let from = read.from; from < read.to;) {
+    const to = Math.min(
+      read.to,
+      split ? from + read.cell : tileEnd(tileOf(from, read.cell), read.cell),
+    );
+    const rows = meterCells(
+      {
+        source: 's',
+        meter: 'balance',
+        pointMode: 'observation',
+        accounting: {spending: 'unavailable', topups: 'unavailable'},
+        readings: Array.from({length: (15 * (to - from)) / read.cell}, (_, i) => ({
+          id: 'balance',
+          kind: 'balance',
+          unit: 'USD',
+          amount,
+          at: from + (i * read.cell) / 15,
+          staleAfterMs: read.cell,
+          previousAt: null,
+          limit: null,
+          resetAt: null,
+          minutes: null,
+          scope: null,
+          label: null,
+        })),
+        spans: [{from, to, staleAfterMs: read.cell}],
+      },
+      'USD',
+      from,
+      to,
+      read.cell,
+    );
+    if (sparse) rows.push({...rows[0], meter: 'older', cells: rows[0].cells.slice(0, 20)});
+    chunks.push({...empty(from, to), meterSeries: rows});
+    from = to;
+  }
+  return chunks;
+}
+
+for (const outcome of ['commit', 'cancel'] as const)
+  test(`prepared monetary buffers stay reserved through overlapping chunks and tiles until ${outcome}`, async t => {
+    type PackedBuffers = {data: Uint8Array; offsets: Uint32Array; references: Uint32Array};
+    const buffers = (tile: HistoryTile) => {
+      const rows = (tile as unknown as {meters: {series: Map<string, PackedBuffers>}}).meters
+        .series;
+      return [...rows.values()].flatMap(p => [
+        p.data.buffer,
+        p.offsets.buffer,
+        p.references.buffer,
+      ]);
+    };
+    const pool = new HistoryPool(),
+      h = cooperativeHarness(pool, 'budget');
+    t.after(() => h.store.close());
+    const range = {from: NOW - 120 * H, to: NOW - 5 * M};
+    h.store.setMeters({
+      unit: 'USD',
+      ids: [
+        ['s', 'balance'],
+        ['s', 'older'],
+      ],
+    });
+    h.store.choose('30d', range);
+    await h.start();
+    await h.reads[0].answer({chunks: observedBalances(h.reads[0], '7000000', false, true)});
+    await h.finish();
+    const shown = h.store.get().history;
+    assert.ok(shown);
+    h.store.news(range.to - H);
+    await h.advance(300);
+    await h.finish();
+    const read = pending(h)[0],
+      parts = observedBalances(read, '6000000', true);
+    assert.equal(new Set(parts.map(chunk => tileOf(chunk.from, read.cell))).size, 2);
+    assert.ok(parts.length > 2);
+
+    const originals = new Set(
+      [...h.internals.grids.get(read.cell)!.values()].flatMap(tile => buffers(tile as HistoryTile)),
+    );
+    const prepared = new Map<number, HistoryTile>();
+    const sizes = (tiles: HistoryTile[]) => {
+      let shared = 0,
+        separate = 0;
+      for (const b of new Set(tiles.flatMap(buffers))) {
+        if (originals.has(b)) shared += b.byteLength;
+        else separate += b.byteLength;
+      }
+      return {shared, separate};
+    };
+    const prototype = HistoryTile.prototype as unknown as {
+      staged(...args: Parameters<HistoryTile['staged']>): ReturnType<HistoryTile['staged']>;
+      mergePrepared(
+        chunk: Chunk,
+        known: HistoryAnswer['known'],
+        now: number,
+        plane: string,
+      ): Generator<void, void>;
+    };
+    const stage = prototype.staged,
+      merge = prototype.mergePrepared;
+    let completed = 0,
+      checked = 0;
+    const active: {copy?: HistoryTile} = {};
+    t.mock.method(
+      prototype,
+      'mergePrepared',
+      function* (this: HistoryTile, ...args: Parameters<typeof merge>) {
+        active.copy = this;
+        try {
+          yield* merge.apply(this, args);
+        } finally {
+          active.copy = undefined;
+        }
+      },
+    );
+    t.mock.method(
+      prototype,
+      'staged',
+      function* (this: HistoryTile, ...args: Parameters<typeof stage>) {
+        const copy = yield* stage.apply(this, args);
+        if (copy) {
+          prepared.set(copy.from, copy);
+          completed++;
+        }
+        return copy;
+      },
+    );
+    const reserve = pool.reserve.bind(pool);
+    t.mock.method(pool, 'reserve', (owner: Parameters<typeof reserve>[0], bytes: number) => {
+      if (checked < completed) {
+        // Compare actual backing identities at each preparation handoff. The previous
+        // draft of the same pin is gone; all other unpublished pins are still owned.
+        const {separate, shared} = sizes([...prepared.values()]);
+        assert.ok(separate > 50_000);
+        assert.ok(bytes >= separate, `reservation ${bytes}, private buffers ${separate}`);
+        assert.ok(
+          shared > 10_000 && bytes < separate + shared,
+          'unchanged series are charged once',
+        );
+        checked = completed;
+      }
+      return reserve(owner, bytes);
+    });
+    await read.answer({chunks: parts});
+    let overlapping = false;
+    while (h.tasks.length) {
+      h.tick();
+      const copy = active.copy;
+      if (!copy || !prepared.has(copy.from)) continue;
+      const held = [...prepared.values()];
+      const separate = sizes([...held, copy]).separate;
+      if (separate === sizes(held).separate) continue;
+      overlapping = true;
+      assert.ok(
+        pool.estimatedBytes >= h.store.estimatedBytes + separate,
+        'both unpublished versions of a pin are owned during replacement',
+      );
+      if (outcome === 'cancel') {
+        h.store.close();
+        break;
+      }
+    }
+    assert.ok(overlapping);
+    await h.finish();
+    if (outcome === 'commit') {
+      assert.equal(checked, parts.length);
+      assert.notEqual(h.store.get().history, shown);
+      assert.equal(h.store.get().error, undefined);
+    } else {
+      assert.equal(h.store.get().history, null);
+      assert.equal(h.store.estimatedBytes, 0);
+    }
+    assert.equal(pool.estimatedBytes, h.store.estimatedBytes);
+  });
+
+test('a dense monthly balance fits with its encoded intervals and the transport response still owned', async () => {
+  for (const raw of [false, true]) {
+    const pool = new HistoryPool(raw ? 905_000 : 480_000),
+      h = cooperativeHarness(pool, 'budget');
+    const transport = {role: 'visible' as const};
+    try {
+      h.store.setMeters({unit: 'USD', ids: [['s', 'balance']]});
+      h.store.choose('30d', {from: NOW - 720 * H, to: NOW - 5 * M});
+      await h.start();
+      for (let i = 0; i < h.reads.length; i++) {
+        const read = h.reads[i],
+          chunks = observedBalances(read, '7000000');
+        if (raw) {
+          const body = {
+            run: 'run',
+            now: NOW,
+            historyStart: 0,
+            known: {work: 0, sources: {s: 0}},
+            chunks,
+          };
+          assert.ok(pool.reserve(transport, Buffer.byteLength(JSON.stringify(body)) * 3));
+        }
+        await read.answer({chunks});
+        await h.finish();
+        pool.release(transport);
+      }
+      assert.equal(h.store.get().error, undefined);
+      assert.equal(h.reads.length, 7);
+      assert.equal(h.store.get().history?.meterSeries?.[0].end, '7000000');
+    } finally {
+      pool.release(transport);
+      h.store.close();
     }
   }
 });

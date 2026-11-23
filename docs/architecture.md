@@ -1286,8 +1286,9 @@ existing path and cache dependencies, and the legacy GET history route remains a
 Each monetary series packs its cells into one byte buffer with an index for cell
 boundaries and dictionary references. Cells share rate and unit metadata, and keep
 each original amount and observation time with the reading. Private tile versions
-share unchanged series. Reclaiming an eligible prefix copies the surviving suffix
-into smaller buffers and releases the discarded cells' metadata references.
+share unchanged series. Reclaiming an eligible prefix releases whole series directly.
+A surviving suffix moves to smaller buffers only when its copy fits alongside the
+original. Otherwise the pool continues with its ordinary nonvisible eviction candidates.
 Packing, decoding and composition yield between leaves and cells through the shared
 preparation scheduler. Monetary points enter the progressive plot during a gesture
 while table totals retain the
