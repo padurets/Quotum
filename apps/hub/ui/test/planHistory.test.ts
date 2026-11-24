@@ -113,6 +113,94 @@ test('the actual history owner redacts active and sleeping facts through the sha
   assert.equal(timers.size, 0);
 });
 
+for (const onlyWork of [false, true])
+  test(`a ${onlyWork ? 'work-only' : 'mixed'} update replaces the panned Activity cells after plan retirement`, async t => {
+    const at = H - M,
+      range = {from: 0, to: H},
+      reads: boolean[] = [];
+    let now = H,
+      activeMs = 20_000;
+    const clock = new PageClock({
+      now: () => now,
+      visible: () => true,
+      setTimeout: () => null,
+      clearTimeout: () => {},
+    });
+    const store = new HistoryStore(
+      {
+        clock,
+        now: () => now,
+        preparations: null,
+        read: async (_board, cell, from, to, _signal, _meters, _meta, _owner, activityOnly) => {
+          reads.push(!!activityOnly);
+          const row = chunk(from <= M ? [['s', M, 'max', {at: 0, plan: 'pro'}, H + M + 1]] : []);
+          const i = (at - from) / cell;
+          row.from = from;
+          row.to = to;
+          row.activity = {
+            sessions: [['r', 's', 'p', 'd']],
+            devices: {},
+            cells: [[i, activeMs, [0], []]],
+          };
+          if (!activityOnly) {
+            const left = reads.length === 1 ? 80 : 60;
+            row.series = [
+              {source: 's', window: 'w', hold: H, open: left, cells: [[i, left, 0, 0]]},
+            ];
+          }
+          return {run: 'run', now, known, historyStart: 0, chunks: [row]};
+        },
+        dropTimeRange: () => {},
+        setTimeout: () => null,
+        clearTimeout: () => {},
+      },
+      undefined,
+      'quota',
+    );
+    t.after(() => store.close());
+    const flush = async () => {
+      for (let i = 0; i < 30; i++) await Promise.resolve();
+    };
+    store.open('b');
+    store.hello('run');
+    store.setWorkFilter('all');
+    store.choose('1h', range);
+    store.snapshot(['s'], ['s w'], 0);
+    await flush();
+    const interest = {...range, length: H, token: 1, direction: 0 as const};
+    store.pan(interest);
+    await flush();
+    assert.equal(store.getActivityPlot()?.activityCells.get(at)?.agentMs, 20_000);
+    now++;
+    clock.wakeDue();
+    await flush();
+    const native = store.getPlot()!;
+    assert.ok(native.events.some(e => e.kind === 'plan' && e.previous === null));
+    assert.equal(native.series[0].points[0][1], 80);
+    activeMs = 50_000;
+    store.news(at, undefined, at, onlyWork ? Infinity : at);
+    await flush();
+    if (onlyWork) assert.equal(store.getPlot(), native);
+    const displayed = () => [
+      store.getActivityPlot()?.token,
+      store.getActivityPlot()?.activityCells.get(at)?.agentMs,
+      store.getPlot()?.series[0].points[0][1],
+    ];
+    const updated = displayed();
+    store.endPan(true);
+    store.pan({...interest, token: 2});
+    await flush();
+    const left = onlyWork ? 80 : 60;
+    assert.deepEqual(
+      [updated, displayed()],
+      [
+        [1, 50_000, left],
+        [2, 50_000, left],
+      ],
+    );
+    assert.deepEqual(reads, [false, onlyWork]);
+  });
+
 for (const expiry of [false, true])
   for (const pan of [false, true])
     test(`pending cached ${pan ? 'pan completion' : 'range'} survives plan retirement (${expiry ? 'exclusive expiry' : 'control'})`, async () => {

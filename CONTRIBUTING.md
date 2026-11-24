@@ -64,6 +64,19 @@ it adds no recovery command, and its sampling cost stays in the reported CPU dur
 Its larger diagnostic capacity retains the monthly ownership snapshots; omitted entries
 still fail the check, and the product's memory and transport limits stay the same.
 No browser means the check was not run.
+
+The hub tests also exercise monthly history at a fixed time near a five-day tile
+boundary. The drawing and fixed Activity scenarios read the dense demo board through
+SQLite and the production period reader. The following command in `apps/hub/`
+exercises all six clock offsets, including a live read 20 seconds before the next tile.
+
+```sh
+QUOTUM_TEST_HISTORY_CYCLE=1 node --import tsx --test ui/test/historyPoolCycle.test.ts
+```
+
+Each offset seeds one board and gives each scenario its own copy. The tests check
+the pool's peak reservation, cached navigation and reuse of clean Activity tiles.
+
 UTC calendar-only card events must match the stream's unchanged observation
 baseline and the exact new period. Raw traffic remains reported; missing, repeated or
 unrelated updates fail. This exception permits no extra page rendering or requests and

@@ -63,6 +63,7 @@ import type {WorkOrder} from '../../server/domain/periodIndex';
 import {historyPool} from './historyPool';
 import {page, type PageEvent, type PageState} from './board';
 import {clock, hubNow} from './clock';
+import {measurementTimeAt} from './measurementClock';
 import {onPrefs, prefs} from './prefs';
 import {periodOf} from './periods';
 import {onTimeRange, timeRange} from './timeRange';
@@ -218,6 +219,7 @@ class BoardPeriod {
       to: number;
       validBefore: number;
       bytes: number;
+      copyBytes: number;
       storage: Map<object, number>;
       metadata: number;
       at: number;
@@ -352,31 +354,94 @@ class BoardPeriod {
     }
   }
   get estimatedBytes() {
-    let bytes = this.bytes - this.storageBytes(this.storage) + this.calendar.bytes;
-    const storage = new Map(this.storage);
-    // Scope changes can retain the exact tapes and indexes still used on screen.
-    // Metadata belongs to each owner; identical numerical roots belong to their union.
+    let bytes = this.bytes + this.calendar.bytes;
+    // The current roots are already paid. Only keep the marginal charges added
+    // by other owners, including a larger estimate for a root shared by both.
+    const extra = new Map<object, number>();
+    const include = (root: object, size: number) => {
+      const previous = extra.get(root) ?? this.storage.get(root) ?? 0;
+      if (size > previous) {
+        bytes += size - previous;
+        extra.set(root, size);
+      }
+    };
     for (const entry of [
       ...this.retained.values(),
       ...this.restoring,
       ...this.valueCache.values(),
     ]) {
       bytes += entry.metadata;
-      for (const [root, size] of entry.storage)
-        storage.set(root, Math.max(storage.get(root) ?? 0, size));
+      for (const [root, size] of entry.storage) include(root, size);
     }
-    for (const [projector, lease] of this.activityLeases)
-      storage.set(projector, Math.max(storage.get(projector) ?? 0, lease.bytes));
-    return bytes + this.storageBytes(storage);
+    for (const [projector, lease] of this.activityLeases) include(projector, lease.bytes);
+    return bytes;
   }
   private storageBytes(storage: Map<object, number>) {
     return [...storage.values()].reduce((sum, bytes) => sum + bytes, 0);
   }
-  private valueStorage(values: Map<string, Reading<PeriodValues>>) {
-    const storage = new Map<object, number>();
-    for (const reading of values.values())
-      if (reading.value) storage.set(reading.value, JSON.stringify(reading.value).length * 3);
-    return storage;
+  private readonly startFields = [
+    'windows',
+    'meters',
+    'keys',
+    'creditBalance',
+    'validFor',
+  ] as const;
+  private readonly addedStartBytes = new WeakMap<PeriodValues, number>();
+
+  private sharedStartBytes(start: Omit<PeriodValues, 'states'>) {
+    let shared = 0;
+    for (const field of this.startFields) {
+      const payload = start[field];
+      if (payload) shared += Math.max(0, JSON.stringify(payload).length * 3 - 8);
+    }
+    return shared;
+  }
+  private valueSizes(value: PeriodValues) {
+    const states = value.states,
+      // Replays keep the immutable program by reference. Its slot and property still
+      // belong to each value wrapper, even when the program belongs to several values.
+      proof = states ? (this.storage.get(states) ?? JSON.stringify(states).length * 3 - 8) : 0,
+      body =
+        JSON.stringify({...value, states: undefined}).length * 3 +
+        (states ? ',"states":'.length * 3 + 8 : 0),
+      start = states?.start,
+      shared =
+        start && this.startFields.every(field => value[field] === start[field])
+          ? this.sharedStartBytes(start)
+          : 0;
+    return {owned: body - shared, proof, serialized: body + proof};
+  }
+  private captureValue(wire: PeriodValues, added: number) {
+    if (!added) return wire;
+    const {states, ...start} = wire;
+    const value = {...start, states: {...states!, start}};
+    // The wire representation omits this initial start. Entering another replay
+    // interval materializes a value that can have the same fields and a larger copy bound.
+    this.addedStartBytes.set(value, added);
+    return value;
+  }
+  private valueCopyBytes(values: Map<string, Reading<PeriodValues>>, serialized: number) {
+    for (const {value} of values.values())
+      if (value) serialized -= this.addedStartBytes.get(value) ?? 0;
+    return serialized;
+  }
+  private measureValues(values: Map<string, Reading<PeriodValues>>, storage: Map<object, number>) {
+    let serialized = 0;
+    for (const {value} of values.values()) {
+      if (!value) continue;
+      const size = this.valueSizes(value);
+      serialized += size.serialized;
+      storage.set(value, size.owned);
+      if (value.states) storage.set(value.states, size.proof);
+    }
+    return serialized;
+  }
+  private limitStatusDelta({value, loading, error}: Reading<PeriodValues>) {
+    if (!value) return 0;
+    // A pinned pool must still be able to report history_limit on its last reading.
+    // JSON's true is one character shorter than false; errors are strings or null.
+    const length = error === null ? 4 : JSON.stringify(error).length;
+    return ('"history_limit"'.length + Number(loading) - length) * 3;
   }
   private measurementSince(
     data: Extract<import('./board').HubEvent, {type: 'history'}>['data'],
@@ -426,15 +491,17 @@ class BoardPeriod {
       [...this.values.values()].every(v => v.value && !v.loading && !v.error)
     ) {
       const values = new Map(this.values),
-        storage = this.valueStorage(values),
-        bytes = JSON.stringify([...values]).length * 3;
+        storage = new Map<object, number>(),
+        serialized = JSON.stringify([...values]).length * 3,
+        metadata = serialized - this.measureValues(values, storage);
       this.valueCache.set(periodKey(this.selection), {
         values,
         to: this.selection.to,
         validBefore: this.validBefore,
-        bytes,
+        bytes: metadata + this.storageBytes(storage),
+        copyBytes: this.valueCopyBytes(values, serialized),
         storage,
-        metadata: bytes - this.storageBytes(storage),
+        metadata,
         at: hubNow(),
       });
     }
@@ -504,7 +571,7 @@ class BoardPeriod {
                 6,
             0,
           ) +
-          JSON.stringify([...values.values()]).length * 3;
+          this.valueCopyBytes(values, JSON.stringify([...values.values()]).length * 3);
     this.valueCache.delete(periodKey(this.selection));
     const valid = (target: PeriodSelection) =>
       target.mode === 'range' ? target.to <= validBefore : validBefore === Infinity;
@@ -1464,11 +1531,6 @@ class BoardPeriod {
     };
   }
   private setValue(id: string, value: Reading<PeriodValues>) {
-    if (value.value && value.basis && value.basis.range.to > value.basis.evaluatedAt)
-      value = {
-        ...value,
-        value: periodValueNow(value.value, Math.min(value.basis.range.to, hubNow())),
-      };
     this.forgetProjection();
     this.values.set(id, value);
     this.notify(this.valueListeners.get(id));
@@ -1841,7 +1903,7 @@ class BoardPeriod {
             ),
         );
       const valueStaging = this.staging('values');
-      if (cached && !historyPool.reserve(valueStaging, cached.bytes)) cached = undefined;
+      if (cached && !historyPool.reserve(valueStaging, cached.copyBytes)) cached = undefined;
       if (cached) this.validBefore = cached.validBefore;
       this.valuesNeeded = selection.mode === 'range' && !cached;
       if (selection.mode === 'range')
@@ -1906,37 +1968,39 @@ class BoardPeriod {
       const saved = this.retained.get(cacheKey)?.valid(selection)
         ? ([cacheKey, this.retained.get(cacheKey)!] as const)
         : [...this.retained].find(([, entry]) => entry.fits(selection));
+      const generation = this.generation,
+        revision = this.revision,
+        proofEpoch = this.proofEpoch;
+      const current = () =>
+        generation === this.generation &&
+        revision === this.revision &&
+        proofEpoch === this.proofEpoch &&
+        this.cacheKey === cacheKey;
+      let restored = false;
       if (saved) {
-        const staging = this.staging('restore'),
-          generation = this.generation,
-          revision = this.revision,
-          proofEpoch = this.proofEpoch;
-        const current = () =>
-          generation === this.generation &&
-          revision === this.revision &&
-          proofEpoch === this.proofEpoch &&
-          this.cacheKey === cacheKey;
+        const staging = this.staging('restore');
         this.restoring.add(saved[1]);
         this.retained.delete(saved[0]);
         // The removed cache entry remains owned until its exact shifted copy is ready.
         try {
-          if (
+          restored =
             (saved[0] === cacheKey || historyPool.reserve(staging, saved[1].copyBytes)) &&
             current() &&
-            saved[1].restore(selection)
-          )
-            this.tick(false);
+            saved[1].restore(selection);
         } finally {
           this.restoring.delete(saved[1]);
           historyPool.release(staging);
         }
-        if (!current()) return;
       }
+      // The captured owners and their staging are gone before the clock replays a
+      // saved reading. Its basis also owns the endpoint while another range loads.
+      if (!current() || !this.advanceValues(hubNow(), true)) return;
       if (!this.workNeeded && this.work.basis) {
         this.workSelection = selection;
         this.workRangeKey = selection.mode === 'range' ? periodKey(selection) : prefs().range;
-        this.tick(false);
       }
+      if (restored || (!this.workNeeded && this.work.basis)) this.tick(false);
+      if (!current()) return;
       for (const tape of this.tapes.values())
         if (this.tapeCovers(tape, range)) {
           tape.selection = selection;
@@ -2166,11 +2230,32 @@ class BoardPeriod {
     }
     if (reply.sessions && reply.sessions.state !== 'error')
       staged.set('work', workBytes(reply.sessions.value, 0));
-    if (reply.values?.state === 'complete')
+    const addedStarts: number[] = [];
+    if (reply.values?.state === 'complete') {
+      const {value: wires, basis} = reply.values;
+      // The decoded values already own every payload. Pay for the reading and
+      // the extra start wrapper before binding those references for all consumers.
+      const readingBytes =
+        (JSON.stringify({value: null, basis, loading: false, error: 'history_limit'}).length - 4) *
+        3;
+      let wrappers = wires.length * readingBytes;
+      for (const wire of wires) {
+        if (!wire.states || wire.states.start) {
+          addedStarts.push(0);
+          continue;
+        }
+        const startBytes = JSON.stringify({...wire, states: undefined}).length * 3,
+          shell = startBytes - this.sharedStartBytes(wire);
+        addedStarts.push(startBytes + ',"start":'.length * 3);
+        // While the decoded section still owns its raw value and program, capture
+        // adds both value shells and a program sharing the paths and pieces arrays.
+        wrappers += shell * 2 + ',"states":{"paths":,"pieces":,"start":}'.length * 3 + 2 * 8;
+      }
       staged.set(
         'values',
-        JSON.stringify(reply.values.value).length * 3 + reply.values.value.length * 768,
+        JSON.stringify(wires).length * 3 + Math.max(wires.length * 768, wrappers),
       );
+    }
     if (reply.facets?.state === 'complete')
       staged.set('facets', this.facetBytes(reply.facets.value));
     if (reply.sourceWork && reply.sourceWork.state !== 'error')
@@ -2605,13 +2690,16 @@ class BoardPeriod {
           changed.add('quota');
           this.valuesNeeded = false;
           this.valuesProofEpoch = proofEpoch;
-          for (const value of reply.values.value)
-            this.setValue(value.id, {
-              value,
+          for (const [i, wire] of reply.values.value.entries())
+            this.setValue(wire.id, {
+              value: this.captureValue(wire, addedStarts[i]),
               basis: reply.values.basis,
               loading: false,
               error: null,
             });
+          // Only chart sections go back to drawing readers. Hand off the decoded
+          // value section before releasing its reservation or notifying subscribers.
+          reply.values.value = [];
         } else {
           this.valuesNeeded = false;
           for (const id of this.sourceIds)
@@ -2639,13 +2727,17 @@ class BoardPeriod {
           this.index = prepared.index;
           this.activity = prepared.activity;
           this.activityRetained = null;
-          const now = hubNow();
-          this.advanceValues(now);
-          this.updateWork(now, false);
+          this.updateWork(hubNow(), false);
         }
       }
       this.measureBytes();
       release();
+      if (
+        !current() ||
+        ((reply.values || (reply.sessions && reply.sessions.state !== 'error')) &&
+          !this.advanceValues(hubNow(), reply.values?.state === 'complete'))
+      )
+        return;
       this.publishProjection([...changed]);
       this.retirementAt =
         intent.request.selection.mode === 'live'
@@ -2908,13 +3000,13 @@ class BoardPeriod {
     const storage = new Map<object, number>();
     if (this.sourceTape) storage.set(this.sourceTape, JSON.stringify(this.sourceTape).length * 3);
     if (this.sourceCurves) storage.set(this.sourceCurves, this.sourceCurves.bytes ?? 0);
-    let valuesBytes = JSON.stringify([...this.values.values()]).length * 3;
-    for (const reading of this.values.values())
-      if (reading.value) {
-        const bytes = JSON.stringify(reading.value).length * 3;
-        storage.set(reading.value, bytes);
-        valuesBytes -= bytes;
-      }
+    const valuesBytes =
+      JSON.stringify([...this.values.values()]).length * 3 -
+      this.measureValues(this.values, storage) +
+      [...this.values.values()].reduce(
+        (total, reading) => total + Math.max(0, this.limitStatusDelta(reading)),
+        0,
+      );
     if (this.work.value) {
       const root =
         this.activity?.trace === this.work.value ? this.activity : (this.index ?? this.work.value);
@@ -2984,7 +3076,7 @@ class BoardPeriod {
     if (!this.active) return;
     const now = hubNow();
     this.tickCalendar(now);
-    this.advanceValues(now);
+    if (!this.advanceValues(now)) return;
     if (this.selection.mode === 'live') {
       const range = evaluatedRange(this.selection, now),
         workGap = !!this.index && range.from < this.index.trace.anchor;
@@ -3021,12 +3113,61 @@ class BoardPeriod {
     this.retireExpired(now);
     this.scheduleClock();
   }
-  private advanceValues(now: number) {
-    if (now < this.nativeDue || this.selection.mode !== 'range') return;
-    const at = Math.min(this.selection.to, now);
-    for (const [id, reading] of this.values)
-      if (reading.value) this.setValue(id, {...reading, value: periodValueNow(reading.value, at)});
-    this.publishProjection();
+  private advanceValues(now: number, force = false) {
+    if ((!force && now < this.nativeDue) || this.selection.mode !== 'range') return true;
+    const generation = this.generation,
+      revision = this.revision;
+    let changed = false;
+    for (const [id, reading] of this.values) {
+      const prior = reading.value,
+        basis = reading.basis;
+      if (!prior || !basis) continue;
+      if (reading.error === 'history_limit') {
+        // Consumers read the retained amounts at their own deadlines until Retry.
+        // Waking their existing subscription needs no new measurement graph.
+        this.setValue(id, {...reading});
+        continue;
+      }
+      const at = Math.min(basis.range.to, now),
+        staging = this.staging('values'),
+        limited = {},
+        valid = () =>
+          this.generation === generation &&
+          this.revision === revision &&
+          this.values.get(id) === reading;
+      let held = 0;
+      const reserve = (bytes: number) => {
+        if (bytes <= held) return;
+        if (!historyPool.reserve(staging, bytes) || !valid()) throw limited;
+        held = bytes;
+      };
+      try {
+        const value = periodValueNow(prior, at, reserve);
+        if (value === prior) continue;
+        changed = true;
+        const size = this.valueSizes(value),
+          old = this.storage.get(prior)!;
+        reserve(size.owned);
+        // Expiring a status without entering a replay piece keeps the wire copy bound.
+        const added = value.validFor === prior.validFor && this.addedStartBytes.get(prior);
+        if (added) this.addedStartBytes.set(value, added);
+        this.storage.delete(prior);
+        this.storage.set(value, size.owned);
+        this.bytes += size.owned - old;
+        this.setValue(id, {...reading, value});
+      } catch (error) {
+        if (error !== limited) throw error;
+        if (!valid()) return false;
+        changed = true;
+        // Positive growth was prepaid. A longer prior error releases its excess.
+        this.bytes += Math.min(0, this.limitStatusDelta(reading));
+        this.setValue(id, {...reading, loading: false, error: 'history_limit'});
+      } finally {
+        historyPool.release(staging);
+      }
+    }
+    if (changed || now >= this.nativeDue) this.publishProjection();
+    return true;
   }
   private updateWork(now: number, fromClock: boolean) {
     this.evaluatedAt = now;
@@ -3123,13 +3264,19 @@ class BoardPeriod {
         )
       : null;
     this.nativeDue =
-      this.selection.mode === 'range' && this.selection.to > now
+      this.selection.mode === 'range'
         ? Math.min(
-            this.selection.to,
-            ...[...this.values.values()].flatMap(reading =>
-              reading.value ? [periodValueChangesAt(reading.value, now) ?? Infinity] : [],
+            ...[...this.values.values()].map(({value, basis}) =>
+              value && basis && basis.range.to > now
+                ? Math.min(basis.range.to, periodValueChangesAt(value, now) ?? Infinity)
+                : Infinity,
             ),
-            ...PERIOD_SCOPES.map(scope => this.projectionChangesAt(scope, now) ?? Infinity),
+            ...(this.selection.to > now
+              ? [
+                  this.selection.to,
+                  ...PERIOD_SCOPES.map(scope => this.projectionChangesAt(scope, now) ?? Infinity),
+                ]
+              : []),
           )
         : Infinity;
     const next = Math.min(
@@ -3262,11 +3409,16 @@ export function followPeriod() {
   choose();
   return () => stops.forEach(stop => stop());
 }
-export function usePeriodValues(id: string) {
-  return useSyncExternalStore(
+export function usePeriodValues(id: string): Reading<PeriodValues> & {statusAt?: number} {
+  const reading = useSyncExternalStore(
     listener => boardPeriod.subscribeValue(id, listener),
     () => boardPeriod.getValue(id),
   );
+  // A missing replay cannot extend a displayed observation. Render its status
+  // from the same clock and fixed edge without allocating another history value.
+  return reading.value && reading.basis && (reading.error || reading.loading)
+    ? {...reading, statusAt: measurementTimeAt(reading.basis.range.to, hubNow())}
+    : reading;
 }
 
 const roster = (rows: readonly WorkedSession[]) => rows.map(({workedMs: _, ...row}) => row);

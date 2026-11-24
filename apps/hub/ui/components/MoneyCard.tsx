@@ -21,6 +21,7 @@ import {
   capLeft,
   capPercent,
   capStale,
+  meterStatusAt,
   capChangesAt,
   accessTone,
   accessChangesAt,
@@ -303,15 +304,18 @@ export function QuotaCard({
   source,
   ids = QUOTA_IDS,
   compact = false,
+  statusAt,
 }: {
   source: Pick<Card, 'meters'>;
   ids?: readonly string[];
   compact?: boolean;
+  statusAt?: number;
 }) {
   return (
     <>
       {ids.map(id => {
-        const cap = source.meters?.find(m => m.id === id),
+        const measured = source.meters?.find(m => m.id === id),
+          cap = measured && meterStatusAt(measured, statusAt),
           used = cap ? capPercent(cap) : null;
         const detail = cap
           ? [
@@ -368,12 +372,14 @@ export function MoneyCard({
   compact = false,
   tray = false,
   measurement,
+  statusAt,
 }: {
   source: Card;
   board: string;
   view?: View;
   compact?: boolean;
   tray?: boolean;
+  statusAt?: number;
   measurement?: (MoneySource & {keys: KeyPart[]; meters: Meter[]}) | null;
 }) {
   const context = useCurrencyContext(source.id);
@@ -388,6 +394,7 @@ export function MoneyCard({
       source={value}
       keys={measurement === undefined ? keys : (measurement?.keys ?? [])}
       names={keys}
+      statusAt={statusAt}
       meters={measurement === undefined ? meters : (measurement?.meters ?? [])}
       allowances={allowances}
       noEvidence={!!measurement && !measurement.meters.length}
@@ -422,6 +429,7 @@ export function MoneyValues({
   compact = false,
   tray = false,
   context,
+  statusAt,
 }: {
   source: MoneySource;
   keys: KeyPart[];
@@ -435,6 +443,7 @@ export function MoneyValues({
   compact?: boolean;
   tray?: boolean;
   context: CurrencyContext;
+  statusAt?: number;
 }) {
   const action = useRemovalFocus<HTMLButtonElement>();
   const filters = useDataFilters().current,
@@ -452,6 +461,7 @@ export function MoneyValues({
       keys.filter(key => allowances.includes(key.id)),
       meters,
       context,
+      statusAt,
     ),
     groups = remaining.values;
   const selectedCount = allowances.length,
@@ -471,10 +481,14 @@ export function MoneyValues({
     .filter(Boolean)
     .join('\n');
   const credit = source.provider === 'codex';
-  const native = source.meters?.find(m => m.id === 'balance:credits' && !m.conversion);
+  const captured = source.meters?.find(m => m.id === 'balance:credits' && !m.conversion),
+    native = captured && meterStatusAt(captured, statusAt);
   const displayUnavailable =
     !groups.length &&
-    (source.currencyUnavailable || balanceGroups(source).some(g => !g.total.stale));
+    (source.currencyUnavailable ||
+      balanceGroups(source).some(g =>
+        statusAt === undefined ? !g.total.stale : statusAt < observationDeadline(g.total),
+      ));
   const composition = groups.filter(group => group.components.length || group.approximate);
   const proof = groups[0]?.total.conversion;
   const referenceRate =

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {tileOf, type Chunk} from '../../server/domain/history';
-import {composeMeters} from '../../server/domain/meterHistory';
-import {HistoryStore} from '../lib/history';
+import {setImmediate as turn} from 'node:timers/promises';
+import {tileEnd, tileOf, type Chunk} from '../../server/domain/history';
+import {composeMeters, meterCells} from '../../server/domain/meterHistory';
+import {HistoryStore, type HistoryEnv} from '../lib/history';
 import {HistoryPool} from '../lib/historyPool';
 import {HistoryTile} from '../lib/historyTiles';
 import {drain, Preparations} from '../lib/prepare';
@@ -44,8 +45,8 @@ function input(from: number): Chunk {
     })),
   };
 }
-function tile(from: number) {
-  const value = drain(new HistoryTile(from, CELL).staged(input(from), known));
+function tile(from: number, chunk = input(from)) {
+  const value = drain(new HistoryTile(from, CELL).staged(chunk, known));
   value.readFrom = value.nativeFrom = from;
   value.readTo = value.validTo = value.nativeTo = value.nativeValidTo = from + 60 * CELL;
   return value;
@@ -145,6 +146,360 @@ test('a visible monetary edge can release its never-requested prefix and retain 
     assert.equal(h.state.grids.get(CELL)!.get(tileOf(RETURN, CELL)), h.returned);
   } finally {
     h.close();
+  }
+});
+
+test('reclaiming a dense edge never copies its visible suffix beyond a full pool', t => {
+  const h = fixture();
+  try {
+    const chunk = input(LEFT);
+    const series = chunk.meterSeries![0];
+    series.pointMode = 'observation';
+    series.cells = Array.from({length: 60}, (_, i) => [
+      i,
+      '1000000',
+      null,
+      null,
+      CELL,
+      {
+        observations: Array.from({length: 15}, (_, j) => ({
+          at: LEFT + i * CELL + (j * CELL) / 15,
+          value: '1000000',
+          validUntil: LEFT + (i + 1) * CELL,
+        })),
+      },
+    ]);
+    chunk.meterSeries = [series];
+    const edge = tile(LEFT, chunk);
+    h.state.grids.set(CELL, new Map([[tileOf(LEFT, CELL), edge]]));
+    h.latest(LEFT + 3 * CELL);
+    assert.ok(h.store.evictionCandidates().some(candidate => candidate.priority === 0));
+    const pinned = new Uint8Array(h.pool.budget - h.pool.estimatedBytes);
+    h.pool.register({
+      get estimatedBytes() {
+        return pinned.byteLength;
+      },
+      evictionCandidates: () => [],
+    });
+    assert.equal(h.pool.estimatedBytes, h.pool.budget);
+
+    // These three arrays are simultaneously reachable inside the copy, before
+    // the new suffix can replace its source. They are a lower bound on live bytes.
+    const slice = Uint8Array.prototype.slice;
+    let peak = pinned.byteLength;
+    t.mock.method(
+      Uint8Array.prototype,
+      'slice',
+      function (this: Uint8Array, start?: number, end?: number) {
+        const copy = slice.call(this, start, end);
+        peak = Math.max(peak, pinned.byteLength + this.buffer.byteLength + copy.buffer.byteLength);
+        return copy;
+      },
+    );
+    const flight = {role: 'visible' as const};
+    assert.equal(h.pool.reserve(flight, 1), false, 'the visible tile is the only candidate');
+    assert.equal(edge.readFrom, LEFT);
+    assert.deepEqual(edge.chunk(known).meterSeries, chunk.meterSeries);
+    assert.ok(peak <= h.pool.budget, `live buffers occupied at least ${peak} B`);
+  } finally {
+    h.close();
+  }
+});
+
+for (const [available, sparse] of [
+  [15_000, false],
+  [2_700, false],
+  [2_700, true],
+] as const)
+  test(`a late balance read can reclaim another drawing's panned edge only when its suffix fits (${available} B free, ${sparse ? 'mixed' : 'dense'} series)`, async t => {
+    let now = Date.parse('2026-09-26T12:23:00Z') + 58 * 3_600_000,
+      amount = '7000000',
+      tick = 0;
+    const range = {from: now - 30 * DAY, to: now - 300_000},
+      pool = new HistoryPool(),
+      preparations = new Preparations({now: () => tick++, post: queueMicrotask}),
+      timers = new Map<object, {at: number; fn(): void}>(),
+      transport = {role: 'visible' as const},
+      peer = {role: 'visible' as const, data: new Uint8Array()};
+    const env: HistoryEnv = {
+      now: () => now,
+      preparations,
+      read: async (_board, cell, from, to, _signal, meters) => {
+        const chunks: Chunk[] = [];
+        for (let a = from; a < to;) {
+          const b = Math.min(to, tileEnd(tileOf(a, cell), cell));
+          const meterSeries = meterCells(
+            {
+              source: 's',
+              meter: 'balance',
+              pointMode: 'observation',
+              accounting: {spending: 'unavailable', topups: 'unavailable'},
+              spans: [{from: a, to: b, staleAfterMs: cell}],
+              readings: Array.from({length: (15 * (b - a)) / cell}, (_, i) => ({
+                id: 'balance',
+                kind: 'balance',
+                unit: 'USD',
+                amount,
+                at: a + (i * cell) / 15,
+                staleAfterMs: cell,
+                previousAt: null,
+                limit: null,
+                resetAt: null,
+                minutes: null,
+                scope: null,
+                label: null,
+              })),
+            },
+            'USD',
+            a,
+            b,
+            cell,
+          );
+          if (
+            a <= range.from &&
+            b > range.from &&
+            meters?.ids.some(([, meter]) => meter === 'credits')
+          )
+            meterSeries.push({
+              ...meterSeries[0],
+              meter: 'credits',
+              cells: meterSeries[0].cells.slice(0, 1),
+            });
+          chunks.push({
+            from: a,
+            to: b,
+            series: [],
+            activity: {sessions: [], devices: {}, cells: []},
+            resets: [],
+            grants: [],
+            meterSeries,
+          });
+          a = b;
+        }
+        const body = {run: 'run', now, historyStart: 0, known: {work: 0, sources: {s: 0}}, chunks};
+        if (amount === '6000000') {
+          assert.ok(pool.reserve(transport, 3 * Buffer.byteLength(JSON.stringify(body))));
+          peer.data = new Uint8Array(pool.budget - pool.estimatedBytes - available);
+          assert.ok(pool.reserve(peer, peer.data.byteLength));
+        }
+        return body;
+      },
+      setTimeout: (fn, ms) => {
+        const key = {};
+        timers.set(key, {at: now + ms, fn});
+        return key;
+      },
+      clearTimeout: key => timers.delete(key as object),
+      dropTimeRange() {},
+    };
+    const drawing = (env: HistoryEnv, withCredits = false) => {
+      const store = new HistoryStore(env, undefined, 'budget', pool);
+      store.setMeters({
+        unit: 'USD',
+        ids: withCredits
+          ? [
+              ['s', 'balance'],
+              ['s', 'credits'],
+            ]
+          : [['s', 'balance']],
+      });
+      store.choose('30d', range);
+      store.open('b');
+      store.hello('run');
+      store.snapshot(['s']);
+      t.after(() => store.close());
+      return store;
+    };
+    t.after(() => {
+      pool.release(transport);
+      pool.release(peer);
+    });
+    const store = drawing(env);
+    await turn();
+    assert.equal(store.get().history?.meterSeries?.[0].end, '7000000');
+    amount = '5000000';
+    const other = drawing({...env, visibleFrom: () => range.from}, sparse);
+    other.pan({...range, length: range.to - range.from, token: 1, direction: -1});
+    await turn();
+    other.endPan(true);
+    await turn();
+    const edge = other.evictionCandidates().find(item => item.priority === 0);
+    assert.ok(edge && edge.bytes > 60_000);
+    const before = other.estimatedBytes,
+      visible = other.get().history;
+    amount = '6000000';
+    store.news(range.to - 3_600_000);
+    now += 300;
+    for (const [key, timer] of timers) {
+      if (timer.at > now) continue;
+      timers.delete(key);
+      timer.fn();
+    }
+    await turn();
+    assert.ok(peer.data.byteLength > 0);
+    assert.equal(other.get().history, visible);
+    if (available === 15_000 || sparse) {
+      assert.equal(store.get().error, undefined);
+      assert.equal(store.get().history?.meterSeries?.[0].end, '6000000');
+      assert.ok(before - other.estimatedBytes >= edge.bytes);
+    } else {
+      assert.equal(store.get().error, 'history_limit');
+      assert.equal(other.estimatedBytes, before);
+    }
+    assert.ok(pool.estimatedBytes <= pool.budget);
+  });
+
+test('copy headroom belongs only to the current preallocation while it reclaims space', () => {
+  for (const cancel of [false, true]) {
+    const pool = new HistoryPool(100),
+      flight = {role: 'visible' as const};
+    let nested = false,
+      retained = 80;
+    const headroom: {read?: () => number} = {};
+    pool.register({
+      get estimatedBytes() {
+        return retained;
+      },
+      evictionCandidates: () => [
+        {
+          bytes: 40,
+          shownAt: 0,
+          drop(available) {
+            if (!available) {
+              nested = true;
+              return;
+            }
+            headroom.read = available;
+            assert.equal(available(), 10, 'the other 10 requested bytes already exist');
+            assert.equal(pool.trim(), false);
+            if (cancel) {
+              pool.release(flight);
+              assert.equal(available(), 20, 'a released flight cannot fund a suffix copy');
+            } else retained -= 40;
+          },
+        },
+      ],
+    });
+    assert.equal(pool.reserve(flight, 50, 40), !cancel);
+    assert.ok(nested);
+    assert.equal(pool.estimatedBytes, cancel ? 80 : 90);
+    assert.equal(headroom.read?.(), pool.budget - pool.estimatedBytes);
+  }
+});
+
+test('trim retries affordable prefixes across readers after one equal-age victim releases space', () => {
+  const pool = new HistoryPool(100);
+  let dense = new Uint8Array(43),
+    sparse = new Uint8Array(11),
+    visited = new Uint8Array(3);
+  const cached = new Uint8Array(43),
+    drops: string[] = [];
+  const retained = () =>
+    dense.byteLength + sparse.byteLength + visited.byteLength + cached.byteLength;
+  pool.register({
+    get estimatedBytes() {
+      return dense.byteLength + visited.byteLength;
+    },
+    evictionCandidates: () => [
+      {
+        priority: 0,
+        shownAt: 0,
+        bytes: 33,
+        drop(available) {
+          drops.push('dense');
+          if (available!() < 10) return;
+          assert.ok(retained() + 10 <= pool.budget);
+          dense = dense.slice(-10);
+        },
+      },
+      {
+        shownAt: 1,
+        bytes: 3,
+        drop() {
+          drops.push('shared');
+        },
+      }, // Its frame still owns these bytes.
+      {
+        shownAt: 1,
+        bytes: 3,
+        drop() {
+          drops.push('visited');
+          visited = new Uint8Array(0);
+        },
+      },
+    ],
+  });
+  pool.register({
+    get estimatedBytes() {
+      return sparse.byteLength + cached.byteLength;
+    },
+    evictionCandidates: () => [
+      {
+        priority: 0,
+        shownAt: 0,
+        bytes: 8,
+        drop(available) {
+          drops.push('sparse');
+          if (available!() < 3) return;
+          assert.ok(retained() + 3 <= pool.budget);
+          sparse = sparse.slice(-3);
+        },
+      },
+      {
+        shownAt: 1,
+        bytes: 43,
+        drop() {
+          assert.fail('a later victim is unnecessary');
+        },
+      },
+    ],
+  });
+  const flight = {role: 'visible' as const};
+  assert.ok(pool.reserve(flight, 40, 40));
+  assert.deepEqual(drops, ['dense', 'sparse', 'shared', 'visited', 'dense', 'sparse', 'dense']);
+  assert.equal(pool.estimatedBytes, retained() + 40);
+});
+
+test('pressure can evict an older tile when the visible edge has no room to shrink', () => {
+  const h = fixture();
+  try {
+    const grid = h.state.grids.get(CELL)!;
+    const held = h.pool.budget - h.pool.estimatedBytes;
+    h.pool.register({estimatedBytes: held, evictionCandidates: () => []});
+    const flight = {role: 'visible' as const};
+    assert.equal(h.pool.reserve(flight, 1), true);
+    assert.equal(grid.get(tileOf(LEFT, CELL)), h.edge);
+    assert.equal(h.edge.nativeFrom, LEFT);
+    assert.equal(grid.has(tileOf(RETURN, CELL)), false);
+    assert.ok(h.pool.estimatedBytes <= h.pool.budget);
+    h.pool.release(flight);
+  } finally {
+    h.close();
+  }
+});
+
+test('a full pool can release a wholly unseen series in either order and preserve the return tile', () => {
+  for (const last of [false, true]) {
+    const h = fixture();
+    try {
+      const chunk = input(LEFT);
+      chunk.meterSeries!.at(last ? -1 : 0)!.cells.pop();
+      const edge = tile(LEFT, chunk),
+        grid = h.state.grids.get(CELL)!,
+        shown = composeMeters([{from: LEFT, meterSeries: chunk.meterSeries}], CELL, CUT, END);
+      grid.set(tileOf(LEFT, CELL), edge);
+      const held = h.pool.budget - h.pool.estimatedBytes;
+      h.pool.register({estimatedBytes: held, evictionCandidates: () => []});
+      const flight = {role: 'visible' as const};
+      assert.equal(h.pool.reserve(flight, 1), true);
+      assert.equal(edge.nativeFrom, CUT);
+      assert.equal(grid.get(tileOf(RETURN, CELL)), h.returned);
+      assert.deepEqual(composeMeters([edge.chunk(known)], CELL, CUT, END), shown);
+      assert.ok(h.pool.estimatedBytes <= h.pool.budget);
+      h.pool.release(flight);
+    } finally {
+      h.close();
+    }
   }
 });
 

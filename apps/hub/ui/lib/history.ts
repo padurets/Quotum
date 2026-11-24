@@ -1,7 +1,7 @@
 import type {HistoryReadOwner} from './periodTransport';
 import {onDataFilters, filtersReady, effectiveFilters} from './filterSelection';
 import {executableWorkFilters, workFilter, type WorkFilter} from '../../server/domain/dataFilters';
-import type {HistoryPool} from './historyPool';
+import type {HistoryMember, HistoryPool} from './historyPool';
 import {historyPool} from './historyPool';
 import {boardPeriod, followPeriod, type ActivityFrame} from './period';
 import {workChange} from './workChanges';
@@ -219,11 +219,12 @@ export class HistoryStore {
   private composeCurrent: ((target: Target) => boolean) | null = null;
   private readonly responses = new Map<Flight, ResponseOwner>();
   private readonly reservations = new Map<string, Flight>();
+  private readonly plotTileIds = new WeakMap<HistoryTile, number>();
+  private lastPlotTileId = 0;
   private readonly plotChunks = new Map<
     string,
     {
-      tile: HistoryTile | null;
-      seq: number;
+      version: number;
       from: number;
       to: number;
       chunk: Chunk;
@@ -294,6 +295,17 @@ export class HistoryStore {
     this.preparations?.cancel(this.composeOwner);
     this.plotIdentity = this.composeIdentity = '';
     this.composeCurrent = null;
+  }
+
+  /** Release jobs that still borrow a tile after the grid replaces or evicts it. */
+  private releaseDetachedReaders() {
+    const scheduler = this.preparations;
+    scheduler?.cancelInvalid(this.plotOwner);
+    if (this.composeCurrent && !this.composeCurrent(this.target())) {
+      scheduler?.cancel(this.composeOwner);
+      this.composeCurrent = null;
+      this.composeIdentity = '';
+    }
   }
 
   close() {
@@ -1090,6 +1102,16 @@ export class HistoryStore {
       : this.target();
   }
 
+  // Plan expiry can advance a tile's write sequence to the next response's number.
+  // Distinguish those published tiles without keeping their packed buffers alive.
+  private plotTileId(tile: HistoryTile) {
+    const existing = this.plotTileIds.get(tile);
+    if (existing !== undefined) return existing;
+    const id = ++this.lastPlotTileId;
+    this.plotTileIds.set(tile, id);
+    return id;
+  }
+
   private publishPlot() {
     if (!this.meta || !this.plotPending || !this.interest) return;
     const visible = this.plotTarget();
@@ -1140,7 +1162,7 @@ export class HistoryStore {
       this.cutTo,
       nativeTiles.map(tile => [tile.from, tile.nativeSeq, tile.nativeFrom, tile.nativeTo]),
     ]);
-    const identity = `${this.epoch}:${this.interest?.token ?? this.plot?.token}:${strip.cell}:${strip.k0}:${strip.k1}:${this.windowsKey}:${this.cutTo}:${JSON.stringify(this.meta.known)}:${tiles.map(tile => `${tile.from},${tile.writeSeq},${tile.readFrom},${tile.readTo}`).join(';')}:${separate ? nativeIdentity : ''}`;
+    const identity = `${this.epoch}:${this.interest?.token ?? this.plot?.token}:${strip.cell}:${strip.k0}:${strip.k1}:${this.windowsKey}:${this.cutTo}:${JSON.stringify(this.meta.known)}:${tiles.map(tile => `${this.plotTileId(tile)},${tile.readFrom},${tile.readTo}`).join(';')}:${separate ? nativeIdentity : ''}`;
     this.plotVersion = this.version;
     if (identity === this.plotIdentity) return;
     this.plotIdentity = identity;
@@ -1179,23 +1201,18 @@ export class HistoryStore {
     ): Preparation<{activity: PlotBuffer | null; native: PlotBuffer}> {
       const chunks: Chunk[] = [];
       if (store.wantsActivity)
-        for (const {tile, seq, from, to} of pins) {
-          const key = `${tile.cell}:${tile.from}`;
+        for (const {tile, from, to} of pins) {
+          const key = `${tile.cell}:${tile.from}`,
+            version = store.plotTileId(tile);
           let saved = store.plotChunks.get(key);
-          if (
-            !saved ||
-            saved.tile !== tile ||
-            saved.seq !== seq ||
-            saved.from !== from ||
-            saved.to !== to
-          ) {
+          if (!saved || saved.version !== version || saved.from !== from || saved.to !== to) {
             const chunk = yield* tile.chunkPrepared(
               meta.known,
               true,
               store.env.now(),
               separate ? 'activity' : 'all',
             );
-            saved = {tile, seq, from, to, chunk};
+            saved = {version, from, to, chunk};
             if (valid()) store.plotChunks.set(key, saved);
           }
           chunks.push(saved.chunk);
@@ -1217,13 +1234,13 @@ export class HistoryStore {
         let saved = store.plotChunks.get(key);
         if (
           !saved ||
-          saved.seq !== seq ||
+          saved.version !== seq ||
           saved.from !== from ||
           saved.to !== to ||
           saved.deadline !== tile.planDeadline
         ) {
           const chunk = yield* tile.chunkPrepared(meta.known, true, store.env.now(), 'native');
-          saved = {tile: null, seq, from, to, chunk, deadline: tile.planDeadline};
+          saved = {version: seq, from, to, chunk, deadline: tile.planDeadline};
           if (valid()) store.plotChunks.set(key, saved);
         }
         nativeChunks.push(saved.chunk);
@@ -1828,6 +1845,7 @@ export class HistoryStore {
           from: number;
           to: number;
           staged: HistoryTile;
+          reserved: number;
           chunks: {chunk: Chunk; plane: 'all' | 'native' | 'activity'}[];
         }
       >();
@@ -1854,7 +1872,8 @@ export class HistoryStore {
         );
       };
       const work = function* (store: HistoryStore): Preparation<void> {
-        let completed = false;
+        let completed = false,
+          pinnedBytes = 0;
         try {
           for (const chunk of response.answer.chunks) {
             const base = store.tile(chunk.from, flight.cell);
@@ -1866,20 +1885,17 @@ export class HistoryStore {
                 from: base.readFrom,
                 to: base.readTo,
                 staged: base,
+                reserved: 0,
                 chunks: [],
               };
               pins.set(base, pin);
             }
-            const otherGrowth = [...pins].reduce(
-              (sum, [other, value]) =>
-                sum + (other === base ? 0 : Math.max(0, value.staged.bytes - other.bytes)),
-              0,
-            );
-            const admit = (bytes: number) =>
-              !store.pool ||
-              store.pool.reserve(flight, otherGrowth + Math.max(0, bytes - base.bytes));
-            // Include new empty tile headers before preparation can yield, too.
-            if (!admit(pin.staged.bytes)) {
+            // Keep every previously prepared version, including this pin's earlier
+            // chunk, while its successor allocates alongside it.
+            const admit = (extra: number, allocation = 0) =>
+              !store.pool || store.pool.reserve(flight, pinnedBytes + extra, allocation);
+            // The new empty tile header already belongs to the grid.
+            if (!admit(0)) {
               response.limited = true;
               completed = true;
               return;
@@ -1901,18 +1917,13 @@ export class HistoryStore {
               completed = true;
               return;
             }
+            const measure = staged.measureBeside(base);
+            const reserved = measure();
+            pinnedBytes += reserved - pin.reserved;
+            pin.reserved = reserved;
             pin.staged = staged;
             pin.chunks.push({chunk, plane});
-            if (
-              store.pool &&
-              !store.pool.reserve(
-                flight,
-                [...pins].reduce(
-                  (sum, [base, pin]) => sum + Math.max(0, pin.staged.bytes - base.bytes),
-                  0,
-                ),
-              )
-            ) {
+            if (!admit(0)) {
               response.limited = true;
               completed = true;
               return;
@@ -1921,6 +1932,7 @@ export class HistoryStore {
           }
           completed = true;
         } finally {
+          if (!completed || response.limited) pins.clear();
           if (!completed && store.responses.get(flight) === response) {
             store.releaseResponse(flight);
             store.schedule();
@@ -2022,6 +2034,10 @@ export class HistoryStore {
                   }
                 : null;
           }
+          // Drop superseded packed versions before boundary or transport callbacks can admit more work.
+          pins.clear();
+          this.releaseDetachedReaders();
+          this.pool?.releaseBytes(flight);
           if (flight.seq > this.metaSeq && !flight.activityOnly) {
             this.metaSeq = flight.seq;
             this.meta = {
@@ -2209,7 +2225,7 @@ export class HistoryStore {
 
   evictionCandidates() {
     const target = this.interest ? this.plotTarget() : this.target();
-    const candidates: {bytes: number; shownAt: number; priority?: 0; drop: () => void}[] = [];
+    const candidates: ReturnType<HistoryMember['evictionCandidates']> = [];
     for (const [cell, tiles] of this.grids)
       for (const [n, tile] of tiles) {
         if (this.reservations.has(`${cell}:${n}`)) continue;
@@ -2230,11 +2246,18 @@ export class HistoryStore {
               bytes,
               shownAt: 0,
               priority: 0,
-              drop: () => {
+              drop: available => {
                 const current = this.interest ? this.plotTarget() : this.target();
+                const headroom =
+                  available ??
+                  (() =>
+                    this.pool
+                      ? this.pool.budget - this.pool.estimatedBytes
+                      : this.budget - this.estimatedBytes);
                 if (
                   tiles.get(n) !== tile ||
                   this.reservations.has(`${cell}:${n}`) ||
+                  !tile.prefixBytes(before, headroom()) ||
                   cell !== current.cell ||
                   before >
                     Math.min(
@@ -2249,7 +2272,7 @@ export class HistoryStore {
                 this.plotVersion = -1;
                 this.plotChunks.delete(`${cell}:${tile.from}`);
                 this.plotChunks.delete(`native:${cell}:${tile.from}`);
-                const freed = tile.discardPrefix(before);
+                const freed = tile.discardPrefix(before, headroom());
                 this.schedule();
                 if (!freed) return;
                 this.nativeProof = null;
@@ -2267,6 +2290,7 @@ export class HistoryStore {
           drop: () => {
             tiles.delete(n);
             this.plotChunks.delete(`${cell}:${tile.from}`);
+            this.releaseDetachedReaders();
             this.version++;
             this.aheadStopped = true;
             // Another reader can evict this tile while our final projection is yielding.
@@ -2312,6 +2336,7 @@ export class HistoryStore {
     for (const {cell, n, tile} of candidates.sort((a, b) => a.tile.shownAt - b.tile.shownAt)) {
       if (bytes <= this.budget) break;
       this.grids.get(cell)!.delete(n);
+      this.releaseDetachedReaders();
       this.version++;
       bytes -= tile.bytes;
       // This interest cannot retain its speculative coverage. Another response

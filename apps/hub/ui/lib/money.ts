@@ -7,7 +7,7 @@ import {
 import {displayMeter, convertedRemaining} from '../../server/domain/currencyPresentation';
 import {monetaryOf, providerOf, supportsBudget} from '../../server/domain/providers';
 import type {Card} from './types';
-import type {Meter, KeyPart} from '../../server/domain/meters';
+import {keyPresenceAt, type Meter, type KeyPart} from '../../server/domain/meters';
 export {compareKeys} from '../../server/domain/meters';
 import type {SourceAccess} from '../../server/secrets/credentials';
 import {observationDeadline} from '../../server/domain/resources';
@@ -133,6 +133,12 @@ export function money(
 }
 export const keyName = (key: Pick<KeyPart, 'id' | 'name'>) => key.name ?? key.id;
 export const capLeft = convertedRemaining;
+/** Only the status of a displayed, retained observation follows its own clock. */
+export function meterStatusAt(meter: Meter, at?: number) {
+  if (at === undefined) return meter;
+  const stale = at >= observationDeadline(meter);
+  return stale === meter.stale ? meter : {...meter, stale};
+}
 export const capStale = (meter: Meter, now: number) =>
   meter.stale ||
   now >= observationDeadline(meter) ||
@@ -238,20 +244,22 @@ export function budgetView(
   keys: readonly KeyPart[] = [],
   meters: readonly Meter[] = source.meters ?? [],
   context: CurrencyContext = defaultCurrencyContext,
+  statusAt?: number,
 ): BudgetView {
   const byId = new Map(meters.map(m => [m.id, m]));
   const caps = providerOf(source.provider)?.meterKinds.some(kind => kind === 'cap');
   const limits = caps
     ? keys.flatMap(part => {
         const meter = byId.get(`key:${part.id}:cap`);
-        const {id, name, disabled, expiresAt, includeByok, presence} = part;
+        const {id, name, disabled, expiresAt, includeByok} = part;
+        const presence = statusAt === undefined ? part.presence : keyPresenceAt(part, statusAt);
         const shown = meter && displayMeter(meter, source.id, context);
         return meter?.kind === 'cap' && meter.limit !== null
           ? [
               {
                 scope: {kind: 'key' as const, id},
                 part: {id, name, disabled, expiresAt, includeByok, presence},
-                meter: shown ?? meter,
+                meter: meterStatusAt(shown ?? meter, statusAt),
                 native: meter,
                 ...(!shown ? {unavailable: true} : {}),
               },
@@ -270,12 +278,14 @@ export function budgetView(
   const components =
     balance?.components.flatMap(part => {
       const meter = displayMeter(part.meter, source.id, context);
-      return meter ? [{...part, meter}] : [];
+      return meter ? [{...part, meter: meterStatusAt(meter, statusAt)}] : [];
     }) ?? [];
   return {
     remaining: {
       kind: 'funds',
-      values: shown ? [{total: shown, components, approximate: !!shown.conversion}] : [],
+      values: shown
+        ? [{total: meterStatusAt(shown, statusAt), components, approximate: !!shown.conversion}]
+        : [],
     },
     limits,
   };

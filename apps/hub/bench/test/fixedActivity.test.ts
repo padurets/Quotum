@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import vm, {runInNewContext} from 'node:vm';
 import {
   activityOracle,
+  assertCleanActivityTiles,
   assertActivityOverlap,
   assertActivityOutside,
   assertActivityCancellation,
@@ -26,6 +27,25 @@ import {PeriodTransport} from '../../ui/lib/periodTransport';
 import {TILE_CELLS, MAX_READ_TILES} from '../../server/domain/history';
 import {Preparations} from '../../ui/lib/prepare';
 import {plotGroups} from '../../ui/lib/historyPlot';
+
+test('fixed Activity retains every visible clean tile through the dirty boundary', () => {
+  const baseline: Parameters<typeof assertCleanActivityTiles>[0] = [
+    [0, 10, 1],
+    [10, 20, 2],
+    [20, 30, 3],
+    [30, 40, 4],
+    [40, 50, 5],
+  ];
+  const current = baseline.slice(1, 4);
+  assertCleanActivityTiles(baseline, current, 10, 40);
+  assertCleanActivityTiles(baseline, [...current, [40, 50, 6]], 13, 40);
+  assert.throws(() => assertCleanActivityTiles(baseline, current.slice(1), 13, 40));
+  assert.throws(() => assertCleanActivityTiles(baseline, current.slice(0, 2), 13, 40));
+  assert.throws(() =>
+    assertCleanActivityTiles(baseline, [current[0], [20, 30, 6], current[2]], 13, 40),
+  );
+  assert.throws(() => assertCleanActivityTiles(baseline, current, 40, 45));
+});
 
 for (const mode of ['live', 'disposed', 'save-failed', 'no-evidence'])
   test('fixed Activity interrupt snapshot: ' + mode, t => {

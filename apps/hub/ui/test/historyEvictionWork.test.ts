@@ -1,8 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
-import {runInNewContext} from 'node:vm';
-import ts from 'typescript';
+import {HistoryStore} from '../lib/history';
 import {HistoryTile} from '../lib/historyTiles';
 
 const M = 60_000,
@@ -11,7 +9,7 @@ type Domain = {cell: number; k0: number; k1: number};
 type Fixture = ReturnType<typeof fixture>;
 
 function fixture(budget: number, direction = 0, seed = 0) {
-  const counts = {visits: 0, sorts: 0, targets: 0};
+  const counts = {visits: 0, targets: 0};
   const grids = new Map<number, Map<number, HistoryTile>>();
   for (const cell of [M, 5 * M, 2 * H]) {
     const tiles = new Map<number, HistoryTile>();
@@ -52,6 +50,7 @@ function fixture(budget: number, direction = 0, seed = 0) {
   const state = {
     grids,
     budget,
+    env: {preparations: null},
     reservations: new Set([`${M}:2`, `${5 * M}:${seed % 12}`]),
     version: 4,
     aheadStopped: !!(seed % 2),
@@ -75,23 +74,10 @@ function fixture(budget: number, direction = 0, seed = 0) {
       return bytes;
     },
   };
-  return {state, counts};
+  Object.setPrototypeOf(state, HistoryStore.prototype);
+  return {state, counts, evict: () => Reflect.apply(HistoryStore.prototype['evict'], state, [])};
 }
 
-const source = readFileSync(new URL('../lib/history.ts', import.meta.url), 'utf8');
-const start = source.indexOf('  private evict()'),
-  body = source.slice(start, source.indexOf('  private clear(', start));
-function current(h: Fixture) {
-  const context = {counts: h.counts, evict: null as unknown as (this: Fixture['state']) => void};
-  runInNewContext(
-    ts.transpileModule(
-      `const original=Array.prototype.sort;Array.prototype.sort=function(...args){counts.sorts++;return original.apply(this,args);};class Reader{${body}}globalThis.evict=Reader.prototype.evict;`,
-      {compilerOptions: {target: ts.ScriptTarget.ES2022}},
-    ).outputText,
-    context,
-  );
-  return () => context.evict.call(h.state);
-}
 const snapshot = (h: Fixture) => ({
   grids: [...h.state.grids].map(([cell, tiles]) => [cell, [...tiles.keys()]]),
   bytes: h.state.estimatedBytes,
@@ -101,12 +87,21 @@ const snapshot = (h: Fixture) => ({
 
 test('actual eviction does no candidate work below the unchanged cache budget', () => {
   const h = fixture(15 * 1024 * 1024, -1),
-    before = snapshot(h),
-    evict = current(h);
-  for (let i = 0; i < 100; i++) evict();
+    before = snapshot(h);
+  let sorts = 0;
+  const sort = Array.prototype.sort;
+  Array.prototype.sort = function (compare) {
+    sorts++;
+    return sort.call(this, compare);
+  };
+  try {
+    for (let i = 0; i < 100; i++) h.evict();
+  } finally {
+    Array.prototype.sort = sort;
+  }
   assert.deepEqual(snapshot(h), before);
   assert.equal(h.counts.visits, 0, 'under-budget pan must not visit candidate tiles');
-  assert.equal(h.counts.sorts, 0);
+  assert.equal(sorts, 0);
   assert.equal(h.counts.targets, 0);
 });
 
@@ -147,7 +142,7 @@ test('over-budget eviction preserves reservations, visible frames, mixed grids, 
         const budget = Math.floor(fixture(0, direction, seed).state.estimatedBytes * fraction);
         const actual = fixture(budget, direction, seed),
           expected = fixture(budget, direction, seed);
-        current(actual)();
+        actual.evict();
         original(expected);
         assert.deepEqual(
           snapshot(actual),

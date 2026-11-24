@@ -21,7 +21,15 @@ import type {MoneyWorkCells} from '../../server/domain/moneyWork';
 
 const FIELDS = 11;
 const HEAD = 248; // 61 uint32 offsets, padded to a float64 boundary.
-type PackedSeries = {source: string; window: string; values: Float64Array; ends?: Float64Array};
+type PackedSeries = {
+  source: string;
+  window: string;
+  start: number;
+  values: Float64Array;
+  ends?: Float64Array;
+};
+const seriesEnd = (s: PackedSeries) => s.start + s.values.length / FIELDS;
+const seriesBytes = (s: PackedSeries) => s.values.byteLength + (s.ends?.byteLength ?? 0) + 256;
 type Session = Chunk['activity']['sessions'][number];
 type Group = ['s' | 'p' | 'd', string];
 type Plane = 'all' | 'native' | 'activity';
@@ -71,9 +79,11 @@ export class HistoryTile {
   }
 
   get bytes() {
+    return this.meters.bytes + this.nonMeterBytes;
+  }
+  private get nonMeterBytes() {
     return (
       this.activity.byteLength +
-      this.meters.bytes +
       this.moneyBytes +
       this.seriesBytes +
       this.sessions.length * 320 +
@@ -84,22 +94,28 @@ export class HistoryTile {
       1024
     );
   }
+  /** A published tile keeps its packed money even when the replacement has the same size. */
+  measureBeside(held: HistoryTile): () => number {
+    const money = this.meters.measureBeside(held.meters);
+    const retained = held.nonMeterBytes;
+    return () => Math.max(0, this.nonMeterBytes - retained) + money();
+  }
   get planDeadline() {
     return this.plansUntil;
   }
-  prefixBytes(before: number) {
+  prefixBytes(before: number, headroom = Infinity) {
     return !this.series.size &&
       Number.isSafeInteger(before) &&
       before > this.from &&
       before < this.readTo &&
       before < this.nativeTo &&
       (before - this.from) % this.cell === 0
-      ? this.meters.prefixBytes(before)
+      ? this.meters.prefixBytes(before, headroom)
       : 0;
   }
-  discardPrefix(before: number) {
-    if (this.readers || !this.prefixBytes(before)) return 0;
-    const bytes = this.meters.discardPrefix(before);
+  discardPrefix(before: number, headroom = Infinity) {
+    if (this.readers || !this.prefixBytes(before, headroom)) return 0;
+    const bytes = this.meters.discardPrefix(before, headroom);
     if (!bytes) return 0;
     this.readFrom = Math.max(this.readFrom, before);
     this.validTo = Math.max(this.readFrom, this.validTo);
@@ -141,14 +157,14 @@ export class HistoryTile {
   staged(
     chunk: Chunk,
     known: HistoryMeta['known'],
-    admit: (bytes: number) => boolean,
+    admit: (bytes: number, allocation: number) => boolean,
     now?: number,
     plane?: Plane,
   ): Preparation<HistoryTile | null>;
   *staged(
     chunk: Chunk,
     known: HistoryMeta['known'],
-    admit?: (bytes: number) => boolean,
+    admit?: (bytes: number, allocation: number) => boolean,
     now = 0,
     plane: Plane = 'all',
   ): Preparation<HistoryTile | null> {
@@ -167,7 +183,7 @@ export class HistoryTile {
       copy.nativeSeq = this.nativeSeq;
       for (const [key, series] of this.series) {
         copy.series.set(key, series);
-        copy.seriesBytes += series.values.byteLength + (series.ends?.byteLength ?? 0) + 256;
+        copy.seriesBytes += seriesBytes(series);
         yield;
       }
       for (const session of this.sessions) {
@@ -197,13 +213,13 @@ export class HistoryTile {
       copy.planBytes = this.planBytes;
       copy.plansUntil = this.plansUntil;
       copy.sourceWork = this.sourceWork;
-      // Earlier chunks of this response remain owned while their replacement is copied.
-      let reserved = this.bytes;
+      const measure = copy.measureBeside(this);
+      let reserved = 0;
       const fits = () => {
         if (!admit) return true;
-        const bytes = copy.bytes;
+        const bytes = measure();
         if (bytes <= reserved) return true;
-        if (!admit(bytes)) return false;
+        if (!admit(bytes, copy.meters.pendingAllocation)) return false;
         reserved = bytes;
         return true;
       };
@@ -270,63 +286,21 @@ export class HistoryTile {
         this.sourceWork.push([source, first + index, active, agent]);
         yield;
       }
-      for (const [key, s] of this.series) {
-        const values = new Float64Array(s.values.length);
-        const ends = s.ends?.slice();
-        for (let i = 0; i < values.length; i += FIELDS) {
-          values.set(s.values.subarray(i, i + FIELDS), i);
-          yield;
-        }
-        for (let i = first; i < last; i++) {
-          values.fill(NaN, i * FIELDS, (i + 1) * FIELDS);
-          if (ends) ends[i] = NaN;
-          yield;
-        }
-        this.series.set(key, {...s, values, ends});
-      }
+      const replaced = new Set<string>();
       for (const s of chunk.series) {
         const key = `${s.source} ${s.window}`;
-        let packed = this.series.get(key);
-        if (!packed) {
-          const values = new Float64Array(TILE_CELLS * FIELDS);
-          values.fill(NaN);
-          this.series.set(key, (packed = {source: s.source, window: s.window, values}));
-          this.seriesBytes += values.byteLength + 256;
-        }
         const since = Math.max(
           known.work,
           known.sourceWork?.[s.source] ??
             (known.sourceWork ? Infinity : (known.sources[s.source] ?? Infinity)),
         );
-        for (const v of yield* decodeCellsPrepared(s, chunk.from, this.cell, since)) {
-          yield;
-          const i = ((v.at - this.from) / this.cell) * FIELDS;
-          packed.values.set(
-            [v.low, v.first, v.last, v.open ?? NaN, +v.gap, v.hold, v.spent, v.covered, ...v.work],
-            i,
-          );
-          if (v.validUntil !== undefined) {
-            if (!packed.ends) {
-              packed.ends = new Float64Array(TILE_CELLS).fill(NaN);
-              this.seriesBytes += packed.ends.byteLength;
-            }
-            packed.ends[i / FIELDS] = v.validUntil;
-          }
-        }
+        const cells = yield* decodeCellsPrepared(s, chunk.from, this.cell, since);
+        yield* this.replaceSeriesPrepared(key, s, first, last, cells);
+        replaced.add(key);
       }
       for (const [key, s] of this.series) {
-        let kept = false;
-        for (let i = 0; i < s.values.length; i += FIELDS) {
-          yield;
-          if (!Number.isNaN(s.values[i])) {
-            kept = true;
-            break;
-          }
-        }
-        if (!kept) {
-          this.series.delete(key);
-          this.seriesBytes -= s.values.byteLength + (s.ends?.byteLength ?? 0) + 256;
-        }
+        if (!replaced.has(key)) yield* this.replaceSeriesPrepared(key, s, first, last, []);
+        yield;
       }
     }
     if (plane !== 'native') {
@@ -434,6 +408,84 @@ export class HistoryTile {
     }
   }
 
+  private *replaceSeriesPrepared(
+    key: string,
+    {source, window}: Pick<PackedSeries, 'source' | 'window'>,
+    first: number,
+    last: number,
+    cells: DecodedCell[],
+  ): Preparation<void> {
+    const old = this.series.get(key);
+    let left = old?.start ?? 0,
+      right = old ? seriesEnd(old) : 0;
+    if (old && !cells.length && (last <= left || right <= first)) return;
+    // Replacing an edge may uncover a hole before the next surviving measurement.
+    if (old) {
+      if (first <= left && left < last) {
+        left = last;
+        while (left < right && Number.isNaN(old.values[(left - old.start) * FIELDS])) {
+          left++;
+          yield;
+        }
+      }
+      if (first < right && right <= last) {
+        right = first;
+        while (left < right && Number.isNaN(old.values[(right - 1 - old.start) * FIELDS])) {
+          right--;
+          yield;
+        }
+      }
+    }
+    let start = left < right ? left : TILE_CELLS,
+      end = left < right ? right : 0;
+    // Wire cells are chronological; gaps between them stay NaN.
+    if (cells.length) {
+      start = Math.min(start, (cells[0].at - this.from) / this.cell);
+      end = Math.max(end, (cells[cells.length - 1].at - this.from) / this.cell + 1);
+    }
+    if (start >= end) {
+      if (old) {
+        this.series.delete(key);
+        this.seriesBytes -= seriesBytes(old);
+      }
+      return;
+    }
+    const values = new Float64Array((end - start) * FIELDS).fill(NaN);
+    const next: PackedSeries = {source, window, start, values};
+    if (old && left < right) {
+      // Each copy is bounded by the 60 cells of one series. Published views keep the old buffers.
+      values.set(
+        old.values.subarray((left - old.start) * FIELDS, (right - old.start) * FIELDS),
+        (left - start) * FIELDS,
+      );
+      const clearFrom = Math.max(left, first),
+        clearTo = Math.min(right, last);
+      if (clearFrom < clearTo)
+        values.fill(NaN, (clearFrom - start) * FIELDS, (clearTo - start) * FIELDS);
+      if (old.ends?.some((v, i) => !Number.isNaN(v) && (i < first || i >= last))) {
+        next.ends = old.ends.slice();
+        next.ends.fill(NaN, first, last);
+      }
+    }
+    this.series.set(key, next);
+    this.seriesBytes += seriesBytes(next) - (old ? seriesBytes(old) : 0);
+    for (const v of cells) {
+      const i = (v.at - this.from) / this.cell;
+      values.set(
+        [v.low, v.first, v.last, v.open ?? NaN, +v.gap, v.hold, v.spent, v.covered, ...v.work],
+        (i - start) * FIELDS,
+      );
+      if (v.validUntil !== undefined) {
+        if (!next.ends) {
+          next.ends = new Float64Array(TILE_CELLS).fill(NaN);
+          this.seriesBytes += next.ends.byteLength;
+        }
+        next.ends[i] = v.validUntil;
+      }
+      yield;
+    }
+  }
+
   /** References in all retained rows survive, including a suffix not yet read in this epoch. */
   private *compact(rows: number[][]): Preparation<void> {
     const sessions: Session[] = [],
@@ -511,9 +563,10 @@ export class HistoryTile {
         if (plot) {
           const first = (readFrom - tile.from) / tile.cell,
             cells: Chunk['series'][number]['cells'] = [];
-          for (let i = first; tile.from + i * tile.cell < readTo; i++) {
+          const end = Math.min(seriesEnd(s), (readTo - tile.from) / tile.cell);
+          for (let i = Math.max(first, s.start); i < end; i++) {
             yield;
-            const at = i * FIELDS;
+            const at = (i - s.start) * FIELDS;
             if (Number.isNaN(s.values[at])) continue;
             const end = s.ends?.[i];
             cells.push([
@@ -583,9 +636,11 @@ export class HistoryTile {
     readTo: number,
   ): Preparation<DecodedCell[]> {
     const cells: DecodedCell[] = [];
-    for (let i = (readFrom - this.from) / this.cell; this.from + i * this.cell < readTo; i++) {
+    const first = Math.max(s.start, (readFrom - this.from) / this.cell),
+      end = Math.min(seriesEnd(s), (readTo - this.from) / this.cell);
+    for (let i = first; i < end; i++) {
       yield;
-      const at = i * FIELDS;
+      const at = (i - s.start) * FIELDS;
       if (Number.isNaN(s.values[at])) continue;
       cells.push(this.seriesCell(s, i));
     }
@@ -593,7 +648,7 @@ export class HistoryTile {
   }
 
   private seriesCell(s: PackedSeries, i: number): DecodedCell {
-    const at = i * FIELDS,
+    const at = (i - s.start) * FIELDS,
       v = s.values,
       end = s.ends?.[i];
     return {
@@ -618,23 +673,22 @@ export class HistoryTile {
     since: number,
     consume: (cell: DecodedCell) => void,
   ): Preparation<void> {
-    const tile = this;
+    const first = Math.max(s.start, (readFrom - this.from) / this.cell),
+      end = Math.min(seriesEnd(s), (readTo - this.from) / this.cell);
     let previous: number | null | undefined, zeroMode: boolean | undefined;
-    for (let i = (readFrom - this.from) / this.cell; this.from + i * this.cell < readTo; i++) {
+    for (let i = first; i < end; i++) {
       yield;
-      if (Number.isNaN(s.values[i * FIELDS])) continue;
+      if (Number.isNaN(s.values[(i - s.start) * FIELDS])) continue;
       const value = this.seriesCell(s, i);
       // Only an implicit negative-zero hold changes under the wire mode's Map key.
       if (Object.is(value.hold, -0) && zeroMode === undefined)
         zeroMode =
           (yield* modalHoldPrepared(
             (function* () {
-              for (
-                let j = (readFrom - tile.from) / tile.cell;
-                tile.from + j * tile.cell < readTo;
-                j++
-              )
-                if (!Number.isNaN(s.values[j * FIELDS])) yield s.values[j * FIELDS + 5];
+              for (let j = first; j < end; j++) {
+                const at = (j - s.start) * FIELDS;
+                if (!Number.isNaN(s.values[at])) yield s.values[at + 5];
+              }
             })(),
           )) === 0;
       const row = canonicalCell(

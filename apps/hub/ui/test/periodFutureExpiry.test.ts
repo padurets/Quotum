@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {fixture, flush, NOW, H, M} from './periodRuntimeFixture';
 import type {History} from '../../server/domain/history';
 import {Preparations} from '../lib/prepare';
+import {periodValueChangesAt, periodValueNow} from '../../server/domain/periodValues';
+import {budgetView} from '../lib/money';
 
 for (const values of ['complete', 'error'] as const)
   test(`future fixed summaries with ${values} card values stay expired while past endpoints remain historical`, async t => {
@@ -175,4 +177,132 @@ test('a sessions-only preparation crossing a card deadline publishes the expired
     h.prepareWith(null);
     await h.close();
   }
+});
+
+test('a pending fixed selection ages the displayed values only as far as their own endpoint', async t => {
+  t.mock.method(Date, 'now', () => NOW);
+  const h = await fixture({personal: true, clocked: true});
+  t.after(() => h.close());
+  h.store.record(h.source, {
+    observedAt: NOW - M,
+    plan: '',
+    resets: null,
+    staleAfterMs: H,
+    windows: [
+      {
+        id: 'w',
+        kind: 'weekly',
+        label: null,
+        minutes: 10080,
+        used: 22,
+        remaining: 78,
+        resetAt: NOW + 10000,
+      },
+    ],
+  });
+  h.events.flush();
+  await flush();
+  const shown = {from: NOW - H, to: NOW + 5000};
+  h.selectRange(shown);
+  await flush();
+  const held = h.hold();
+  try {
+    h.event({type: 'history', data: {sources: [h.source], since: NOW - M}});
+    h.selectRange({from: NOW - 2 * H, to: NOW + 30000});
+    await flush();
+    assert.ok(held.reply);
+    h.elapseTo(NOW + 15000);
+    h.clock.wakeDue();
+    h.page.dispatch({type: 'connection', status: 'retrying', lostAt: NOW + 15000});
+    const reading = h.period.getValue(h.source);
+    assert.equal(reading.loading, true);
+    assert.deepEqual(reading.basis.range, shown);
+    assert.equal(reading.value.windows[0].validUntil, NOW + 10000);
+    assert.equal(reading.value.windows[0].stale, false);
+  } finally {
+    held.release();
+    await flush();
+  }
+});
+
+test('a fixed wallet card keeps a key observed through its compressed heartbeat span', async t => {
+  t.mock.method(Date, 'now', () => NOW);
+  const h = await fixture({personal: true, clocked: true});
+  t.after(() => h.close());
+  const wallet = h.store.source('openrouter', '1'.repeat(24), NOW - H),
+    key = '01'.repeat(6),
+    start = NOW - 14 * M,
+    last = start + 8 * M,
+    ttl = 2 * M,
+    deadline = last + ttl + 1;
+  h.store.hold(wallet, h.alice.id, NOW - H);
+  for (let at = start; at <= last; at += M)
+    h.store.record(wallet, {
+      type: 'meters',
+      observedAt: at,
+      staleAfterMs: ttl,
+      meters: [
+        {
+          id: `key:${key}:cap`,
+          kind: 'cap',
+          unit: 'USD',
+          amount: '100',
+          limit: '1000',
+          resetAt: null,
+          minutes: null,
+          scope: 'lifetime',
+          label: null,
+          stale: false,
+          at,
+          staleAfterMs: ttl,
+        },
+      ],
+      keys: [
+        {
+          id: key,
+          name: 'Demo key',
+          disabled: false,
+          expiresAt: null,
+          includeByok: false,
+          at,
+          staleAfterMs: ttl,
+          presence: 'observed',
+          missCount: 0,
+          periods: {day: null, week: null, month: null},
+        },
+      ],
+      inventoryComplete: true,
+      inventoryError: null,
+    });
+  h.events.touchBoards([h.board]);
+  h.events.flush();
+  await flush();
+  const select = async (to: number) => {
+    h.selectRange({from: to - H, to});
+    await flush();
+    const reading = h.period.getValue(wallet);
+    assert.equal(reading.error, null);
+    return reading.value;
+  };
+  const inside = start + 5 * M + 1000,
+    value = await select(inside);
+  assert.equal(value.keys[0].at, start);
+  assert.equal(value.keys[0].validUntil, deadline);
+  assert.equal(value.keys[0].presence, 'observed');
+  const keyOnly = {...value, meters: [], states: undefined};
+  assert.equal(periodValueChangesAt(keyOnly, inside), deadline);
+  for (const [at, expected] of [
+    [deadline - 1, 'observed'],
+    [deadline, 'missing'],
+  ] as const) {
+    assert.equal(periodValueNow(keyOnly, at).keys[0].presence, expected);
+    assert.equal(
+      budgetView(value, value.keys, value.meters, undefined, at).limits[0].part.presence,
+      expected,
+    );
+  }
+  const afterLast = await select(last + 1);
+  assert.equal(afterLast.keys[0].at, last);
+  assert.equal(Object.hasOwn(afterLast.keys[0], 'validUntil'), false);
+  assert.equal(periodValueNow(afterLast, deadline).keys[0].presence, 'missing');
 });

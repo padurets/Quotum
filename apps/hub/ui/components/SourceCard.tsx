@@ -155,10 +155,12 @@ function Limit({
   w,
   measuredAt,
   weekly,
+  stale = w.stale,
 }: {
   w: Win & {stale?: boolean; observedAt?: number};
   measuredAt: number | null;
   weekly: WeeklyPlan | null;
+  stale?: boolean;
 }) {
   const at = w.observedAt ?? measuredAt;
   return (
@@ -168,7 +170,7 @@ function Limit({
       valueTitle={[
         `${num(w.remaining, 2)}%`,
         at !== null ? t('source.measured', {at: stamp(at)}) : null,
-        w.stale ? t('money.stale') : null,
+        stale ? t('money.stale') : null,
       ]
         .filter(Boolean)
         .join('\n')}
@@ -177,8 +179,8 @@ function Limit({
           <small
             className="key-status"
             role="img"
-            aria-hidden={!w.stale}
-            title={w.stale ? `${t('money.stale')}\n${stamp(w.observedAt)}` : undefined}
+            aria-hidden={!stale}
+            title={stale ? `${t('money.stale')}\n${stamp(w.observedAt)}` : undefined}
           />
         )
       }
@@ -831,7 +833,8 @@ function CardMeasurements({
   const reading = usePeriodValues(source.id),
     selected = useTimeRange();
   const historical = !!selected,
-    value = historical ? reading.value : null;
+    value = historical ? reading.value : null,
+    statusAt = historical ? reading.statusAt : undefined;
   const windows = historical ? (value?.windows ?? []) : source.windows;
   const periods = quotaPeriods(source, historical ? windows : undefined),
     shownPeriods = periods.filter(w => !isWindowHidden(arrange.view, source.id, w.id));
@@ -862,6 +865,7 @@ function CardMeasurements({
             board={boardId}
             view={arrange.view}
             measurement={historical ? value : undefined}
+            statusAt={statusAt}
           />
         )}
         {!wallet &&
@@ -877,11 +881,21 @@ function CardMeasurements({
                 <Limit
                   key={w.id}
                   w={w}
+                  stale={
+                    statusAt !== undefined && 'validUntil' in w
+                      ? statusAt >= (w.validUntil as number)
+                      : undefined
+                  }
                   measuredAt={'observedAt' in w ? (w.observedAt as number) : source.successAt}
                   weekly={weekly}
                 />
               ) : caps && measurement ? (
-                <QuotaCard key={period.id} source={measurement} ids={[period.id]} />
+                <QuotaCard
+                  key={period.id}
+                  source={measurement}
+                  ids={[period.id]}
+                  statusAt={statusAt}
+                />
               ) : (
                 <PercentLimit
                   key={period.id}
@@ -944,6 +958,7 @@ function CardFooter({source, arrange, boardId}: {source: Card; arrange: Arrange;
             meters={value.meters}
             keys={[]}
             context={historicalContext}
+            statusAt={reading.statusAt}
             tray
           />
         </MeasurementClock.Provider>

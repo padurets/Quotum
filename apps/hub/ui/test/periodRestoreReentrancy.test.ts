@@ -2,6 +2,34 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {fixture, drawings, flush, NOW, H, M} from './periodRuntimeFixture';
 
+test('a restored live work order runs after the old storage owner is released', async t => {
+  t.mock.method(Date, 'now', () => NOW);
+  const h = await fixture({personal: true}),
+    drawing = await drawings(h),
+    live = h.period.get().value;
+  let stop = () => {};
+  try {
+    h.selectRange({from: NOW - 2 * H, to: NOW - H});
+    await flush();
+    assert.ok(h.period.retained.size);
+    const owners: number[] = [];
+    stop = h.period.subscribeWorkOrder(() => {
+      if (h.period.work.value === live) owners.push(h.period.restoring.size);
+      return null;
+    });
+    h.selectRange(null);
+    assert.ok(owners.length);
+    assert.ok(
+      owners.every(count => count === 0),
+      `work order saw restoring owners: ${owners}`,
+    );
+  } finally {
+    stop();
+    drawing.close();
+    await h.close();
+  }
+});
+
 for (const replacement of ['live', 'clear'] as const)
   test(`a value listener ${replacement === 'live' ? 'choosing live' : 'closing the board'} interrupts the actual retained period restore`, async t => {
     t.mock.method(Date, 'now', () => NOW);

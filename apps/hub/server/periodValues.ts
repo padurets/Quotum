@@ -1,7 +1,7 @@
 import type {BudgetAccess, CreditBalanceState} from './domain/resources.js';
 import type {Store} from './store/store.js';
 import {prepareValueStates, type PeriodValues, type WindowValue} from './domain/periodValues.js';
-import type {Meter, KeyPart} from './domain/meters.js';
+import type {Meter} from './domain/meters.js';
 import type {MeterContextValue} from './store/meterContexts.js';
 import {convertBy, conversionId, isConvertible} from './domain/currency.js';
 import {HistoryLimit} from './history.js';
@@ -236,7 +236,7 @@ function readValues(
       });
     }
     const meters: Meter[] = [],
-      keys: KeyPart[] = [];
+      keys: PeriodValues['keys'] = [];
     for (const raw of ids.iterate(id, admitted)) {
       const meter = String(raw.meter_id),
         reading = store.meters.readings(id, meter, admitted, admitted, reserve)[0];
@@ -308,6 +308,9 @@ function readValues(
         );
         if (at === null) continue;
         // A compressed context with a future endpoint cannot prove its former TTL.
+        const confirmed = row.to_at < evidenceCut,
+          staleAfterMs = confirmed ? row.stale_after_ms : 0,
+          validUntil = (confirmed ? row.to_at : at) + staleAfterMs + 1;
         keys.push({
           id: v.id,
           name: owned ? v.name : null,
@@ -315,11 +318,9 @@ function readValues(
           expiresAt: v.expiresAt,
           includeByok: v.includeByok,
           at,
-          staleAfterMs: row.to_at < evidenceCut ? row.stale_after_ms : 0,
-          presence:
-            to >= (row.to_at < evidenceCut ? row.to_at + row.stale_after_ms + 1 : at + 1)
-              ? 'missing'
-              : 'observed',
+          staleAfterMs,
+          ...(confirmed && row.to_at !== at ? {validUntil} : {}),
+          presence: to >= validUntil ? 'missing' : 'observed',
           missCount: 0,
           periods: v.periods,
           byokUsage: v.byokUsage,

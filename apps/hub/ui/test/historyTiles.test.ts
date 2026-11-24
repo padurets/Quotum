@@ -43,9 +43,59 @@ test('unchanged packed tile footprint reads do not iterate its committed series'
     }
     return undefined;
   };
-  const expected = 248 + 1024 + 50 * (60 * 11 * 8 + 256);
+  const expected = 248 + 1024 + 50 * (11 * 8 + 256);
   for (let i = 0; i < 100; i++) assert.equal(tile.bytes, expected);
   assert.equal(visits, 0, 'ready tile accounting must be constant work during panning');
+});
+
+test('a sparse quota series owns only the span between its surviving edge cells', () => {
+  const tile = new HistoryTile(0, M);
+  tile.nativeTo = tile.readTo = 60 * M;
+  const rows = (i: number, value?: number): Chunk => ({
+    from: i * M,
+    to: (i + 1) * M,
+    series:
+      value === undefined
+        ? []
+        : [{source: 's', window: 'w', hold: -0, open: null, cells: [[0, value, 0, 0, {u: 0}]]}],
+    activity: {sessions: [], devices: {}, cells: []},
+    resets: [],
+    grants: [],
+  });
+  const packed = (tile: HistoryTile) =>
+    (
+      tile as unknown as {series: Map<string, {values: Float64Array; ends: Float64Array}>}
+    ).series.get('s w')!;
+  tile.merge(rows(25, 75), known);
+  const initial = packed(tile);
+  assert.equal(initial.values.buffer.byteLength, 11 * 8);
+  assert.equal(initial.ends.byteLength, 60 * 8);
+  const left = drain(tile.staged(rows(10, 90), known));
+  const both = drain(left.staged(rows(55, 45), known));
+  assert.equal(packed(left).values.buffer.byteLength, 16 * 11 * 8);
+  assert.equal(packed(both).values.buffer.byteLength, 46 * 11 * 8);
+  assert.equal(both.bytes - tile.bytes, 45 * 11 * 8);
+  for (const plot of [false, true]) {
+    const cells = both.chunk(known, plot).series[0].cells;
+    assert.deepEqual(
+      cells.map(([i, low, , , extra]) => [i, low, extra?.u]),
+      [
+        [10, 90, 0],
+        [25, 75, 0],
+        [55, 45, 0],
+      ],
+    );
+  }
+  const decoded = drain(both.composeChunkPrepared(60 * M, 'native', new Set(['s w'])));
+  const cut = drain(both.staged(rows(10), known));
+  cut.merge(rows(55), known);
+  assert.equal(packed(cut).values.buffer.byteLength, 11 * 8);
+  assert.equal(cut.bytes, tile.bytes);
+  assert.deepStrictEqual(cut.chunk(known), tile.chunk(known));
+  const captured: DecodedCell[] = [];
+  drain(decoded.series[0].consumeCells(0, value => captured.push(value)));
+  assert.deepStrictEqual(captured, decodeCells(both.chunk(known).series[0], 0, M, 0));
+  assert.equal(packed(tile), initial);
 });
 
 test('packed footprint stays exact through dense growth, compaction, private COW yields and cancellation', () => {

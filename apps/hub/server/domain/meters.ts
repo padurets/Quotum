@@ -1,7 +1,7 @@
 import {balanceDescriptor} from './providers.js';
 import {amount, amountScale, isUnit, type Unit} from './amount.js';
 import type {Conversion} from './currency.js';
-import type {CreditBalanceState, ObservationTiming} from './resources.js';
+import {observationDeadline, type CreditBalanceState, type ObservationTiming} from './resources.js';
 
 export type BalanceIssue =
   | 'currency_invalid'
@@ -43,6 +43,8 @@ export type KeyPart = {
   createdAt?: number | null;
   updatedAt?: number | null;
 };
+export const keyPresenceAt = (key: Pick<KeyPart, 'presence'> & ObservationTiming, at: number) =>
+  at >= observationDeadline(key) ? 'missing' : key.presence;
 const keyNames = new Intl.Collator('en-US');
 /** A selected cap keeps the same identity across server and browser locales. */
 export const compareKeys = (a: Pick<KeyPart, 'id' | 'name'>, b: Pick<KeyPart, 'id' | 'name'>) =>

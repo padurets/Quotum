@@ -1,6 +1,11 @@
 // Interactive admission can differ from the member that owns retained bytes.
 type Flight = {role: 'visible' | 'ahead'; admission?: object; evict?: boolean};
-type Candidate = {bytes: number; shownAt: number; priority?: 0; drop(): void};
+type Candidate = {
+  bytes: number;
+  shownAt: number;
+  priority?: 0;
+  drop(available?: () => number): void;
+};
 export type HistoryMember = {readonly estimatedBytes: number; evictionCandidates(): Candidate[]};
 type Waiting = {owner: HistoryMember; flight: Flight; start(): void; cancel(): void};
 
@@ -58,10 +63,14 @@ export class HistoryPool {
     const held = this.retained.get(flight);
     if (held) held.released = true;
     else this.active.delete(flight);
-    this.reservations.delete(flight);
+    this.releaseBytes(flight);
     const index = this.waiting.findIndex(item => item.flight === flight);
     if (index !== -1) this.waiting.splice(index, 1);
     this.schedule();
+  }
+  /** Published buffers can belong to a member before its transport slot is released. */
+  releaseBytes(flight: Flight) {
+    this.reservations.delete(flight);
   }
   private schedule() {
     if (this.scheduled || !this.waiting.length) return;
@@ -105,27 +114,55 @@ export class HistoryPool {
   }
 
   /** Staged growth is reserved before each yield; another family's visible tiles stay pinned. */
-  reserve(flight: Flight, bytes: number) {
+  reserve(flight: Flight, bytes: number, allocation = 0) {
     const previous = this.reservations.get(flight) ?? 0;
     this.reservations.set(flight, bytes);
-    // Optional compaction must not discard useful cache to copy a smaller ledger.
-    if (flight.evict === false ? this.estimatedBytes <= this.budget : this.trim()) return true;
+    // Reserve the entire destination against other readers. Only this synchronous
+    // eviction can use the still-unallocated buffer's space to copy a smaller suffix.
+    const available =
+      allocation > 0
+        ? () =>
+            this.budget -
+            this.estimatedBytes +
+            (this.reservations.get(flight) === bytes ? allocation : 0)
+        : undefined;
+    const fits = flight.evict === false ? this.estimatedBytes <= this.budget : this.trim(available);
+    allocation = 0;
+    if (available && this.reservations.get(flight) !== bytes) return false;
+    if (fits) return true;
     this.reservations.set(flight, previous);
     return false;
   }
-  trim() {
+  trim(available?: () => number) {
     let bytes = this.estimatedBytes;
     if (bytes <= this.budget) return true;
-    const candidates = [...this.members]
+    // Pop in stable eviction order. Processed callbacks can themselves own removed tiles.
+    const oldest = [...this.members]
       .flatMap(member => member.evictionCandidates())
-      .sort((a, b) => (a.priority ?? 1) - (b.priority ?? 1) || a.shownAt - b.shownAt);
-    for (const candidate of candidates) {
-      candidate.drop();
-      // A dropped cache entry can share storage with a frame that still owns it.
+      .sort((a, b) => (a.priority ?? 1) - (b.priority ?? 1) || a.shownAt - b.shownAt)
+      .reverse();
+    const prefixes: Candidate[] = [];
+    while (oldest.at(-1)?.priority === 0) prefixes.push(oldest.pop()!);
+    let tryPrefixes = true;
+    while (bytes > this.budget) {
+      if (tryPrefixes) {
+        const before = bytes;
+        for (const prefix of prefixes) {
+          prefix.drop(available);
+          bytes = this.estimatedBytes;
+          if (bytes <= this.budget) return true;
+        }
+        // A cheap prefix can make enough room for another series' suffix copy.
+        if (bytes < before) continue;
+      }
+      if (!oldest.length) return false;
+      const before = bytes;
+      oldest.pop()!.drop(available);
       bytes = this.estimatedBytes;
-      if (bytes <= this.budget) return true;
+      // A dropped entry may still share all its storage with a published frame.
+      tryPrefixes = bytes < before;
     }
-    return false;
+    return true;
   }
 }
 
